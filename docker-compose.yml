@@ -1,0 +1,193 @@
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: deploy/relay/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      - FEDI3_RELAY_BIND=0.0.0.0:8787
+      - FEDI3_RELAY_DB=/data/fedi3_relay.db
+      - FEDI3_RELAY_DB_DRIVER=${FEDI3_RELAY_DB_DRIVER:-sqlite}
+      - FEDI3_RELAY_DB_URL=${FEDI3_RELAY_DB_URL:-}
+      - FEDI3_RELAY_REDIS_URL=redis://dragonfly:6379
+      - FEDI3_RELAY_REDIS_PREFIX=${FEDI3_RELAY_REDIS_PREFIX:-fedi3}
+      - FEDI3_RELAY_PUBLIC_URL=https://${FEDI3_DOMAIN}
+      - FEDI3_P2P_INFRA_PEER_ID=${FEDI3_P2P_INFRA_PEER_ID:-}
+      - FEDI3_P2P_INFRA_PEER_ID_FILE=/p2p_infra/fedi3_p2p_peer_id
+      - FEDI3_P2P_INFRA_MULTIADDRS=${FEDI3_P2P_INFRA_MULTIADDRS:-}
+      - FEDI3_P2P_INFRA_HOST=${FEDI3_P2P_INFRA_HOST:-}
+      - FEDI3_P2P_INFRA_PORT=${FEDI3_P2P_INFRA_PORT:-4001}
+      - FEDI3_RELAY_TRUST_PROXY_HEADERS=true
+      - FEDI3_RELAY_ALLOW_SELF_REGISTER=${FEDI3_RELAY_ALLOW_SELF_REGISTER:-false}
+      - FEDI3_RELAY_ADMIN_TOKEN=${FEDI3_RELAY_ADMIN_TOKEN}
+      - FEDI3_RELAY_TELEMETRY_TOKEN=${FEDI3_RELAY_TELEMETRY_TOKEN}
+      - FEDI3_RELAY_HSTS_MAX_AGE_SECS=31536000
+      - FEDI3_RELAY_RL_ADMIN_PER_MIN=${FEDI3_RELAY_RL_ADMIN_PER_MIN:-60}
+      - FEDI3_RELAY_RL_REGISTER_PER_MIN=${FEDI3_RELAY_RL_REGISTER_PER_MIN:-20}
+      - FEDI3_RELAY_RL_TUNNEL_PER_MIN=${FEDI3_RELAY_RL_TUNNEL_PER_MIN:-60}
+      - FEDI3_RELAY_RL_INBOX_PER_MIN=${FEDI3_RELAY_RL_INBOX_PER_MIN:-120}
+      - FEDI3_RELAY_RL_FORWARD_PER_MIN=${FEDI3_RELAY_RL_FORWARD_PER_MIN:-240}
+      - FEDI3_RELAY_MEDIA_BACKEND=${FEDI3_RELAY_MEDIA_BACKEND:-local}
+      - FEDI3_RELAY_MEDIA_PREFIX=${FEDI3_RELAY_MEDIA_PREFIX:-}
+      - FEDI3_RELAY_MEDIA_S3_BUCKET=${FEDI3_RELAY_MEDIA_S3_BUCKET:-}
+      - FEDI3_RELAY_MEDIA_S3_REGION=${FEDI3_RELAY_MEDIA_S3_REGION:-}
+      - FEDI3_RELAY_MEDIA_S3_ENDPOINT=${FEDI3_RELAY_MEDIA_S3_ENDPOINT:-}
+      - FEDI3_RELAY_MEDIA_S3_ACCESS_KEY=${FEDI3_RELAY_MEDIA_S3_ACCESS_KEY:-}
+      - FEDI3_RELAY_MEDIA_S3_SECRET_KEY=${FEDI3_RELAY_MEDIA_S3_SECRET_KEY:-}
+      - FEDI3_RELAY_MEDIA_S3_PATH_STYLE=${FEDI3_RELAY_MEDIA_S3_PATH_STYLE:-false}
+      - FEDI3_RELAY_SEARCH_BACKEND=${FEDI3_RELAY_SEARCH_BACKEND:-db}
+      - FEDI3_RELAY_SEARCH_TOTAL_MODE=${FEDI3_RELAY_SEARCH_TOTAL_MODE:-approx}
+      - FEDI3_RELAY_SEARCH_CACHE_TTL_SECS=${FEDI3_RELAY_SEARCH_CACHE_TTL_SECS:-10}
+      - FEDI3_RELAY_SEARCH_CACHE_MAX=${FEDI3_RELAY_SEARCH_CACHE_MAX:-512}
+      - FEDI3_RELAY_MEILI_URL=${FEDI3_RELAY_MEILI_URL:-}
+      - FEDI3_RELAY_MEILI_API_KEY=${FEDI3_RELAY_MEILI_API_KEY:-}
+      - FEDI3_RELAY_MEILI_TIMEOUT_SECS=${FEDI3_RELAY_MEILI_TIMEOUT_SECS:-10}
+      - FEDI3_RELAY_MEILI_NOTES_INDEX=${FEDI3_RELAY_MEILI_NOTES_INDEX:-relay_notes}
+      - FEDI3_RELAY_MEILI_USERS_INDEX=${FEDI3_RELAY_MEILI_USERS_INDEX:-relay_users}
+      - FEDI3_RELAY_MEILI_BATCH_MAX=${FEDI3_RELAY_MEILI_BATCH_MAX:-200}
+      - FEDI3_RELAY_MEILI_FLUSH_MS=${FEDI3_RELAY_MEILI_FLUSH_MS:-400}
+      - FEDI3_RELAY_MEILI_QUEUE_MAX=${FEDI3_RELAY_MEILI_QUEUE_MAX:-10000}
+      - FEDI3_RELAY_HTTP_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_TIMEOUT_SECS:-30}
+      - FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS:-10}
+      - FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS:-90}
+      - FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST=${FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST:-8}
+      - FEDI3_RELAY_MAX_BODY_BYTES=${FEDI3_RELAY_MAX_BODY_BYTES:-67108864}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+    volumes:
+      - relay_data:/data
+      - p2p_infra_data:/p2p_infra:ro
+    expose:
+      - "8787"
+    ports:
+      - "0.0.0.0:8787:8787"
+    depends_on:
+      dragonfly:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    restart: unless-stopped
+    command:
+      - "--maxmemory=512mb"
+      - "--cache_mode=true"
+      - "--proactor_threads=2"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    expose:
+      - "6379"
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${FEDI3_RELAY_PG_DB:-fedi3_relay}
+      - POSTGRES_USER=${FEDI3_RELAY_PG_USER:-fedi3}
+      - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:-fedi3}
+    volumes:
+      - relay_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FEDI3_RELAY_PG_USER:-fedi3} -d ${FEDI3_RELAY_PG_DB:-fedi3_relay}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432"
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    restart: unless-stopped
+    environment:
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_MASTER_KEY=${FEDI3_RELAY_MEILI_MASTER_KEY:-}
+    volumes:
+      - relay_meili_data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:7700/health | grep -q 'available'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "7700"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      - FEDI3_DOMAIN=${FEDI3_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/relay/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - relay
+
+  p2p_infra:
+    build:
+      context: .
+      dockerfile: deploy/p2p_infra/Dockerfile
+      args:
+        P2P_UID: ${P2P_UID:-1000}
+        P2P_GID: ${P2P_GID:-1000}
+    user: "${P2P_UID:-1000}:${P2P_GID:-1000}"
+    environment:
+      - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
+      - FEDI3_P2P_ENABLE_RELAY_SERVER=true
+      - FEDI3_P2P_ENABLE_KAD_SERVER=true
+      - FEDI3_P2P_KEY=/data/fedi3_p2p_infra_keypair.pb
+      - FEDI3_P2P_MAILBOX_DB=/data/fedi3_p2p_mailbox.sqlite
+      - FEDI3_P2P_PEER_ID_FILE=/data/fedi3_p2p_peer_id
+      - FEDI3_P2P_MAILBOX_MAX_PER_PEER=1000
+      - FEDI3_P2P_MAILBOX_MAX_BYTES_PER_PEER=10485760
+      - FEDI3_P2P_MAILBOX_MAX_TTL_SECS=86400
+      - FEDI3_P2P_MAILBOX_MAX_PUTS_PER_MIN=120
+      - FEDI3_P2P_MAILBOX_MAX_PUT_BYTES_PER_MIN=2097152
+      - FEDI3_P2P_MAILBOX_MAX_BODY_BYTES=524288
+    volumes:
+      - p2p_infra_data:/data
+    ports:
+      - "4001:4001/tcp"
+      - "4001:4001/udp"
+    restart: unless-stopped
+
+  turn:
+    image: instrumentisto/coturn:latest
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./.env
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--fingerprint"
+      - "--no-cli"
+      - "--realm=${TURN_REALM:-relay.fedi3.com}"
+      - "--listening-port=${TURN_PORT:-3478}"
+      - "--min-port=${TURN_MIN_PORT:-49152}"
+      - "--max-port=${TURN_MAX_PORT:-65535}"
+      - "--lt-cred-mech"
+      - "--user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}"
+      - "--no-tlsv1"
+      - "--no-tlsv1_1"
+
+volumes:
+  relay_data:
+  caddy_data:
+  caddy_config:
+  relay_pg_data:
+  relay_meili_data:
+  p2p_infra_data:

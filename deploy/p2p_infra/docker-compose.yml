@@ -1,0 +1,27 @@
+services:
+  fedi3_p2p_infra:
+    build:
+      context: ../..
+      dockerfile: deploy/p2p_infra/Dockerfile
+      args:
+        P2P_UID: ${P2P_UID:-1000}
+        P2P_GID: ${P2P_GID:-1000}
+    user: "${P2P_UID:-1000}:${P2P_GID:-1000}"
+    environment:
+      - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
+      - FEDI3_P2P_ENABLE_RELAY_SERVER=true
+      - FEDI3_P2P_ENABLE_KAD_SERVER=true
+      - FEDI3_P2P_KEY=/data/fedi3_p2p_infra_keypair.pb
+      - FEDI3_P2P_MAILBOX_DB=/data/fedi3_p2p_mailbox.sqlite
+      - FEDI3_P2P_MAILBOX_MAX_PER_PEER=1000
+      - FEDI3_P2P_MAILBOX_MAX_BYTES_PER_PEER=10485760
+      - FEDI3_P2P_MAILBOX_MAX_TTL_SECS=86400
+      - FEDI3_P2P_MAILBOX_MAX_PUTS_PER_MIN=120
+      - FEDI3_P2P_MAILBOX_MAX_PUT_BYTES_PER_MIN=2097152
+      - FEDI3_P2P_MAILBOX_MAX_BODY_BYTES=524288
+    volumes:
+      - ./data:/data
+    ports:
+      - "4001:4001/tcp"
+      - "4001:4001/udp"
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/fedi3_core",
+  "crates/fedi3_protocol",
+  "crates/fedi3_relay",
+  "crates/fedi3_p2p_infra",
+]

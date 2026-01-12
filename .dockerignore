@@ -1,0 +1,17 @@
+**/target/
+**/build/
+**/.dart_tool/
+**/.git/
+**/.idea/
+**/.vscode/
+**/node_modules/
+.env
+.env.*
+backups/
+app/windows/
+app/linux/
+app/macos/
+app/android/
+app/ios/
+app/web/
+*.log

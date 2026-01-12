@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Fedi3
+Exec=fedi3
+Icon=fedi3
+Categories=Network;Chat;InstantMessaging;
+Terminal=false

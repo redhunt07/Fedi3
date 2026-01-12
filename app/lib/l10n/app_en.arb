@@ -1,0 +1,690 @@
+{
+  "@@locale": "en",
+
+  "appTitle": "Fedi3",
+
+  "navTimeline": "Timeline",
+  "navCompose": "Compose",
+  "navNotifications": "Notifications",
+  "navSearch": "Search",
+  "navChat": "Chat",
+  "navRelays": "Relays",
+  "navSettings": "Settings",
+
+  "save": "Save",
+  "cancel": "Cancel",
+  "ok": "OK",
+  "err": "Error: {error}",
+  "@err": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "copy": "Copy",
+  "copied": "Copied",
+  "enabled": "Enabled",
+  "disabled": "Disabled",
+  "networkErrorTitle": "Network issue",
+  "networkErrorHint": "Check your connection and try again.",
+  "networkErrorRetry": "Retry",
+
+  "timelineTitle": "Timeline",
+  "timelineTabHome": "Home",
+  "timelineTabLocal": "Local",
+  "timelineTabSocial": "Social",
+  "timelineTabFederated": "Federated",
+  "searchTitle": "Search",
+  "searchHint": "Search posts, users, hashtags",
+  "searchTabPosts": "Posts",
+  "searchTabUsers": "Users",
+  "searchTabHashtags": "Hashtags",
+  "searchEmpty": "Type to search",
+  "searchNoResults": "No results",
+  "searchShowingFor": "Showing results for",
+  "searchSourceAll": "All",
+  "searchSourceLocal": "Local",
+  "searchSourceRelay": "Relay",
+  "searchTagCount": "{count} posts",
+  "@searchTagCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+
+  "chatTitle": "Chat",
+  "chatThreadTitle": "Conversation",
+  "chatNewTitle": "New chat",
+  "chatNewTooltip": "Start a new chat",
+  "chatNewMissingFields": "Add recipients and a message.",
+  "chatNewFailed": "Failed to create chat.",
+  "chatRecipients": "Recipients",
+  "chatRecipientsHint": "e.g. @alice@example.com, https://server/users/bob",
+  "chatMessage": "Message",
+  "chatMessageHint": "Write a message…",
+  "chatCreate": "Create",
+  "chatSend": "Send",
+  "chatRefresh": "Refresh",
+  "chatThreadsEmpty": "No chats yet",
+  "chatEmpty": "No messages yet",
+  "chatNoMessages": "No messages",
+  "chatDirectMessage": "Direct message",
+  "chatGroup": "Group chat",
+  "chatMessageDeleted": "Message deleted",
+  "chatMessageEmpty": "Empty message",
+  "chatEdit": "Edit",
+  "chatDelete": "Delete",
+  "chatEditTitle": "Edit message",
+  "chatDeleteTitle": "Delete message",
+  "chatDeleteHint": "This will remove the message for everyone.",
+  "chatSave": "Save",
+  "chatNewMessage": "New message",
+  "chatNewMessageBody": "You have a new message.",
+  "chatOpen": "Open",
+  "chatGif": "GIF",
+  "chatGifSearchHint": "Search GIFs…",
+  "chatGifEmpty": "No GIFs found",
+  "chatGifMissingKey": "Add a GIF API key in Settings to enable search.",
+  "chatStatusPending": "Pending",
+  "chatStatusQueued": "Queued",
+  "chatStatusSent": "Sent",
+  "chatStatusDelivered": "Delivered",
+  "chatStatusSeen": "Seen",
+  "chatReply": "Reply",
+  "chatReplyClear": "Cancel reply",
+  "chatReplyAttachment": "Attachment",
+  "chatReplyUnknown": "Original message",
+  "chatMembers": "Members",
+  "chatRename": "Rename chat",
+  "chatRenameHint": "New chat title",
+  "chatAddMember": "Add member",
+  "chatAddMemberHint": "Search or paste an actor",
+  "chatRemoveMember": "Remove member",
+  "chatReact": "React",
+  "chatPin": "Pin chat",
+  "chatUnpin": "Unpin chat",
+  "chatTyping": "{name} is typing…",
+  "@chatTyping": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "chatTypingMany": "{names} are typing…",
+  "@chatTypingMany": {
+    "placeholders": {
+      "names": { "type": "String" }
+    }
+  },
+
+  "timelineHomeTooltip": "Generic timeline (Global P2P + Legacy). Shows incoming/outgoing interactions, including with users you don't follow and who don't follow you.",
+  "timelineLocalTooltip": "Follower/Following timeline (P2P + Legacy). Only profiles with a follow/follower relationship.",
+  "timelineSocialTooltip": "Social timeline (P2P). Best-effort global feed via gossip/DHT (discover peers beyond legacy).",
+  "timelineFederatedTooltip": "Federated timeline (P2P + Legacy). Public content seen by your instance across federation.",
+  "timelineLayoutColumns": "Switch to columns",
+  "timelineLayoutTabs": "Switch to tabs",
+
+  "coreStart": "Start core",
+  "coreStop": "Stop core",
+
+  "listNoItems": "No items",
+  "listEnd": "End",
+  "listLoadMore": "Load more",
+
+  "timelineNewPosts": "{count} new posts",
+  "@timelineNewPosts": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "timelineShowNewPosts": "Show",
+  "timelineShowNewPostsHint": "Click to show without reloading",
+  "timelineRefreshTitle": "Refresh",
+  "timelineRefreshHint": "Force reload and pull from legacy while you were offline",
+
+  "activityBoost": "Boost",
+  "activityReply": "Reply",
+  "activityLike": "Like",
+  "activityReact": "React",
+  "activityReplyTitle": "Reply",
+  "activityReplyHint": "Write a reply.",
+  "activityCancel": "Cancel",
+  "activitySend": "Send",
+  "activityUnsupported": "Unsupported item",
+  "activityViewRaw": "View raw",
+  "activityHideRaw": "Hide raw",
+  "noteInReplyTo": "In reply to",
+  "noteBoostedBy": "Boosted by {name}",
+  "@noteBoostedBy": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "noteThreadTitle": "Thread",
+  "noteThreadUp": "In reply to",
+  "noteShowThread": "Show thread",
+  "noteHideThread": "Hide thread",
+  "noteLoadingThread": "Loading…",
+  "noteShowReplies": "Show replies",
+  "noteHideReplies": "Hide replies",
+  "noteLoadingReplies": "Loading replies…",
+  "noteReactionLoading": "Loading reactions…",
+  "noteReactionAdd": "Add reaction",
+  "noteContentWarning": "Content warning",
+  "noteShowContent": "Show",
+  "noteHideContent": "Hide",
+
+  "timeAgoJustNow": "just now",
+  "timeAgoMinutes": "{count,plural,=1{1 minute ago}other{{count} minutes ago}}",
+  "@timeAgoMinutes": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoHours": "{count,plural,=1{1 hour ago}other{{count} hours ago}}",
+  "@timeAgoHours": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoDays": "{count,plural,=1{1 day ago}other{{count} days ago}}",
+  "@timeAgoDays": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoMonths": "{count,plural,=1{1 month ago}other{{count} months ago}}",
+  "@timeAgoMonths": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoYears": "{count,plural,=1{1 year ago}other{{count} years ago}}",
+  "@timeAgoYears": { "placeholders": { "count": { "type": "int" } } },
+
+  "firstRunTitle": "Welcome",
+  "firstRunIntro": "Do you want to use an existing account or create a new one?",
+  "firstRunLoginTitle": "Log in (existing setup)",
+  "firstRunLoginHint": "Enter the settings of an existing account/setup.",
+  "firstRunCreateTitle": "Create new account",
+  "firstRunCreateHint": "Create a new local identity and configure relay endpoints.",
+  "firstRunRelayPreviewTitle": "Relay network preview",
+  "firstRunRelayPreviewRelays": "Relays",
+  "firstRunRelayPreviewPeers": "Peers",
+  "firstRunRelayPreviewEmpty": "No data yet",
+  "firstRunRelayPreviewError": "Failed to load relay preview.",
+
+  "onboardingCreateTitle": "Create account",
+  "onboardingCreateIntro": "Fill the required fields to create a new setup. The core will start automatically after saving.",
+  "onboardingLoginTitle": "Log in",
+  "onboardingLoginIntro": "Enter your existing setup fields. The core will start automatically after saving.",
+  "onboardingImportBackup": "Import backup JSON",
+  "onboardingRelaySelect": "Relay selection",
+  "onboardingRelayDiscover": "Discover",
+  "onboardingRelayDiscovering": "Discovering…",
+  "onboardingRelayListHint": "Pick a relay from the shared list or enter one manually.",
+  "onboardingRelayPick": "Select a relay",
+  "onboardingRelayCustom": "Use custom relay settings",
+
+  "composeTitle": "Compose",
+  "composeCharCount": "{used}/{max}",
+  "@composeCharCount": {
+    "placeholders": {
+      "used": { "type": "int" },
+      "max": { "type": "int" }
+    }
+  },
+  "composeCoreNotRunning": "Core not running: go to {settings} and press {start}.",
+  "@composeCoreNotRunning": {
+    "placeholders": {
+      "settings": { "type": "String" },
+      "start": { "type": "String" }
+    }
+  },
+  "composeWhatsHappening": "Write what you think.",
+  "composePublic": "Public",
+  "composePublicHint": "If off: followers-only",
+  "composeAddMediaPath": "Add media (path)",
+  "composeAddMedia": "Attach media",
+  "composeDropHere": "Drop files to attach",
+  "composeClearDraft": "Clear draft",
+  "composeDraftSaved": "Draft saved",
+  "composeDraftRestored": "Draft restored",
+  "composeDraftCleared": "Draft cleared",
+  "composeDraftResumeTooltip": "Resume draft",
+  "composeDraftDeleteTooltip": "Delete draft",
+  "composeQuickHint": "Open the quick composer",
+  "translationTitle": "Translation",
+  "translationHint": "DeepL or DeepLX settings",
+  "translationProviderLabel": "Provider",
+  "translationProviderDeepL": "DeepL",
+  "translationProviderDeepLX": "DeepLX",
+  "translationAuthKeyLabel": "Auth key",
+  "translationAuthKeyHint": "DeepL API key",
+  "translationUseProLabel": "Pro account",
+  "translationUseProHint": "Use api.deepl.com instead of api-free.deepl.com",
+  "translationDeepLXUrlLabel": "DeepLX endpoint",
+  "translationDeepLXUrlHint": "https://api.deeplx.org/translate",
+  "translationTimeoutLabel": "Timeout",
+  "translationTimeoutValue": "{seconds, plural, one {# second} other {# seconds}}",
+  "@translationTimeoutValue": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "translationTargetLabel": "Target language: {lang}",
+  "@translationTargetLabel": {
+    "placeholders": {
+      "lang": {
+        "type": "String"
+      }
+    }
+  },
+  "noteTranslate": "Translate",
+  "noteShowTranslation": "Show translation",
+  "noteShowOriginal": "Show original",
+  "noteTranslatedFrom": "Translated from {lang}",
+  "@noteTranslatedFrom": {
+    "placeholders": {
+      "lang": {
+        "type": "String"
+      }
+    }
+  },
+  "noteTranslateFailed": "Translation failed: {error}",
+  "@noteTranslateFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "composePost": "Post",
+  "composeAttachments": "Attachments",
+  "composeMediaId": "mediaId={id}",
+  "@composeMediaId": {
+    "placeholders": {
+      "id": { "type": "String" }
+    }
+  },
+  "composeFileFallback": "file",
+  "composeMediaFilePathLabel": "Media file path (desktop/dev)",
+  "composeMediaFilePathHint": "C:\\\\path\\\\img.png or /home/user/img.png",
+  "composeNotUploaded": "Not uploaded",
+  "composeQueuedOk": "OK: queued for delivery",
+  "composeErrEmptyContent": "ERR: empty content",
+  "composeErrUnableReadFile": "ERR: unable to read file: {error}",
+  "@composeErrUnableReadFile": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "composeErrUnablePickFile": "ERR: file picker failed: {error}",
+  "@composeErrUnablePickFile": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "composeErrInvalidMediaType": "ERR: invalid media type: {type}",
+  "@composeErrInvalidMediaType": {
+    "placeholders": {
+      "type": { "type": "String" }
+    }
+  },
+  "composeErrGeneric": "ERR: {error}",
+  "@composeErrGeneric": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "settingsTitle": "Settings",
+  "settingsCore": "Core",
+  "settingsCoreRunning": "Running (handle={handle})",
+  "@settingsCoreRunning": {
+    "placeholders": {
+      "handle": { "type": "int" }
+    }
+  },
+  "settingsCoreStopped": "Stopped",
+  "settingsAccount": "Account",
+  "settingsFollowSection": "Follow / Unfollow",
+  "settingsActorUrlLabel": "Actor URL (https://...)",
+  "settingsFollow": "Follow",
+  "settingsUnfollow": "Unfollow",
+  "settingsAdvancedDev": "Advanced (dev)",
+  "settingsAdvancedDevHint": "Start/Stop + migration status",
+  "settingsResetApp": "Reset app (clear config)",
+
+  "profileEditTitle": "Profile",
+  "profileEditHint": "Public profile, avatar, banner, fields",
+  "profileDisplayName": "Display name",
+  "profileBio": "Bio",
+  "profileFollowers": "Followers",
+  "profileFollowing": "Following",
+  "profileAvatar": "Avatar",
+  "profileBanner": "Banner",
+  "profilePickFile": "Choose file",
+  "profileFilePathHint": "File path (desktop)",
+  "profileUpload": "Upload",
+  "profileUploadOk": "OK: uploaded",
+  "profileSave": "Save",
+  "profileSavedOk": "OK: saved (core restarted)",
+  "profileErrSave": "Save failed: {error}",
+  "@profileErrSave": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "profileErrUpload": "Upload failed: {error}",
+  "@profileErrUpload": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "profileErrCoreNotRunning": "Core not running.",
+  "profileFieldsTitle": "Profile fields",
+  "profileFieldAdd": "Add field",
+  "profileFieldEdit": "Edit field",
+  "profileFieldName": "Name",
+  "profileFieldValue": "Value",
+  "profileFieldNameEmpty": "(empty)",
+
+  "privacyTitle": "Privacy",
+  "privacyHint": "Account privacy settings",
+  "privacyLockedAccount": "Locked account (manual follow approval)",
+  "privacyLockedAccountHint": "When enabled, incoming follow requests require approval.",
+  "telemetrySectionTitle": "Diagnostics",
+  "telemetryEnabled": "Anonymous telemetry",
+  "telemetryEnabledHint": "Share minimal diagnostics (errors and performance) to improve stability. No personal content.",
+  "telemetryMonitoringEnabled": "Client monitoring (debug/staging)",
+  "telemetryMonitoringHint": "Keep a local diagnostics log for troubleshooting.",
+  "telemetryOpen": "Open diagnostics",
+  "telemetryTitle": "Diagnostics",
+  "telemetryRefresh": "Refresh",
+  "telemetryExport": "Export",
+  "telemetryExportEmpty": "No diagnostics to export",
+  "telemetryClear": "Clear",
+  "telemetryEmpty": "No diagnostics yet",
+
+  "securityTitle": "Security",
+  "securityHint": "Tokens and internal endpoints",
+  "securityInternalToken": "Internal token",
+  "securityInternalTokenHint": "Used to protect internal API endpoints",
+  "securityRegenerate": "Regenerate",
+  "securityHintInternalEndpoints": "Keep this token private. If exposed, others on your network could call internal endpoints.",
+
+  "moderationTitle": "Moderation",
+  "moderationHintTitle": "Block lists and policies",
+  "moderationBlockedDomains": "Blocked domains",
+  "moderationBlockedDomainsHint": "One per line (example.com or *.example.com)",
+  "moderationBlockedActors": "Blocked actors",
+  "moderationBlockedActorsHint": "One actor URL per line",
+  "moderationHint": "Blocks apply to inbound and outbound interactions.",
+
+  "networkingTitle": "Networking",
+  "networkingHintTitle": "Relay, P2P, and AP relays",
+  "networkingRelay": "Relay public base URL",
+  "networkingRelayWs": "Relay WebSocket",
+  "networkingBind": "Local bind",
+  "networkingP2p": "P2P",
+  "networkingRelaysTitle": "Relay discovery",
+  "networkingRelaysCount": "{count} relays known",
+  "@networkingRelaysCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "networkingRelaysEmpty": "No relays yet",
+  "relayAdminTitle": "Relay admin",
+  "relayAdminHint": "Manage relay users and audit",
+  "relayAdminRelayWsLabel": "Relay WS",
+  "relayAdminTokenLabel": "Admin token",
+  "relayAdminTokenHint": "Paste admin token",
+  "relayAdminTokenMissing": "Add an admin token to use relay admin.",
+  "relayAdminUsers": "Users",
+  "relayAdminAudit": "Audit",
+  "relayAdminRegister": "Register",
+  "relayAdminRegisterHint": "username (e.g. alice)",
+  "relayAdminUsername": "Username",
+  "relayAdminGenerateToken": "Generate token",
+  "relayAdminRotate": "Rotate token",
+  "relayAdminEnable": "Enable",
+  "relayAdminDisable": "Disable",
+  "relayAdminDelete": "Delete",
+  "relayAdminAuditFailed": "Failed",
+  "relayAdminUserEnabled": "Enabled",
+  "relayAdminUserDisabled": "Disabled",
+  "relayAdminUserSearchHint": "Search users…",
+  "relayAdminDeleteConfirm": "Delete user {username}?",
+  "relayAdminAuditExport": "Export audit",
+  "relayAdminAuditExported": "Audit exported: {path}",
+  "@relayAdminAuditExported": {
+    "placeholders": {
+      "path": { "type": "String" }
+    }
+  },
+  "relayAdminAuditSearchHint": "Search audit…",
+  "relayAdminAuditFailedOnly": "Failed only",
+  "relayAdminAuditReverse": "Reverse order",
+  "relayAdminUsersCount": "Users: {count}",
+  "@relayAdminUsersCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "relayAdminUsersDisabledCount": "Disabled: {count}",
+  "@relayAdminUsersDisabledCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "relayAdminAuditLast": "Last audit",
+  "@relayAdminDeleteConfirm": {
+    "placeholders": {
+      "username": { "type": "String" }
+    }
+  },
+  "networkingRelaysError": "Relay sync failed",
+  "networkingApRelays": "ActivityPub relays",
+  "networkingApRelaysEmpty": "No AP relays configured",
+  "networkingEditAccount": "Edit account/networking",
+  "networkingHint": "Some changes require restarting the core.",
+
+  "backupTitle": "Backup",
+  "backupHint": "Export/import your Fedi3 profile and settings",
+  "backupExportTitle": "Export",
+  "backupExportHint": "Creates a JSON backup (config + UI prefs).",
+  "backupExportSave": "Save backup file",
+  "backupExportCopy": "Copy backup JSON",
+  "backupExportOk": "OK: copied to clipboard",
+  "backupExportSaved": "OK: saved backup file",
+  "backupImportTitle": "Import",
+  "backupImportHint": "Paste a previously exported JSON backup here.",
+  "backupImportApply": "Import now",
+  "backupImportFile": "Import from file",
+  "backupImportOk": "OK: imported (core restarted)",
+  "backupErr": "Backup error: {error}",
+  "@backupErr": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "statusRelay": "Relay",
+  "statusP2p": "P2P",
+  "statusMailbox": "Mailbox",
+  "statusWebrtc": "WebRTC",
+  "statusRelayRtt": "R",
+  "statusP2pRtt": "P",
+  "statusMailboxRtt": "M",
+  "statusRelayTraffic": "R ↑/↓",
+  "statusP2pTraffic": "P ↑/↓",
+  "statusMailboxTraffic": "M ↑/↓",
+  "statusWebrtcTraffic": "W ↑/↓",
+  "statusCoreStoppedShort": "core off",
+  "statusUnknownShort": "?",
+  "statusConnectedShort": "on",
+  "statusDisconnectedShort": "off",
+  "statusNoPeersShort": "0/0",
+  "settingsOk": "OK",
+  "settingsErr": "ERR: {error}",
+  "@settingsErr": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "relaysTitle": "Relays",
+  "relaysCurrent": "Current relay",
+  "relaysTelemetry": "Telemetry",
+  "relaysKnown": "Known relays",
+  "relaysLastSeen": "last_seen={ms}",
+  "@relaysLastSeen": {
+    "placeholders": {
+      "ms": { "type": "String" }
+    }
+  },
+  "relaysPeersTitle": "Known peers",
+  "relaysPeersSearchHint": "Search peers",
+  "relaysPeersEmpty": "No peers found",
+  "relaysRecommended": "Recommended",
+  "relaysLatency": "Latency: {ms} ms",
+  "@relaysLatency": {
+    "placeholders": {
+      "ms": { "type": "int" }
+    }
+  },
+  "relaysCoverageTitle": "Search coverage",
+  "relaysCoverageUsers": "{indexed}/{total} users indexed",
+  "@relaysCoverageUsers": {
+    "placeholders": {
+      "indexed": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "relaysCoverageLast": "Last index: {ms}",
+  "@relaysCoverageLast": {
+    "placeholders": {
+      "ms": { "type": "String" }
+    }
+  },
+
+  "onboardingTitle": "Fedi3 setup",
+  "onboardingIntro": "Create your local instance and connect it to a relay (for legacy compatibility).",
+  "onboardingUsername": "Username",
+  "onboardingDomain": "Domain (handle: user@domain)",
+  "onboardingRelayPublicUrl": "Relay public URL (https://relay... or http://127.0.0.1:8787)",
+  "onboardingRelayWs": "Relay WS (wss://... or ws://127.0.0.1:8787)",
+  "onboardingRelayToken": "Relay token",
+  "onboardingBind": "Local bind (host:port)",
+  "onboardingInternalToken": "Internal token (UI ↔ core)",
+  "onboardingEnableP2p": "Enable P2P",
+  "onboardingSave": "Save & open app",
+  "onboardingRelayTokenTooShort": "Relay token too short (min 16 characters).",
+
+  "editAccountTitle": "Edit account",
+  "editAccountSave": "Save",
+  "editAccountCoreRunningWarning": "Core is running: it will be stopped automatically before saving to avoid inconsistencies.",
+  "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
+  "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
+  "editAccountRegenerateInternal": "Regenerate internal token",
+
+  "devCoreTitle": "Dev core controls",
+  "devCoreConfigSaved": "Config (saved)",
+  "devCoreStart": "Start",
+  "devCoreStop": "Stop",
+  "devCoreFetchMigration": "Fetch migration status",
+  "devCoreVersion": "Core version: {version}",
+  "@devCoreVersion": {
+    "placeholders": {
+      "version": { "type": "String" }
+    }
+  },
+  "devCoreNotLoaded": "Core not loaded: {error}",
+  "@devCoreNotLoaded": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "notificationsTitle": "Notifications",
+  "notificationsEmpty": "No notifications",
+  "notificationsCoreNotRunning": "Core not running.",
+  "notificationsGeneric": "Notification",
+  "notificationsFollow": "New follower",
+  "notificationsFollowAccepted": "Follow accepted",
+  "notificationsFollowRejected": "Follow rejected",
+  "notificationsLike": "Liked your post",
+  "notificationsReact": "Reacted to your post",
+  "notificationsBoost": "Boosted your post",
+  "notificationsMentionOrReply": "Mention / reply",
+
+  "uiSettingsTitle": "Appearance & language",
+  "uiSettingsHint": "Theme, language, density, font size",
+  "uiLanguage": "Language",
+  "uiLanguageSystem": "System default",
+  "uiTheme": "Theme",
+  "uiThemeSystem": "System",
+  "uiThemeLight": "Light",
+  "uiThemeDark": "Dark",
+  "uiDensity": "Density",
+  "uiDensityNormal": "Normal",
+  "uiDensityCompact": "Compact",
+  "uiAccent": "Accent color",
+  "uiFontSize": "Font size",
+  "uiFontSizeHint": "Affects the whole app",
+  "gifSettingsTitle": "GIFs",
+  "gifSettingsHint": "Giphy API key",
+  "gifProviderLabel": "Provider",
+  "gifProviderHint": "Use your own API key to enable GIF search.",
+  "gifProviderTenor": "Tenor",
+  "gifProviderGiphy": "Giphy",
+  "gifApiKeyLabel": "API key",
+  "gifApiKeyHint": "Paste your Giphy API key",
+  "gifSettingsDefaultHint": "You can use the default Giphy key for now.",
+  "gifSettingsUseDefault": "Use default key",
+
+  "composeContentWarningTitle": "Content warning",
+  "composeContentWarningHint": "Hide content behind a warning",
+  "composeContentWarningTextLabel": "Warning text",
+  "composeSensitiveMediaTitle": "Sensitive media",
+  "composeSensitiveMediaHint": "Mark media as sensitive",
+  "composeEmojiButton": "Emoji",
+  "composeMfmCheatsheet": "MFM cheatsheet",
+  "composeMfmCheatsheetTitle": "MFM cheatsheet",
+  "composeMfmCheatsheetBody": "**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strike\n`code` -> inline code\n#tag -> hashtag\n:emoji: -> custom emoji\nLine breaks: new line",
+  "close": "Close",
+  "composeVisibilityTitle": "Visibility",
+  "composeVisibilityHint": "Who can see this post",
+  "composeVisibilityPublic": "Public",
+  "composeVisibilityHome": "Home",
+  "composeVisibilityFollowers": "Followers only",
+  "composeVisibilityDirect": "Direct",
+  "composeVisibilityDirectLabel": "Direct recipient",
+  "composeVisibilityDirectHint": "@user@host or actor URL",
+  "composeVisibilityDirectMissing": "Direct recipient is required",
+  "composeExpand": "Expand",
+  "composeExpandTitle": "Composer",
+
+  "uiEmojiPaletteTitle": "Emoji palette",
+  "uiEmojiPaletteHint": "Edit quick emojis",
+  "emojiPaletteAddLabel": "Add emoji",
+  "emojiPaletteAddHint": "😀 or :shortcode:",
+  "emojiPaletteAddButton": "Add",
+  "emojiPaletteEmpty": "No emojis yet.",
+
+  "emojiPickerTitle": "Emoji",
+  "emojiPickerClose": "Close",
+  "emojiPickerSearchLabel": "Search",
+  "emojiPickerSearchHint": "Emoji or :shortcode:",
+  "emojiPickerPalette": "Palette",
+  "emojiPickerRecent": "Recent",
+  "emojiPickerCommon": "Common",
+  "emojiPickerCustom": "Custom emojis",
+
+  "reactionPickerTitle": "Reactions",
+  "reactionPickerClose": "Close",
+  "reactionPickerSearchLabel": "Search or custom",
+  "reactionPickerSearchHint": "Emoji or :shortcode:",
+  "reactionPickerRecent": "Recent",
+  "reactionPickerCommon": "Common",
+  "reactionPickerNoteEmojis": "This note emojis",
+  "reactionPickerGlobalEmojis": "Global custom emojis",
+
+  "uiEmojiPickerTitle": "Emoji picker",
+  "uiEmojiPickerSizeLabel": "Size",
+  "uiEmojiPickerColumnsLabel": "Columns",
+  "uiEmojiPickerStyleLabel": "Custom emoji style",
+  "uiEmojiPickerStyleImage": "Image",
+  "uiEmojiPickerStyleText": "Text",
+  "uiEmojiPickerPresetLabel": "Preset",
+  "uiEmojiPickerPresetCompact": "Compact",
+  "uiEmojiPickerPresetComfort": "Comfort",
+  "uiEmojiPickerPresetLarge": "Large",
+  "uiEmojiPickerPreviewLabel": "Preview"
+}
