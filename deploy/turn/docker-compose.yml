@@ -1,0 +1,20 @@
+services:
+  coturn:
+    image: instrumentisto/coturn:latest
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../../.env
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--fingerprint"
+      - "--no-cli"
+      - "--realm=${TURN_REALM:-relay.fedi3.com}"
+      - "--listening-port=${TURN_PORT:-3478}"
+      - "--min-port=${TURN_MIN_PORT:-49152}"
+      - "--max-port=${TURN_MAX_PORT:-65535}"
+      - "--lt-cred-mech"
+      - "--user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}"
+      - "--no-tlsv1"
+      - "--no-tlsv1_1"

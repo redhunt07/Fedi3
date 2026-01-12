@@ -1,0 +1,691 @@
+{
+  "@@locale": "it",
+
+  "appTitle": "Fedi3",
+
+  "navTimeline": "Timeline",
+  "navCompose": "Componi",
+  "navNotifications": "Notifiche",
+  "navSearch": "Cerca",
+  "navChat": "Chat",
+  "navRelays": "Relay",
+  "navSettings": "Configurazioni",
+
+  "save": "Salva",
+  "cancel": "Annulla",
+  "ok": "OK",
+  "err": "Errore: {error}",
+  "@err": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "copy": "Copia",
+  "copied": "Copiato",
+  "enabled": "Attivo",
+  "disabled": "Disattivo",
+  "networkErrorTitle": "Problema di rete",
+  "networkErrorHint": "Controlla la connessione e riprova.",
+  "networkErrorRetry": "Riprova",
+
+  "timelineTitle": "Timeline",
+  "timelineTabHome": "Home",
+  "timelineTabLocal": "Locale",
+  "timelineTabSocial": "Sociale",
+  "timelineTabFederated": "Federata",
+  "searchTitle": "Cerca",
+  "searchHint": "Cerca post, utenti, hashtag",
+  "searchTabPosts": "Post",
+  "searchTabUsers": "Utenti",
+  "searchTabHashtags": "Hashtag",
+  "searchEmpty": "Scrivi per cercare",
+  "searchNoResults": "Nessun risultato",
+  "searchShowingFor": "Risultati per",
+  "searchSourceAll": "Tutti",
+  "searchSourceLocal": "Locale",
+  "searchSourceRelay": "Relay",
+  "searchTagCount": "{count} post",
+  "@searchTagCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+
+  "chatTitle": "Chat",
+  "chatThreadTitle": "Conversazione",
+  "chatNewTitle": "Nuova chat",
+  "chatNewTooltip": "Avvia una nuova chat",
+  "chatNewMissingFields": "Aggiungi destinatari e un messaggio.",
+  "chatNewFailed": "Creazione chat non riuscita.",
+  "chatRecipients": "Destinatari",
+  "chatRecipientsHint": "es. @alice@example.com, https://server/users/bob",
+  "chatMessage": "Messaggio",
+  "chatMessageHint": "Scrivi un messaggio…",
+  "chatCreate": "Crea",
+  "chatSend": "Invia",
+  "chatRefresh": "Aggiorna",
+  "chatThreadsEmpty": "Nessuna chat",
+  "chatEmpty": "Nessun messaggio",
+  "chatNoMessages": "Nessun messaggio",
+  "chatDirectMessage": "Messaggio diretto",
+  "chatGroup": "Chat di gruppo",
+  "chatMessageDeleted": "Messaggio eliminato",
+  "chatMessageEmpty": "Messaggio vuoto",
+  "chatEdit": "Modifica",
+  "chatDelete": "Elimina",
+  "chatEditTitle": "Modifica messaggio",
+  "chatDeleteTitle": "Elimina messaggio",
+  "chatDeleteHint": "Questo rimuoverà il messaggio per tutti.",
+  "chatSave": "Salva",
+  "chatNewMessage": "Nuovo messaggio",
+  "chatNewMessageBody": "Hai ricevuto un nuovo messaggio.",
+  "chatOpen": "Apri",
+  "chatGif": "GIF",
+  "chatGifSearchHint": "Cerca GIF…",
+  "chatGifEmpty": "Nessuna GIF trovata",
+  "chatGifMissingKey": "Aggiungi una API key GIF nelle impostazioni per abilitare la ricerca.",
+  "chatStatusPending": "In attesa",
+  "chatStatusQueued": "In coda",
+  "chatStatusSent": "Inviato",
+  "chatStatusDelivered": "Consegnato",
+  "chatStatusSeen": "Visto",
+  "chatReply": "Rispondi",
+  "chatReplyClear": "Annulla risposta",
+  "chatReplyAttachment": "Allegato",
+  "chatReplyUnknown": "Messaggio originale",
+  "chatMembers": "Membri",
+  "chatRename": "Rinomina chat",
+  "chatRenameHint": "Nuovo titolo chat",
+  "chatAddMember": "Aggiungi membro",
+  "chatAddMemberHint": "Cerca o incolla un actor",
+  "chatRemoveMember": "Rimuovi membro",
+  "chatReact": "Reagisci",
+  "chatPin": "Fissa chat",
+  "chatUnpin": "Rimuovi fissata",
+  "chatTyping": "{name} sta scrivendo…",
+  "@chatTyping": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "chatTypingMany": "{names} stanno scrivendo…",
+  "@chatTypingMany": {
+    "placeholders": {
+      "names": { "type": "String" }
+    }
+  },
+
+  "timelineHomeTooltip": "Timeline Generica (P2P rete globale + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.",
+  "timelineLocalTooltip": "Timeline Follower/Follow (P2P + Legacy). Solo profili con cui hai relazione follow/follower.",
+  "timelineSocialTooltip": "Timeline Sociale (P2P). Contenuti best-effort diffusi via gossip/DHT (scoperta peer oltre i legacy).",
+  "timelineFederatedTooltip": "Timeline Federata (P2P + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.",
+  "timelineLayoutColumns": "Passa alle colonne",
+  "timelineLayoutTabs": "Passa alle tab",
+
+  "coreStart": "Avvia core",
+  "coreStop": "Ferma core",
+
+  "listNoItems": "Nessun elemento",
+  "listEnd": "Fine",
+  "listLoadMore": "Carica altro",
+
+  "timelineNewPosts": "{count} nuovi post",
+  "@timelineNewPosts": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "timelineShowNewPosts": "Mostra",
+  "timelineShowNewPostsHint": "Clicca per mostrare senza ricaricare",
+  "timelineRefreshTitle": "Aggiorna",
+  "timelineRefreshHint": "Forza ricarica e pull dai legacy mentre eri offline",
+
+  "activityBoost": "Boost",
+  "activityReply": "Rispondi",
+  "activityLike": "Mi piace",
+  "activityReact": "Reazione",
+  "activityReplyTitle": "Rispondi",
+  "activityReplyHint": "Scrivi una risposta…",
+  "activityCancel": "Annulla",
+  "activitySend": "Invia",
+
+  "activityUnsupported": "Elemento non supportato",
+  "activityViewRaw": "Mostra raw",
+  "activityHideRaw": "Nascondi raw",
+  "noteInReplyTo": "In risposta a",
+  "noteBoostedBy": "Boost di {name}",
+  "@noteBoostedBy": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "noteThreadTitle": "Thread",
+  "noteThreadUp": "In risposta a",
+  "noteShowThread": "Mostra thread",
+  "noteHideThread": "Nascondi thread",
+  "noteLoadingThread": "Caricamento…",
+  "noteShowReplies": "Mostra risposte",
+  "noteHideReplies": "Nascondi risposte",
+  "noteLoadingReplies": "Caricamento risposte…",
+  "noteReactionLoading": "Caricamento reazioni…",
+  "noteReactionAdd": "Aggiungi reazione",
+  "noteContentWarning": "Contenuto sensibile",
+  "noteShowContent": "Mostra",
+  "noteHideContent": "Nascondi",
+
+  "timeAgoJustNow": "adesso",
+  "timeAgoMinutes": "{count,plural,=1{1 minuto fa}other{{count} minuti fa}}",
+  "@timeAgoMinutes": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoHours": "{count,plural,=1{1 ora fa}other{{count} ore fa}}",
+  "@timeAgoHours": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoDays": "{count,plural,=1{1 giorno fa}other{{count} giorni fa}}",
+  "@timeAgoDays": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoMonths": "{count,plural,=1{1 mese fa}other{{count} mesi fa}}",
+  "@timeAgoMonths": { "placeholders": { "count": { "type": "int" } } },
+  "timeAgoYears": "{count,plural,=1{1 anno fa}other{{count} anni fa}}",
+  "@timeAgoYears": { "placeholders": { "count": { "type": "int" } } },
+
+  "firstRunTitle": "Benvenuto",
+  "firstRunIntro": "Vuoi fare il login con un account esistente oppure crearne uno nuovo?",
+  "firstRunLoginTitle": "Login (config esistente)",
+  "firstRunLoginHint": "Inserisci i dati di un account/setup già esistente.",
+  "firstRunCreateTitle": "Crea nuovo account",
+  "firstRunCreateHint": "Crea una nuova identità locale e configura gli endpoint del relay.",
+  "firstRunRelayPreviewTitle": "Anteprima rete relay",
+  "firstRunRelayPreviewRelays": "Relay",
+  "firstRunRelayPreviewPeers": "Peer",
+  "firstRunRelayPreviewEmpty": "Nessun dato disponibile",
+  "firstRunRelayPreviewError": "Impossibile caricare l'anteprima relay.",
+
+  "onboardingCreateTitle": "Crea account",
+  "onboardingCreateIntro": "Compila i campi necessari. Il core verrà avviato automaticamente dopo il salvataggio.",
+  "onboardingLoginTitle": "Login",
+  "onboardingLoginIntro": "Inserisci i campi del tuo setup esistente. Il core verrà avviato automaticamente dopo il salvataggio.",
+  "onboardingImportBackup": "Importa backup JSON",
+  "onboardingRelaySelect": "Selezione relay",
+  "onboardingRelayDiscover": "Scopri",
+  "onboardingRelayDiscovering": "Ricerca…",
+  "onboardingRelayListHint": "Scegli un relay dalla lista condivisa o inseriscilo manualmente.",
+  "onboardingRelayPick": "Seleziona un relay",
+  "onboardingRelayCustom": "Usa impostazioni relay personalizzate",
+
+  "composeTitle": "Componi",
+  "composeCharCount": "{used}/{max}",
+  "@composeCharCount": {
+    "placeholders": {
+      "used": { "type": "int" },
+      "max": { "type": "int" }
+    }
+  },
+  "composeCoreNotRunning": "Core non avviato: vai in {settings} e premi {start}.",
+  "@composeCoreNotRunning": {
+    "placeholders": {
+      "settings": { "type": "String" },
+      "start": { "type": "String" }
+    }
+  },
+  "composeWhatsHappening": "Scrivi cosa pensi.",
+  "composePublic": "Pubblico",
+  "composePublicHint": "Se off: solo follower",
+  "composeAddMediaPath": "Aggiungi media (path)",
+  "composeAddMedia": "Allega media",
+  "composeDropHere": "Trascina qui i file per allegare",
+  "composeClearDraft": "Svuota bozza",
+  "composeDraftSaved": "Bozza salvata",
+  "composeDraftRestored": "Bozza ripristinata",
+  "composeDraftCleared": "Bozza eliminata",
+  "composeDraftResumeTooltip": "Riprendi bozza",
+  "composeDraftDeleteTooltip": "Elimina bozza",
+  "composeQuickHint": "Apri il compositore rapido",
+  "translationTitle": "Traduzione",
+  "translationHint": "Impostazioni DeepL o DeepLX",
+  "translationProviderLabel": "Provider",
+  "translationProviderDeepL": "DeepL",
+  "translationProviderDeepLX": "DeepLX",
+  "translationAuthKeyLabel": "Chiave API",
+  "translationAuthKeyHint": "Chiave API DeepL",
+  "translationUseProLabel": "Account Pro",
+  "translationUseProHint": "Usa api.deepl.com invece di api-free.deepl.com",
+  "translationDeepLXUrlLabel": "Endpoint DeepLX",
+  "translationDeepLXUrlHint": "https://api.deeplx.org/translate",
+  "translationTimeoutLabel": "Timeout",
+  "translationTimeoutValue": "{seconds, plural, one {# secondo} other {# secondi}}",
+  "@translationTimeoutValue": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "translationTargetLabel": "Lingua di destinazione: {lang}",
+  "@translationTargetLabel": {
+    "placeholders": {
+      "lang": {
+        "type": "String"
+      }
+    }
+  },
+  "noteTranslate": "Traduci",
+  "noteShowTranslation": "Mostra traduzione",
+  "noteShowOriginal": "Mostra originale",
+  "noteTranslatedFrom": "Tradotto da {lang}",
+  "@noteTranslatedFrom": {
+    "placeholders": {
+      "lang": {
+        "type": "String"
+      }
+    }
+  },
+  "noteTranslateFailed": "Traduzione non riuscita: {error}",
+  "@noteTranslateFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "composePost": "Pubblica",
+  "composeAttachments": "Allegati",
+  "composeMediaId": "mediaId={id}",
+  "@composeMediaId": {
+    "placeholders": {
+      "id": { "type": "String" }
+    }
+  },
+  "composeFileFallback": "file",
+  "composeMediaFilePathLabel": "Percorso file media (desktop/dev)",
+  "composeMediaFilePathHint": "C:\\\\path\\\\img.png oppure /home/user/img.png",
+  "composeNotUploaded": "Non caricato",
+  "composeQueuedOk": "OK: in coda per la consegna",
+  "composeErrEmptyContent": "ERR: contenuto vuoto",
+  "composeErrUnableReadFile": "ERR: impossibile leggere il file: {error}",
+  "@composeErrUnableReadFile": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "composeErrUnablePickFile": "ERR: selezione file fallita: {error}",
+  "@composeErrUnablePickFile": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "composeErrInvalidMediaType": "ERR: tipo media non valido: {type}",
+  "@composeErrInvalidMediaType": {
+    "placeholders": {
+      "type": { "type": "String" }
+    }
+  },
+  "composeErrGeneric": "ERR: {error}",
+  "@composeErrGeneric": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "settingsTitle": "Configurazioni",
+  "settingsCore": "Core",
+  "settingsCoreRunning": "In esecuzione (handle={handle})",
+  "@settingsCoreRunning": {
+    "placeholders": {
+      "handle": { "type": "int" }
+    }
+  },
+  "settingsCoreStopped": "Fermo",
+  "settingsAccount": "Account",
+  "settingsFollowSection": "Follow / Unfollow",
+  "settingsActorUrlLabel": "Actor URL (https://...)",
+  "settingsFollow": "Follow",
+  "settingsUnfollow": "Unfollow",
+  "settingsAdvancedDev": "Avanzate (dev)",
+  "settingsAdvancedDevHint": "Start/Stop + status migrazione",
+  "settingsResetApp": "Reset app (cancella config)",
+
+  "profileEditTitle": "Profilo",
+  "profileEditHint": "Profilo pubblico, avatar, banner, campi",
+  "profileDisplayName": "Nome visualizzato",
+  "profileBio": "Bio",
+  "profileFollowers": "Follower",
+  "profileFollowing": "Seguiti",
+  "profileAvatar": "Avatar",
+  "profileBanner": "Banner",
+  "profilePickFile": "Scegli file",
+  "profileFilePathHint": "Percorso file (desktop)",
+  "profileUpload": "Carica",
+  "profileUploadOk": "OK: caricato",
+  "profileSave": "Salva",
+  "profileSavedOk": "OK: salvato (core riavviato)",
+  "profileErrSave": "Salvataggio fallito: {error}",
+  "@profileErrSave": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "profileErrUpload": "Upload fallito: {error}",
+  "@profileErrUpload": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "profileErrCoreNotRunning": "Core non avviato.",
+  "profileFieldsTitle": "Campi profilo",
+  "profileFieldAdd": "Aggiungi campo",
+  "profileFieldEdit": "Modifica campo",
+  "profileFieldName": "Nome",
+  "profileFieldValue": "Valore",
+  "profileFieldNameEmpty": "(vuoto)",
+
+  "privacyTitle": "Privacy",
+  "privacyHint": "Impostazioni privacy account",
+  "privacyLockedAccount": "Account privato (approvazione follow manuale)",
+  "privacyLockedAccountHint": "Se attivo, le richieste di follow richiedono approvazione.",
+  "telemetrySectionTitle": "Diagnostica",
+  "telemetryEnabled": "Telemetria anonima",
+  "telemetryEnabledHint": "Condividi diagnostica minima (errori e prestazioni) per migliorare la stabilità. Nessun contenuto personale.",
+  "telemetryMonitoringEnabled": "Monitoraggio client (debug/staging)",
+  "telemetryMonitoringHint": "Mantieni un log diagnostico locale per il troubleshooting.",
+  "telemetryOpen": "Apri diagnostica",
+  "telemetryTitle": "Diagnostica",
+  "telemetryRefresh": "Aggiorna",
+  "telemetryExport": "Esporta",
+  "telemetryExportEmpty": "Nessuna diagnostica da esportare",
+  "telemetryClear": "Svuota",
+  "telemetryEmpty": "Nessuna diagnostica",
+
+  "securityTitle": "Sicurezza",
+  "securityHint": "Token e endpoint interni",
+  "securityInternalToken": "Token interno",
+  "securityInternalTokenHint": "Usato per proteggere gli endpoint interni",
+  "securityRegenerate": "Rigenera",
+  "securityHintInternalEndpoints": "Tieni questo token privato. Se esposto, altri nella tua rete potrebbero chiamare endpoint interni.",
+
+  "moderationTitle": "Moderazione",
+  "moderationHintTitle": "Liste di blocco e policy",
+  "moderationBlockedDomains": "Domini bloccati",
+  "moderationBlockedDomainsHint": "Uno per riga (example.com o *.example.com)",
+  "moderationBlockedActors": "Actor bloccati",
+  "moderationBlockedActorsHint": "Un URL actor per riga",
+  "moderationHint": "I blocchi si applicano a interazioni in ingresso e in uscita.",
+
+  "networkingTitle": "Networking",
+  "networkingHintTitle": "Relay, P2P e AP relays",
+  "networkingRelay": "Relay public base URL",
+  "networkingRelayWs": "Relay WebSocket",
+  "networkingBind": "Bind locale",
+  "networkingP2p": "P2P",
+  "networkingRelaysTitle": "Discovery relay",
+  "networkingRelaysCount": "{count} relay noti",
+  "@networkingRelaysCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "networkingRelaysEmpty": "Nessun relay",
+  "relayAdminTitle": "Relay admin",
+  "relayAdminHint": "Gestisci utenti relay e audit",
+  "relayAdminRelayWsLabel": "Relay WS",
+  "relayAdminTokenLabel": "Token admin",
+  "relayAdminTokenHint": "Incolla token admin",
+  "relayAdminTokenMissing": "Aggiungi un token admin per usare il relay admin.",
+  "relayAdminUsers": "Utenti",
+  "relayAdminAudit": "Audit",
+  "relayAdminRegister": "Registra",
+  "relayAdminRegisterHint": "username (es. alice)",
+  "relayAdminUsername": "Username",
+  "relayAdminGenerateToken": "Genera token",
+  "relayAdminRotate": "Ruota token",
+  "relayAdminEnable": "Abilita",
+  "relayAdminDisable": "Disabilita",
+  "relayAdminDelete": "Elimina",
+  "relayAdminAuditFailed": "Fallito",
+  "relayAdminUserEnabled": "Attivo",
+  "relayAdminUserDisabled": "Disattivo",
+  "relayAdminUserSearchHint": "Cerca utenti…",
+  "relayAdminDeleteConfirm": "Eliminare l'utente {username}?",
+  "@relayAdminDeleteConfirm": {
+    "placeholders": {
+      "username": { "type": "String" }
+    }
+  },
+  "relayAdminAuditExport": "Esporta audit",
+  "relayAdminAuditExported": "Audit esportato: {path}",
+  "@relayAdminAuditExported": {
+    "placeholders": {
+      "path": { "type": "String" }
+    }
+  },
+  "relayAdminAuditSearchHint": "Cerca audit…",
+  "relayAdminAuditFailedOnly": "Solo falliti",
+  "relayAdminAuditReverse": "Ordine inverso",
+  "relayAdminUsersCount": "Utenti: {count}",
+  "@relayAdminUsersCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "relayAdminUsersDisabledCount": "Disattivi: {count}",
+  "@relayAdminUsersDisabledCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "relayAdminAuditLast": "Ultimo audit",
+  "networkingRelaysError": "Sync relay non riuscita",
+  "networkingApRelays": "ActivityPub relays",
+  "networkingApRelaysEmpty": "Nessun AP relay configurato",
+  "networkingEditAccount": "Modifica account/networking",
+  "networkingHint": "Alcune modifiche richiedono il riavvio del core.",
+
+  "backupTitle": "Backup",
+  "backupHint": "Esporta/importa profilo e impostazioni Fedi3",
+  "backupExportTitle": "Esporta",
+  "backupExportHint": "Crea un backup JSON (config + preferenze UI).",
+  "backupExportSave": "Salva file backup",
+  "backupExportCopy": "Copia JSON backup",
+  "backupExportOk": "OK: copiato negli appunti",
+  "backupExportSaved": "OK: file backup salvato",
+  "backupImportTitle": "Importa",
+  "backupImportHint": "Incolla qui un backup JSON esportato in precedenza.",
+  "backupImportApply": "Importa ora",
+  "backupImportFile": "Importa da file",
+  "backupImportOk": "OK: importato (core riavviato)",
+  "backupErr": "Errore backup: {error}",
+  "@backupErr": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "statusRelay": "Relay",
+  "statusP2p": "P2P",
+  "statusMailbox": "Mailbox",
+  "statusWebrtc": "WebRTC",
+  "statusRelayRtt": "R",
+  "statusP2pRtt": "P",
+  "statusMailboxRtt": "M",
+  "statusRelayTraffic": "R ↑/↓",
+  "statusP2pTraffic": "P ↑/↓",
+  "statusMailboxTraffic": "M ↑/↓",
+  "statusWebrtcTraffic": "W ↑/↓",
+  "statusCoreStoppedShort": "core off",
+  "statusUnknownShort": "?",
+  "statusConnectedShort": "on",
+  "statusDisconnectedShort": "off",
+  "statusNoPeersShort": "0/0",
+  "settingsOk": "OK",
+  "settingsErr": "ERR: {error}",
+  "@settingsErr": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "relaysTitle": "Relay",
+  "relaysCurrent": "Relay attuale",
+  "relaysTelemetry": "Telemetria",
+  "relaysKnown": "Relay conosciuti",
+  "relaysLastSeen": "last_seen={ms}",
+  "@relaysLastSeen": {
+    "placeholders": {
+      "ms": { "type": "String" }
+    }
+  },
+  "relaysPeersTitle": "Peer conosciuti",
+  "relaysPeersSearchHint": "Cerca peer",
+  "relaysPeersEmpty": "Nessun peer trovato",
+  "relaysRecommended": "Consigliato",
+  "relaysLatency": "Latenza: {ms} ms",
+  "@relaysLatency": {
+    "placeholders": {
+      "ms": { "type": "int" }
+    }
+  },
+  "relaysCoverageTitle": "Copertura ricerca",
+  "relaysCoverageUsers": "{indexed}/{total} utenti indicizzati",
+  "@relaysCoverageUsers": {
+    "placeholders": {
+      "indexed": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "relaysCoverageLast": "Ultima indicizzazione: {ms}",
+  "@relaysCoverageLast": {
+    "placeholders": {
+      "ms": { "type": "String" }
+    }
+  },
+
+  "onboardingTitle": "Setup Fedi3",
+  "onboardingIntro": "Crea la tua istanza locale e collegala a un relay (per compatibilità con le istanze legacy).",
+  "onboardingUsername": "Username",
+  "onboardingDomain": "Domain (handle: user@domain)",
+  "onboardingRelayPublicUrl": "Relay public URL (https://relay... oppure http://127.0.0.1:8787)",
+  "onboardingRelayWs": "Relay WS (wss://... oppure ws://127.0.0.1:8787)",
+  "onboardingRelayToken": "Relay token",
+  "onboardingBind": "Local bind (host:port)",
+  "onboardingInternalToken": "Internal token (UI ↔ core)",
+  "onboardingEnableP2p": "Abilita P2P",
+  "onboardingSave": "Salva e apri app",
+  "onboardingRelayTokenTooShort": "Relay token troppo corto (min 16 caratteri).",
+
+  "editAccountTitle": "Modifica account",
+  "editAccountSave": "Salva",
+  "editAccountCoreRunningWarning": "Core in esecuzione: verrà fermato automaticamente prima di salvare per evitare incoerenze.",
+  "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
+  "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
+  "editAccountRegenerateInternal": "Rigenera internal token",
+
+  "devCoreTitle": "Dev core controls",
+  "devCoreConfigSaved": "Config (salvata)",
+  "devCoreStart": "Start",
+  "devCoreStop": "Stop",
+  "devCoreFetchMigration": "Leggi status migrazione",
+  "devCoreVersion": "Versione core: {version}",
+  "@devCoreVersion": {
+    "placeholders": {
+      "version": { "type": "String" }
+    }
+  },
+  "devCoreNotLoaded": "Core non caricato: {error}",
+  "@devCoreNotLoaded": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "notificationsTitle": "Notifiche",
+  "notificationsEmpty": "Nessuna notifica",
+  "notificationsCoreNotRunning": "Core non avviato.",
+  "notificationsGeneric": "Notifica",
+  "notificationsFollow": "Nuovo follower",
+  "notificationsFollowAccepted": "Follow accettato",
+  "notificationsFollowRejected": "Follow rifiutato",
+  "notificationsLike": "Ha messo Mi piace",
+  "notificationsReact": "Ha reagito al post",
+  "notificationsBoost": "Ha boostato il post",
+  "notificationsMentionOrReply": "Menzione / risposta",
+
+  "uiSettingsTitle": "Aspetto e lingua",
+  "uiSettingsHint": "Tema, lingua, densità, dimensione testo",
+  "uiLanguage": "Lingua",
+  "uiLanguageSystem": "Default sistema",
+  "uiTheme": "Tema",
+  "uiThemeSystem": "Sistema",
+  "uiThemeLight": "Chiaro",
+  "uiThemeDark": "Scuro",
+  "uiDensity": "Densità",
+  "uiDensityNormal": "Normale",
+  "uiDensityCompact": "Compatta",
+  "uiAccent": "Colore accento",
+  "uiFontSize": "Dimensione testo",
+  "uiFontSizeHint": "Influisce su tutta l'app",
+  "gifSettingsTitle": "GIF",
+  "gifSettingsHint": "API key Giphy",
+  "gifProviderLabel": "Provider",
+  "gifProviderHint": "Usa una API key personale per abilitare la ricerca.",
+  "gifProviderTenor": "Tenor",
+  "gifProviderGiphy": "Giphy",
+  "gifApiKeyLabel": "API key",
+  "gifApiKeyHint": "Incolla la API key di Giphy",
+  "gifSettingsDefaultHint": "Puoi usare la key predefinita di Giphy per ora.",
+  "gifSettingsUseDefault": "Usa key predefinita",
+
+  "composeContentWarningTitle": "Content warning",
+  "composeContentWarningHint": "Nascondi il contenuto dietro un avviso",
+  "composeContentWarningTextLabel": "Testo avviso",
+  "composeSensitiveMediaTitle": "Media sensibili",
+  "composeSensitiveMediaHint": "Segna i media come sensibili",
+  "composeEmojiButton": "Emoji",
+  "composeMfmCheatsheet": "MFM cheatsheet",
+  "composeMfmCheatsheetTitle": "MFM cheatsheet",
+  "composeMfmCheatsheetBody": "**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n#tag -> hashtag\n:emoji: -> emoji personalizzata\nA capo: nuova linea",
+  "close": "Chiudi",
+  "composeVisibilityTitle": "Visibilità",
+  "composeVisibilityHint": "Chi può vedere questo post",
+  "composeVisibilityPublic": "Pubblico",
+  "composeVisibilityHome": "Home",
+  "composeVisibilityFollowers": "Solo follower",
+  "composeVisibilityDirect": "Diretto",
+  "composeVisibilityDirectLabel": "Destinatario diretto",
+  "composeVisibilityDirectHint": "@utente@host o URL attore",
+  "composeVisibilityDirectMissing": "Serve un destinatario diretto",
+  "composeExpand": "Espandi",
+  "composeExpandTitle": "Editor",
+
+  "uiEmojiPaletteTitle": "Palette emoji",
+  "uiEmojiPaletteHint": "Modifica emoji rapide",
+  "emojiPaletteAddLabel": "Aggiungi emoji",
+  "emojiPaletteAddHint": "😀 o :shortcode:",
+  "emojiPaletteAddButton": "Aggiungi",
+  "emojiPaletteEmpty": "Nessuna emoji.",
+
+  "emojiPickerTitle": "Emoji",
+  "emojiPickerClose": "Chiudi",
+  "emojiPickerSearchLabel": "Cerca",
+  "emojiPickerSearchHint": "Emoji o :shortcode:",
+  "emojiPickerPalette": "Palette",
+  "emojiPickerRecent": "Recenti",
+  "emojiPickerCommon": "Comuni",
+  "emojiPickerCustom": "Emoji custom",
+
+  "reactionPickerTitle": "Reazioni",
+  "reactionPickerClose": "Chiudi",
+  "reactionPickerSearchLabel": "Cerca o personalizza",
+  "reactionPickerSearchHint": "Emoji o :shortcode:",
+  "reactionPickerRecent": "Recenti",
+  "reactionPickerCommon": "Comuni",
+  "reactionPickerNoteEmojis": "Emoji della nota",
+  "reactionPickerGlobalEmojis": "Emoji globali",
+
+  "uiEmojiPickerTitle": "Selettore emoji",
+  "uiEmojiPickerSizeLabel": "Dimensione",
+  "uiEmojiPickerColumnsLabel": "Colonne",
+  "uiEmojiPickerStyleLabel": "Stile emoji custom",
+  "uiEmojiPickerStyleImage": "Immagine",
+  "uiEmojiPickerStyleText": "Testo",
+  "uiEmojiPickerPresetLabel": "Preset",
+  "uiEmojiPickerPresetCompact": "Compatto",
+  "uiEmojiPickerPresetComfort": "Comodo",
+  "uiEmojiPickerPresetLarge": "Grande",
+  "uiEmojiPickerPreviewLabel": "Anteprima"
+}

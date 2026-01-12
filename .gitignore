@@ -1,0 +1,26 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+**/build/
+**/.dart_tool/
+**/.packages
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# Rust
+target/
+**/target/
+
+# OS
+Thumbs.db
+*.swp
+.env
+.env.*
+backups/

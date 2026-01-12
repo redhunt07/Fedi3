@@ -1,0 +1,6 @@
+cd ~/Scrivania/Fedi3-Linux/app
+flutter clean
+rm -rf flutter/ephemeral
+flutter pub get
+flutter build linux --release
+7t2qKx8mE5nQp3LrV9xwAh1B
