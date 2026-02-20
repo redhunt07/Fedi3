@@ -46,8 +46,10 @@ install_rust() {
     return
   fi
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  # shellcheck disable=SC1091
-  source "$HOME/.cargo/env"
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+  fi
 }
 
 install_flutter() {
@@ -73,6 +75,9 @@ clone_or_update_repo() {
 
 build_core() {
   pushd "$REPO_DIR" >/dev/null
+  if [[ -f ./scripts/build_core.sh ]]; then
+    chmod +x ./scripts/build_core.sh
+  fi
   bash ./scripts/build_core.sh release
   popd >/dev/null
 }
