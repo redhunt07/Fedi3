@@ -32,30 +32,23 @@ curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/instal
 
 ## Installazione client Linux (Arch/derivate)
 
-Dipendenze:
+Install (build + setup):
 
 ```
-sudo pacman -S --needed git curl unzip xz zip clang cmake ninja pkgconf gtk3
+curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash
 ```
 
-Flutter SDK (opzionale, se non installato):
+Update-only (senza reinstallare dipendenze):
 
 ```
-sudo pacman -S --needed flutter
+curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash -s -- --update-only
 ```
 
-Build + install:
+Dipendenze principali (pacman):
 
 ```
-sudo mkdir -p /opt/fedi3
-sudo git clone https://github.com/redhunt07/Fedi3.git /opt/fedi3/src
-cd /opt/fedi3/src
-./scripts/build_core.sh release
-cd app
-flutter pub get
-flutter build linux --release
-sudo rm -rf /opt/fedi3/app
-sudo cp -r build/linux/x64/release/bundle /opt/fedi3/app
+base-devel git curl unzip xz zip python clang cmake ninja pkgconf gtk3 webkit2gtk
+gstreamer gst-plugins-base gst-plugins-good libsecret libnotify mpv
 ```
 
 ## Docs
