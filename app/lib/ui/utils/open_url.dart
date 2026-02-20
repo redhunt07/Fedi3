@@ -8,8 +8,17 @@ import 'package:url_launcher/url_launcher.dart';
 Future<bool> openUrlExternal(String url) async {
   final u = url.trim();
   if (u.isEmpty) return false;
-  final uri = Uri.tryParse(u);
-  if (uri == null) return false;
-  return launchUrl(uri, mode: LaunchMode.externalApplication);
-}
+  final raw = Uri.tryParse(u);
+  if (raw == null) return false;
 
+  final uri = raw.hasScheme ? raw : Uri.parse('https://$u');
+  if (!await canLaunchUrl(uri)) {
+    return false;
+  }
+
+  if (await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    return true;
+  }
+
+  return launchUrl(uri, mode: LaunchMode.platformDefault);
+}

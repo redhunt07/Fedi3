@@ -28,8 +28,8 @@ class CoreConfig {
     required this.relayToken,
     required this.bind,
     required this.internalToken,
-    required this.p2pEnable,
     required this.apRelays,
+    required this.bootstrapFollowActors,
     required this.displayName,
     required this.summary,
     required this.iconUrl,
@@ -40,15 +40,16 @@ class CoreConfig {
     required this.manuallyApprovesFollowers,
     required this.blockedDomains,
     required this.blockedActors,
-    this.postDeliveryMode = postDeliveryP2pRelay,
-    this.p2pRelayReserve = const [],
-    this.webrtcEnable = false,
-    this.webrtcIceUrls = const [],
-    this.webrtcIceUsername,
-    this.webrtcIceCredential,
-    this.p2pCacheTtlSecs,
     this.previousPublicBaseUrl,
     this.previousRelayToken,
+    this.upnpPortRangeStart,
+    this.upnpPortRangeEnd,
+    this.upnpLeaseSecs,
+    this.upnpTimeoutSecs,
+    this.useTor = false,
+    this.proxyHost,
+    this.proxyPort,
+    this.proxyType,
   });
 
   final String username;
@@ -58,13 +59,8 @@ class CoreConfig {
   final String relayToken;
   final String bind;
   final String internalToken;
-  final bool p2pEnable;
-  final List<String> p2pRelayReserve;
-  final bool webrtcEnable;
-  final List<String> webrtcIceUrls;
-  final String? webrtcIceUsername;
-  final String? webrtcIceCredential;
   final List<String> apRelays;
+  final List<String> bootstrapFollowActors;
   final String displayName;
   final String summary;
   final String iconUrl;
@@ -75,21 +71,20 @@ class CoreConfig {
   final bool manuallyApprovesFollowers;
   final List<String> blockedDomains;
   final List<String> blockedActors;
-  final String postDeliveryMode;
-  final int? p2pCacheTtlSecs;
   final String? previousPublicBaseUrl;
   final String? previousRelayToken;
+  final int? upnpPortRangeStart;
+  final int? upnpPortRangeEnd;
+  final int? upnpLeaseSecs;
+  final int? upnpTimeoutSecs;
+  final bool useTor;
+  final String? proxyHost;
+  final int? proxyPort;
+  final String? proxyType;
 
   Uri get localBaseUri => Uri.parse('http://$bind');
 
-  static const String postDeliveryP2pRelay = 'p2p_relay';
-  static const String postDeliveryP2pOnly = 'p2p_only';
-
   static CoreConfig fromJson(Map<String, dynamic> json) {
-    final rawMode = (json['postDeliveryMode'] as String?)?.trim().toLowerCase();
-    final postDeliveryMode = (rawMode == postDeliveryP2pOnly || rawMode == postDeliveryP2pRelay)
-        ? rawMode!
-        : postDeliveryP2pRelay;
     return CoreConfig(
       username: (json['username'] as String? ?? '').trim(),
       domain: (json['domain'] as String? ?? '').trim(),
@@ -98,21 +93,12 @@ class CoreConfig {
       relayToken: (json['relayToken'] as String? ?? '').trim(),
       bind: (json['bind'] as String? ?? '').trim(),
       internalToken: (json['internalToken'] as String? ?? '').trim(),
-      p2pEnable: (json['p2pEnable'] as bool?) ?? false,
-      p2pRelayReserve: (json['p2pRelayReserve'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcEnable: (json['webrtcEnable'] as bool?) ?? ((json['p2pEnable'] as bool?) ?? false),
-      webrtcIceUrls: (json['webrtcIceUrls'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcIceUsername: (json['webrtcIceUsername'] as String?)?.trim(),
-      webrtcIceCredential: (json['webrtcIceCredential'] as String?)?.trim(),
       apRelays: (json['apRelays'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList(),
+      bootstrapFollowActors: (json['bootstrapFollowActors'] as List<dynamic>? ?? [])
           .whereType<String>()
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
@@ -139,10 +125,16 @@ class CoreConfig {
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toList(),
-      postDeliveryMode: postDeliveryMode,
-      p2pCacheTtlSecs: (json['p2pCacheTtlSecs'] as num?)?.toInt(),
       previousPublicBaseUrl: (json['previousPublicBaseUrl'] as String?)?.trim(),
       previousRelayToken: (json['previousRelayToken'] as String?)?.trim(),
+      upnpPortRangeStart: (json['upnpPortRangeStart'] as num?)?.toInt(),
+      upnpPortRangeEnd: (json['upnpPortRangeEnd'] as num?)?.toInt(),
+      upnpLeaseSecs: (json['upnpLeaseSecs'] as num?)?.toInt(),
+      upnpTimeoutSecs: (json['upnpTimeoutSecs'] as num?)?.toInt(),
+      useTor: (json['useTor'] as bool?) ?? false,
+      proxyHost: (json['proxyHost'] as String?)?.trim(),
+      proxyPort: (json['proxyPort'] as num?)?.toInt(),
+      proxyType: (json['proxyType'] as String?)?.trim(),
     );
   }
 
@@ -154,13 +146,8 @@ class CoreConfig {
         'relayToken': relayToken,
         'bind': bind,
         'internalToken': internalToken,
-        'p2pEnable': p2pEnable,
-        'p2pRelayReserve': p2pRelayReserve,
-        'webrtcEnable': webrtcEnable,
-        'webrtcIceUrls': webrtcIceUrls,
-        'webrtcIceUsername': webrtcIceUsername,
-        'webrtcIceCredential': webrtcIceCredential,
         'apRelays': apRelays,
+        'bootstrapFollowActors': bootstrapFollowActors,
         'displayName': displayName,
         'summary': summary,
         'iconUrl': iconUrl,
@@ -171,10 +158,16 @@ class CoreConfig {
         'manuallyApprovesFollowers': manuallyApprovesFollowers,
         'blockedDomains': blockedDomains,
         'blockedActors': blockedActors,
-        'postDeliveryMode': postDeliveryMode,
-        'p2pCacheTtlSecs': p2pCacheTtlSecs,
         'previousPublicBaseUrl': previousPublicBaseUrl,
         'previousRelayToken': previousRelayToken,
+        'upnpPortRangeStart': upnpPortRangeStart,
+        'upnpPortRangeEnd': upnpPortRangeEnd,
+        'upnpLeaseSecs': upnpLeaseSecs,
+        'upnpTimeoutSecs': upnpTimeoutSecs,
+        'useTor': useTor,
+        'proxyHost': proxyHost,
+        'proxyPort': proxyPort,
+        'proxyType': proxyType,
       };
 
   Map<String, dynamic> toCoreStartJson() {
@@ -199,17 +192,6 @@ class CoreConfig {
       'relay_token': relayToken,
       'bind': bind,
       'internal_token': internalToken,
-      'post_delivery_mode': postDeliveryMode,
-      'p2p': {
-        'enable': p2pEnable,
-        if (p2pRelayReserve.isNotEmpty) 'relay_reserve': p2pRelayReserve,
-        'webrtc_enable': webrtcEnable,
-        if (webrtcIceUrls.isNotEmpty) 'webrtc_ice_urls': webrtcIceUrls,
-        if (webrtcIceUsername != null && webrtcIceUsername!.trim().isNotEmpty)
-          'webrtc_ice_username': webrtcIceUsername!.trim(),
-        if (webrtcIceCredential != null && webrtcIceCredential!.trim().isNotEmpty)
-          'webrtc_ice_credential': webrtcIceCredential!.trim(),
-      },
     };
     if (displayName.trim().isNotEmpty) cfg['display_name'] = displayName.trim();
     if (summary.trim().isNotEmpty) cfg['summary'] = textToHtml(summary);
@@ -236,14 +218,27 @@ class CoreConfig {
     if (apRelays.isNotEmpty) {
       cfg['ap_relays'] = apRelays;
     }
-    if (p2pCacheTtlSecs != null && p2pCacheTtlSecs! > 0) {
-      cfg['p2p_cache_ttl_secs'] = p2pCacheTtlSecs;
+    if (bootstrapFollowActors.isNotEmpty) {
+      cfg['bootstrap_follow_actors'] = bootstrapFollowActors;
     }
     if (previousPublicBaseUrl != null && previousPublicBaseUrl!.trim().isNotEmpty) {
       cfg['previous_public_base_url'] = previousPublicBaseUrl!.trim();
     }
     if (previousRelayToken != null && previousRelayToken!.trim().isNotEmpty) {
       cfg['previous_relay_token'] = previousRelayToken!.trim();
+    }
+    if (upnpPortRangeStart != null &&
+        upnpPortRangeEnd != null &&
+        upnpPortRangeStart! > 0 &&
+        upnpPortRangeStart! <= upnpPortRangeEnd!) {
+      cfg['upnp_port_start'] = upnpPortRangeStart;
+      cfg['upnp_port_end'] = upnpPortRangeEnd;
+      if (upnpLeaseSecs != null && upnpLeaseSecs! > 0) {
+        cfg['upnp_lease_secs'] = upnpLeaseSecs;
+      }
+      if (upnpTimeoutSecs != null && upnpTimeoutSecs! > 0) {
+        cfg['upnp_timeout_secs'] = upnpTimeoutSecs;
+      }
     }
     return cfg;
   }

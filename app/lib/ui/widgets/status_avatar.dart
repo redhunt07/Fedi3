@@ -24,8 +24,8 @@ class StatusAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatar = _buildAvatar(context);
-    final key = statusKey?.trim() ?? '';
-    if (!showStatus || key.isEmpty) return avatar;
+    final key = statusKey?.trim().toLowerCase() ?? '';
+    if (key.isEmpty) return avatar;
     return ValueListenableBuilder<Map<String, bool>>(
       valueListenable: PeerPresenceStore.instance.onlineByUsername,
       builder: (context, map, _) {

@@ -14,6 +14,7 @@ class ChatThreadItem {
     required this.updatedAtMs,
     required this.lastMessageMs,
     required this.lastMessagePreview,
+    required this.dmActor,
   });
 
   final String threadId;
@@ -23,6 +24,7 @@ class ChatThreadItem {
   final int updatedAtMs;
   final int? lastMessageMs;
   final String? lastMessagePreview;
+  final String? dmActor;
 
   factory ChatThreadItem.fromJson(Map<String, dynamic> json) {
     return ChatThreadItem(
@@ -33,6 +35,7 @@ class ChatThreadItem {
       updatedAtMs: (json['updated_at_ms'] as num?)?.toInt() ?? 0,
       lastMessageMs: (json['last_message_ms'] as num?)?.toInt(),
       lastMessagePreview: json['last_message_preview']?.toString(),
+      dmActor: json['dm_actor']?.toString(),
     );
   }
 }
@@ -133,8 +136,26 @@ class ChatPayload {
           ? (json['members'] as List).map((v) => v.toString()).toList()
           : null,
       title: json['title']?.toString(),
-      reaction: json['reaction']?.toString(),
-    );
+    reaction: json['reaction']?.toString(),
+  );
+  }
+
+  Map<String, dynamic> toJson() {
+    final data = <String, dynamic>{'op': op};
+    if (text != null) data['text'] = text;
+    if (replyTo != null) data['reply_to'] = replyTo;
+    if (messageId != null) data['message_id'] = messageId;
+    if (status != null) data['status'] = status;
+    if (threadId != null) data['thread_id'] = threadId;
+    if (attachments != null) {
+      data['attachments'] = attachments!.map((a) => a.toJson()).toList();
+    }
+    if (action != null) data['action'] = action;
+    if (targets != null) data['targets'] = targets;
+    if (members != null) data['members'] = members;
+    if (title != null) data['title'] = title;
+    if (reaction != null) data['reaction'] = reaction;
+    return data;
   }
 }
 
@@ -165,7 +186,20 @@ class ChatAttachment {
       name: json['name']?.toString(),
       width: (json['width'] as num?)?.toInt(),
       height: (json['height'] as num?)?.toInt(),
-      blurhash: json['blurhash']?.toString(),
-    );
+    blurhash: json['blurhash']?.toString(),
+  );
+  }
+
+  Map<String, dynamic> toJson() {
+    final data = <String, dynamic>{
+      'id': id,
+      'url': url,
+      'media_type': mediaType,
+    };
+    if (name != null) data['name'] = name;
+    if (width != null) data['width'] = width;
+    if (height != null) data['height'] = height;
+    if (blurhash != null) data['blurhash'] = blurhash;
+    return data;
   }
 }

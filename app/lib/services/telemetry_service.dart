@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/core_api.dart';
+import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
 
 class TelemetryEvent {
@@ -46,12 +50,20 @@ class TelemetryEvent {
 
 class TelemetryService {
   static ValueGetter<UiPrefs>? _prefsGetter;
+  static ValueGetter<CoreConfig?>? _configGetter;
   static String? _logPath;
   static final List<TelemetryEvent> _buffer = <TelemetryEvent>[];
+  static DateTime? _lastRemoteSend;
 
-  static Future<void> init(ValueGetter<UiPrefs> prefsGetter) async {
+  static Future<void> init(
+    ValueGetter<UiPrefs> prefsGetter,
+    ValueGetter<CoreConfig?> configGetter,
+  ) async {
     _prefsGetter = prefsGetter;
+    _configGetter = configGetter;
     _logPath = await _resolveLogPath();
+    final msg = 'telemetry: logPath=${_logPath ?? "null"}';
+    _safeDebug(msg);
   }
 
   static bool get enabled => _prefsGetter?.call().telemetryEnabled ?? false;
@@ -66,12 +78,13 @@ class TelemetryService {
     if (!force && !(enabled || monitoringEnabled || kDebugMode)) {
       return;
     }
+    // Add jitter to timestamp to prevent temporal correlation
+    final jitteredTs = DateTime.now().toUtc().add(Duration(milliseconds: Random().nextInt(5000)));
     final event = TelemetryEvent(
-      ts: DateTime.now().toUtc(),
+      ts: jitteredTs,
       type: type,
       message: message.trim(),
       data: {
-        'platform': Platform.operatingSystem,
         'mode': kReleaseMode ? 'release' : 'debug',
         if (data != null) ...data,
       },
@@ -85,6 +98,9 @@ class TelemetryService {
     final file = File(path);
     final line = jsonEncode(event.toJson());
     await file.writeAsString('$line\n', mode: FileMode.append, flush: false);
+    if (enabled && _shouldSendRemote(event)) {
+      unawaited(_sendRemote(event));
+    }
   }
 
   static Future<List<TelemetryEvent>> loadRecent({int limit = 100}) async {
@@ -138,16 +154,88 @@ class TelemetryService {
     }
   }
 
+  static bool _shouldSendRemote(TelemetryEvent event) {
+    final type = event.type.toLowerCase();
+    if (!(type.contains('warn') ||
+        type.contains('error') ||
+        type.contains('crash') ||
+        type.contains('panic') ||
+        type.contains('exception') ||
+        type.contains('core_dead'))) {
+      return false;
+    }
+    final now = DateTime.now().toUtc();
+    if (_lastRemoteSend != null && now.difference(_lastRemoteSend!).inSeconds < 10) {
+      return false;
+    }
+    _lastRemoteSend = now;
+    return true;
+  }
+
+  static String _sanitizeStack(String? stack) {
+    if (stack == null || stack.trim().isEmpty) return '';
+    final lines = <String>[];
+    for (final raw in stack.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      if (line.contains('package:') || line.contains('dart:')) {
+        lines.add(line);
+      } else if (line.contains('(')) {
+        lines.add(line.split('(').first.trim());
+      } else {
+        lines.add(line);
+      }
+      if (lines.length >= 10) break;
+    }
+    return lines.join('\n');
+  }
+
+  static Future<void> _sendRemote(TelemetryEvent event) async {
+    final cfg = _configGetter?.call();
+    if (cfg == null) return;
+    if (cfg.publicBaseUrl.trim().isEmpty || cfg.relayToken.trim().isEmpty) return;
+    final host = Uri.tryParse(cfg.publicBaseUrl.trim())?.host.trim() ?? cfg.domain.trim();
+    final handle = '@${cfg.username.trim()}@${host.isEmpty ? cfg.domain.trim() : host}';
+    final payload = <String, dynamic>{
+      'username': cfg.username.trim(),
+      'type': event.type,
+      'message': event.message,
+      'stack': _sanitizeStack(event.data?['stack']?.toString()),
+      'mode': event.data?['mode']?.toString() ?? (kReleaseMode ? 'release' : 'debug'),
+      'ts': event.ts.toIso8601String(),
+      'handle': handle,
+    };
+    try {
+      final api = CoreApi(config: cfg);
+      await api.sendClientTelemetry(payload);
+    } catch (_) {
+      // Best-effort: ignore failures.
+    }
+  }
+
   static Future<String?> _resolveLogPath() async {
     try {
       final dir = await getApplicationSupportDirectory();
+      final msg = 'telemetry: supportDir=${dir.path}';
+      _safeDebug(msg);
       final telemetryDir = Directory('${dir.path}${Platform.pathSeparator}telemetry');
       if (!await telemetryDir.exists()) {
         await telemetryDir.create(recursive: true);
       }
       return '${telemetryDir.path}${Platform.pathSeparator}events.log';
-    } catch (_) {
+    } catch (e) {
+      final msg = 'telemetry: resolveLogPath failed: $e';
+      _safeDebug(msg);
       return null;
+    }
+  }
+
+  static void _safeDebug(String msg) {
+    try {
+      if (kReleaseMode) return;
+      debugPrint(msg);
+    } catch (_) {
+      // Ignore debug logging failures on GUI builds (e.g. Windows release).
     }
   }
 }

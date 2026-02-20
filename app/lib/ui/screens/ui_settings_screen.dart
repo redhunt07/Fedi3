@@ -37,6 +37,29 @@ class UiSettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(context.l10n.uiNotificationsTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      SwitchListTile(
+                        title: Text(context.l10n.uiNotificationsChat),
+                        value: prefs.notifyChat,
+                        onChanged: (v) => appState.savePrefs(prefs.copyWith(notifyChat: v)),
+                      ),
+                      SwitchListTile(
+                        title: Text(context.l10n.uiNotificationsDirect),
+                        value: prefs.notifyDirect,
+                        onChanged: (v) => appState.savePrefs(prefs.copyWith(notifyDirect: v)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Card(
                 child: ListTile(
                   title: Text(context.l10n.gifSettingsTitle),
                   subtitle: Text(context.l10n.gifSettingsHint),

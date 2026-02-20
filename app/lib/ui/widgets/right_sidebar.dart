@@ -10,13 +10,18 @@ import 'package:flutter/material.dart';
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../model/note_models.dart';
+import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
+import '../screens/note_detail_screen.dart';
+import '../screens/profile_screen.dart';
 import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
 import 'inline_composer.dart';
+import 'status_avatar.dart';
 
 class RightSidebar extends StatefulWidget {
   const RightSidebar({super.key, required this.appState});
@@ -40,6 +45,7 @@ class _RightSidebarState extends State<RightSidebar> {
   List<Map<String, dynamic>> _items = const [];
   String _draftKey = '';
   ComposeDraft? _draft;
+  ActorProfile? _selfProfile;
 
   @override
   void initState() {
@@ -63,6 +69,7 @@ class _RightSidebarState extends State<RightSidebar> {
     if (widget.appState.isRunning) {
       _startStream();
     }
+    _loadSelfProfile();
   }
 
   @override
@@ -130,6 +137,18 @@ class _RightSidebarState extends State<RightSidebar> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadSelfProfile() async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final base = cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
+    final user = cfg.username.trim();
+    if (base.isEmpty || user.isEmpty) return;
+    final actorUrl = '$base/users/$user';
+    final profile = await ActorRepository.instance.getActor(actorUrl);
+    if (!mounted) return;
+    setState(() => _selfProfile = profile);
   }
 
   @override
@@ -230,7 +249,7 @@ class _RightSidebarState extends State<RightSidebar> {
                       Column(
                         children: [
                           for (final it in _items.take(8))
-                            _SidebarNotificationRow(item: it, lastSeenMs: lastSeen),
+                            _SidebarNotificationRow(appState: widget.appState, item: it, lastSeenMs: lastSeen),
                         ],
                       ),
                   ],
@@ -242,7 +261,23 @@ class _RightSidebarState extends State<RightSidebar> {
               child: ListTile(
                 title: Text(context.l10n.settingsAccount),
                 subtitle: Text(cfg == null ? context.l10n.statusUnknownShort : '${cfg.username}@${cfg.domain}'),
+                leading: StatusAvatar(
+                  imageUrl: _selfProfile?.iconUrl ?? '',
+                  size: 36,
+                  showStatus: _selfProfile?.isFedi3 == true,
+                  statusKey: _selfProfile?.statusKey,
+                ),
                 trailing: const Icon(Icons.person_outline),
+                onTap: () {
+                  final profile = _selfProfile;
+                  final actorUrl = profile?.id.trim() ?? '';
+                  if (actorUrl.isEmpty) return;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: actorUrl),
+                    ),
+                  );
+                },
               ),
             ),
             const SizedBox(height: UiTokens.gapMd),
@@ -343,21 +378,71 @@ class _RightSidebarState extends State<RightSidebar> {
   }
 }
 
-class _SidebarNotificationRow extends StatelessWidget {
-  const _SidebarNotificationRow({required this.item, required this.lastSeenMs});
+class _SidebarNotificationRow extends StatefulWidget {
+  const _SidebarNotificationRow({required this.appState, required this.item, required this.lastSeenMs});
 
+  final AppState appState;
   final Map<String, dynamic> item;
   final int lastSeenMs;
 
   @override
+  State<_SidebarNotificationRow> createState() => _SidebarNotificationRowState();
+}
+
+class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
+  ActorProfile? _actor;
+  String _actorUrl = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadActor();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SidebarNotificationRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item != widget.item) {
+      _loadActor();
+    }
+  }
+
+  Future<void> _loadActor() async {
+    final activity = (widget.item['activity'] is Map) ? (widget.item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final actorUrl = (activity['actor'] as String?)?.trim() ?? '';
+    if (actorUrl.isEmpty || actorUrl == _actorUrl) return;
+    _actorUrl = actorUrl;
+    final profile = await ActorRepository.instance.getActor(actorUrl);
+    if (!mounted) return;
+    setState(() => _actor = profile);
+  }
+
+  void _openTarget(BuildContext context, Map<String, dynamic>? noteActivity, String actorUrl) {
+    if (noteActivity != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: widget.appState, activity: noteActivity)),
+      );
+      return;
+    }
+    if (actorUrl.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: actorUrl)),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     final ts = (item['ts'] is num) ? (item['ts'] as num).toInt() : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
     final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     final actor = (activity['actor'] as String?)?.trim() ?? '';
+    final noteActivity = _extractNoteActivity(activity);
+    final canOpen = noteActivity != null || actor.isNotEmpty;
 
     final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
-    final isNew = ts > 0 && ts > lastSeenMs;
+    final isNew = ts > 0 && ts > widget.lastSeenMs;
 
     IconData icon = Icons.notifications;
     if (type == 'Follow') icon = Icons.person_add_alt_1;
@@ -377,35 +462,89 @@ class _SidebarNotificationRow extends StatelessWidget {
     if (type == 'Announce') label = context.l10n.notificationsBoost;
     if (type == 'Create') label = context.l10n.notificationsMentionOrReply;
 
+    final actorName = _actor?.displayName ?? _shortActor(actor);
+    final summary = _notificationSummary(activity);
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        children: [
-          if (isNew)
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary, borderRadius: BorderRadius.circular(99)),
-            )
-          else
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: canOpen ? () => _openTarget(context, noteActivity, actor) : null,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isNew)
+              Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.only(top: 12),
+                decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary, borderRadius: BorderRadius.circular(99)),
+              )
+            else
+              const SizedBox(width: 8),
             const SizedBox(width: 8),
-          const SizedBox(width: 8),
-          Icon(icon, size: 16),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              actor.isNotEmpty ? '$label · ${_shortActor(actor)}' : label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                StatusAvatar(
+                  imageUrl: _actor?.iconUrl ?? '',
+                  size: 28,
+                  showStatus: _actor?.isFedi3 == true,
+                  statusKey: _actor?.statusKey,
+                ),
+                Positioned(
+                  right: -3,
+                  bottom: -3,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: _badgeColorFor(context, type),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Theme.of(context).colorScheme.surface, width: 2),
+                    ),
+                    child: Icon(icon, size: 10, color: Theme.of(context).colorScheme.onPrimary),
+                  ),
+                ),
+              ],
             ),
-          ),
-          if (when != null)
-            Text(
-              formatTimeAgo(context, when),
-              style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withAlpha(128)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, size: 14),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          actorName.isNotEmpty ? '$actorName · $label' : label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (when != null)
+                        Text(
+                          formatTimeAgo(context, when),
+                          style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withAlpha(128)),
+                        ),
+                    ],
+                  ),
+                  if (summary.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      summary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+                    ),
+                  ],
+                ],
+              ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -446,4 +585,73 @@ class _SidebarNotificationRow extends StatelessWidget {
     }
     return type;
   }
+}
+
+Map<String, dynamic>? _extractNoteActivity(Map<String, dynamic> activity) {
+  final type = (activity['type'] as String?)?.trim() ?? '';
+  if (type == 'Create' || type == 'Announce' || type == 'Update') return activity;
+  final obj = activity['object'];
+  if (obj is Map) {
+    final map = obj.cast<String, dynamic>();
+    if (_isNoteLikeType(map['type'])) return map;
+    final inner = map['object'];
+    if (inner is Map) {
+      final innerMap = inner.cast<String, dynamic>();
+      if (_isNoteLikeType(innerMap['type'])) return innerMap;
+    }
+  }
+  return null;
+}
+
+String _notificationSummary(Map<String, dynamic> activity) {
+  final noteActivity = _extractNoteActivity(activity);
+  if (noteActivity != null) {
+    final note = Note.tryParse(noteActivity);
+    if (note != null) {
+      final text = _stripHtml(note.contentHtml);
+      if (text.isNotEmpty) return text;
+    }
+  }
+  final obj = activity['object'];
+  if (obj is String) return obj.trim();
+  if (obj is Map) {
+    final map = obj.cast<String, dynamic>();
+    final summary = (map['summary'] as String?)?.trim() ?? '';
+    if (summary.isNotEmpty) return _stripHtml(summary);
+    final name = (map['name'] as String?)?.trim() ?? '';
+    if (name.isNotEmpty) return _stripHtml(name);
+    final id = (map['id'] as String?)?.trim() ?? '';
+    if (id.isNotEmpty) return id;
+  }
+  return '';
+}
+
+String _stripHtml(String html) {
+  var text = html;
+  text = text.replaceAll(RegExp(r'<br\\s*/?>', caseSensitive: false), '\n');
+  text = text.replaceAll(RegExp(r'</p>', caseSensitive: false), '\n');
+  text = text.replaceAll(RegExp(r'<[^>]+>'), ' ');
+  text = text.replaceAll('&amp;', '&');
+  text = text.replaceAll('&quot;', '"');
+  text = text.replaceAll('&#39;', "'");
+  text = text.replaceAll('&lt;', '<');
+  text = text.replaceAll('&gt;', '>');
+  return text.replaceAll(RegExp(r'\\s+'), ' ').trim();
+}
+
+bool _isNoteLikeType(dynamic value) {
+  final ty = value is String ? value.trim() : '';
+  return ty == 'Note' || ty == 'Article' || ty == 'Question';
+}
+
+Color _badgeColorFor(BuildContext context, String type) {
+  final scheme = Theme.of(context).colorScheme;
+  return switch (type) {
+    'Like' => scheme.secondary,
+    'EmojiReact' => scheme.tertiary,
+    'Reject' => scheme.error,
+    'Announce' => scheme.primary,
+    'Create' => scheme.primary,
+    _ => scheme.primary,
+  };
 }

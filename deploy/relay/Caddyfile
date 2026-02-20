@@ -1,8 +1,16 @@
 # Dominio relay in produzione
 {$FEDI3_DOMAIN} {
-  encode zstd gzip
   request_body {
     max_size 64MB
   }
-  reverse_proxy relay:8787
+
+  @media path /users/*/media/*
+  handle @media {
+    reverse_proxy relay:8787
+  }
+
+  handle {
+    encode zstd gzip
+    reverse_proxy relay:8787
+  }
 }

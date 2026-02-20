@@ -566,6 +566,12 @@ abstract class AppLocalizations {
   /// **'Original message'**
   String get chatReplyUnknown;
 
+  /// No description provided for @chatSenderMe.
+  ///
+  /// In en, this message translates to:
+  /// **'me'**
+  String get chatSenderMe;
+
   /// No description provided for @chatMembers.
   ///
   /// In en, this message translates to:
@@ -608,6 +614,84 @@ abstract class AppLocalizations {
   /// **'React'**
   String get chatReact;
 
+  /// No description provided for @chatDeleteThread.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete chat'**
+  String get chatDeleteThread;
+
+  /// No description provided for @chatDeleteThreadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This will delete the entire chat thread for everyone.'**
+  String get chatDeleteThreadHint;
+
+  /// No description provided for @chatLeaveThreadOption.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave chat'**
+  String get chatLeaveThreadOption;
+
+  /// No description provided for @chatArchiveThreadOption.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive chat'**
+  String get chatArchiveThreadOption;
+
+  /// No description provided for @chatLeaveThreadSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'You left the chat.'**
+  String get chatLeaveThreadSuccess;
+
+  /// No description provided for @chatLeaveThreadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not leave the chat.'**
+  String get chatLeaveThreadFailed;
+
+  /// No description provided for @chatArchiveThreadSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat archived.'**
+  String get chatArchiveThreadSuccess;
+
+  /// No description provided for @chatArchiveThreadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not archive the chat.'**
+  String get chatArchiveThreadFailed;
+
+  /// No description provided for @chatUnarchiveThreadSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat restored.'**
+  String get chatUnarchiveThreadSuccess;
+
+  /// No description provided for @chatUnarchiveThreadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not restore the chat.'**
+  String get chatUnarchiveThreadFailed;
+
+  /// No description provided for @chatThreadsActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active'**
+  String get chatThreadsActive;
+
+  /// No description provided for @chatThreadsArchived.
+  ///
+  /// In en, this message translates to:
+  /// **'Archived'**
+  String get chatThreadsArchived;
+
+  /// No description provided for @chatUnarchiveThreadOption.
+  ///
+  /// In en, this message translates to:
+  /// **'Unarchive chat'**
+  String get chatUnarchiveThreadOption;
+
   /// No description provided for @chatPin.
   ///
   /// In en, this message translates to:
@@ -635,25 +719,25 @@ abstract class AppLocalizations {
   /// No description provided for @timelineHomeTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Generic timeline (Global P2P + Legacy). Shows incoming/outgoing interactions, including with users you don\'t follow and who don\'t follow you.'**
+  /// **'Generic timeline (Relay + Legacy). Shows incoming/outgoing interactions, including with users you don\'t follow and who don\'t follow you.'**
   String get timelineHomeTooltip;
 
   /// No description provided for @timelineLocalTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Follower/Following timeline (P2P + Legacy). Only profiles with a follow/follower relationship.'**
+  /// **'Follower/Following timeline (Relay + Legacy). Only profiles with a follow/follower relationship.'**
   String get timelineLocalTooltip;
 
   /// No description provided for @timelineSocialTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Social timeline (P2P). Best-effort global feed via gossip/DHT (discover peers beyond legacy).'**
+  /// **'Social timeline (Relay). Best-effort global feed via relay federation.'**
   String get timelineSocialTooltip;
 
   /// No description provided for @timelineFederatedTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Federated timeline (P2P + Legacy). Public content seen by your instance across federation.'**
+  /// **'Federated timeline (Relay + Legacy). Public content seen by your instance across federation.'**
   String get timelineFederatedTooltip;
 
   /// No description provided for @timelineLayoutColumns.
@@ -667,6 +751,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Switch to tabs'**
   String get timelineLayoutTabs;
+
+  /// No description provided for @timelineFilters.
+  ///
+  /// In en, this message translates to:
+  /// **'Filters'**
+  String get timelineFilters;
+
+  /// No description provided for @timelineFilterMedia.
+  ///
+  /// In en, this message translates to:
+  /// **'Media'**
+  String get timelineFilterMedia;
+
+  /// No description provided for @timelineFilterReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get timelineFilterReply;
+
+  /// No description provided for @timelineFilterBoost.
+  ///
+  /// In en, this message translates to:
+  /// **'Boost'**
+  String get timelineFilterBoost;
+
+  /// No description provided for @timelineFilterMention.
+  ///
+  /// In en, this message translates to:
+  /// **'Mention'**
+  String get timelineFilterMention;
 
   /// No description provided for @coreStart.
   ///
@@ -884,6 +998,90 @@ abstract class AppLocalizations {
   /// **'Hide'**
   String get noteHideContent;
 
+  /// No description provided for @noteActions.
+  ///
+  /// In en, this message translates to:
+  /// **'Actions'**
+  String get noteActions;
+
+  /// No description provided for @noteEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get noteEdit;
+
+  /// No description provided for @noteDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get noteDelete;
+
+  /// No description provided for @noteDeleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Note deleted'**
+  String get noteDeleted;
+
+  /// No description provided for @noteEditTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit note'**
+  String get noteEditTitle;
+
+  /// No description provided for @noteEditContentHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit content'**
+  String get noteEditContentHint;
+
+  /// No description provided for @noteEditSummaryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Content warning (optional)'**
+  String get noteEditSummaryHint;
+
+  /// No description provided for @noteSensitiveLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Sensitive content'**
+  String get noteSensitiveLabel;
+
+  /// No description provided for @noteEditSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get noteEditSave;
+
+  /// No description provided for @noteEditMissingAudience.
+  ///
+  /// In en, this message translates to:
+  /// **'Missing audience'**
+  String get noteEditMissingAudience;
+
+  /// No description provided for @noteDeleteTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete note'**
+  String get noteDeleteTitle;
+
+  /// No description provided for @noteDeleteHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to delete this note?'**
+  String get noteDeleteHint;
+
+  /// No description provided for @noteDeleteConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get noteDeleteConfirm;
+
+  /// No description provided for @noteDeleteMissingAudience.
+  ///
+  /// In en, this message translates to:
+  /// **'Missing audience'**
+  String get noteDeleteMissingAudience;
+
   /// No description provided for @timeAgoJustNow.
   ///
   /// In en, this message translates to:
@@ -1015,6 +1213,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Import backup JSON'**
   String get onboardingImportBackup;
+
+  /// No description provided for @onboardingImportBackupCloud.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore from relay backup'**
+  String get onboardingImportBackupCloud;
 
   /// No description provided for @onboardingRelaySelect.
   ///
@@ -1448,6 +1652,30 @@ abstract class AppLocalizations {
   /// **'Following'**
   String get profileFollowing;
 
+  /// No description provided for @profileFeatured.
+  ///
+  /// In en, this message translates to:
+  /// **'Featured'**
+  String get profileFeatured;
+
+  /// No description provided for @profileAliases.
+  ///
+  /// In en, this message translates to:
+  /// **'Also known as'**
+  String get profileAliases;
+
+  /// No description provided for @profileFollowPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get profileFollowPending;
+
+  /// No description provided for @profileMovedTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Moved to {actor}'**
+  String profileMovedTo(String actor);
+
   /// No description provided for @profileAvatar.
   ///
   /// In en, this message translates to:
@@ -1646,6 +1874,48 @@ abstract class AppLocalizations {
   /// **'No diagnostics yet'**
   String get telemetryEmpty;
 
+  /// No description provided for @updateAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Update available: {version}'**
+  String updateAvailable(String version);
+
+  /// No description provided for @updateInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install update'**
+  String get updateInstall;
+
+  /// No description provided for @updateDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading...'**
+  String get updateDownloading;
+
+  /// No description provided for @updateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Update failed: {error}'**
+  String updateFailed(String error);
+
+  /// No description provided for @updateChangelog.
+  ///
+  /// In en, this message translates to:
+  /// **'Changelog'**
+  String get updateChangelog;
+
+  /// No description provided for @updateDismiss.
+  ///
+  /// In en, this message translates to:
+  /// **'Dismiss'**
+  String get updateDismiss;
+
+  /// No description provided for @updateOpenRelease.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening release page'**
+  String get updateOpenRelease;
+
   /// No description provided for @securityTitle.
   ///
   /// In en, this message translates to:
@@ -1733,7 +2003,7 @@ abstract class AppLocalizations {
   /// No description provided for @networkingHintTitle.
   ///
   /// In en, this message translates to:
-  /// **'Relay, P2P, and AP relays'**
+  /// **'Relay and AP relays'**
   String get networkingHintTitle;
 
   /// No description provided for @networkingRelay.
@@ -1753,12 +2023,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Local bind'**
   String get networkingBind;
-
-  /// No description provided for @networkingP2p.
-  ///
-  /// In en, this message translates to:
-  /// **'P2P'**
-  String get networkingP2p;
 
   /// No description provided for @networkingRelaysTitle.
   ///
@@ -2060,6 +2324,42 @@ abstract class AppLocalizations {
   /// **'OK: imported (core restarted)'**
   String get backupImportOk;
 
+  /// No description provided for @backupCloudTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Cloud backup'**
+  String get backupCloudTitle;
+
+  /// No description provided for @backupCloudHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted backup stored on your relay (or S3) for fast device sync.'**
+  String get backupCloudHint;
+
+  /// No description provided for @backupCloudUpload.
+  ///
+  /// In en, this message translates to:
+  /// **'Upload to relay'**
+  String get backupCloudUpload;
+
+  /// No description provided for @backupCloudDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore from relay'**
+  String get backupCloudDownload;
+
+  /// No description provided for @backupCloudUploadOk.
+  ///
+  /// In en, this message translates to:
+  /// **'OK: backup uploaded'**
+  String get backupCloudUploadOk;
+
+  /// No description provided for @backupCloudDownloadOk.
+  ///
+  /// In en, this message translates to:
+  /// **'OK: backup restored'**
+  String get backupCloudDownloadOk;
+
   /// No description provided for @backupErr.
   ///
   /// In en, this message translates to:
@@ -2072,35 +2372,17 @@ abstract class AppLocalizations {
   /// **'Relay'**
   String get statusRelay;
 
-  /// No description provided for @statusP2p.
-  ///
-  /// In en, this message translates to:
-  /// **'P2P'**
-  String get statusP2p;
-
   /// No description provided for @statusMailbox.
   ///
   /// In en, this message translates to:
   /// **'Mailbox'**
   String get statusMailbox;
 
-  /// No description provided for @statusWebrtc.
-  ///
-  /// In en, this message translates to:
-  /// **'WebRTC'**
-  String get statusWebrtc;
-
   /// No description provided for @statusRelayRtt.
   ///
   /// In en, this message translates to:
   /// **'R'**
   String get statusRelayRtt;
-
-  /// No description provided for @statusP2pRtt.
-  ///
-  /// In en, this message translates to:
-  /// **'P'**
-  String get statusP2pRtt;
 
   /// No description provided for @statusMailboxRtt.
   ///
@@ -2114,23 +2396,11 @@ abstract class AppLocalizations {
   /// **'R ↑/↓'**
   String get statusRelayTraffic;
 
-  /// No description provided for @statusP2pTraffic.
-  ///
-  /// In en, this message translates to:
-  /// **'P ↑/↓'**
-  String get statusP2pTraffic;
-
   /// No description provided for @statusMailboxTraffic.
   ///
   /// In en, this message translates to:
   /// **'M ↑/↓'**
   String get statusMailboxTraffic;
-
-  /// No description provided for @statusWebrtcTraffic.
-  ///
-  /// In en, this message translates to:
-  /// **'W ↑/↓'**
-  String get statusWebrtcTraffic;
 
   /// No description provided for @statusCoreStoppedShort.
   ///
@@ -2306,12 +2576,6 @@ abstract class AppLocalizations {
   /// **'Internal token (UI ↔ core)'**
   String get onboardingInternalToken;
 
-  /// No description provided for @onboardingEnableP2p.
-  ///
-  /// In en, this message translates to:
-  /// **'Enable P2P'**
-  String get onboardingEnableP2p;
-
   /// No description provided for @onboardingSave.
   ///
   /// In en, this message translates to:
@@ -2467,6 +2731,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Mention / reply'**
   String get notificationsMentionOrReply;
+
+  /// No description provided for @notificationsNewActivity.
+  ///
+  /// In en, this message translates to:
+  /// **'New activity'**
+  String get notificationsNewActivity;
 
   /// No description provided for @uiSettingsTitle.
   ///
@@ -2663,7 +2933,7 @@ abstract class AppLocalizations {
   /// No description provided for @composeMfmCheatsheetBody.
   ///
   /// In en, this message translates to:
-  /// **'**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strike\n`code` -> inline code\n#tag -> hashtag\n:emoji: -> custom emoji\nLine breaks: new line'**
+  /// **'**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strikethrough\n`code` -> inline code\n```code``` -> code block\n> quote -> quote block\n[title](https://example.com) -> link\n#tag -> hashtag\n@user@domain -> mention\n:emoji: -> custom emoji\nLine breaks -> new line'**
   String get composeMfmCheatsheetBody;
 
   /// No description provided for @close.
@@ -2935,6 +3205,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Preview'**
   String get uiEmojiPickerPreviewLabel;
+
+  /// No description provided for @uiNotificationsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications'**
+  String get uiNotificationsTitle;
+
+  /// No description provided for @uiNotificationsChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat messages'**
+  String get uiNotificationsChat;
+
+  /// No description provided for @uiNotificationsDirect.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct interactions'**
+  String get uiNotificationsDirect;
 }
 
 class _AppLocalizationsDelegate

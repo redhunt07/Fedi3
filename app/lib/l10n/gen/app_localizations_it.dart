@@ -249,6 +249,9 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatReplyUnknown => 'Messaggio originale';
 
   @override
+  String get chatSenderMe => 'io';
+
+  @override
   String get chatMembers => 'Membri';
 
   @override
@@ -270,6 +273,46 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatReact => 'Reagisci';
 
   @override
+  String get chatDeleteThread => 'Elimina chat';
+
+  @override
+  String get chatDeleteThreadHint =>
+      'Questo eliminerà l\'intera chat per tutti. Solo il creatore può eliminare la chat.';
+
+  @override
+  String get chatLeaveThreadOption => 'Abbandona chat';
+
+  @override
+  String get chatArchiveThreadOption => 'Archivia chat';
+
+  @override
+  String get chatLeaveThreadSuccess => 'Hai abbandonato la chat.';
+
+  @override
+  String get chatLeaveThreadFailed => 'Impossibile abbandonare la chat.';
+
+  @override
+  String get chatArchiveThreadSuccess => 'Chat archiviata.';
+
+  @override
+  String get chatArchiveThreadFailed => 'Impossibile archiviare la chat.';
+
+  @override
+  String get chatUnarchiveThreadSuccess => 'Chat ripristinata.';
+
+  @override
+  String get chatUnarchiveThreadFailed => 'Impossibile ripristinare la chat.';
+
+  @override
+  String get chatThreadsActive => 'Attive';
+
+  @override
+  String get chatThreadsArchived => 'Archiviate';
+
+  @override
+  String get chatUnarchiveThreadOption => 'Ripristina chat';
+
+  @override
   String get chatPin => 'Fissa chat';
 
   @override
@@ -287,25 +330,40 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get timelineHomeTooltip =>
-      'Timeline Generica (P2P rete globale + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.';
+      'Timeline Generica (Relay + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.';
 
   @override
   String get timelineLocalTooltip =>
-      'Timeline Follower/Follow (P2P + Legacy). Solo profili con cui hai relazione follow/follower.';
+      'Timeline Follower/Follow (Relay + Legacy). Solo profili con cui hai relazione follow/follower.';
 
   @override
   String get timelineSocialTooltip =>
-      'Timeline Sociale (P2P). Contenuti best-effort diffusi via gossip/DHT (scoperta peer oltre i legacy).';
+      'Timeline Sociale (Relay). Feed globale best-effort via relay.';
 
   @override
   String get timelineFederatedTooltip =>
-      'Timeline Federata (P2P + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.';
+      'Timeline Federata (Relay + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.';
 
   @override
   String get timelineLayoutColumns => 'Passa alle colonne';
 
   @override
   String get timelineLayoutTabs => 'Passa alle tab';
+
+  @override
+  String get timelineFilters => 'Filtri';
+
+  @override
+  String get timelineFilterMedia => 'Media';
+
+  @override
+  String get timelineFilterReply => 'Risposte';
+
+  @override
+  String get timelineFilterBoost => 'Boost';
+
+  @override
+  String get timelineFilterMention => 'Menzioni';
 
   @override
   String get coreStart => 'Avvia core';
@@ -421,6 +479,48 @@ class AppLocalizationsIt extends AppLocalizations {
   String get noteHideContent => 'Nascondi';
 
   @override
+  String get noteActions => 'Azioni';
+
+  @override
+  String get noteEdit => 'Modifica';
+
+  @override
+  String get noteDelete => 'Elimina';
+
+  @override
+  String get noteDeleted => 'Nota eliminata';
+
+  @override
+  String get noteEditTitle => 'Modifica nota';
+
+  @override
+  String get noteEditContentHint => 'Modifica contenuto';
+
+  @override
+  String get noteEditSummaryHint => 'Avviso contenuto (opzionale)';
+
+  @override
+  String get noteSensitiveLabel => 'Contenuto sensibile';
+
+  @override
+  String get noteEditSave => 'Salva';
+
+  @override
+  String get noteEditMissingAudience => 'Destinatario mancante';
+
+  @override
+  String get noteDeleteTitle => 'Elimina nota';
+
+  @override
+  String get noteDeleteHint => 'Sei sicuro di voler eliminare questa nota?';
+
+  @override
+  String get noteDeleteConfirm => 'Elimina';
+
+  @override
+  String get noteDeleteMissingAudience => 'Destinatario mancante';
+
+  @override
   String get timeAgoJustNow => 'adesso';
 
   @override
@@ -531,6 +631,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get onboardingImportBackup => 'Importa backup JSON';
+
+  @override
+  String get onboardingImportBackupCloud => 'Ripristina dal relay';
 
   @override
   String get onboardingRelaySelect => 'Selezione relay';
@@ -782,6 +885,20 @@ class AppLocalizationsIt extends AppLocalizations {
   String get profileFollowing => 'Seguiti';
 
   @override
+  String get profileFeatured => 'In evidenza';
+
+  @override
+  String get profileAliases => 'Alias';
+
+  @override
+  String get profileFollowPending => 'In attesa';
+
+  @override
+  String profileMovedTo(String actor) {
+    return 'Spostato su $actor';
+  }
+
+  @override
   String get profileAvatar => 'Avatar';
 
   @override
@@ -890,6 +1007,31 @@ class AppLocalizationsIt extends AppLocalizations {
   String get telemetryEmpty => 'Nessuna diagnostica';
 
   @override
+  String updateAvailable(String version) {
+    return 'Aggiornamento disponibile: $version';
+  }
+
+  @override
+  String get updateInstall => 'Installa aggiornamento';
+
+  @override
+  String get updateDownloading => 'Download in corso...';
+
+  @override
+  String updateFailed(String error) {
+    return 'Aggiornamento fallito: $error';
+  }
+
+  @override
+  String get updateChangelog => 'Changelog';
+
+  @override
+  String get updateDismiss => 'Chiudi';
+
+  @override
+  String get updateOpenRelease => 'Apro la pagina release';
+
+  @override
   String get securityTitle => 'Sicurezza';
 
   @override
@@ -936,7 +1078,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get networkingTitle => 'Networking';
 
   @override
-  String get networkingHintTitle => 'Relay, P2P e AP relays';
+  String get networkingHintTitle => 'Relay e AP relays';
 
   @override
   String get networkingRelay => 'Relay public base URL';
@@ -946,9 +1088,6 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get networkingBind => 'Bind locale';
-
-  @override
-  String get networkingP2p => 'P2P';
 
   @override
   String get networkingRelaysTitle => 'Discovery relay';
@@ -1115,6 +1254,25 @@ class AppLocalizationsIt extends AppLocalizations {
   String get backupImportOk => 'OK: importato (core riavviato)';
 
   @override
+  String get backupCloudTitle => 'Backup cloud';
+
+  @override
+  String get backupCloudHint =>
+      'Backup cifrato salvato sul relay (o S3) per sincronizzare i dispositivi.';
+
+  @override
+  String get backupCloudUpload => 'Carica sul relay';
+
+  @override
+  String get backupCloudDownload => 'Ripristina dal relay';
+
+  @override
+  String get backupCloudUploadOk => 'OK: backup caricato';
+
+  @override
+  String get backupCloudDownloadOk => 'OK: backup ripristinato';
+
+  @override
   String backupErr(String error) {
     return 'Errore backup: $error';
   }
@@ -1123,19 +1281,10 @@ class AppLocalizationsIt extends AppLocalizations {
   String get statusRelay => 'Relay';
 
   @override
-  String get statusP2p => 'P2P';
-
-  @override
   String get statusMailbox => 'Mailbox';
 
   @override
-  String get statusWebrtc => 'WebRTC';
-
-  @override
   String get statusRelayRtt => 'R';
-
-  @override
-  String get statusP2pRtt => 'P';
 
   @override
   String get statusMailboxRtt => 'M';
@@ -1144,13 +1293,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get statusRelayTraffic => 'R ↑/↓';
 
   @override
-  String get statusP2pTraffic => 'P ↑/↓';
-
-  @override
   String get statusMailboxTraffic => 'M ↑/↓';
-
-  @override
-  String get statusWebrtcTraffic => 'W ↑/↓';
 
   @override
   String get statusCoreStoppedShort => 'core off';
@@ -1253,9 +1396,6 @@ class AppLocalizationsIt extends AppLocalizations {
   String get onboardingInternalToken => 'Internal token (UI ↔ core)';
 
   @override
-  String get onboardingEnableP2p => 'Abilita P2P';
-
-  @override
   String get onboardingSave => 'Salva e apri app';
 
   @override
@@ -1339,6 +1479,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get notificationsMentionOrReply => 'Menzione / risposta';
+
+  @override
+  String get notificationsNewActivity => 'Nuova attività';
 
   @override
   String get uiSettingsTitle => 'Aspetto e lingua';
@@ -1441,7 +1584,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get composeMfmCheatsheetBody =>
-      '**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n#tag -> hashtag\n:emoji: -> emoji personalizzata\nA capo: nuova linea';
+      '**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n```codice``` -> blocco di codice\n> citazione -> citazione\n[titolo](https://esempio.com) -> link\n#tag -> hashtag\n@utente@dominio -> menzione\n:emoji: -> emoji personalizzata\nA capo -> nuova linea';
 
   @override
   String get close => 'Chiudi';
@@ -1577,4 +1720,13 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get uiEmojiPickerPreviewLabel => 'Anteprima';
+
+  @override
+  String get uiNotificationsTitle => 'Notifiche';
+
+  @override
+  String get uiNotificationsChat => 'Messaggi chat';
+
+  @override
+  String get uiNotificationsDirect => 'Interazioni dirette';
 }

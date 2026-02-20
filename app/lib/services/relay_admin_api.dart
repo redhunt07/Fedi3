@@ -126,4 +126,13 @@ class RelayAdminApi {
     }
     return const [];
   }
+
+  Future<void> deletePeer(String peerId) async {
+    final base = _baseUri();
+    final uri = base.replace(path: '/admin/peers/$peerId');
+    final resp = await http.delete(uri, headers: _headers);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('admin delete peer failed: ${resp.statusCode} ${resp.body}');
+    }
+  }
 }

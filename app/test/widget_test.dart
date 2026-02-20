@@ -15,11 +15,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/ui/app_root.dart';
+import 'package:fedi3/ui/screens/first_run_screen.dart';
 
 void main() {
   testWidgets('App boots', (WidgetTester tester) async {
     final appState = AppState(config: null, prefs: UiPrefs.defaults());
     await tester.pumpWidget(AppRoot(appState: appState));
-    expect(find.text('Fedi3 setup'), findsOneWidget);
+    expect(find.byType(FirstRunScreen), findsOneWidget);
   });
 }

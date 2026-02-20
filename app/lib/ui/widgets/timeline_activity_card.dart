@@ -90,6 +90,7 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
         objId = (obj['id'] as String?)?.trim() ?? (obj['url'] as String?)?.trim() ?? '';
       }
       return Card(
+        margin: EdgeInsets.zero,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(

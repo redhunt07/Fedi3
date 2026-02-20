@@ -3,24 +3,39 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use crate::net_metrics::NetMetrics;
+use crate::relay_bridge::handle_relay_http_request;
 use axum::body::Body;
 use fedi3_protocol::RelayHttpRequest;
 use futures_util::{SinkExt, StreamExt};
 use http::Request;
-use tracing::{error, info};
-use tokio_tungstenite::tungstenite;
 use tokio::sync::watch;
-use crate::relay_bridge::handle_relay_http_request;
-use crate::net_metrics::NetMetrics;
+use tokio_tungstenite::tungstenite;
+use tracing::{error, info};
 
 pub async fn run_tunnel(
     user: &str,
     relay_ws_url: &str,
     relay_token: &str,
-    handler: impl Clone + Send + 'static + tower::Service<Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+    handler: impl Clone
+        + Send
+        + 'static
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
 ) -> anyhow::Result<()> {
     let (_tx, rx) = watch::channel(false);
-    run_tunnel_with_shutdown(user, relay_ws_url, relay_token, handler, rx, std::sync::Arc::new(NetMetrics::new())).await
+    run_tunnel_with_shutdown(
+        user,
+        relay_ws_url,
+        relay_token,
+        handler,
+        rx,
+        std::sync::Arc::new(NetMetrics::new()),
+    )
+    .await
 }
 
 pub async fn run_tunnel_with_shutdown(
@@ -30,7 +45,11 @@ pub async fn run_tunnel_with_shutdown(
     mut handler: impl Clone
         + Send
         + 'static
-        + tower::Service<Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
     mut shutdown: watch::Receiver<bool>,
     metrics: std::sync::Arc<NetMetrics>,
 ) -> anyhow::Result<()> {

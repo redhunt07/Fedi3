@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 fn now_ms() -> u64 {
@@ -83,7 +83,11 @@ impl NetMetrics {
             return;
         }
         let prev = self.relay_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.relay_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
@@ -98,7 +102,8 @@ impl NetMetrics {
     pub fn p2p_peer_seen(&self, peer_id: &str) {
         let mut g = self.p2p_seen.lock().unwrap();
         g.insert(peer_id.to_string(), now_ms());
-        self.p2p_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        self.p2p_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn p2p_rx_add(&self, n: u64) {
@@ -114,14 +119,19 @@ impl NetMetrics {
             return;
         }
         let prev = self.p2p_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.p2p_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
     pub fn mailbox_peer_seen(&self, peer_id: &str) {
         let mut g = self.mailbox_seen.lock().unwrap();
         g.insert(peer_id.to_string(), now_ms());
-        self.mailbox_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        self.mailbox_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn mailbox_rx_add(&self, n: u64) {
@@ -137,7 +147,11 @@ impl NetMetrics {
             return;
         }
         let prev = self.mailbox_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.mailbox_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
@@ -148,7 +162,8 @@ impl NetMetrics {
     pub fn webrtc_peer_seen(&self, peer_id: &str) {
         let mut g = self.webrtc_seen.lock().unwrap();
         g.insert(peer_id.to_string(), now_ms());
-        self.webrtc_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        self.webrtc_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn webrtc_rx_add(&self, n: u64) {
@@ -180,17 +195,20 @@ impl NetMetrics {
         {
             let mut g = self.p2p_seen.lock().unwrap();
             g.retain(|_, t| *t >= cutoff);
-            self.p2p_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.p2p_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
         {
             let mut g = self.mailbox_seen.lock().unwrap();
             g.retain(|_, t| *t >= cutoff);
-            self.mailbox_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.mailbox_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
         {
             let mut g = self.webrtc_seen.lock().unwrap();
             g.retain(|_, t| *t >= cutoff);
-            self.webrtc_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.webrtc_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
     }
 
@@ -207,25 +225,11 @@ impl NetMetrics {
                 "rtt_ms": self.relay_rtt_ema_ms.load(Ordering::Relaxed),
                 "last_error": last_error,
             },
-            "p2p": {
-                "enabled": self.p2p_enabled.load(Ordering::Relaxed),
-                "connected_peers": self.p2p_connected_peers.load(Ordering::Relaxed),
-                "active_peers": self.p2p_active_peers.load(Ordering::Relaxed),
-                "rx_bytes": self.p2p_rx_bytes.load(Ordering::Relaxed),
-                "tx_bytes": self.p2p_tx_bytes.load(Ordering::Relaxed),
-                "rtt_ms": self.p2p_rtt_ema_ms.load(Ordering::Relaxed),
-            },
             "mailbox": {
                 "active_peers": self.mailbox_active_peers.load(Ordering::Relaxed),
                 "rx_bytes": self.mailbox_rx_bytes.load(Ordering::Relaxed),
                 "tx_bytes": self.mailbox_tx_bytes.load(Ordering::Relaxed),
                 "rtt_ms": self.mailbox_rtt_ema_ms.load(Ordering::Relaxed),
-            },
-            "webrtc": {
-                "sessions": self.webrtc_sessions.load(Ordering::Relaxed),
-                "active_peers": self.webrtc_active_peers.load(Ordering::Relaxed),
-                "rx_bytes": self.webrtc_rx_bytes.load(Ordering::Relaxed),
-                "tx_bytes": self.webrtc_tx_bytes.load(Ordering::Relaxed),
             },
             "errors": {
                 "auth_failures": self.auth_failures.load(Ordering::Relaxed),

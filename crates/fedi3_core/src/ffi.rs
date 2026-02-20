@@ -17,12 +17,18 @@ fn set_err(out_err: *mut *mut c_char, msg: String) {
 }
 
 #[no_mangle]
-pub extern "C" fn fedi3_core_start(config_json: *const c_char, out_handle: *mut u64, out_err: *mut *mut c_char) -> c_int {
+pub extern "C" fn fedi3_core_start(
+    config_json: *const c_char,
+    out_handle: *mut u64,
+    out_err: *mut *mut c_char,
+) -> c_int {
     if config_json.is_null() || out_handle.is_null() {
         set_err(out_err, "null argument".to_string());
         return 1;
     }
-    let cfg_str = unsafe { CStr::from_ptr(config_json) }.to_string_lossy().to_string();
+    let cfg_str = unsafe { CStr::from_ptr(config_json) }
+        .to_string_lossy()
+        .to_string();
     let cfg: CoreStartConfig = match serde_json::from_str(&cfg_str) {
         Ok(v) => v,
         Err(e) => {
@@ -32,7 +38,9 @@ pub extern "C" fn fedi3_core_start(config_json: *const c_char, out_handle: *mut 
     };
     match runtime::start(cfg) {
         Ok(handle) => {
-            unsafe { *out_handle = handle; }
+            unsafe {
+                *out_handle = handle;
+            }
             0
         }
         Err(e) => {

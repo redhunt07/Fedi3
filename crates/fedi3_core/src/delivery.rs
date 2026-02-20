@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use crate::http_sig::sign_request_rsa_sha256;
-use crate::http_retry::send_with_retry;
 use crate::crypto_envelope::encrypt_relay_http_request_body;
+use crate::http_retry::send_with_retry;
+use crate::http_sig::sign_request_rsa_sha256;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
@@ -13,12 +13,12 @@ use http::{HeaderMap, Method, Uri};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::RwLock;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-use crate::p2p::P2pHandle;
 use crate::p2p::DidDiscoveryRecord;
+use crate::p2p::P2pHandle;
 use crate::p2p::PeerDiscoveryRecord;
 use crate::webrtc_p2p::WebrtcHandle;
 
@@ -207,7 +207,10 @@ impl Delivery {
             &["(request-target)", "host", "date", "digest", "content-type"],
         )?;
 
-        let mut req = self.client.post(inbox_url).header(ACCEPT, "application/activity+json");
+        let mut req = self
+            .client
+            .post(inbox_url)
+            .header(ACCEPT, "application/activity+json");
         for (k, v) in headers.iter() {
             req = req.header(k.as_str(), v.to_str().unwrap_or_default());
         }
@@ -347,11 +350,27 @@ impl Delivery {
         handle.kad_get_did(did).await
     }
 
-    pub async fn p2p_request(&self, peer_id: &str, req: RelayHttpRequest) -> Result<RelayHttpResponse> {
+    pub async fn p2p_request(
+        &self,
+        peer_id: &str,
+        req: RelayHttpRequest,
+    ) -> Result<RelayHttpResponse> {
         let Some(handle) = self.p2p.read().await.clone() else {
             return Err(anyhow!("p2p not enabled"));
         };
         handle.request(peer_id, req).await
+    }
+
+    pub async fn webrtc_request(
+        &self,
+        peer_actor_url: &str,
+        peer_id: &str,
+        req: RelayHttpRequest,
+    ) -> Result<RelayHttpResponse> {
+        let Some(handle) = self.webrtc.read().await.clone() else {
+            return Err(anyhow!("webrtc not enabled"));
+        };
+        handle.request(peer_actor_url, peer_id, req).await
     }
 }
 
@@ -388,7 +407,8 @@ pub fn is_public_activity(activity: &Value) -> bool {
             _ => false,
         }
     }
-    activity.get("to").map(has_public).unwrap_or(false) || activity.get("cc").map(has_public).unwrap_or(false)
+    activity.get("to").map(has_public).unwrap_or(false)
+        || activity.get("cc").map(has_public).unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]

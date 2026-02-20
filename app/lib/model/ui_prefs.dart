@@ -41,7 +41,13 @@ class UiPrefs {
     required this.translationDeepLxUrl,
     required this.telemetryEnabled,
     required this.clientMonitoringEnabled,
+    required this.notifyChat,
+    required this.notifyDirect,
     required this.relayAdminToken,
+    required this.useTor,
+    required this.proxyHost,
+    required this.proxyPort,
+    required this.proxyType,
   });
 
   final UiThemeMode themeMode;
@@ -67,7 +73,13 @@ class UiPrefs {
   final String translationDeepLxUrl;
   final bool telemetryEnabled;
   final bool clientMonitoringEnabled;
+  final bool notifyChat;
+  final bool notifyDirect;
   final String relayAdminToken;
+  final bool useTor;
+  final String? proxyHost;
+  final int? proxyPort;
+  final String? proxyType;
 
   static UiPrefs defaults() => const UiPrefs(
         themeMode: UiThemeMode.system,
@@ -93,7 +105,13 @@ class UiPrefs {
         translationDeepLxUrl: 'https://api.deeplx.org/translate',
         telemetryEnabled: false,
         clientMonitoringEnabled: false,
+        notifyChat: true,
+        notifyDirect: true,
         relayAdminToken: '',
+        useTor: false,
+        proxyHost: null,
+        proxyPort: null,
+        proxyType: null,
       );
 
   UiPrefs copyWith({
@@ -120,7 +138,13 @@ class UiPrefs {
     String? translationDeepLxUrl,
     bool? telemetryEnabled,
     bool? clientMonitoringEnabled,
+    bool? notifyChat,
+    bool? notifyDirect,
     String? relayAdminToken,
+    bool? useTor,
+    String? proxyHost,
+    int? proxyPort,
+    String? proxyType,
   }) {
     return UiPrefs(
       themeMode: themeMode ?? this.themeMode,
@@ -146,7 +170,13 @@ class UiPrefs {
       translationDeepLxUrl: translationDeepLxUrl ?? this.translationDeepLxUrl,
       telemetryEnabled: telemetryEnabled ?? this.telemetryEnabled,
       clientMonitoringEnabled: clientMonitoringEnabled ?? this.clientMonitoringEnabled,
+      notifyChat: notifyChat ?? this.notifyChat,
+      notifyDirect: notifyDirect ?? this.notifyDirect,
       relayAdminToken: relayAdminToken ?? this.relayAdminToken,
+      useTor: useTor ?? this.useTor,
+      proxyHost: proxyHost ?? this.proxyHost,
+      proxyPort: proxyPort ?? this.proxyPort,
+      proxyType: proxyType ?? this.proxyType,
     );
   }
 
@@ -174,7 +204,13 @@ class UiPrefs {
         'translationDeepLxUrl': translationDeepLxUrl,
         'telemetryEnabled': telemetryEnabled,
         'clientMonitoringEnabled': clientMonitoringEnabled,
+        'notifyChat': notifyChat,
+        'notifyDirect': notifyDirect,
         'relayAdminToken': relayAdminToken,
+        'useTor': useTor,
+        'proxyHost': proxyHost,
+        'proxyPort': proxyPort,
+        'proxyType': proxyType,
       };
 
   Map<String, dynamic> get json => toJson();
@@ -254,7 +290,13 @@ class UiPrefs {
       translationDeepLxUrl: (raw['translationDeepLxUrl'] as String? ?? UiPrefs.defaults().translationDeepLxUrl).trim(),
       telemetryEnabled: raw['telemetryEnabled'] == true,
       clientMonitoringEnabled: raw['clientMonitoringEnabled'] == true,
+      notifyChat: raw['notifyChat'] == null ? UiPrefs.defaults().notifyChat : raw['notifyChat'] == true,
+      notifyDirect: raw['notifyDirect'] == null ? UiPrefs.defaults().notifyDirect : raw['notifyDirect'] == true,
       relayAdminToken: (raw['relayAdminToken'] as String? ?? '').trim(),
+      useTor: raw['useTor'] == true,
+      proxyHost: (raw['proxyHost'] as String? ?? '').trim(),
+      proxyPort: (raw['proxyPort'] is num) ? (raw['proxyPort'] as num).toInt() : null,
+      proxyType: (raw['proxyType'] as String? ?? '').trim(),
     );
   }
 

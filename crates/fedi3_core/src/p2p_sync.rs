@@ -5,17 +5,30 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
+use http::{HeaderMap, Method, Uri};
 use tokio::sync::watch;
 use tracing::info;
 
 use crate::ap::ApState;
-use crate::delivery::is_public_activity;
 use crate::p2p::P2pConfig;
+use crate::http_sig::sign_request_rsa_sha256;
+
+#[derive(Debug, serde::Serialize)]
+struct P2pSyncRequest {
+    clock: std::collections::HashMap<String, i64>,
+    limit: u32,
+}
 
 #[derive(Debug, serde::Deserialize)]
-struct SyncOutboxResp {
-    items: Vec<serde_json::Value>,
-    latest_ms: i64,
+struct P2pSyncItem {
+    actor_id: String,
+    lamport: i64,
+    activity: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct P2pSyncResponse {
+    items: Vec<P2pSyncItem>,
 }
 
 pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch::Receiver<bool>) {
@@ -40,20 +53,25 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
                 break;
             }
 
-            let following = match state.social.list_following_accepted_ids(1000) {
+            let peers = match state.social.list_actor_meta_fedi3(1000) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if following.is_empty() {
+            if peers.is_empty() {
                 continue;
             }
 
-            for actor_url in following {
+            let mut clock = std::collections::HashMap::new();
+            if let Ok(entries) = state.social.list_p2p_actor_clock(5000) {
+                for (actor_id, lamport) in entries {
+                    clock.insert(actor_id, lamport);
+                }
+            }
+
+            for actor_url in peers {
                 if *shutdown.borrow() {
                     break;
                 }
-
-                let since = state.social.get_p2p_sync_since(&actor_url).unwrap_or(0);
 
                 let info = match state.delivery.resolve_actor_info(&actor_url).await {
                     Ok(v) => v,
@@ -69,13 +87,51 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
                         .await;
                 }
 
+                let req_body = serde_json::to_vec(&P2pSyncRequest {
+                    clock: clock.clone(),
+                    limit: batch_limit,
+                })
+                .unwrap_or_default();
+
+                let mut headers = HeaderMap::new();
+                headers.insert("accept", "application/json".parse().unwrap());
+                headers.insert("content-type", "application/json".parse().unwrap());
+
+                let uri: Uri = "http://localhost/.fedi3/sync/activities"
+                    .parse()
+                    .unwrap_or_else(|_| Uri::from_static("http://localhost/"));
+                let key_id = format!(
+                    "{}/users/{}#main-key",
+                    state.cfg.public_base_url.trim_end_matches('/'),
+                    state.cfg.username
+                );
+                if sign_request_rsa_sha256(
+                    &state.private_key_pem,
+                    &key_id,
+                    &Method::POST,
+                    &uri,
+                    &mut headers,
+                    &req_body,
+                    &["(request-target)", "host", "date", "digest"],
+                )
+                .is_err()
+                {
+                    continue;
+                }
+
+                let mut header_vec = Vec::new();
+                for (k, v) in headers.iter() {
+                    if let Ok(val) = v.to_str() {
+                        header_vec.push((k.to_string(), val.to_string()));
+                    }
+                }
                 let req = RelayHttpRequest {
                     id: format!("sync-{}-{}", short_hash(&actor_url), now_ms()),
-                    method: "GET".to_string(),
-                    path: "/.fedi3/sync/outbox".to_string(),
-                    query: format!("?since={since}&limit={batch_limit}"),
-                    headers: vec![("accept".to_string(), "application/json".to_string())],
-                    body_b64: "".to_string(),
+                    method: "POST".to_string(),
+                    path: "/.fedi3/sync/activities".to_string(),
+                    query: "".to_string(),
+                    headers: header_vec,
+                    body_b64: B64.encode(req_body),
                 };
 
                 let resp = match state.delivery.p2p_request(&peer_id, req).await {
@@ -87,34 +143,42 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
                 }
 
                 let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-                let sync: SyncOutboxResp = match serde_json::from_slice(&body) {
+                let sync: P2pSyncResponse = match serde_json::from_slice(&body) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
 
                 let mut stored: u32 = 0;
-                for activity in sync.items {
-                    if !is_public_activity(&activity) {
+                for item in sync.items {
+                    let ty = item.activity.get("type").and_then(|v| v.as_str());
+                    let actor = if !item.actor_id.trim().is_empty() {
+                        Some(item.actor_id.as_str())
+                    } else {
+                        item.activity.get("actor").and_then(|v| v.as_str())
+                    };
+                    let Some(actor) = actor else {
                         continue;
-                    }
-                    let ty = activity.get("type").and_then(|v| v.as_str());
-                    let actor = activity.get("actor").and_then(|v| v.as_str());
+                    };
 
-                    let activity_id = activity_dedup_id(&activity);
+                    let activity_id = activity_dedup_id(&item.activity);
+                    let bytes = canonical_json_bytes(&item.activity);
+                    let _ = state
+                        .social
+                        .upsert_p2p_activity(&activity_id, actor, item.lamport, bytes.clone());
                     if !state.social.mark_inbox_seen(&activity_id).unwrap_or(false) {
                         continue;
                     }
-                    let bytes = canonical_json_bytes(&activity);
-                    let _ = state.social.store_inbox_activity(&activity_id, actor, ty, bytes.clone());
-                    let _ = state.social.insert_federated_feed_item(&activity_id, actor, bytes);
-                    if let Some(a) = actor {
-                        let _ = state.social.upsert_actor_meta(a, true);
+                    let _ =
+                        state
+                            .social
+                            .store_inbox_activity(&activity_id, Some(actor), ty, bytes.clone());
+                    if crate::delivery::is_public_activity(&item.activity) {
+                        let _ = state
+                            .social
+                            .insert_federated_feed_item(&activity_id, Some(actor), bytes);
                     }
+                    let _ = state.social.upsert_actor_meta(actor, true);
                     stored = stored.saturating_add(1);
-                }
-
-                if sync.latest_ms > since {
-                    let _ = state.social.set_p2p_sync_since(&actor_url, sync.latest_ms);
                 }
                 if stored > 0 {
                     info!(peer=%peer_id, actor=%actor_url, stored, "p2p sync stored");
@@ -146,7 +210,10 @@ fn activity_dedup_id(activity: &serde_json::Value) -> String {
         }
     }
     let bytes = canonical_json_bytes(activity);
-    format!("urn:fedi3:sync:{}", short_hash(&String::from_utf8_lossy(&bytes)))
+    format!(
+        "urn:fedi3:sync:{}",
+        short_hash(&String::from_utf8_lossy(&bytes))
+    )
 }
 
 fn canonical_json_bytes(v: &serde_json::Value) -> Vec<u8> {
@@ -166,7 +233,9 @@ fn canonicalize_json(v: &serde_json::Value) -> serde_json::Value {
             }
             serde_json::Value::Object(out)
         }
-        serde_json::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(canonicalize_json).collect()),
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(canonicalize_json).collect())
+        }
         _ => v.clone(),
     }
 }

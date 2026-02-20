@@ -26,7 +26,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $coreDir = Join-Path $repoRoot "crates\\fedi3_core"
 
 $vsDevCmd = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"
-if ($IsWindows -and (Test-Path $vsDevCmd)) {
+$isWin = $env:OS -eq "Windows_NT"
+if ($isWin -and (Test-Path $vsDevCmd)) {
   $cmd = @"
 cd /d "$coreDir" && "$vsDevCmd" -arch=x64 -host_arch=x64 >nul && "$($cargo.Source)" build -p fedi3_core --$Profile
 "@

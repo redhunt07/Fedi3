@@ -44,16 +44,14 @@ pub fn load_or_generate_identity(dir: impl AsRef<Path>) -> Result<Identity> {
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
         let priv_pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
-        fs::write(&priv_path, &priv_pem).with_context(|| format!("write {}", priv_path.display()))?;
+        fs::write(&priv_path, &priv_pem)
+            .with_context(|| format!("write {}", priv_path.display()))?;
         priv_pem
     };
 
-    let private_key = RsaPrivateKey::from_pkcs8_pem(&priv_pem)
-        .context("parse private key pem")?;
+    let private_key = RsaPrivateKey::from_pkcs8_pem(&priv_pem).context("parse private key pem")?;
     let public_key = RsaPublicKey::from(&private_key);
-    let public_key_pem = public_key
-        .to_public_key_pem(LineEnding::LF)?
-        .to_string();
+    let public_key_pem = public_key.to_public_key_pem(LineEnding::LF)?.to_string();
 
     Ok(Identity {
         private_key,

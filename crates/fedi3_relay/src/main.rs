@@ -3,34 +3,38 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use anyhow::Result;
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, OriginalUri, Path, Query, RawQuery, State,
+        ConnectInfo, Path, Query, RawQuery, State,
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{from_fn, from_fn_with_state, Next},
-    response::{IntoResponse, Response},
-    routing::{any, get, post},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
+    routing::{any, delete, get, post},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use bytes::Bytes;
-use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
-use futures_util::{SinkExt, StreamExt};
-use anyhow::Result;
-use httpdate::parse_http_date;
-use http::header;
-use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
 use deadpool::managed::QueueMode;
-use std::future::Future;
-use std::sync::OnceLock;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::{NoTls, Row};
+use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
+use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
+use futures_util::{stream, SinkExt, StreamExt};
+use http::{header, Request};
+use httpdate::parse_http_date;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::convert::Infallible;
+use std::future::Future;
+use std::net::IpAddr;
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -40,21 +44,32 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::net::IpAddr;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock as TokioRwLock;
-use tokio::sync::{mpsc, oneshot, RwLock, Semaphore};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock, Semaphore};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{NoTls, Row};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, info_span, warn};
 
-use rusqlite::{params, Connection, OptionalExtension};
 use ed25519_dalek::{Signer as _, Verifier as _};
+use rusqlite::{params, Connection, OptionalExtension};
 
 mod media_store;
+mod relay_mesh;
+mod relay_notes;
+
+use relay_notes::{
+    actor_to_index_from_note, extract_media_from_note, extract_notes_from_value, note_to_index,
+    RelayActorIndex, RelayMediaIndex, RelayNoteIndex, RelaySyncNoteItem, RelaySyncNotesResponse,
+};
 
 static REQ_ID: AtomicU64 = AtomicU64::new(1);
 const DB_BATCH_DELETE_MAX: usize = 500;
+const WEBRTC_SIGNAL_TTL_SECS: i64 = 300;
+const WEBRTC_SIGNAL_MAX_PER_PEER: usize = 200;
+const WEBRTC_KEY_CACHE_TTL_SECS: i64 = 3600;
 
 fn next_request_id() -> String {
     let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
@@ -65,16 +80,30 @@ fn next_request_id() -> String {
 struct PeerHello {
     username: String,
     actor: String,
-    #[allow(dead_code)]
-    core_version: String,
-    p2p: Option<PeerHelloP2p>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-struct PeerHelloP2p {
-    peer_id: Option<String>,
-    #[allow(dead_code)]
-    addrs: Option<Vec<String>>,
+#[derive(Debug, Clone, Serialize)]
+struct PresenceItem {
+    username: String,
+    actor_url: String,
+    online: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PresenceSnapshot {
+    ts_ms: i64,
+    items: Vec<PresenceItem>,
+}
+
+#[derive(Debug, Clone)]
+enum PresenceEvent {
+    Update(PresenceItem),
+}
+
+#[derive(Debug, Clone)]
+struct RelayReputation {
+    score: i32,
+    last_ms: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -106,6 +135,12 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     search_relay_sync_window_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    p2p_upnp_port_start: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    p2p_upnp_port_end: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_p2p_peer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature_b64: Option<String>,
@@ -113,6 +148,31 @@ struct RelayTelemetry {
     users: Vec<RelayUserEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     peers: Vec<RelayPeerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientTelemetryInput {
+    username: String,
+    #[serde(rename = "type")]
+    event_type: String,
+    message: String,
+    stack: Option<String>,
+    mode: Option<String>,
+    ts: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebrtcSendReq {
+    to_peer_id: String,
+    session_id: String,
+    kind: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebrtcAckReq {
+    to_peer_id: String,
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -174,6 +234,26 @@ struct RelayMoveNotice {
     nonce: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RelayListEntry {
+    relay_url: String,
+    #[serde(default)]
+    sign_pubkey_b64: Option<String>,
+    #[serde(default)]
+    relay_p2p_peer_id: Option<String>,
+    #[serde(default)]
+    base_domain: Option<String>,
+    #[serde(default)]
+    last_seen_ms: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GithubContentResponse {
+    content: Option<String>,
+    sha: Option<String>,
+    encoding: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct SpoolItem {
     id: i64,
@@ -196,15 +276,23 @@ struct MediaItem {
 }
 
 #[derive(Debug, Clone)]
-struct RelayNoteIndex {
-    note_id: String,
-    actor_id: Option<String>,
-    published_ms: Option<i64>,
-    content_text: String,
-    content_html: String,
-    note_json: String,
+struct UserBackupItem {
+    username: String,
+    storage_key: String,
+    content_type: String,
+    size_bytes: i64,
+    updated_at_ms: i64,
+    meta_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WebrtcSignal {
+    id: String,
+    from_actor: String,
+    session_id: String,
+    kind: String,
+    payload: serde_json::Value,
     created_at_ms: i64,
-    tags: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +307,13 @@ struct AppState {
     tunnels: Arc<RwLock<HashMap<String, TunnelHandle>>>,
     inflight_per_user: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
+    relay_mesh_peer_id: Arc<RwLock<Option<String>>>,
+    presence_tx: broadcast::Sender<PresenceEvent>,
+    github_issues: Option<Arc<GithubIssueReporter>>,
+    telemetry_dedupe: Arc<Mutex<HashMap<String, i64>>>,
+    webrtc_signals: Arc<Mutex<HashMap<String, Vec<WebrtcSignal>>>>,
+    webrtc_key_cache: Arc<Mutex<HashMap<String, (String, i64)>>>,
+    relay_reputation: Arc<Mutex<HashMap<String, RelayReputation>>>,
     cfg: RelayConfig,
     db: Arc<Mutex<Db>>,
     limiter: Arc<RateLimiter>,
@@ -248,6 +343,19 @@ enum MeiliItem {
 
 struct MeiliIndexer {
     tx: mpsc::Sender<MeiliItem>,
+}
+
+struct GithubIssueReporter {
+    labels: Vec<String>,
+    assignee: Option<String>,
+    tx: mpsc::Sender<GithubIssueRequest>,
+}
+
+struct GithubIssueRequest {
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignee: Option<String>,
 }
 
 impl MeiliIndexer {
@@ -302,6 +410,239 @@ impl MeiliIndexer {
     fn enqueue_note(&self, doc: MeiliNoteDoc) {
         let _ = self.tx.try_send(MeiliItem::Note(doc));
     }
+}
+
+fn spawn_github_issues(cfg: &RelayConfig, http: reqwest::Client) -> Option<Arc<GithubIssueReporter>> {
+    let repo = cfg.github_repo.as_ref()?.trim().to_string();
+    let token = cfg.github_token.as_ref()?.trim().to_string();
+    if repo.is_empty() || token.is_empty() {
+        return None;
+    }
+    let (tx, mut rx) = mpsc::channel::<GithubIssueRequest>(200);
+    let labels = cfg.github_issue_labels.clone();
+    let assignee = cfg.github_issue_assignee.clone();
+    let reporter = GithubIssueReporter {
+        labels,
+        assignee,
+        tx,
+    };
+    tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            let url = format!("https://api.github.com/repos/{repo}/issues");
+            let mut payload = serde_json::json!({
+                "title": req.title,
+                "body": req.body,
+                "labels": req.labels,
+            });
+            if let Some(a) = req.assignee.as_ref().filter(|v| !v.is_empty()) {
+                payload["assignees"] = serde_json::json!([a]);
+            }
+            let resp = http
+                .post(&url)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "fedi3-relay")
+                .json(&payload)
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => {}
+                Ok(r) if r.status().as_u16() == 422 => {
+                    let payload = serde_json::json!({
+                        "title": req.title,
+                        "body": req.body,
+                    });
+                    let _ = http
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "fedi3-relay")
+                        .json(&payload)
+                        .send()
+                        .await;
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    let body = r.text().await.unwrap_or_default();
+                    warn!("github issue failed: {status} {body}");
+                }
+                Err(e) => warn!("github issue send failed: {e}"),
+            }
+        }
+    });
+    Some(Arc::new(reporter))
+}
+
+async fn sync_relay_list_once(state: &AppState) -> Result<()> {
+    let Some(repo) = state.cfg.relay_list_repo.as_deref().filter(|v| !v.is_empty()) else {
+        return Ok(());
+    };
+    let path = state.cfg.relay_list_path.trim().to_string();
+    let branch = state.cfg.relay_list_branch.trim().to_string();
+    let (mut entries, sha) =
+        fetch_relay_list_from_github(state, repo, &path, &branch, state.cfg.relay_list_token.as_deref())
+            .await?;
+
+    if !entries.is_empty() {
+        let mut db = state.db.lock().await;
+        for entry in &entries {
+            if entry.relay_url.trim().is_empty() {
+                continue;
+            }
+            let _ = db.upsert_relay(
+                &entry.relay_url,
+                entry.base_domain.clone(),
+                None,
+                entry.sign_pubkey_b64.clone(),
+            );
+        }
+    }
+
+    let mut changed = false;
+    if let Some(self_entry) = build_self_relay_list_entry(state).await? {
+        if let Some(existing) = entries
+            .iter_mut()
+            .find(|e| e.relay_url.trim_end_matches('/') == self_entry.relay_url)
+        {
+            if existing.sign_pubkey_b64 != self_entry.sign_pubkey_b64
+                || existing.relay_p2p_peer_id != self_entry.relay_p2p_peer_id
+                || existing.base_domain != self_entry.base_domain
+            {
+                *existing = self_entry;
+                changed = true;
+            }
+        } else {
+            entries.push(self_entry);
+            changed = true;
+        }
+    }
+
+    if changed {
+        if let Some(token) = state.cfg.relay_list_token.as_deref() {
+            entries.sort_by(|a, b| a.relay_url.cmp(&b.relay_url));
+            update_relay_list_on_github(state, repo, &path, &branch, token, &entries, sha).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn build_self_relay_list_entry(state: &AppState) -> Result<Option<RelayListEntry>> {
+    let Some(relay_url) = state.cfg.public_url.clone() else {
+        return Ok(None);
+    };
+    let relay_url = relay_url.trim_end_matches('/').to_string();
+    if relay_url.is_empty() {
+        return Ok(None);
+    }
+    let peer_id = state.relay_mesh_peer_id.read().await.clone();
+    let db = state.db.lock().await;
+    let (pk_b64, _) = db.load_or_create_signing_keypair_b64()?;
+    Ok(Some(RelayListEntry {
+        relay_url,
+        sign_pubkey_b64: Some(pk_b64),
+        relay_p2p_peer_id: peer_id,
+        base_domain: state.cfg.base_domain.clone(),
+        last_seen_ms: now_ms(),
+    }))
+}
+
+async fn fetch_relay_list_from_github(
+    state: &AppState,
+    repo: &str,
+    path: &str,
+    branch: &str,
+    token: Option<&str>,
+) -> Result<(Vec<RelayListEntry>, Option<String>)> {
+    let url = format!(
+        "https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    );
+    let mut req = state
+        .http
+        .get(url)
+        .header("User-Agent", "fedi3-relay");
+    if let Some(tok) = token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let resp = req.send().await?;
+    if resp.status().as_u16() == 404 {
+        return Ok((Vec::new(), None));
+    }
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!("relay list fetch failed: {}", resp.status()));
+    }
+    let data: GithubContentResponse = resp.json().await?;
+    let Some(content) = data.content else {
+        return Ok((Vec::new(), data.sha));
+    };
+    let mut raw = content.replace('\n', "");
+    if data.encoding.as_deref() == Some("base64") {
+        let bytes = B64.decode(raw.as_bytes()).unwrap_or_default();
+        raw = String::from_utf8(bytes).unwrap_or_default();
+    }
+    let entries = parse_relay_list_entries(&raw);
+    Ok((entries, data.sha))
+}
+
+fn parse_relay_list_entries(raw: &str) -> Vec<RelayListEntry> {
+    let value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let items = if let Some(arr) = value.as_array() {
+        arr.clone()
+    } else if let Some(arr) = value.get("entries").and_then(|v| v.as_array()) {
+        arr.clone()
+    } else {
+        Vec::new()
+    };
+    let mut out = Vec::new();
+    for item in items {
+        if let Ok(entry) = serde_json::from_value::<RelayListEntry>(item) {
+            if entry.relay_url.trim().is_empty() {
+                continue;
+            }
+            out.push(entry);
+        }
+    }
+    out
+}
+
+async fn update_relay_list_on_github(
+    state: &AppState,
+    repo: &str,
+    path: &str,
+    branch: &str,
+    token: &str,
+    entries: &[RelayListEntry],
+    sha: Option<String>,
+) -> Result<()> {
+    let url = format!("https://api.github.com/repos/{repo}/contents/{path}");
+    let payload_json = serde_json::to_vec(entries)?;
+    let content = B64.encode(payload_json);
+    let mut payload = serde_json::json!({
+        "message": "fedi3 relay list update",
+        "content": content,
+        "branch": branch,
+    });
+    if let Some(sha) = sha {
+        payload["sha"] = serde_json::Value::String(sha);
+    }
+    let resp = state
+        .http
+        .put(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("User-Agent", "fedi3-relay")
+        .json(&payload)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "relay list update failed: {}",
+            resp.status()
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -385,11 +726,26 @@ struct RelayConfig {
     admin_token: Option<String>,
     public_url: Option<String>,
     telemetry_token: Option<String>,
+    github_token: Option<String>,
+    github_repo: Option<String>,
+    github_issue_labels: Vec<String>,
+    github_issue_assignee: Option<String>,
+    relay_list_repo: Option<String>,
+    relay_list_path: String,
+    relay_list_branch: String,
+    relay_list_token: Option<String>,
+    relay_list_refresh_secs: u64,
     seed_relays: Vec<String>,
     p2p_infra_peer_id: Option<String>,
     p2p_infra_multiaddrs: Vec<String>,
     p2p_infra_host: Option<String>,
     p2p_infra_port: u16,
+    relay_mesh_enable: bool,
+    relay_mesh_listen: Vec<String>,
+    relay_mesh_bootstrap: Vec<String>,
+    relay_mesh_key_path: PathBuf,
+    p2p_upnp_port_start: Option<u16>,
+    p2p_upnp_port_end: Option<u16>,
     telemetry_interval_secs: u64,
     max_body_bytes: usize,
     http_timeout_secs: u64,
@@ -404,6 +760,7 @@ struct RelayConfig {
     rate_limit_inbox_per_min: u32,
     rate_limit_forward_per_min: u32,
     rate_limit_admin_per_min: u32,
+    rate_limit_client_telemetry_per_min: u32,
     search_backend: String,
     search_total_mode: SearchTotalMode,
     search_cache_ttl_secs: u64,
@@ -440,9 +797,6 @@ struct RelayConfig {
     spool_ttl_secs: u64,
     move_notice_ttl_secs: u64,
     move_notice_fanout_interval_secs: u64,
-    webrtc_signal_ttl_secs: u64,
-    webrtc_signal_cleanup_interval_secs: u64,
-    webrtc_signal_max_per_peer: u32,
     spool_max_rows_per_user: usize,
     spool_flush_batch: usize,
     peer_directory_ttl_days: u32,
@@ -459,6 +813,9 @@ struct RelayConfig {
     media_s3_access_key: Option<String>,
     media_s3_secret_key: Option<String>,
     media_s3_path_style: bool,
+    backup_max_bytes: usize,
+    backup_retention_count: usize,
+    backup_rate_limit_per_hour: u32,
     outbox_index_interval_secs: u64,
     outbox_index_pages: u32,
     outbox_index_page_limit: u32,
@@ -466,6 +823,9 @@ struct RelayConfig {
     telemetry_peers_limit: u32,
     relay_sync_interval_secs: u64,
     relay_sync_limit: u32,
+    relay_media_ttl_secs: u64,
+    relay_actor_ttl_secs: u64,
+    relay_reputation_ttl_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,12 +951,6 @@ struct RelaySyncNotesQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct WebRtcSignalPollQuery {
-    to_peer_id: Option<String>,
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
 struct RegisterRequest {
     username: String,
     token: String,
@@ -605,20 +959,6 @@ struct RegisterRequest {
 #[derive(Debug, serde::Serialize)]
 struct AdminRotateResponse {
     token: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct WebRtcSignalSendReq {
-    to_peer_id: String,
-    session_id: String,
-    kind: String, // offer|answer|candidate
-    payload: serde_json::Value,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct WebRtcSignalAckReq {
-    to_peer_id: String,
-    ids: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -750,10 +1090,11 @@ impl MeiliSearch {
         if docs.is_empty() {
             return Ok(());
         }
-        let resp = self.req(
-            reqwest::Method::POST,
-            &format!("/indexes/{}/documents", self.notes_index),
-        )
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/indexes/{}/documents", self.notes_index),
+            )
             .json(docs)
             .send()
             .await?;
@@ -769,10 +1110,11 @@ impl MeiliSearch {
         if docs.is_empty() {
             return Ok(());
         }
-        let resp = self.req(
-            reqwest::Method::POST,
-            &format!("/indexes/{}/documents", self.users_index),
-        )
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/indexes/{}/documents", self.users_index),
+            )
             .json(docs)
             .send()
             .await?;
@@ -803,7 +1145,11 @@ impl MeiliSearch {
         if let Some(cur) = cursor {
             filters.push(format!("created_at_ms < {}", cur));
         }
-        let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
+        let filter = if filters.is_empty() {
+            None
+        } else {
+            Some(filters.join(" AND "))
+        };
         let body = serde_json::json!({
             "q": q,
             "limit": limit.min(200).max(1),
@@ -853,7 +1199,11 @@ impl MeiliSearch {
         if let Some(cur) = cursor {
             filters.push(format!("updated_at_ms < {}", cur));
         }
-        let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
+        let filter = if filters.is_empty() {
+            None
+        } else {
+            Some(filters.join(" AND "))
+        };
         let body = serde_json::json!({
             "q": q,
             "limit": limit.min(200).max(1),
@@ -944,7 +1294,10 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
     let cfg = load_config();
@@ -1023,6 +1376,13 @@ async fn main() {
         tunnels: Arc::new(RwLock::new(HashMap::new())),
         inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
+        relay_mesh_peer_id: Arc::new(RwLock::new(None)),
+        presence_tx: broadcast::channel(256).0,
+        github_issues: spawn_github_issues(&cfg, http.clone()),
+        telemetry_dedupe: Arc::new(Mutex::new(HashMap::new())),
+        webrtc_signals: Arc::new(Mutex::new(HashMap::new())),
+        webrtc_key_cache: Arc::new(Mutex::new(HashMap::new())),
+        relay_reputation: Arc::new(Mutex::new(HashMap::new())),
         cfg,
         db: Arc::new(Mutex::new(db)),
         limiter,
@@ -1038,14 +1398,51 @@ async fn main() {
     let base_domain = state.cfg.base_domain.clone();
     let max_body = state.cfg.max_body_bytes;
 
+    let reputation_ttl_ms = (state.cfg.relay_reputation_ttl_secs as i64) * 1000;
+    if let Ok(entries) = {
+        let db = state.db.lock().await;
+        db.list_relay_reputation()
+    } {
+        let now = now_ms();
+        let mut rep = state.relay_reputation.lock().await;
+        for (relay_url, score, updated_at_ms) in entries {
+            if reputation_ttl_ms == 0 || now.saturating_sub(updated_at_ms) <= reputation_ttl_ms {
+                rep.insert(
+                    relay_url,
+                    RelayReputation {
+                        score,
+                        last_ms: updated_at_ms,
+                    },
+                );
+            }
+        }
+    }
+
+    relay_mesh::spawn_relay_mesh(state.clone());
+
+    let relay_list_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sync_relay_list_once(&relay_list_state).await {
+            warn!("relay list sync failed: {e:#}");
+        }
+        let mut interval =
+            tokio::time::interval(Duration::from_secs(relay_list_state.cfg.relay_list_refresh_secs));
+        loop {
+            interval.tick().await;
+            if let Err(e) = sync_relay_list_once(&relay_list_state).await {
+                warn!("relay list sync failed: {e:#}");
+            }
+        }
+    });
+
     let cleanup_state = state.clone();
     let spool_ttl_secs = cleanup_state.cfg.spool_ttl_secs;
-    let webrtc_ttl_secs = cleanup_state.cfg.webrtc_signal_ttl_secs;
     let peer_directory_ttl_days = cleanup_state.cfg.peer_directory_ttl_days;
+    let relay_media_ttl_secs = cleanup_state.cfg.relay_media_ttl_secs;
+    let relay_actor_ttl_secs = cleanup_state.cfg.relay_actor_ttl_secs;
+    let relay_reputation_ttl_secs = cleanup_state.cfg.relay_reputation_ttl_secs;
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(
-            cleanup_state.cfg.webrtc_signal_cleanup_interval_secs.max(10),
-        ));
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
             let db = cleanup_state.db.lock().await;
@@ -1055,12 +1452,23 @@ async fn main() {
             if let Err(e) = db.cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs) {
                 error!("move_notices cleanup failed: {e}");
             }
-            if let Err(e) = db.cleanup_webrtc_signals(webrtc_ttl_secs) {
-                error!("webrtc signals cleanup failed: {e}");
+            if let Err(e) = db.cleanup_relay_media(relay_media_ttl_secs) {
+                error!("relay_media cleanup failed: {e}");
+            }
+            if let Err(e) = db.cleanup_relay_actors(relay_actor_ttl_secs) {
+                error!("relay_actors cleanup failed: {e}");
+            }
+            if let Err(e) = db.cleanup_relay_reputation(relay_reputation_ttl_secs) {
+                error!("relay_reputation cleanup failed: {e}");
             }
             if peer_directory_ttl_days > 0 {
                 if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
                     error!("peer_directory cleanup failed: {e}");
+                }
+            }
+            if peer_directory_ttl_days > 0 {
+                if let Err(e) = db.cleanup_peer_registry(peer_directory_ttl_days) {
+                    error!("peer_registry cleanup failed: {e}");
                 }
             }
         }
@@ -1117,15 +1525,20 @@ async fn main() {
         .route("/.well-known/webfinger", get(webfinger))
         .route("/inbox", post(shared_inbox))
         .route("/admin/users", get(admin_list_users))
-        .route("/admin/users/:user", get(admin_get_user).delete(admin_delete_user))
+        .route(
+            "/admin/users/:user",
+            get(admin_get_user).delete(admin_delete_user),
+        )
         .route("/admin/users/:user/disable", post(admin_disable_user))
         .route("/admin/users/:user/enable", post(admin_enable_user))
         .route("/admin/users/:user/rotate_token", post(admin_rotate_token))
+        .route("/admin/peers/:peer_id", delete(admin_delete_peer))
         .route("/admin/audit", get(admin_audit_list))
         .route("/_fedi3/relay/stats", get(relay_stats))
         .route("/_fedi3/relay/me", get(relay_me))
         .route("/_fedi3/relay/relays", get(relay_list))
         .route("/_fedi3/relay/peers", get(relay_peers))
+        .route("/_fedi3/relay/presence/stream", get(relay_presence_stream))
         .route("/_fedi3/relay/p2p_infra", get(relay_p2p_infra))
         .route("/_fedi3/relay/metrics", get(relay_metrics_json))
         .route("/_fedi3/relay/metrics.prom", get(relay_metrics_prom))
@@ -1136,12 +1549,21 @@ async fn main() {
         .route("/_fedi3/relay/sync/notes", get(relay_sync_notes))
         .route("/_fedi3/relay/reindex", post(relay_reindex))
         .route("/_fedi3/relay/telemetry", post(relay_telemetry_post))
+        .route(
+            "/_fedi3/relay/telemetry/client",
+            post(relay_client_telemetry_post),
+        )
+        .route("/_fedi3/webrtc/send", post(webrtc_send))
+        .route("/_fedi3/webrtc/poll", get(webrtc_poll))
+        .route("/_fedi3/webrtc/ack", post(webrtc_ack))
         .route("/_fedi3/relay/move", post(relay_move_post))
-        .route("/_fedi3/relay/move/:user", axum::routing::delete(relay_move_delete))
+        .route(
+            "/_fedi3/relay/move/:user",
+            axum::routing::delete(relay_move_delete),
+        )
         .route("/_fedi3/relay/move_notice", post(relay_move_notice_post))
-        .route("/_fedi3/webrtc/send", post(webrtc_signal_send))
-        .route("/_fedi3/webrtc/poll", get(webrtc_signal_poll))
-        .route("/_fedi3/webrtc/ack", post(webrtc_signal_ack))
+        .route("/_fedi3/backup", get(relay_backup_meta).put(relay_backup_put))
+        .route("/_fedi3/backup/blob", get(relay_backup_blob))
         .route("/users/:user/media", post(media_upload))
         .route("/users/:user/media/:id", get(media_get))
         .route("/users/:user", any(forward_user_root))
@@ -1183,7 +1605,9 @@ async fn main() {
     }
     let sync_state = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(sync_state.cfg.telemetry_interval_secs.max(10)));
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            sync_state.cfg.telemetry_interval_secs.max(10),
+        ));
         loop {
             interval.tick().await;
             if let Err(e) = push_telemetry_once(&sync_state).await {
@@ -1197,15 +1621,20 @@ async fn main() {
         info!("host routing enabled for base domain: {d}");
     }
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 fn load_config() -> RelayConfig {
     let bind = std::env::var("FEDI3_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0:8787".to_string());
     let bind: SocketAddr = bind.parse().expect("FEDI3_RELAY_BIND invalid");
-    let base_domain = std::env::var("FEDI3_RELAY_BASE_DOMAIN").ok().map(normalize_host);
+    let base_domain = std::env::var("FEDI3_RELAY_BASE_DOMAIN")
+        .ok()
+        .map(normalize_host);
     let trust_proxy_headers = std::env::var("FEDI3_RELAY_TRUST_PROXY_HEADERS")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -1215,8 +1644,54 @@ fn load_config() -> RelayConfig {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     let admin_token = std::env::var("FEDI3_RELAY_ADMIN_TOKEN").ok();
-    let public_url = std::env::var("FEDI3_RELAY_PUBLIC_URL").ok().map(|s| s.trim_end_matches('/').to_string());
+    let public_url = std::env::var("FEDI3_RELAY_PUBLIC_URL")
+        .ok()
+        .map(|s| s.trim_end_matches('/').to_string());
     let telemetry_token = std::env::var("FEDI3_RELAY_TELEMETRY_TOKEN").ok();
+    let github_token = std::env::var("FEDI3_GITHUB_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let github_repo = std::env::var("FEDI3_GITHUB_REPO")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let github_issue_labels = std::env::var("FEDI3_GITHUB_ISSUE_LABELS")
+        .ok()
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["telemetry".to_string(), "auto-generated".to_string()]);
+    let github_issue_assignee = std::env::var("FEDI3_GITHUB_ISSUE_ASSIGNEE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let relay_list_repo = std::env::var("FEDI3_RELAY_LIST_REPO")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let relay_list_path = std::env::var("FEDI3_RELAY_LIST_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "relay_list.json".to_string());
+    let relay_list_branch = std::env::var("FEDI3_RELAY_LIST_BRANCH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let relay_list_token = std::env::var("FEDI3_RELAY_LIST_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let relay_list_refresh_secs = std::env::var("FEDI3_RELAY_LIST_REFRESH_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(600)
+        .max(30);
     let seed_relays = std::env::var("FEDI3_RELAY_SEED_RELAYS")
         .ok()
         .map(|v| {
@@ -1236,7 +1711,11 @@ fn load_config() -> RelayConfig {
             match std::fs::read_to_string(&path) {
                 Ok(v) => {
                     let t = v.trim().to_string();
-                    if t.is_empty() { None } else { Some(t) }
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
                 }
                 Err(e) => {
                     warn!(path=%path, "read p2p_infra peer_id file failed: {e}");
@@ -1261,6 +1740,49 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
         .unwrap_or(4001);
+    let relay_mesh_enable = std::env::var("FEDI3_RELAY_MESH_ENABLE")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+    let relay_mesh_listen = std::env::var("FEDI3_RELAY_MESH_LISTEN")
+        .ok()
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "/ip4/0.0.0.0/tcp/0".to_string(),
+                "/ip4/0.0.0.0/udp/0/quic-v1".to_string(),
+            ]
+        });
+    let relay_mesh_bootstrap = std::env::var("FEDI3_RELAY_MESH_BOOTSTRAP")
+        .ok()
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default();
+    let relay_mesh_key_path = std::env::var("FEDI3_RELAY_MESH_KEY")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("fedi3_relay_mesh_keypair.pb"));
+    let relay_mesh_bootstrap = if relay_mesh_bootstrap.is_empty() {
+        p2p_infra_multiaddrs.clone()
+    } else {
+        relay_mesh_bootstrap
+    };
+    let p2p_upnp_port_start = std::env::var("FEDI3_RELAY_P2P_UPNP_PORT_START")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok());
+    let p2p_upnp_port_end = std::env::var("FEDI3_RELAY_P2P_UPNP_PORT_END")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok());
     let telemetry_interval_secs = std::env::var("FEDI3_RELAY_TELEMETRY_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1269,11 +1791,30 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(64 * 1024 * 1024);
+    let backup_max_bytes = std::env::var("FEDI3_RELAY_BACKUP_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(200 * 1024 * 1024)
+        .clamp(1 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+        .min(max_body_bytes);
+    let backup_retention_count = std::env::var("FEDI3_RELAY_BACKUP_RETENTION")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(3)
+        .clamp(1, 10);
+    let backup_rate_limit_per_hour = std::env::var("FEDI3_RELAY_BACKUP_RL_PER_HOUR")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(1)
+        .clamp(1, 100);
     let hsts_max_age_secs = std::env::var("FEDI3_RELAY_HSTS_MAX_AGE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    let csp = std::env::var("FEDI3_RELAY_CSP").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let csp = std::env::var("FEDI3_RELAY_CSP")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let http_timeout_secs = std::env::var("FEDI3_RELAY_HTTP_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1318,6 +1859,11 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(120);
+    let rate_limit_client_telemetry_per_min =
+        std::env::var("FEDI3_RELAY_RL_CLIENT_TELEMETRY_PER_MIN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(30);
     let search_backend = std::env::var("FEDI3_RELAY_SEARCH_BACKEND")
         .ok()
         .map(|v| v.trim().to_ascii_lowercase())
@@ -1489,33 +2035,22 @@ fn load_config() -> RelayConfig {
     let spool_ttl_secs = std::env::var("FEDI3_RELAY_SPOOL_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(7 * 24 * 60 * 60);
+        .unwrap_or(30 * 24 * 60 * 60);
     let move_notice_ttl_secs = std::env::var("FEDI3_RELAY_MOVE_NOTICE_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(7 * 24 * 60 * 60);
-    let move_notice_fanout_interval_secs = std::env::var("FEDI3_RELAY_MOVE_NOTICE_FANOUT_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(60);
+    let move_notice_fanout_interval_secs =
+        std::env::var("FEDI3_RELAY_MOVE_NOTICE_FANOUT_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
     let peer_directory_ttl_days = std::env::var("FEDI3_RELAY_PEER_DIRECTORY_TTL_DAYS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(30)
         .min(3650);
 
-    let webrtc_signal_ttl_secs = std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_TTL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(10 * 60);
-    let webrtc_signal_cleanup_interval_secs = std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_CLEANUP_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30);
-    let webrtc_signal_max_per_peer = std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_MAX_PER_PEER")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(200);
     let spool_max_rows_per_user = std::env::var("FEDI3_RELAY_SPOOL_MAX_ROWS_PER_USER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -1524,8 +2059,10 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50);
-    let media_backend = std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
-    let media_dir = std::env::var("FEDI3_RELAY_MEDIA_DIR").unwrap_or_else(|_| "fedi3_relay_media".to_string());
+    let media_backend =
+        std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
+    let media_dir =
+        std::env::var("FEDI3_RELAY_MEDIA_DIR").unwrap_or_else(|_| "fedi3_relay_media".to_string());
     let media_prefix = std::env::var("FEDI3_RELAY_MEDIA_PREFIX").unwrap_or_default();
     let media_webdav_base_url = std::env::var("FEDI3_RELAY_MEDIA_WEBDAV_BASE_URL").ok();
     let media_webdav_username = std::env::var("FEDI3_RELAY_MEDIA_WEBDAV_USERNAME").ok();
@@ -1568,6 +2105,18 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(200);
+    let relay_media_ttl_secs = std::env::var("FEDI3_RELAY_MEDIA_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(14 * 24 * 60 * 60);
+    let relay_actor_ttl_secs = std::env::var("FEDI3_RELAY_ACTOR_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30 * 24 * 60 * 60);
+    let relay_reputation_ttl_secs = std::env::var("FEDI3_RELAY_REPUTATION_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30 * 24 * 60 * 60);
     RelayConfig {
         bind,
         base_domain,
@@ -1576,11 +2125,26 @@ fn load_config() -> RelayConfig {
         admin_token,
         public_url,
         telemetry_token,
+        github_token,
+        github_repo,
+        github_issue_labels,
+        github_issue_assignee,
+        relay_list_repo,
+        relay_list_path,
+        relay_list_branch,
+        relay_list_token,
+        relay_list_refresh_secs,
         seed_relays,
         p2p_infra_peer_id,
         p2p_infra_multiaddrs,
         p2p_infra_host,
         p2p_infra_port,
+        relay_mesh_enable,
+        relay_mesh_listen,
+        relay_mesh_bootstrap,
+        relay_mesh_key_path,
+        p2p_upnp_port_start,
+        p2p_upnp_port_end,
         telemetry_interval_secs,
         max_body_bytes,
         http_timeout_secs,
@@ -1595,6 +2159,7 @@ fn load_config() -> RelayConfig {
         rate_limit_inbox_per_min,
         rate_limit_forward_per_min,
         rate_limit_admin_per_min,
+        rate_limit_client_telemetry_per_min,
         search_backend,
         search_total_mode,
         search_cache_ttl_secs,
@@ -1631,9 +2196,6 @@ fn load_config() -> RelayConfig {
         spool_ttl_secs,
         move_notice_ttl_secs,
         move_notice_fanout_interval_secs,
-        webrtc_signal_ttl_secs,
-        webrtc_signal_cleanup_interval_secs,
-        webrtc_signal_max_per_peer,
         spool_max_rows_per_user,
         spool_flush_batch,
         peer_directory_ttl_days,
@@ -1650,6 +2212,9 @@ fn load_config() -> RelayConfig {
         media_s3_access_key,
         media_s3_secret_key,
         media_s3_path_style,
+        backup_max_bytes,
+        backup_retention_count,
+        backup_rate_limit_per_hour,
         outbox_index_interval_secs,
         outbox_index_pages,
         outbox_index_page_limit,
@@ -1657,6 +2222,9 @@ fn load_config() -> RelayConfig {
         telemetry_peers_limit,
         relay_sync_interval_secs,
         relay_sync_limit,
+        relay_media_ttl_secs,
+        relay_actor_ttl_secs,
+        relay_reputation_ttl_secs,
     }
 }
 
@@ -1680,7 +2248,13 @@ async fn tunnel_ws(
     ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, q.token, socket))
 }
 
-async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: Option<String>, socket: WebSocket) {
+async fn handle_tunnel(
+    state: AppState,
+    peer: SocketAddr,
+    user: String,
+    token: Option<String>,
+    socket: WebSocket,
+) {
     let token = match token {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -1695,7 +2269,11 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
 
     if !state
         .limiter
-        .check(peer_ip(&peer), "tunnel", state.cfg.rate_limit_tunnel_per_min)
+        .check(
+            peer_ip(&peer),
+            "tunnel",
+            state.cfg.rate_limit_tunnel_per_min,
+        )
         .await
     {
         error!(%user, "tunnel rejected: rate limited");
@@ -1719,35 +2297,55 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
     let (tx, mut rx) = mpsc::channel::<TunnelRequest>(64);
     let tx_for_hello = tx.clone();
 
-    state.tunnels.write().await.insert(user.clone(), TunnelHandle { tx });
+    state
+        .tunnels
+        .write()
+        .await
+        .insert(user.clone(), TunnelHandle { tx });
 
-    // Fetch peer hello (best-effort) and store it for telemetry/online peer id.
+    {
+        let stub_peer_id = format!("user:{user}");
+        let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
+        let db = state.db.lock().await;
+        let _ = db.upsert_peer_directory(&stub_peer_id, &user, &actor_url);
+        emit_presence_update(&state, &user, &actor_url, true);
+    }
+
+    // Fetch peer hello (best-effort) and store it for directory/telemetry.
     let hello_state = state.clone();
     let hello_user = user.clone();
     tokio::spawn(async move {
         if let Ok(Some(hello)) = fetch_peer_hello(&hello_state, &hello_user, tx_for_hello).await {
-            if let Some(p) = hello.p2p.as_ref().and_then(|p| p.peer_id.clone()) {
-                let mut db = hello_state.db.lock().await;
-                let _ = db.upsert_peer_seen(&p);
-                let actor_url = hello.actor.trim().to_string();
-                if !actor_url.is_empty() {
-                    let _ = db.upsert_peer_directory(&p, &hello.username, &actor_url);
-                    let stub = actor_stub_from_actor_url(
-                        &hello.username,
-                        &actor_url,
-                        &user_base_template(&hello_state.cfg),
-                    );
-                    let doc = MeiliUserDoc {
-                        id: meili_doc_id(&actor_url),
-                        username: hello.username.clone(),
-                        actor_url: actor_url.clone(),
-                        actor_json: Some(serde_json::to_string(&stub).unwrap_or_default()),
-                        updated_at_ms: now_ms(),
-                    };
-                    hello_state.meili_index_user(doc);
-                }
-            }
-            hello_state.peer_hello.write().await.insert(hello_user, hello);
+            let actor_url = if hello.actor.trim().is_empty() {
+                format!(
+                    "{}/users/{}",
+                    user_base_url(&hello_state.cfg, &hello_user),
+                    hello_user
+                )
+            } else {
+                hello.actor.trim().to_string()
+            };
+            let db = hello_state.db.lock().await;
+            let _ = db.upsert_peer_directory(&format!("user:{hello_user}"), &hello.username, &actor_url);
+            let stub = actor_stub_from_actor_url(
+                &hello.username,
+                &actor_url,
+                &user_base_template(&hello_state.cfg),
+            );
+            let doc = MeiliUserDoc {
+                id: meili_doc_id(&actor_url),
+                username: hello.username.clone(),
+                actor_url: actor_url.clone(),
+                actor_json: Some(serde_json::to_string(&stub).unwrap_or_default()),
+                updated_at_ms: now_ms(),
+            };
+            hello_state.meili_index_user(doc);
+            hello_state
+                .peer_hello
+                .write()
+                .await
+                .insert(hello_user.clone(), hello);
+            emit_presence_update(&hello_state, &hello_user, &actor_url, true);
         }
     });
 
@@ -1768,7 +2366,10 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let id = msg.id.clone();
-            inflight_writer.write().await.insert(id.clone(), msg.resp_tx);
+            inflight_writer
+                .write()
+                .await
+                .insert(id.clone(), msg.resp_tx);
             let json = match serde_json::to_string(&msg.req) {
                 Ok(v) => v,
                 Err(e) => {
@@ -1817,6 +2418,8 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
 
     state.tunnels.write().await.remove(&user);
     state.peer_hello.write().await.remove(&user);
+    let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
+    emit_presence_update(&state, &user, &actor_url, false);
     info!(%user, "tunnel disconnected");
 }
 
@@ -1826,7 +2429,13 @@ async fn webfinger(
     headers: HeaderMap,
     Query(q): Query<WebfingerQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/webfinger", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/webfinger",
+        None,
+    ) {
         return resp.into_response();
     }
     let Some(resource) = q.resource else {
@@ -1912,9 +2521,13 @@ async fn register(
     let mut db = state.db.lock().await;
     let result = db.upsert_user_token(&state.cfg, &headers, &req.username, &req.token);
     drop(db);
-    if matches!(result, Ok(UpsertUserResult::Created | UpsertUserResult::Updated)) {
+    if matches!(
+        result,
+        Ok(UpsertUserResult::Created | UpsertUserResult::Updated)
+    ) {
         let actor_url = format!("{}/users/{}", relay_self_base(&state.cfg), req.username);
-        let stub = actor_stub_from_actor_url(&req.username, &actor_url, &user_base_template(&state.cfg));
+        let stub =
+            actor_stub_from_actor_url(&req.username, &actor_url, &user_base_template(&state.cfg));
         let doc = MeiliUserDoc {
             id: meili_doc_id(&actor_url),
             username: req.username.clone(),
@@ -1928,7 +2541,9 @@ async fn register(
         Ok(UpsertUserResult::Created) => (StatusCode::CREATED, "created").into_response(),
         Ok(UpsertUserResult::Exists) => (StatusCode::OK, "exists").into_response(),
         Ok(UpsertUserResult::Updated) => (StatusCode::OK, "updated").into_response(),
-        Ok(UpsertUserResult::Unauthorized) => (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Ok(UpsertUserResult::Unauthorized) => {
+            (StatusCode::UNAUTHORIZED, "invalid token").into_response()
+        }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     }
 }
@@ -1956,7 +2571,12 @@ async fn media_upload(
     }
     if !state
         .limiter
-        .check_weighted(client_ip(&state.cfg, &peer, &headers), "media_upload", state.cfg.rate_limit_inbox_per_min, 1)
+        .check_weighted(
+            client_ip(&state.cfg, &peer, &headers),
+            "media_upload",
+            state.cfg.rate_limit_inbox_per_min,
+            1,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -1978,15 +2598,18 @@ async fn media_upload(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
     let id = generate_media_id(ext);
-    let prefix = state
-        .cfg
-        .media_prefix
-        .trim()
-        .trim_matches('/')
-        .to_string();
-    let prefix = if prefix.is_empty() { String::new() } else { format!("{}/", prefix) };
+    let prefix = state.cfg.media_prefix.trim().trim_matches('/').to_string();
+    let prefix = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", prefix)
+    };
     let storage_key = media_store::sanitize_key(&format!("{prefix}{user}/{id}"));
-    let saved = match state.media_backend.save_upload(&storage_key, media_type, &bytes).await {
+    let saved = match state
+        .media_backend
+        .save_upload(&storage_key, media_type, &bytes)
+        .await
+    {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("store failed: {e:#}")).into_response(),
     };
@@ -2011,7 +2634,15 @@ async fn media_upload(
       "mediaType": saved.media_type,
       "size": saved.size
     });
-    (StatusCode::CREATED, [(http::header::CONTENT_TYPE, "application/json; charset=utf-8")], body.to_string()).into_response()
+    (
+        StatusCode::CREATED,
+        [(
+            http::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )],
+        body.to_string(),
+    )
+        .into_response()
 }
 
 async fn media_get(
@@ -2051,8 +2682,15 @@ async fn media_get(
     match state.media_backend.load(&item.storage_key).await {
         Ok(bytes) => {
             let mut headers_out = HeaderMap::new();
-            headers_out.insert(http::header::CONTENT_TYPE, HeaderValue::from_str(&item.media_type).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
-            headers_out.insert(http::header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+            headers_out.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_str(&item.media_type)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            );
+            headers_out.insert(
+                http::header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            );
             (StatusCode::OK, headers_out, bytes).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
@@ -2113,7 +2751,11 @@ async fn readyz(
             Some("media not ready"),
             &audit.meta,
         );
-        return (StatusCode::SERVICE_UNAVAILABLE, format!("media not ready: {e}")).into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("media not ready: {e}"),
+        )
+            .into_response();
     }
     let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
     let relay_sync_cutoff_ms = now_ms().saturating_sub(relay_sync_window_ms);
@@ -2175,17 +2817,29 @@ async fn add_security_headers(
     if let Some(correlation) = correlation {
         headers.insert(
             "X-Correlation-Id",
-            HeaderValue::from_str(&correlation).unwrap_or_else(|_| HeaderValue::from_static("corr")),
+            HeaderValue::from_str(&correlation)
+                .unwrap_or_else(|_| HeaderValue::from_static("corr")),
         );
     }
-    headers.entry("X-Content-Type-Options").or_insert(HeaderValue::from_static("nosniff"));
-    headers.entry("X-Frame-Options").or_insert(HeaderValue::from_static("DENY"));
-    headers.entry("Referrer-Policy").or_insert(HeaderValue::from_static("no-referrer"));
+    headers
+        .entry("X-Content-Type-Options")
+        .or_insert(HeaderValue::from_static("nosniff"));
+    headers
+        .entry("X-Frame-Options")
+        .or_insert(HeaderValue::from_static("DENY"));
+    headers
+        .entry("Referrer-Policy")
+        .or_insert(HeaderValue::from_static("no-referrer"));
     headers
         .entry("Permissions-Policy")
-        .or_insert(HeaderValue::from_static("geolocation=(), microphone=(), camera=()"));
+        .or_insert(HeaderValue::from_static(
+            "geolocation=(), microphone=(), camera=()",
+        ));
     if state.cfg.hsts_max_age_secs > 0 {
-        let value = format!("max-age={}; includeSubDomains; preload", state.cfg.hsts_max_age_secs);
+        let value = format!(
+            "max-age={}; includeSubDomains; preload",
+            state.cfg.hsts_max_age_secs
+        );
         headers.insert(
             "Strict-Transport-Security",
             HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("max-age=0")),
@@ -2194,7 +2848,8 @@ async fn add_security_headers(
     if let Some(csp) = &state.cfg.csp {
         headers.insert(
             "Content-Security-Policy",
-            HeaderValue::from_str(csp).unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'")),
+            HeaderValue::from_str(csp)
+                .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'")),
         );
     }
     resp
@@ -2237,7 +2892,8 @@ async fn enforce_ip_policy(
         let mut resp = (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
         resp.headers_mut().insert(
             "Retry-After",
-            HeaderValue::from_str(&retry_secs.to_string()).unwrap_or_else(|_| HeaderValue::from_static("60")),
+            HeaderValue::from_str(&retry_secs.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("60")),
         );
         return resp;
     }
@@ -2257,7 +2913,9 @@ async fn relay_metrics_json(
     };
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     let _ = state.db.lock().await.insert_admin_audit(
         "admin_metrics_json",
@@ -2282,19 +2940,36 @@ async fn relay_metrics_prom(
     };
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     let mut out = String::new();
     out.push_str("# TYPE fedi3_relay_online_users gauge\n");
-    out.push_str(&format!("fedi3_relay_online_users {}\n", telemetry.online_users));
+    out.push_str(&format!(
+        "fedi3_relay_online_users {}\n",
+        telemetry.online_users
+    ));
     out.push_str("# TYPE fedi3_relay_online_peers gauge\n");
-    out.push_str(&format!("fedi3_relay_online_peers {}\n", telemetry.online_peers));
+    out.push_str(&format!(
+        "fedi3_relay_online_peers {}\n",
+        telemetry.online_peers
+    ));
     out.push_str("# TYPE fedi3_relay_total_users gauge\n");
-    out.push_str(&format!("fedi3_relay_total_users {}\n", telemetry.total_users));
+    out.push_str(&format!(
+        "fedi3_relay_total_users {}\n",
+        telemetry.total_users
+    ));
     out.push_str("# TYPE fedi3_relay_total_peers_seen gauge\n");
-    out.push_str(&format!("fedi3_relay_total_peers_seen {}\n", telemetry.total_peers_seen));
+    out.push_str(&format!(
+        "fedi3_relay_total_peers_seen {}\n",
+        telemetry.total_peers_seen
+    ));
     out.push_str("# TYPE fedi3_relay_relays_total gauge\n");
-    out.push_str(&format!("fedi3_relay_relays_total {}\n", telemetry.relays.len()));
+    out.push_str(&format!(
+        "fedi3_relay_relays_total {}\n",
+        telemetry.relays.len()
+    ));
     if let Some(v) = telemetry.search_indexed_users {
         out.push_str("# TYPE fedi3_relay_search_indexed_users gauge\n");
         out.push_str(&format!("fedi3_relay_search_indexed_users {v}\n"));
@@ -2318,7 +2993,13 @@ async fn relay_metrics_prom(
 }
 
 async fn host_meta(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/host-meta", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/host-meta",
+        None,
+    ) {
         return resp.into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
@@ -2339,7 +3020,13 @@ async fn host_meta(State(state): State<AppState>, headers: HeaderMap) -> impl In
 }
 
 async fn nodeinfo_links(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/nodeinfo", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/nodeinfo",
+        None,
+    ) {
         return resp.into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
@@ -2398,7 +3085,12 @@ async fn forward_host_any(
     }
 
     // Don't shadow reserved endpoints.
-    if rest.starts_with("tunnel/") || rest == "register" || rest == "healthz" || rest == "readyz" || rest.starts_with(".well-known/") {
+    if rest.starts_with("tunnel/")
+        || rest == "register"
+        || rest == "healthz"
+        || rest == "readyz"
+        || rest.starts_with(".well-known/")
+    {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
@@ -2522,7 +3214,9 @@ async fn forward_to_user(
 
     // If the user is offline, still serve cached profile/collections to improve
     // legacy compatibility (profile/key discovery + collection fetches).
-    if method == Method::GET && (path == format!("/users/{user}") || is_cached_collection_path(&user, path)) {
+    if method == Method::GET
+        && (path == format!("/users/{user}") || is_cached_collection_path(&user, path))
+    {
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
             let db = state.db.lock().await;
@@ -2531,7 +3225,8 @@ async fn forward_to_user(
                     if wants_activity_json(&headers) {
                         // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
                         if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
-                            if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to) {
+                            if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to)
+                            {
                                 return (
                                     StatusCode::OK,
                                     [("Content-Type", "application/activity+json; charset=utf-8")],
@@ -2548,24 +3243,14 @@ async fn forward_to_user(
                         )
                             .into_response();
                     }
-                    return (
-                        StatusCode::PERMANENT_REDIRECT,
-                        [("Location", moved_to)],
-                        "",
-                    )
+                    return (StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "")
                         .into_response();
                 }
 
                 // For collections, redirect to the new actor URL + same suffix.
-                let suffix = path
-                    .strip_prefix(&format!("/users/{user}"))
-                    .unwrap_or("");
+                let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
                 let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
-                return (
-                    StatusCode::PERMANENT_REDIRECT,
-                    [("Location", location)],
-                    "",
-                )
+                return (StatusCode::PERMANENT_REDIRECT, [("Location", location)], "")
                     .into_response();
             }
             if path == format!("/users/{user}") {
@@ -2629,7 +3314,9 @@ async fn forward_to_user(
         return (StatusCode::BAD_GATEWAY, "tunnel send failed").into_response();
     }
 
-    let Ok(resp) = tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await else {
+    let Ok(resp) =
+        tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await
+    else {
         return (StatusCode::GATEWAY_TIMEOUT, "tunnel timeout").into_response();
     };
     let Ok(resp) = resp else {
@@ -2648,7 +3335,11 @@ async fn forward_to_user(
                             .and_then(|id| id.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let meili_raw_id = if actor_url.is_empty() { format!("user:{user}") } else { actor_url.clone() };
+                        let meili_raw_id = if actor_url.is_empty() {
+                            format!("user:{user}")
+                        } else {
+                            actor_url.clone()
+                        };
                         let doc = MeiliUserDoc {
                             id: meili_doc_id(&meili_raw_id),
                             username: user.clone(),
@@ -2665,6 +3356,12 @@ async fn forward_to_user(
                             for note in extract_notes_from_value(&v) {
                                 if let Some(idx) = note_to_index(&note) {
                                     let _ = db.upsert_relay_note(&idx);
+                                }
+                                for media in extract_media_from_note(&note) {
+                                    let _ = db.upsert_relay_media(&media);
+                                }
+                                if let Some(actor_idx) = actor_to_index_from_note(&note) {
+                                    let _ = db.upsert_relay_actor(&actor_idx);
                                 }
                             }
                         }
@@ -2709,7 +3406,10 @@ fn collection_stub_json(user: &str, kind: &str, headers: &HeaderMap) -> String {
 }
 
 fn wants_activity_json(headers: &HeaderMap) -> bool {
-    let accept = headers.get("Accept").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let accept = headers
+        .get("Accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let accept = accept.to_ascii_lowercase();
     accept.contains("application/activity+json")
         || accept.contains("application/ld+json")
@@ -2718,7 +3418,12 @@ fn wants_activity_json(headers: &HeaderMap) -> bool {
         || accept.is_empty()
 }
 
-fn moved_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str, moved_to_actor: &str) -> String {
+fn moved_actor_stub_json(
+    cfg: &RelayConfig,
+    headers: &HeaderMap,
+    user: &str,
+    moved_to_actor: &str,
+) -> String {
     let (scheme, host) = origin_for_links_with_cfg(cfg, headers);
     let id = format!("{scheme}://{host}/users/{user}");
     let inbox = format!("{scheme}://{host}/inbox");
@@ -2751,10 +3456,14 @@ fn patch_actor_with_moved_to(actor_json: &str, moved_to_actor: &str) -> Option<S
             }
         }
         Some(_) => {
-            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(moved_to_actor.to_string())]);
+            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(
+                moved_to_actor.to_string(),
+            )]);
         }
         None => {
-            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(moved_to_actor.to_string())]);
+            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(
+                moved_to_actor.to_string(),
+            )]);
         }
     }
     serde_json::to_string(&v).ok()
@@ -2868,16 +3577,22 @@ async fn index_activity_bytes_for_search(state: &AppState, body: &Bytes) -> Resu
     let mut meili_docs = Vec::new();
     let db = state.db.lock().await;
     for note in notes {
-            if let Some(idx) = note_to_index(&note) {
-                let _ = db.upsert_relay_note(&idx);
-                meili_docs.push(MeiliNoteDoc {
-                    id: meili_doc_id(&idx.note_id),
-                    note_json: idx.note_json.clone(),
-                    content_text: idx.content_text.clone(),
-                    content_html: idx.content_html.clone(),
-                    tags: idx.tags.clone(),
-                    created_at_ms: idx.created_at_ms,
+        if let Some(idx) = note_to_index(&note) {
+            let _ = db.upsert_relay_note(&idx);
+            meili_docs.push(MeiliNoteDoc {
+                id: meili_doc_id(&idx.note_id),
+                note_json: idx.note_json.clone(),
+                content_text: idx.content_text.clone(),
+                content_html: idx.content_html.clone(),
+                tags: idx.tags.clone(),
+                created_at_ms: idx.created_at_ms,
             });
+        }
+        for media in extract_media_from_note(&note) {
+            let _ = db.upsert_relay_media(&media);
+        }
+        if let Some(actor_idx) = actor_to_index_from_note(&note) {
+            let _ = db.upsert_relay_actor(&actor_idx);
         }
     }
     drop(db);
@@ -2923,11 +3638,13 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
             break;
         }
         pages += 1;
-        let Some(value) = fetch_json_url(state, &url).await else { break };
+        let Some(value) = fetch_json_url(state, &url).await else {
+            break;
+        };
         let mut meili_docs = Vec::new();
+        let db = state.db.lock().await;
         for note in extract_notes_from_value(&value) {
             if let Some(idx) = note_to_index(&note) {
-                let db = state.db.lock().await;
                 let _ = db.upsert_relay_note(&idx);
                 meili_docs.push(MeiliNoteDoc {
                     id: meili_doc_id(&idx.note_id),
@@ -2938,7 +3655,14 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
                     created_at_ms: idx.created_at_ms,
                 });
             }
+            for media in extract_media_from_note(&note) {
+                let _ = db.upsert_relay_media(&media);
+            }
+            if let Some(actor_idx) = actor_to_index_from_note(&note) {
+                let _ = db.upsert_relay_actor(&actor_idx);
+            }
         }
+        drop(db);
         for doc in meili_docs {
             state.meili_index_note(doc);
         }
@@ -2966,12 +3690,19 @@ fn outbox_first_page_url(state: &AppState, user: &str) -> String {
     )
 }
 
-fn next_url_from_collection(state: &AppState, user: &str, value: &serde_json::Value) -> Option<String> {
+fn next_url_from_collection(
+    state: &AppState,
+    user: &str,
+    value: &serde_json::Value,
+) -> Option<String> {
     let next = value.get("next")?;
     let raw = if let Some(s) = next.as_str() {
         s.to_string()
     } else if let Some(obj) = next.as_object() {
-        obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        obj.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     } else {
         String::new()
     };
@@ -3164,7 +3895,10 @@ fn extract_actor_ids_from_json(actor_json: &str) -> (Option<String>, Option<Stri
         Ok(v) => v,
         Err(_) => return (None, None),
     };
-    let actor_id = v.get("id").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+    let actor_id = v
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
     let actor_url = extract_actor_url_from_value(&v).or_else(|| actor_id.clone());
     (actor_id, actor_url)
 }
@@ -3173,12 +3907,20 @@ fn extract_actor_url_from_value(v: &serde_json::Value) -> Option<String> {
     let url_val = v.get("url")?;
     if let Some(s) = url_val.as_str() {
         let s = s.trim();
-        return if s.is_empty() { None } else { Some(s.to_string()) };
+        return if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        };
     }
     if let Some(obj) = url_val.as_object() {
         if let Some(s) = obj.get("href").and_then(|v| v.as_str()) {
             let s = s.trim();
-            return if s.is_empty() { None } else { Some(s.to_string()) };
+            return if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            };
         }
     }
     if let Some(arr) = url_val.as_array() {
@@ -3260,9 +4002,16 @@ fn vec_to_headers(v: &[(String, String)]) -> HeaderMap {
 // (intentionally left out; was used for forward-webfinger)
 
 fn is_authorized_admin(cfg: &RelayConfig, headers: &HeaderMap) -> bool {
-    let Some(expected) = &cfg.admin_token else { return false };
-    let auth = headers.get("Authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let Some(token) = auth.strip_prefix("Bearer ") else { return false };
+    let Some(expected) = &cfg.admin_token else {
+        return false;
+    };
+    let auth = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let Some(token) = auth.strip_prefix("Bearer ") else {
+        return false;
+    };
     token == expected
 }
 
@@ -3270,11 +4019,160 @@ fn is_valid_username(user: &str) -> bool {
     if user.is_empty() || user.len() > 64 {
         return false;
     }
-    user.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    user.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 fn normalize_host(host: String) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn simple(status: StatusCode, msg: &str) -> Response<Body> {
+    let mut resp = Response::new(Body::from(msg.to_string()));
+    *resp.status_mut() = status;
+    resp
+}
+
+fn relay_host_for_request(cfg: &RelayConfig, headers: &HeaderMap) -> String {
+    if let Some(base) = cfg.base_domain.as_ref() {
+        return base.clone();
+    }
+    if let Some(url) = cfg.public_url.as_ref() {
+        if let Ok(parsed) = url.parse::<http::Uri>() {
+            if let Some(host) = parsed.host() {
+                return host.to_string();
+            }
+        }
+    }
+    headers
+        .get("Host")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(':').next().unwrap_or(v).to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn short_text(mut text: String, max_len: usize) -> String {
+    if text.len() <= max_len {
+        return text;
+    }
+    text.truncate(max_len.saturating_sub(3));
+    text.push_str("...");
+    text
+}
+
+fn redact_secrets(text: &str) -> String {
+    let mut out = text.replace("Bearer ", "Bearer <redacted>");
+    for key in ["token=", "secret=", "password=", "apikey=", "api_key="] {
+        loop {
+            let Some(pos) = out.to_lowercase().find(key) else { break };
+            let start = pos + key.len();
+            let end = out[start..]
+                .find(|c: char| c.is_whitespace())
+                .map(|o| start + o)
+                .unwrap_or(out.len());
+            out.replace_range(start..end, "<redacted>");
+        }
+    }
+    out
+}
+
+fn scrub_tokens(text: &str) -> String {
+    text.split_whitespace()
+        .map(|t| {
+            if t.contains("http://") || t.contains("https://") || t.contains("file://") {
+                "<url>"
+            } else if t.contains("\\") || t.contains("/home/") || t.contains("/Users/") {
+                "<path>"
+            } else {
+                t
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn sanitize_message(text: &str) -> String {
+    let text = redact_secrets(text);
+    let text = scrub_tokens(&text);
+    short_text(text.trim().to_string(), 500)
+}
+
+fn sanitize_stack(stack: &str) -> String {
+    let mut lines = Vec::new();
+    for raw in stack.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.contains("package:") || line.contains("dart:") {
+            lines.push(line.to_string());
+        } else if let Some(idx) = line.find('(') {
+            lines.push(line[..idx].trim().to_string());
+        } else {
+            lines.push(line.to_string());
+        }
+        if lines.len() >= 12 {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    lines.join("\n")
+}
+
+fn classify_telemetry_level(event_type: &str, message: &str) -> &'static str {
+    let t = event_type.to_ascii_lowercase();
+    let m = message.to_ascii_lowercase();
+    if t.contains("crash") || t.contains("panic") || m.contains("panic") {
+        return "crash";
+    }
+    if t.contains("warn") || m.contains("warn") {
+        return "warn";
+    }
+    if t.contains("error")
+        || t.contains("exception")
+        || m.contains("error")
+        || m.contains("exception")
+    {
+        return "error";
+    }
+    "telemetry"
+}
+
+async fn dedupe_telemetry(state: &AppState, fingerprint: &str, window_secs: i64) -> bool {
+    let mut map = state.telemetry_dedupe.lock().await;
+    let now = now_ms();
+    map.retain(|_, ts| now.saturating_sub(*ts) <= window_secs * 1000);
+    if map.contains_key(fingerprint) {
+        return true;
+    }
+    map.insert(fingerprint.to_string(), now);
+    false
+}
+
+async fn require_user_or_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+    username: &str,
+) -> Result<(), Response<Body>> {
+    let Some(tok) = bearer_token(headers) else {
+        return Err(simple(StatusCode::UNAUTHORIZED, "missing bearer token"));
+    };
+    let db = state.db.lock().await;
+    let authorized = if is_authorized_admin(&state.cfg, headers) {
+        true
+    } else {
+        db.verify_token(username, &tok).unwrap_or(false)
+    };
+    drop(db);
+    if !authorized {
+        return Err(simple(
+            StatusCode::UNAUTHORIZED,
+            "admin or user token required",
+        ));
+    }
+    Ok(())
 }
 
 fn user_from_host(cfg: &RelayConfig, headers: &HeaderMap) -> Option<String> {
@@ -3292,7 +4190,11 @@ fn user_from_host(cfg: &RelayConfig, headers: &HeaderMap) -> Option<String> {
         return None;
     }
     let user = prefix.to_string();
-    if is_valid_username(&user) { Some(user) } else { None }
+    if is_valid_username(&user) {
+        Some(user)
+    } else {
+        None
+    }
 }
 
 impl Db {
@@ -3430,17 +4332,6 @@ impl Db {
               PRIMARY KEY(notice_id, relay_url)
             );
 
-            CREATE TABLE IF NOT EXISTS webrtc_signals (
-              signal_id TEXT PRIMARY KEY,
-              to_peer_id TEXT NOT NULL,
-              from_actor TEXT NOT NULL,
-              session_id TEXT NOT NULL,
-              kind TEXT NOT NULL,
-              payload_json TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_webrtc_to_created ON webrtc_signals(to_peer_id, created_at_ms DESC);
-
             CREATE TABLE IF NOT EXISTS media_items (
               id TEXT PRIMARY KEY,
               username TEXT NOT NULL,
@@ -3451,6 +4342,24 @@ impl Db {
               created_at_ms INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_media_user_created ON media_items(username, created_at_ms DESC);
+            CREATE TABLE IF NOT EXISTS user_backups (
+              username TEXT PRIMARY KEY,
+              storage_key TEXT NOT NULL,
+              content_type TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              meta_json TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_backups_updated ON user_backups(updated_at_ms DESC);
+            CREATE TABLE IF NOT EXISTS user_backups_history (
+              storage_key TEXT PRIMARY KEY,
+              username TEXT NOT NULL,
+              content_type TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              meta_json TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_backups_hist_user_created ON user_backups_history(username, created_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS relay_notes (
               note_id TEXT PRIMARY KEY,
@@ -3509,6 +4418,34 @@ impl Db {
               UPDATE relay_notes_count SET count = count - 1 WHERE id = 1;
             END;
 
+            CREATE TABLE IF NOT EXISTS relay_media (
+              media_url TEXT PRIMARY KEY,
+              media_type TEXT NULL,
+              name TEXT NULL,
+              width INTEGER NULL,
+              height INTEGER NULL,
+              blurhash TEXT NULL,
+              created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_media_created ON relay_media(created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_actors (
+              actor_url TEXT PRIMARY KEY,
+              username TEXT NULL,
+              actor_json TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_actors_updated ON relay_actors(updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_actors_username_lower ON relay_actors(lower(username));
+            CREATE INDEX IF NOT EXISTS idx_relay_actors_url_lower ON relay_actors(lower(actor_url));
+
+            CREATE TABLE IF NOT EXISTS relay_reputation (
+              relay_url TEXT PRIMARY KEY,
+              score INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_reputation_updated ON relay_reputation(updated_at_ms DESC);
+
             CREATE TABLE IF NOT EXISTS relay_outbox_index (
               username TEXT PRIMARY KEY,
               last_index_ms INTEGER NOT NULL,
@@ -3531,20 +4468,34 @@ impl Db {
             "#,
                 )?;
                 // Migrate existing dbs.
-                let _ = conn.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0", []);
+                let _ = conn.execute(
+                    "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+                    [],
+                );
                 let _ = conn.execute("ALTER TABLE user_cache ADD COLUMN actor_id TEXT NULL", []);
                 let _ = conn.execute("ALTER TABLE user_cache ADD COLUMN actor_url TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE relay_registry ADD COLUMN sign_pubkey_b64 TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN request_id TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN correlation_id TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN user_agent TEXT NULL", []);
+                let _ = conn.execute(
+                    "ALTER TABLE relay_registry ADD COLUMN sign_pubkey_b64 TEXT NULL",
+                    [],
+                );
+                let _ = conn.execute(
+                    "ALTER TABLE admin_audit ADD COLUMN request_id TEXT NULL",
+                    [],
+                );
+                let _ = conn.execute(
+                    "ALTER TABLE admin_audit ADD COLUMN correlation_id TEXT NULL",
+                    [],
+                );
+                let _ = conn.execute(
+                    "ALTER TABLE admin_audit ADD COLUMN user_agent TEXT NULL",
+                    [],
+                );
                 Ok(())
             }
             DbDriver::Postgres => {
-                let url = self
-                    .db_url
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("FEDI3_RELAY_DB_URL is required for postgres"))?;
+                let url = self.db_url.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("FEDI3_RELAY_DB_URL is required for postgres")
+                })?;
                 let mut cfg = deadpool_postgres::Config::new();
                 cfg.url = Some(url.to_string());
                 cfg.manager = Some(ManagerConfig {
@@ -3774,7 +4725,10 @@ impl Db {
         }
     }
 
-    fn list_relays(&self, limit: u32) -> Result<Vec<(String, Option<String>, i64, Option<String>, Option<String>)>> {
+    fn list_relays(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<(String, Option<String>, i64, Option<String>, Option<String>)>> {
         let limit = limit.min(500) as i64;
         match self.driver {
             DbDriver::Sqlite => {
@@ -3800,6 +4754,78 @@ impl Db {
                     out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
                 }
                 Ok(out)
+            }
+        }
+    }
+
+    fn upsert_relay_reputation(&self, relay_url: &str, score: i32, updated_at_ms: i64) -> Result<()> {
+        let relay_url = relay_url.trim_end_matches('/');
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_reputation(relay_url, score, updated_at_ms) VALUES (?1, ?2, ?3)\n             ON CONFLICT(relay_url) DO UPDATE SET score=excluded.score, updated_at_ms=excluded.updated_at_ms",
+                    params![relay_url, score, updated_at_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_reputation(relay_url, score, updated_at_ms) VALUES ($1, $2, $3)\n             ON CONFLICT(relay_url) DO UPDATE SET score=EXCLUDED.score, updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[&relay_url, &score, &updated_at_ms],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_relay_reputation(&self) -> Result<Vec<(String, i32, i64)>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT relay_url, score, updated_at_ms FROM relay_reputation ORDER BY updated_at_ms DESC",
+                )?;
+                let mut rows = stmt.query([])?;
+                let mut out = Vec::new();
+                while let Some(r) = rows.next()? {
+                    out.push((r.get(0)?, r.get(1)?, r.get(2)?));
+                }
+                Ok(out)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT relay_url, score, updated_at_ms FROM relay_reputation ORDER BY updated_at_ms DESC",
+                    &[],
+                )?;
+                Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect())
+            }
+        }
+    }
+
+    fn cleanup_relay_reputation(&self, ttl_secs: u64) -> Result<u64> {
+        if ttl_secs == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_reputation WHERE updated_at_ms < ?1",
+                    params![cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_reputation WHERE updated_at_ms < $1",
+                    &[&cutoff],
+                )?;
+                Ok(deleted as u64)
             }
         }
     }
@@ -3832,9 +4858,13 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                conn.query_row("SELECT value FROM relay_meta WHERE key=?1", params![key], |r| r.get(0))
-                    .optional()
-                    .map_err(Into::into)
+                conn.query_row(
+                    "SELECT value FROM relay_meta WHERE key=?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -3848,7 +4878,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                conn.execute("INSERT OR REPLACE INTO relay_meta(key,value) VALUES (?1,?2)", params![key, value])?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO relay_meta(key,value) VALUES (?1,?2)",
+                    params![key, value],
+                )?;
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -3866,7 +4899,9 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare("SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%'")?;
+                let mut stmt = conn.prepare(
+                    "SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%'",
+                )?;
                 let mut rows = stmt.query([])?;
                 let mut out = Vec::new();
                 while let Some(row) = rows.next()? {
@@ -3914,34 +4949,6 @@ impl Db {
         Ok((pk_b64, sk_b64))
     }
 
-    fn upsert_peer_seen(&mut self, peer_id: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO peer_registry(peer_id, last_seen_ms) VALUES (?1, ?2)
-            ON CONFLICT(peer_id) DO UPDATE SET last_seen_ms=excluded.last_seen_ms
-            "#,
-                    params![peer_id, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO peer_registry(peer_id, last_seen_ms) VALUES ($1, $2)
-            ON CONFLICT(peer_id) DO UPDATE SET last_seen_ms=EXCLUDED.last_seen_ms
-            "#,
-                    &[&peer_id, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
     fn count_peers_seen_since(&self, cutoff_ms: i64) -> Result<u64> {
         match self.driver {
             DbDriver::Sqlite => {
@@ -3969,7 +4976,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| r.get(0))?;
+                let n: u64 =
+                    conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| {
+                        r.get(0)
+                    })?;
                 Ok(n)
             }
             DbDriver::Postgres => {
@@ -4118,7 +5128,11 @@ impl Db {
     ) -> Result<UpsertUserResult> {
         if !self.user_exists(username)? {
             let created = self.create_user(username, new_token)?;
-            return Ok(if created { UpsertUserResult::Created } else { UpsertUserResult::Exists });
+            return Ok(if created {
+                UpsertUserResult::Created
+            } else {
+                UpsertUserResult::Exists
+            });
         }
 
         // User exists: only admin can change token unless self-register is enabled
@@ -4226,7 +5240,9 @@ impl Db {
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .optional()?;
-                let Some((stored, disabled)) = row else { return Ok(false) };
+                let Some((stored, disabled)) = row else {
+                    return Ok(false);
+                };
                 if disabled != 0 {
                     return Ok(false);
                 }
@@ -4275,7 +5291,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute("DELETE FROM user_moves WHERE username=?1", params![username])?;
+                let _ = conn.execute(
+                    "DELETE FROM user_moves WHERE username=?1",
+                    params![username],
+                )?;
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -4355,7 +5374,11 @@ impl Db {
         }
     }
 
-    fn list_recent_move_notices(&self, cutoff_ms: i64, limit: u32) -> Result<Vec<(String, String, i64)>> {
+    fn list_recent_move_notices(
+        &self,
+        cutoff_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(String, String, i64)>> {
         let limit = limit.max(1).min(1000) as i64;
         match self.driver {
             DbDriver::Sqlite => {
@@ -4385,7 +5408,11 @@ impl Db {
         }
     }
 
-    fn get_fanout_status(&self, notice_id: &str, relay_url: &str) -> Result<Option<(i64, i64, i64)>> {
+    fn get_fanout_status(
+        &self,
+        notice_id: &str,
+        relay_url: &str,
+    ) -> Result<Option<(i64, i64, i64)>> {
         // returns (tries, last_try_ms, sent_ok)
         match self.driver {
             DbDriver::Sqlite => {
@@ -4553,21 +5580,41 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute("DELETE FROM inbox_spool WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM user_cache WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM user_collection_cache WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM media_items WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM peer_directory WHERE username=?1", params![username])?;
-                let changed = conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
+                let _ = conn.execute(
+                    "DELETE FROM inbox_spool WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM user_cache WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM user_collection_cache WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM media_items WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM peer_directory WHERE username=?1",
+                    params![username],
+                )?;
+                let changed =
+                    conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
                 Ok(changed > 0)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let _ = conn.execute("DELETE FROM inbox_spool WHERE username=$1", &[&username])?;
                 let _ = conn.execute("DELETE FROM user_cache WHERE username=$1", &[&username])?;
-                let _ = conn.execute("DELETE FROM user_collection_cache WHERE username=$1", &[&username])?;
+                let _ = conn.execute(
+                    "DELETE FROM user_collection_cache WHERE username=$1",
+                    &[&username],
+                )?;
                 let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
-                let _ = conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
+                let _ =
+                    conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
                 let changed = conn.execute("DELETE FROM users WHERE username=$1", &[&username])?;
                 Ok(changed > 0)
             }
@@ -4589,7 +5636,8 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
+                let row =
+                    conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
                 Ok(row.map(|r| !r.get::<_, bool>(0)).unwrap_or(false))
             }
         }
@@ -4712,7 +5760,8 @@ impl Db {
                         .collect::<Vec<_>>()
                         .join(", ");
                     let sql = format!("DELETE FROM inbox_spool WHERE id IN ({placeholders})");
-                    let params: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+                    let params: Vec<&dyn rusqlite::ToSql> =
+                        chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
                     let _ = tx.execute(&sql, rusqlite::params_from_iter(params))?;
                 }
                 tx.commit()?;
@@ -4721,7 +5770,8 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let _ = conn.execute("DELETE FROM inbox_spool WHERE id = ANY($1)", &[&chunk])?;
+                    let _ =
+                        conn.execute("DELETE FROM inbox_spool WHERE id = ANY($1)", &[&chunk])?;
                 }
                 Ok(())
             }
@@ -4733,12 +5783,18 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM inbox_spool WHERE created_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM inbox_spool WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 Ok(deleted as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM inbox_spool WHERE created_at_ms < $1", &[&cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM inbox_spool WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
                 Ok(deleted as u64)
             }
         }
@@ -4749,7 +5805,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM move_notices WHERE created_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM move_notices WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 let _ = conn.execute(
                     "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
                     [],
@@ -4758,10 +5817,63 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM move_notices WHERE created_at_ms < $1", &[&cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM move_notices WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
                 let _ = conn.execute(
                     "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
                     &[],
+                )?;
+                Ok(deleted as u64)
+            }
+        }
+    }
+
+    fn cleanup_relay_media(&self, ttl_secs: u64) -> Result<u64> {
+        if ttl_secs == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_media WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_media WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+        }
+    }
+
+    fn cleanup_relay_actors(&self, ttl_secs: u64) -> Result<u64> {
+        if ttl_secs == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_actors WHERE updated_at_ms < ?1",
+                    params![cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_actors WHERE updated_at_ms < $1",
+                    &[&cutoff],
                 )?;
                 Ok(deleted as u64)
             }
@@ -4782,7 +5894,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_one(
-                    "SELECT COUNT(*), COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=$1",
+                    "SELECT COUNT(*), COALESCE(SUM(body_len), 0)::BIGINT FROM inbox_spool WHERE username=$1",
                     &[&username],
                 )?;
                 let count: i64 = row.get(0);
@@ -4895,28 +6007,44 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM peer_directory WHERE updated_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM peer_directory WHERE updated_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 Ok(deleted as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM peer_directory WHERE updated_at_ms < $1", &[&cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM peer_directory WHERE updated_at_ms < $1",
+                    &[&cutoff],
+                )?;
                 Ok(deleted)
             }
         }
     }
 
-    fn cleanup_webrtc_signals(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+    fn cleanup_peer_registry(&self, ttl_days: u32) -> Result<u64> {
+        if ttl_days == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms().saturating_sub((ttl_days as i64) * 24 * 60 * 60 * 1000);
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute("DELETE FROM webrtc_signals WHERE created_at_ms < ?1", params![cutoff])? as u64)
+                let deleted = conn.execute(
+                    "DELETE FROM peer_registry WHERE last_seen_ms < ?1",
+                    params![cutoff],
+                )?;
+                Ok(deleted as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM webrtc_signals WHERE created_at_ms < $1", &[&cutoff])?;
-                Ok(deleted as u64)
+                let deleted = conn.execute(
+                    "DELETE FROM peer_registry WHERE last_seen_ms < $1",
+                    &[&cutoff],
+                )?;
+                Ok(deleted)
             }
         }
     }
@@ -4999,6 +6127,182 @@ impl Db {
         }
     }
 
+    fn upsert_user_backup(&self, item: &UserBackupItem) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO user_backups(username, storage_key, content_type, size_bytes, updated_at_ms, meta_json)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6)\n             ON CONFLICT(username) DO UPDATE SET\n               storage_key=excluded.storage_key,\n               content_type=excluded.content_type,\n               size_bytes=excluded.size_bytes,\n               updated_at_ms=excluded.updated_at_ms,\n               meta_json=excluded.meta_json",
+                    params![
+                        item.username,
+                        item.storage_key,
+                        item.content_type,
+                        item.size_bytes,
+                        item.updated_at_ms,
+                        item.meta_json
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO user_backups(username, storage_key, content_type, size_bytes, updated_at_ms, meta_json)\n             VALUES ($1, $2, $3, $4, $5, $6)\n             ON CONFLICT(username) DO UPDATE SET\n               storage_key=EXCLUDED.storage_key,\n               content_type=EXCLUDED.content_type,\n               size_bytes=EXCLUDED.size_bytes,\n               updated_at_ms=EXCLUDED.updated_at_ms,\n               meta_json=EXCLUDED.meta_json",
+                    &[
+                        &item.username,
+                        &item.storage_key,
+                        &item.content_type,
+                        &item.size_bytes,
+                        &item.updated_at_ms,
+                        &item.meta_json,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn insert_user_backup_history(&self, item: &UserBackupItem) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_backups_history(storage_key, username, content_type, size_bytes, created_at_ms, meta_json)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        item.storage_key,
+                        item.username,
+                        item.content_type,
+                        item.size_bytes,
+                        item.updated_at_ms,
+                        item.meta_json
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO user_backups_history(storage_key, username, content_type, size_bytes, created_at_ms, meta_json)\n             VALUES ($1, $2, $3, $4, $5, $6)\n             ON CONFLICT(storage_key) DO NOTHING",
+                    &[
+                        &item.storage_key,
+                        &item.username,
+                        &item.content_type,
+                        &item.size_bytes,
+                        &item.updated_at_ms,
+                        &item.meta_json,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn get_user_backup(&self, username: &str) -> Result<Option<UserBackupItem>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.query_row(
+                    "SELECT username, storage_key, content_type, size_bytes, updated_at_ms, meta_json\n             FROM user_backups WHERE username=?1",
+                    params![username],
+                    |r| {
+                        Ok(UserBackupItem {
+                            username: r.get(0)?,
+                            storage_key: r.get(1)?,
+                            content_type: r.get(2)?,
+                            size_bytes: r.get(3)?,
+                            updated_at_ms: r.get(4)?,
+                            meta_json: r.get(5)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT username, storage_key, content_type, size_bytes, updated_at_ms, meta_json\n             FROM user_backups WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(row.map(|r| UserBackupItem {
+                    username: r.get(0),
+                    storage_key: r.get(1),
+                    content_type: r.get(2),
+                    size_bytes: r.get(3),
+                    updated_at_ms: r.get(4),
+                    meta_json: r.get(5),
+                }))
+            }
+        }
+    }
+
+    fn list_user_backup_keys(&self, username: &str) -> Result<Vec<String>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT storage_key FROM user_backups_history WHERE username=?1 ORDER BY created_at_ms DESC",
+                )?;
+                let rows = stmt
+                    .query_map(params![username], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT storage_key FROM user_backups_history WHERE username=$1 ORDER BY created_at_ms DESC",
+                    &[&username],
+                )?;
+                Ok(rows.into_iter().map(|r| r.get(0)).collect())
+            }
+        }
+    }
+
+    fn delete_user_backup_history(&self, username: &str, storage_key: &str) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM user_backups_history WHERE username=?1 AND storage_key=?2",
+                    params![username, storage_key],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM user_backups_history WHERE username=$1 AND storage_key=$2",
+                    &[&username, &storage_key],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn count_user_backups_since(&self, username: &str, since_ms: i64) -> Result<u64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM user_backups_history WHERE username=?1 AND created_at_ms >= ?2",
+                    params![username, since_ms],
+                    |r| r.get(0),
+                )?;
+                Ok(count.max(0) as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "SELECT COUNT(*) FROM user_backups_history WHERE username=$1 AND created_at_ms >= $2",
+                    &[&username, &since_ms],
+                )?;
+                let count: i64 = row.get(0);
+                Ok(count.max(0) as u64)
+            }
+        }
+    }
+
     fn upsert_relay_note(&self, note: &RelayNoteIndex) -> Result<()> {
         let published_ms = note.published_ms.unwrap_or(note.created_at_ms);
         match self.driver {
@@ -5017,7 +6321,10 @@ impl Db {
                     ],
                 )?;
                 let tx = conn.unchecked_transaction()?;
-                tx.execute("DELETE FROM relay_note_tags WHERE note_id=?1", params![note.note_id])?;
+                tx.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id=?1",
+                    params![note.note_id],
+                )?;
                 for tag in &note.tags {
                     tx.execute(
                         "INSERT OR IGNORE INTO relay_note_tags(note_id, tag) VALUES (?1, ?2)",
@@ -5043,7 +6350,10 @@ impl Db {
                     "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=EXCLUDED.actor_id,\n               published_ms=EXCLUDED.published_ms,\n               content_text=EXCLUDED.content_text,\n               content_html=EXCLUDED.content_html,\n               note_json=EXCLUDED.note_json",
                     params,
                 )?;
-                tx.execute("DELETE FROM relay_note_tags WHERE note_id=$1", &[&note.note_id])?;
+                tx.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id=$1",
+                    &[&note.note_id],
+                )?;
                 for tag in &note.tags {
                     tx.execute(
                         "INSERT INTO relay_note_tags(note_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -5051,6 +6361,74 @@ impl Db {
                     )?;
                 }
                 tx.commit()?;
+                Ok(())
+            }
+        }
+    }
+
+    fn upsert_relay_media(&self, media: &RelayMediaIndex) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_media(media_url, media_type, name, width, height, blurhash, created_at_ms)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT(media_url) DO UPDATE SET\n               media_type=excluded.media_type,\n               name=excluded.name,\n               width=excluded.width,\n               height=excluded.height,\n               blurhash=excluded.blurhash",
+                    params![
+                        media.url,
+                        media.media_type,
+                        media.name,
+                        media.width,
+                        media.height,
+                        media.blurhash,
+                        media.created_at_ms
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_media(media_url, media_type, name, width, height, blurhash, created_at_ms)\n             VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(media_url) DO UPDATE SET\n               media_type=EXCLUDED.media_type,\n               name=EXCLUDED.name,\n               width=EXCLUDED.width,\n               height=EXCLUDED.height,\n               blurhash=EXCLUDED.blurhash",
+                    &[
+                        &media.url,
+                        &media.media_type,
+                        &media.name,
+                        &media.width,
+                        &media.height,
+                        &media.blurhash,
+                        &media.created_at_ms,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn upsert_relay_actor(&self, actor: &RelayActorIndex) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_actors(actor_url, username, actor_json, updated_at_ms)\n             VALUES (?1, ?2, ?3, ?4)\n             ON CONFLICT(actor_url) DO UPDATE SET\n               username=excluded.username,\n               actor_json=excluded.actor_json,\n               updated_at_ms=excluded.updated_at_ms",
+                    params![
+                        actor.actor_url,
+                        actor.username,
+                        actor.actor_json,
+                        actor.updated_at_ms
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_actors(actor_url, username, actor_json, updated_at_ms)\n             VALUES ($1, $2, $3, $4)\n             ON CONFLICT(actor_url) DO UPDATE SET\n               username=EXCLUDED.username,\n               actor_json=EXCLUDED.actor_json,\n               updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[
+                        &actor.actor_url,
+                        &actor.username,
+                        &actor.actor_json,
+                        &actor.updated_at_ms,
+                    ],
+                )?;
                 Ok(())
             }
         }
@@ -5190,7 +6568,11 @@ impl Db {
                             n.max(0) as u64
                         } else if q_norm.is_empty() {
                             let n: i64 = conn
-                                .query_row("SELECT count FROM relay_notes_count WHERE id = 1", [], |r| r.get(0))
+                                .query_row(
+                                    "SELECT count FROM relay_notes_count WHERE id = 1",
+                                    [],
+                                    |r| r.get(0),
+                                )
                                 .unwrap_or(0);
                             n.max(0) as u64
                         } else {
@@ -5326,7 +6708,10 @@ impl Db {
                             let n: i64 = row.get(0);
                             n.max(0) as u64
                         } else if q_norm.is_empty() {
-                            let row = conn.query_one("SELECT count FROM relay_notes_count WHERE id = 1", &[])?;
+                            let row = conn.query_one(
+                                "SELECT count FROM relay_notes_count WHERE id = 1",
+                                &[],
+                            )?;
                             let n: i64 = row.get(0);
                             n.max(0) as u64
                         } else {
@@ -5381,7 +6766,11 @@ impl Db {
                 } else {
                     None
                 };
-                Ok(CollectionPage { total: items.len() as u64, items, next })
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -5414,7 +6803,207 @@ impl Db {
                 } else {
                     None
                 };
-                Ok(CollectionPage { total: items.len() as u64, items, next })
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn list_relay_media_sync(
+        &self,
+        limit: u32,
+        since: Option<i64>,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<RelayMediaIndex>> {
+        let limit = limit.min(200).max(1) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since) = since {
+                    stmt = conn.prepare(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media WHERE created_at_ms > ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![since, limit])?;
+                } else if let Some(cur) = cursor {
+                    stmt = conn.prepare(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media WHERE created_at_ms < ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![cur, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media ORDER BY created_at_ms DESC LIMIT ?1",
+                    )?;
+                    rows = stmt.query(params![limit])?;
+                }
+                let mut items = Vec::new();
+                let mut last_created = None;
+                while let Some(row) = rows.next()? {
+                    let created_at_ms: i64 = row.get(6)?;
+                    last_created = Some(created_at_ms);
+                    items.push(RelayMediaIndex {
+                        url: row.get(0)?,
+                        media_type: row.get(1)?,
+                        name: row.get(2)?,
+                        width: row.get(3)?,
+                        height: row.get(4)?,
+                        blurhash: row.get(5)?,
+                        created_at_ms,
+                    });
+                }
+                let next = if items.len() as i64 == limit {
+                    last_created.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since) = since {
+                    conn.query(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media WHERE created_at_ms > $1 ORDER BY created_at_ms DESC LIMIT $2",
+                        &[&since, &limit],
+                    )?
+                } else if let Some(cur) = cursor {
+                    conn.query(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media WHERE created_at_ms < $1 ORDER BY created_at_ms DESC LIMIT $2",
+                        &[&cur, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT media_url, media_type, name, width, height, blurhash, created_at_ms FROM relay_media ORDER BY created_at_ms DESC LIMIT $1",
+                        &[&limit],
+                    )?
+                };
+                let mut items = Vec::new();
+                let mut last_created = None;
+                for row in rows {
+                    let created_at_ms: i64 = row.get(6);
+                    last_created = Some(created_at_ms);
+                    items.push(RelayMediaIndex {
+                        url: row.get(0),
+                        media_type: row.get(1),
+                        name: row.get(2),
+                        width: row.get(3),
+                        height: row.get(4),
+                        blurhash: row.get(5),
+                        created_at_ms,
+                    });
+                }
+                let next = if items.len() as i64 == limit {
+                    last_created.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn list_relay_actor_sync(
+        &self,
+        limit: u32,
+        since: Option<i64>,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<RelayActorIndex>> {
+        let limit = limit.min(200).max(1) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since) = since {
+                    stmt = conn.prepare(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors WHERE updated_at_ms > ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![since, limit])?;
+                } else if let Some(cur) = cursor {
+                    stmt = conn.prepare(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors WHERE updated_at_ms < ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![cur, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors ORDER BY updated_at_ms DESC LIMIT ?1",
+                    )?;
+                    rows = stmt.query(params![limit])?;
+                }
+                let mut items = Vec::new();
+                let mut last_updated = None;
+                while let Some(row) = rows.next()? {
+                    let updated_at_ms: i64 = row.get(3)?;
+                    last_updated = Some(updated_at_ms);
+                    items.push(RelayActorIndex {
+                        actor_url: row.get(0)?,
+                        username: row.get(1)?,
+                        actor_json: row.get(2)?,
+                        updated_at_ms,
+                    });
+                }
+                let next = if items.len() as i64 == limit {
+                    last_updated.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since) = since {
+                    conn.query(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors WHERE updated_at_ms > $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                        &[&since, &limit],
+                    )?
+                } else if let Some(cur) = cursor {
+                    conn.query(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors WHERE updated_at_ms < $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                        &[&cur, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT actor_url, username, actor_json, updated_at_ms FROM relay_actors ORDER BY updated_at_ms DESC LIMIT $1",
+                        &[&limit],
+                    )?
+                };
+                let mut items = Vec::new();
+                let mut last_updated = None;
+                for row in rows {
+                    let updated_at_ms: i64 = row.get(3);
+                    last_updated = Some(updated_at_ms);
+                    items.push(RelayActorIndex {
+                        actor_url: row.get(0),
+                        username: row.get(1),
+                        actor_json: row.get(2),
+                        updated_at_ms,
+                    });
+                }
+                let next = if items.len() as i64 == limit {
+                    last_updated.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
             }
         }
     }
@@ -5833,7 +7422,12 @@ impl Db {
         }
     }
 
-    fn list_peer_directory(&self, q: &str, limit: u32) -> Result<Vec<(String, String, String)>> {
+    fn list_peer_directory(
+        &self,
+        q: &str,
+        limit: u32,
+        cutoff_ms: Option<i64>,
+    ) -> Result<Vec<(String, String, String)>> {
         let limit = limit.min(200).max(1) as i64;
         let q_norm = q.trim().to_lowercase();
         let q_like = if q_norm.is_empty() {
@@ -5841,13 +7435,23 @@ impl Db {
         } else {
             format!("%{}%", escape_like(&q_norm))
         };
+        let cutoff_ms = cutoff_ms.unwrap_or(0);
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![q_like, limit])?;
+                let mut stmt;
+                let mut rows;
+                if cutoff_ms > 0 {
+                    stmt = conn.prepare(
+                        "SELECT peer_id, username, actor_url FROM peer_directory WHERE (lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1) AND updated_at_ms >= ?3 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![q_like, limit, cutoff_ms])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![q_like, limit])?;
+                }
                 let mut out = Vec::new();
                 while let Some(row) = rows.next()? {
                     out.push((row.get(0)?, row.get(1)?, row.get(2)?));
@@ -5856,10 +7460,18 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
+                let rows;
+                if cutoff_ms > 0 {
+                    rows = conn.query(
+                        "SELECT peer_id, username, actor_url FROM peer_directory WHERE (lower(username) LIKE $1 OR lower(actor_url) LIKE $1) AND updated_at_ms >= $3 ORDER BY updated_at_ms DESC LIMIT $2",
+                        &[&q_like, &limit, &cutoff_ms],
+                    )?;
+                } else {
+                    rows = conn.query(
+                        "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                        &[&q_like, &limit],
+                    )?;
+                }
                 let mut out = Vec::new();
                 for row in rows {
                     out.push((row.get(0), row.get(1), row.get(2)));
@@ -5869,7 +7481,31 @@ impl Db {
         }
     }
 
-    fn upsert_relay_user_directory(&self, username: &str, actor_url: &str, relay_url: &str) -> Result<()> {
+    fn delete_peer_directory_entry(&self, peer_id: &str) -> Result<u64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM peer_directory WHERE peer_id = ?1",
+                    params![peer_id],
+                )?;
+                Ok(deleted as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let deleted =
+                    conn.execute("DELETE FROM peer_directory WHERE peer_id = $1", &[&peer_id])?;
+                Ok(deleted)
+            }
+        }
+    }
+
+    fn upsert_relay_user_directory(
+        &self,
+        username: &str,
+        actor_url: &str,
+        relay_url: &str,
+    ) -> Result<()> {
         let now = now_ms();
         match self.driver {
             DbDriver::Sqlite => {
@@ -5887,43 +7523,6 @@ impl Db {
                     &[&actor_url, &username, &relay_url, &now],
                 )?;
                 Ok(())
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn list_relay_user_directory(&self, q: &str, limit: u32) -> Result<Vec<(String, String, String)>> {
-        let limit = limit.min(200).max(1) as i64;
-        let q_norm = q.trim().to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![q_like, limit])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    out.push((row.get(0)?, row.get(1)?, row.get(2)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push((row.get(0), row.get(1), row.get(2)));
-                }
-                Ok(out)
             }
         }
     }
@@ -5996,165 +7595,6 @@ impl Db {
         }
     }
 
-    fn count_webrtc_signals_for_peer(&self, to_peer_id: &str) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row(
-                    "SELECT COUNT(*) FROM webrtc_signals WHERE to_peer_id=?1",
-                    params![to_peer_id],
-                    |r| r.get(0),
-                )?;
-                Ok(n)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*) FROM webrtc_signals WHERE to_peer_id=$1",
-                    &[&to_peer_id],
-                )?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn insert_webrtc_signal(
-        &self,
-        signal_id: &str,
-        to_peer_id: &str,
-        from_actor: &str,
-        session_id: &str,
-        kind: &str,
-        payload_json: &str,
-    ) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    r#"
-            INSERT OR REPLACE INTO webrtc_signals(
-              signal_id, to_peer_id, from_actor, session_id, kind, payload_json, created_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            "#,
-                    params![
-                        signal_id,
-                        to_peer_id,
-                        from_actor,
-                        session_id,
-                        kind,
-                        payload_json,
-                        now
-                    ],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO webrtc_signals(
-              signal_id, to_peer_id, from_actor, session_id, kind, payload_json, created_at_ms
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT(signal_id) DO UPDATE SET
-              to_peer_id=EXCLUDED.to_peer_id,
-              from_actor=EXCLUDED.from_actor,
-              session_id=EXCLUDED.session_id,
-              kind=EXCLUDED.kind,
-              payload_json=EXCLUDED.payload_json,
-              created_at_ms=EXCLUDED.created_at_ms
-            "#,
-                    &[&signal_id, &to_peer_id, &from_actor, &session_id, &kind, &payload_json, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_webrtc_signals(&self, to_peer_id: &str, limit: u32) -> Result<Vec<(String, String, String, String, String)>> {
-        let limit = limit.min(200).max(1) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    r#"
-            SELECT signal_id, from_actor, session_id, kind, payload_json
-            FROM webrtc_signals
-            WHERE to_peer_id=?1
-            ORDER BY created_at_ms ASC
-            LIMIT ?2
-            "#,
-                )?;
-                let mut rows = stmt.query(params![to_peer_id, limit])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    r#"
-            SELECT signal_id, from_actor, session_id, kind, payload_json
-            FROM webrtc_signals
-            WHERE to_peer_id=$1
-            ORDER BY created_at_ms ASC
-            LIMIT $2
-            "#,
-                    &[&to_peer_id, &limit],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn delete_webrtc_signals(&self, to_peer_id: &str, ids: &[String]) -> Result<u64> {
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        match self.driver {
-            DbDriver::Sqlite => {
-                let mut conn = self.open_sqlite_conn()?;
-                let tx = conn.transaction()?;
-                let mut deleted: u64 = 0;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let placeholders = std::iter::repeat("?")
-                        .take(chunk.len())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let sql = format!(
-                        "DELETE FROM webrtc_signals WHERE to_peer_id=?1 AND signal_id IN ({placeholders})"
-                    );
-                    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
-                    params.push(&to_peer_id);
-                    params.extend(chunk.iter().map(|id| id as &dyn rusqlite::ToSql));
-                    let n = tx.execute(&sql, rusqlite::params_from_iter(params))?;
-                    deleted = deleted.saturating_add(n as u64);
-                }
-                tx.commit()?;
-                Ok(deleted)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let mut deleted: u64 = 0;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let params: &[&(dyn ToSql + Sync)] = &[&to_peer_id, &chunk];
-                    let n = conn.execute(
-                        "DELETE FROM webrtc_signals WHERE to_peer_id=$1 AND signal_id = ANY($2)",
-                        params,
-                    )?;
-                    deleted = deleted.saturating_add(n as u64);
-                }
-                Ok(deleted)
-            }
-        }
-    }
 }
 
 enum UpsertUserResult {
@@ -6165,8 +7605,15 @@ enum UpsertUserResult {
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
-    let v = headers.get("Authorization")?.to_str().ok()?.trim().to_string();
-    let v = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer "))?;
+    let v = headers
+        .get("Authorization")?
+        .to_str()
+        .ok()?
+        .trim()
+        .to_string();
+    let v = v
+        .strip_prefix("Bearer ")
+        .or_else(|| v.strip_prefix("bearer "))?;
     let v = v.trim();
     if v.is_empty() {
         None
@@ -6236,7 +7683,11 @@ impl RateLimiter {
                         Err(e) => error!("redis init failed: {e}"),
                     }
                 }
-                if conns.is_empty() { None } else { Some(conns) }
+                if conns.is_empty() {
+                    None
+                } else {
+                    Some(conns)
+                }
             }
             None => None,
         };
@@ -6259,7 +7710,10 @@ impl RateLimiter {
         if let Some(_) = self.noisy_block_remaining(&ip).await {
             return false;
         }
-        if let Some(ok) = self.redis_check_weighted(&ip, bucket, per_minute, weight).await {
+        if let Some(ok) = self
+            .redis_check_weighted(&ip, bucket, per_minute, weight)
+            .await
+        {
             if !ok {
                 let now = now_ms();
                 self.register_noisy(&ip, now).await;
@@ -6334,13 +7788,24 @@ impl RateLimiter {
         entry.strikes = entry.strikes.saturating_add(1);
         let shift = entry.strikes.saturating_sub(1).min(10);
         let base = self.noisy_backoff_base_secs.saturating_mul(1u64 << shift);
-        let backoff = base.min(self.noisy_backoff_max_secs.max(self.noisy_backoff_base_secs));
+        let backoff = base.min(
+            self.noisy_backoff_max_secs
+                .max(self.noisy_backoff_base_secs),
+        );
         entry.blocked_until_ms = now + (backoff as i64).saturating_mul(1000);
         entry.last_hit_ms = now;
     }
 
-    async fn redis_check_weighted(&self, ip: &str, bucket: &str, per_minute: u32, weight: u32) -> Option<bool> {
-        let Some(redis) = self.redis_handle() else { return None };
+    async fn redis_check_weighted(
+        &self,
+        ip: &str,
+        bucket: &str,
+        per_minute: u32,
+        weight: u32,
+    ) -> Option<bool> {
+        let Some(redis) = self.redis_handle() else {
+            return None;
+        };
         let key = format!(
             "{}:rl:{}:{}:{}",
             self.redis_prefix,
@@ -6371,7 +7836,9 @@ impl RateLimiter {
     }
 
     async fn redis_noisy_remaining(&self, ip: &str) -> Option<u64> {
-        let Some(redis) = self.redis_handle() else { return None };
+        let Some(redis) = self.redis_handle() else {
+            return None;
+        };
         let key = format!("{}:noisy:block:{}", self.redis_prefix, ip);
         let mut conn = redis.lock().await;
         let ttl: redis::RedisResult<i64> = conn.ttl(key).await;
@@ -6382,7 +7849,9 @@ impl RateLimiter {
     }
 
     async fn redis_register_noisy(&self, ip: &str) -> Option<()> {
-        let Some(redis) = self.redis_handle() else { return None };
+        let Some(redis) = self.redis_handle() else {
+            return None;
+        };
         let base = self.noisy_backoff_base_secs.max(1);
         let max = self.noisy_backoff_max_secs.max(base);
         let mut conn = redis.lock().await;
@@ -6457,7 +7926,9 @@ enum IpRule {
 }
 
 fn parse_ip_rules(env: Option<String>) -> Vec<IpRule> {
-    let Some(raw) = env else { return Vec::new(); };
+    let Some(raw) = env else {
+        return Vec::new();
+    };
     raw.split(|c| c == ',' || c == ' ' || c == '\n' || c == '\t')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
@@ -6487,12 +7958,20 @@ fn ip_in_cidr(ip: IpAddr, base: IpAddr, prefix: u8) -> bool {
     match (ip, base) {
         (IpAddr::V4(ip), IpAddr::V4(base)) => {
             let prefix = prefix.min(32);
-            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
             (u32::from(ip) & mask) == (u32::from(base) & mask)
         }
         (IpAddr::V6(ip), IpAddr::V6(base)) => {
             let prefix = prefix.min(128);
-            let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
             (u128::from(ip) & mask) == (u128::from(base) & mask)
         }
         _ => false,
@@ -6528,35 +8007,27 @@ async fn admin_guard(
         .check(ip.clone(), "admin", state.cfg.rate_limit_admin_per_min)
         .await
     {
-        let _ = state
-            .db
-            .lock()
-            .await
-            .insert_admin_audit(
-                action,
-                username,
-                None,
-                Some(&ip),
-                false,
-                Some("rate limited"),
-                &meta,
-            );
+        let _ = state.db.lock().await.insert_admin_audit(
+            action,
+            username,
+            None,
+            Some(&ip),
+            false,
+            Some("rate limited"),
+            &meta,
+        );
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response());
     }
     if !is_authorized_admin(&state.cfg, headers) {
-        let _ = state
-            .db
-            .lock()
-            .await
-            .insert_admin_audit(
-                action,
-                username,
-                None,
-                Some(&ip),
-                false,
-                Some("unauthorized"),
-                &meta,
-            );
+        let _ = state.db.lock().await.insert_admin_audit(
+            action,
+            username,
+            None,
+            Some(&ip),
+            false,
+            Some("unauthorized"),
+            &meta,
+        );
         return Err((StatusCode::UNAUTHORIZED, "admin token required").into_response());
     }
     Ok(AdminAuditContext { ip, meta })
@@ -6572,8 +8043,15 @@ async fn admin_list_users(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let limit = q.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(100).min(500);
-    let offset = q.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(100)
+        .min(500);
+    let offset = q
+        .get("offset")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
     let db = state.db.lock().await;
     match db.list_users(limit, offset) {
         Ok(users) => {
@@ -6587,16 +8065,16 @@ async fn admin_list_users(
                 &audit.meta,
             );
             axum::Json(
-            users
-                .into_iter()
-                .map(|(u, created_at_ms, disabled)| {
-                    serde_json::json!({
-                      "username": u,
-                      "created_at_ms": created_at_ms,
-                      "disabled": disabled != 0
+                users
+                    .into_iter()
+                    .map(|(u, created_at_ms, disabled)| {
+                        serde_json::json!({
+                          "username": u,
+                          "created_at_ms": created_at_ms,
+                          "disabled": disabled != 0
+                        })
                     })
-                })
-                .collect::<Vec<_>>(),
+                    .collect::<Vec<_>>(),
             )
             .into_response()
         }
@@ -6685,7 +8163,8 @@ async fn admin_disable_user(
     headers: HeaderMap,
     Path(user): Path<String>,
 ) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_disable_user", Some(&user)).await {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_disable_user", Some(&user)).await
+    {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -6769,7 +8248,8 @@ async fn admin_rotate_token(
     headers: HeaderMap,
     Path(user): Path<String>,
 ) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_rotate_token", Some(&user)).await {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_rotate_token", Some(&user)).await
+    {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -6806,16 +8286,25 @@ async fn admin_rotate_token(
     }
 }
 
-async fn relay_stats(State(state): State<AppState>, Query(q): Query<RelayTelemetryQuery>) -> impl IntoResponse {
+async fn relay_stats(
+    State(state): State<AppState>,
+    Query(q): Query<RelayTelemetryQuery>,
+) -> impl IntoResponse {
     let _ = q;
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     axum::Json(telemetry).into_response()
 }
 
-async fn relay_me(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelayMeQuery>) -> impl IntoResponse {
+async fn relay_me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayMeQuery>,
+) -> impl IntoResponse {
     if !is_valid_username(&q.username) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
     }
@@ -6837,6 +8326,196 @@ async fn relay_me(State(state): State<AppState>, headers: HeaderMap, Query(q): Q
       "token_ok": token_ok
     }))
     .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RelayBackupQuery {
+    username: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RelayBackupMeta {
+    username: String,
+    updated_at_ms: i64,
+    size_bytes: i64,
+    content_type: String,
+    meta_json: Option<String>,
+}
+
+async fn relay_backup_meta(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayBackupQuery>,
+) -> impl IntoResponse {
+    let user = q.username.trim().to_string();
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &user).await {
+        return resp;
+    }
+    let db = state.db.lock().await;
+    let item = match db.get_user_backup(&user) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    };
+    let Some(item) = item else {
+        return (StatusCode::NOT_FOUND, "backup not found").into_response();
+    };
+    axum::Json(RelayBackupMeta {
+        username: item.username,
+        updated_at_ms: item.updated_at_ms,
+        size_bytes: item.size_bytes,
+        content_type: item.content_type,
+        meta_json: item.meta_json,
+    })
+    .into_response()
+}
+
+async fn relay_backup_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayBackupQuery>,
+    body: Body,
+) -> impl IntoResponse {
+    let user = q.username.trim().to_string();
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &user).await {
+        return resp;
+    }
+    let since_ms = now_ms().saturating_sub(60 * 60 * 1000);
+    {
+        let db = state.db.lock().await;
+        match db.count_user_backups_since(&user, since_ms) {
+            Ok(count) if count >= state.cfg.backup_rate_limit_per_hour as u64 => {
+                return (StatusCode::TOO_MANY_REQUESTS, "backup rate limited").into_response();
+            }
+            Ok(_) => {}
+            Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+        }
+    }
+    let content_type = headers
+        .get("Content-Type")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let meta_json = headers
+        .get("X-Fedi3-Backup-Meta")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let bytes = match axum::body::to_bytes(body, state.cfg.backup_max_bytes).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid body").into_response(),
+    };
+    if bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty backup").into_response();
+    }
+    let backup_id = generate_token();
+    let raw_key = format!("backups/{user}/{backup_id}.enc");
+    let storage_key = media_store::sanitize_key(&raw_key);
+    let saved = match state
+        .media_backend
+        .save_upload(&storage_key, &content_type, &bytes)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("storage error: {e}")).into_response(),
+    };
+    let now = now_ms();
+    let item = UserBackupItem {
+        username: user.clone(),
+        storage_key: saved.storage_key,
+        content_type: saved.media_type,
+        size_bytes: saved.size as i64,
+        updated_at_ms: now,
+        meta_json,
+    };
+    let saved_key = item.storage_key.clone();
+    let keys_to_delete = {
+        let db = state.db.lock().await;
+        if let Err(e) = db.insert_user_backup_history(&item) {
+            drop(db);
+            let _ = state.media_backend.delete(&saved_key).await;
+            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+        }
+        if let Err(e) = db.upsert_user_backup(&item) {
+            drop(db);
+            let _ = state.media_backend.delete(&saved_key).await;
+            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+        }
+        match db.list_user_backup_keys(&user) {
+            Ok(keys) => {
+                if keys.len() > state.cfg.backup_retention_count {
+                    keys[state.cfg.backup_retention_count..].to_vec()
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+            }
+        }
+    };
+    for key in keys_to_delete {
+        if let Err(e) = state.media_backend.delete(&key).await {
+            warn!("backup delete failed key={key} err={e}");
+            continue;
+        }
+        let db = state.db.lock().await;
+        if let Err(e) = db.delete_user_backup_history(&user, &key) {
+            warn!("backup history delete failed key={key} err={e}");
+        }
+    }
+    axum::Json(serde_json::json!({
+      "ok": true,
+      "username": user,
+      "updated_at_ms": now,
+      "size_bytes": item.size_bytes
+    }))
+    .into_response()
+}
+
+async fn relay_backup_blob(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayBackupQuery>,
+) -> impl IntoResponse {
+    let user = q.username.trim().to_string();
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &user).await {
+        return resp;
+    }
+    let db = state.db.lock().await;
+    let item = match db.get_user_backup(&user) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    };
+    let Some(item) = item else {
+        return (StatusCode::NOT_FOUND, "backup not found").into_response();
+    };
+    let bytes = match state.media_backend.load(&item.storage_key).await {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("storage error: {e}")).into_response(),
+    };
+    let mut resp = Response::new(Body::from(bytes));
+    let headers = resp.headers_mut();
+    headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_str(&item.content_type).unwrap_or_else(|_| {
+            HeaderValue::from_static("application/octet-stream")
+        }),
+    );
+    headers.insert(
+        http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    resp
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -6888,19 +8567,11 @@ struct RelaySearchQuery {
     since: Option<i64>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct RelaySyncNoteItem {
-    note: serde_json::Value,
-    created_at_ms: i64,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct RelaySyncNotesResponse {
-    items: Vec<RelaySyncNoteItem>,
-    next: Option<String>,
-}
-
-async fn relay_search_notes(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -6940,13 +8611,25 @@ async fn relay_search_notes(State(state): State<AppState>, headers: HeaderMap, Q
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_notes(&query, &tag, limit, cursor, since).await {
+        match search
+            .search_notes(&query, &tag, limit, cursor, since)
+            .await
+        {
             Ok(p) => p,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+            }
         }
     } else {
         let db = state.db.lock().await;
-        match db.search_relay_notes(&query, &tag, limit, cursor, since, state.cfg.search_total_mode) {
+        match db.search_relay_notes(
+            &query,
+            &tag,
+            limit,
+            cursor,
+            since,
+            state.cfg.search_total_mode,
+        ) {
             Ok(p) => p,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -6979,7 +8662,11 @@ async fn relay_sync_notes(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "relay_sync", state.cfg.rate_limit_forward_per_min)
+        .check(
+            peer_ip(&peer),
+            "relay_sync",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -6996,13 +8683,24 @@ async fn relay_sync_notes(
         .filter_map(|(note_json, created_at_ms)| {
             serde_json::from_str::<serde_json::Value>(&note_json)
                 .ok()
-                .map(|note| RelaySyncNoteItem { note, created_at_ms })
+                .map(|note| RelaySyncNoteItem {
+                    note,
+                    created_at_ms,
+                })
         })
         .collect::<Vec<_>>();
-    axum::Json(RelaySyncNotesResponse { items, next: page.next }).into_response()
+    axum::Json(RelaySyncNotesResponse {
+        items,
+        next: page.next,
+    })
+    .into_response()
 }
 
-async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -7039,9 +8737,14 @@ async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Q
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_users(&query, limit, cursor, &base_template).await {
+        match search
+            .search_users(&query, limit, cursor, &base_template)
+            .await
+        {
             Ok(p) => p,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+            }
         }
     } else {
         let db = state.db.lock().await;
@@ -7077,7 +8780,11 @@ async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Q
     axum::Json(body).into_response()
 }
 
-async fn relay_search_hashtags(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_hashtags(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -7112,7 +8819,11 @@ struct RelayCoverageQuery {
     username: Option<String>,
 }
 
-async fn relay_search_coverage(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelayCoverageQuery>) -> impl IntoResponse {
+async fn relay_search_coverage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayCoverageQuery>,
+) -> impl IntoResponse {
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
@@ -7192,7 +8903,10 @@ async fn relay_reindex(State(state): State<AppState>, headers: HeaderMap) -> imp
     (StatusCode::ACCEPTED, "reindex started").into_response()
 }
 
-async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetryQuery>) -> impl IntoResponse {
+async fn relay_list(
+    State(state): State<AppState>,
+    Query(q): Query<RelayTelemetryQuery>,
+) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let db = state.db.lock().await;
     let rows = match db.list_relays(limit) {
@@ -7203,7 +8917,9 @@ async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetr
 
     let mut relays = Vec::new();
     for (url, base_domain, last_seen_ms, last_json, sign_pubkey_b64) in rows {
-        let parsed: Option<serde_json::Value> = last_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        let parsed: Option<serde_json::Value> = last_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
         relays.push(serde_json::json!({
           "relay_url": url,
           "base_domain": base_domain,
@@ -7215,33 +8931,491 @@ async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetr
     axum::Json(serde_json::json!({ "relays": relays })).into_response()
 }
 
-async fn relay_peers(State(state): State<AppState>, Query(q): Query<RelayPeersQuery>) -> impl IntoResponse {
+async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
+    let online_users: Vec<String> = state
+        .tunnels
+        .read()
+        .await
+        .keys()
+        .cloned()
+        .collect();
+    let hello_map = state.peer_hello.read().await;
+    online_users
+        .into_iter()
+        .map(|user| {
+            let actor_url = hello_map
+                .get(&user)
+                .and_then(|hello| {
+                    let v = hello.actor.trim();
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.to_string())
+                    }
+                })
+                .unwrap_or_else(|| format!("{}/users/{}", user_base_url(&state.cfg, &user), user));
+            PresenceItem {
+                username: user,
+                actor_url,
+                online: true,
+            }
+        })
+        .collect()
+}
+
+fn emit_presence_update(state: &AppState, username: &str, actor_url: &str, online: bool) {
+    let item = PresenceItem {
+        username: username.to_string(),
+        actor_url: actor_url.to_string(),
+        online,
+    };
+    let _ = state.presence_tx.send(PresenceEvent::Update(item));
+}
+
+async fn relay_peers(
+    State(state): State<AppState>,
+    Query(q): Query<RelayPeersQuery>,
+) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let query = q.q.unwrap_or_default();
     let online_users = {
         let tunnels = state.tunnels.read().await;
         tunnels
             .keys()
-            .cloned()
+            .map(|u| u.to_lowercase())
             .collect::<std::collections::HashSet<String>>()
     };
     let db = state.db.lock().await;
-    let rows = match db.list_peer_directory(&query, limit) {
+    let rows = match db.list_peer_directory(&query, limit, None) {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     };
     let items: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(peer_id, username, actor_url)| {
+            let uname = username.to_lowercase();
             serde_json::json!({
               "peer_id": peer_id,
               "username": username,
               "actor_url": actor_url,
-              "online": online_users.contains(&username),
+              "online": online_users.contains(&uname),
             })
         })
         .collect();
-    axum::Json(serde_json::json!({ "items": items })).into_response()
+    let mut merged = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        if let Some(u) = item.get("username").and_then(|v| v.as_str()) {
+            seen.insert(u.to_lowercase());
+        }
+        merged.push(item);
+    }
+    for user in online_users {
+        if seen.contains(&user) {
+            continue;
+        }
+        let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
+        merged.push(serde_json::json!({
+          "peer_id": format!("user:{user}"),
+          "username": user,
+          "actor_url": actor_url,
+          "online": true,
+        }));
+    }
+    axum::Json(serde_json::json!({ "items": merged })).into_response()
+}
+
+async fn relay_presence_stream(State(state): State<AppState>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let snapshot = presence_snapshot(&state).await;
+    let snapshot_payload = serde_json::to_string(&PresenceSnapshot {
+        ts_ms: now_ms(),
+        items: snapshot,
+    })
+    .unwrap_or_else(|_| "{\"items\":[]}".to_string());
+    let snapshot_event = Event::default().event("snapshot").data(snapshot_payload);
+    let rx = state.presence_tx.subscribe();
+    let updates = stream::unfold((state.clone(), rx), |(state, mut rx)| async move {
+        loop {
+            match rx.recv().await {
+                Ok(PresenceEvent::Update(item)) => {
+                    let payload = serde_json::to_string(&item).unwrap_or_else(|_| "{}".to_string());
+                    let event = Event::default().event("update").data(payload);
+                    return Some((Ok(event), (state, rx)));
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let snapshot = presence_snapshot(&state).await;
+                    let payload = serde_json::to_string(&PresenceSnapshot {
+                        ts_ms: now_ms(),
+                        items: snapshot,
+                    })
+                    .unwrap_or_else(|_| "{\"items\":[]}".to_string());
+                    let event = Event::default().event("snapshot").data(payload);
+                    return Some((Ok(event), (state, rx)));
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    let stream = stream::once(async move { Ok(snapshot_event) }).chain(updates);
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+async fn relay_client_telemetry_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<ClientTelemetryInput>,
+) -> impl IntoResponse {
+    let username = input.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if input.event_type.trim().is_empty() || input.message.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing telemetry fields").into_response();
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    if !state
+        .limiter
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "client_telemetry",
+            state.cfg.rate_limit_client_telemetry_per_min,
+        )
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+
+    let Some(reporter) = state.github_issues.as_ref() else {
+        return (StatusCode::ACCEPTED, "telemetry ok").into_response();
+    };
+
+    let relay_host = relay_host_for_request(&state.cfg, &headers);
+    let handle = format!("@{username}@{relay_host}");
+    let level = classify_telemetry_level(&input.event_type, &input.message);
+    let message = sanitize_message(&input.message);
+    let stack = input
+        .stack
+        .as_deref()
+        .map(|s| sanitize_stack(&redact_secrets(s)))
+        .unwrap_or_default();
+    let fingerprint_src = format!(
+        "{}|{}|{}|{}",
+        handle,
+        input.event_type.trim(),
+        message,
+        stack
+    );
+    let fingerprint = format!("{:x}", Sha256::digest(fingerprint_src.as_bytes()));
+    if dedupe_telemetry(&state, &fingerprint, 3600).await {
+        return (StatusCode::ACCEPTED, "duplicate").into_response();
+    }
+
+    let title = short_text(
+        format!(
+            "[telemetry][{level}] {}",
+            message.split('\n').next().unwrap_or("").trim()
+        ),
+        120,
+    );
+    let ts = input.ts.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let mode = input.mode.unwrap_or_else(|| "unknown".to_string());
+    let body = format!(
+        "## Auto-generated telemetry (Fedi3)\n\
+This issue was created automatically from anonymous client telemetry.\
+\n\n\
+- user: `{handle}`\n\
+- type: `{}`\n\
+- level: `{level}`\n\
+- mode: `{mode}`\n\
+- ts: `{ts}`\n\
+- fingerprint: `{fingerprint}`\n\
+\n\
+### Message\n\
+```\n\
+{message}\n\
+```\n\
+\n\
+### Stack (sanitized)\n\
+```\n\
+{stack}\n\
+```\n",
+        input.event_type.trim()
+    );
+    let mut labels = reporter.labels.clone();
+    labels.push(level.to_string());
+
+    if reporter
+        .tx
+        .try_send(GithubIssueRequest {
+            title,
+            body,
+            labels,
+            assignee: reporter.assignee.clone(),
+        })
+        .is_err()
+    {
+        return (StatusCode::SERVICE_UNAVAILABLE, "telemetry queue full").into_response();
+    }
+
+    (StatusCode::ACCEPTED, "telemetry ok").into_response()
+}
+
+fn signature_header_value(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("Signature")
+        .or_else(|| headers.get("signature"))
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string())
+}
+
+fn signature_key_id(headers: &HeaderMap) -> Option<String> {
+    let sig = signature_header_value(headers)?;
+    for part in sig.split(',') {
+        let part = part.trim();
+        let Some((k, v)) = part.split_once('=') else { continue };
+        if k.trim() == "keyId" {
+            let key_id = v.trim().trim_matches('"').trim().to_string();
+            if !key_id.is_empty() {
+                return Some(key_id);
+            }
+        }
+    }
+    None
+}
+
+fn actor_from_key_id(key_id: &str) -> Option<String> {
+    let actor = key_id.split('#').next().unwrap_or(key_id).trim().to_string();
+    if actor.is_empty() {
+        None
+    } else {
+        Some(actor)
+    }
+}
+
+async fn fetch_actor_public_key_pem(state: &AppState, actor_url: &str) -> Result<String> {
+    let now = now_ms();
+    {
+        let cache = state.webrtc_key_cache.lock().await;
+        if let Some((pem, ts)) = cache.get(actor_url) {
+            if now.saturating_sub(*ts) <= WEBRTC_KEY_CACHE_TTL_SECS * 1000 {
+                return Ok(pem.clone());
+            }
+        }
+    }
+    let resp = state
+        .http
+        .get(actor_url)
+        .header(
+            "Accept",
+            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
+        )
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("actor fetch failed: {status} {body}"));
+    }
+    let text = resp.text().await.unwrap_or_default();
+    let pem = extract_public_key_pem_from_actor_json(&text)
+        .ok_or_else(|| anyhow::anyhow!("actor missing public key"))?;
+    let mut cache = state.webrtc_key_cache.lock().await;
+    cache.insert(actor_url.to_string(), (pem.clone(), now));
+    Ok(pem)
+}
+
+async fn verify_webrtc_signature(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &http::Uri,
+    body: &[u8],
+) -> Result<String> {
+    let sig_header = signature_header_value(headers).ok_or_else(|| anyhow::anyhow!("missing signature"))?;
+    let key_id = signature_key_id(headers).ok_or_else(|| anyhow::anyhow!("missing keyId"))?;
+    let actor_url = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
+
+    // Date skew (5 minutes).
+    let date = headers
+        .get("Date")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if date.is_empty() {
+        return Err(anyhow::anyhow!("missing date"));
+    }
+    let ts = parse_http_date(date)?;
+    let now = std::time::SystemTime::now();
+    let diff = if now > ts {
+        now.duration_since(ts).unwrap_or_default()
+    } else {
+        ts.duration_since(now).unwrap_or_default()
+    };
+    if diff > Duration::from_secs(300) {
+        return Err(anyhow::anyhow!("date skew"));
+    }
+
+    // Digest check if present.
+    if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
+        let Some((alg, value)) = d.split_once('=') else {
+            return Err(anyhow::anyhow!("bad digest"));
+        };
+        if !alg.trim().eq_ignore_ascii_case("SHA-256") {
+            return Err(anyhow::anyhow!("unsupported digest"));
+        }
+        let expected = B64.decode(value.trim().as_bytes()).unwrap_or_default();
+        let actual = Sha256::digest(body);
+        if expected.as_slice() != actual.as_slice() {
+            return Err(anyhow::anyhow!("digest mismatch"));
+        }
+    }
+
+    let params = parse_signature_header(&sig_header)?;
+    let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+    let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
+    if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
+        return Err(anyhow::anyhow!("signature invalid"));
+    }
+    Ok(actor_url)
+}
+
+async fn webrtc_send(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let (parts, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid body").into_response(),
+    };
+    let input: WebrtcSendReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    let from_actor = match verify_webrtc_signature(
+        &state,
+        &parts.headers,
+        &parts.method,
+        &parts.uri,
+        &bytes,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "invalid signature").into_response(),
+    };
+
+    let to_peer_id = input.to_peer_id.trim().to_string();
+    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
+    }
+    let session_id = input.session_id.trim().to_string();
+    if session_id.is_empty() || session_id.len() > 256 {
+        return (StatusCode::BAD_REQUEST, "invalid session_id").into_response();
+    }
+    let kind = input.kind.trim().to_string();
+    if kind.is_empty() || kind.len() > 64 {
+        return (StatusCode::BAD_REQUEST, "invalid kind").into_response();
+    }
+
+    let now = now_ms();
+    let mut signals = state.webrtc_signals.lock().await;
+    let list = signals.entry(to_peer_id).or_insert_with(Vec::new);
+    list.retain(|s| now.saturating_sub(s.created_at_ms) <= WEBRTC_SIGNAL_TTL_SECS * 1000);
+    if list.len() >= WEBRTC_SIGNAL_MAX_PER_PEER {
+        list.sort_by_key(|s| s.created_at_ms);
+        let drop_count = list.len().saturating_sub(WEBRTC_SIGNAL_MAX_PER_PEER - 1);
+        list.drain(0..drop_count);
+    }
+    let id = format!("sig-{}", generate_token());
+    list.push(WebrtcSignal {
+        id: id.clone(),
+        from_actor,
+        session_id,
+        kind,
+        payload: input.payload,
+        created_at_ms: now,
+    });
+
+    axum::Json(serde_json::json!({ "ok": true, "id": id })).into_response()
+}
+
+async fn webrtc_poll(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let (parts, _body) = req.into_parts();
+    if verify_webrtc_signature(&state, &parts.headers, &parts.method, &parts.uri, &[])
+        .await
+        .is_err()
+    {
+        return (StatusCode::UNAUTHORIZED, "invalid signature").into_response();
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let to_peer_id = query
+        .split('&')
+        .find(|p: &&str| p.starts_with("to_peer_id="))
+        .and_then(|p: &str| p.split_once('='))
+        .map(|(_, v): (&str, &str)| v.to_string())
+        .unwrap_or_default();
+    let limit = query
+        .split('&')
+        .find(|p: &&str| p.starts_with("limit="))
+        .and_then(|p: &str| p.split_once('='))
+        .and_then(|(_, v): (&str, &str)| v.parse::<u32>().ok())
+        .unwrap_or(200);
+    let to_peer_id = to_peer_id.trim().to_string();
+    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
+    }
+    let limit = limit.max(1).min(200) as usize;
+
+    let now = now_ms();
+    let mut signals = state.webrtc_signals.lock().await;
+    let list = signals.entry(to_peer_id).or_insert_with(Vec::new);
+    list.retain(|s| now.saturating_sub(s.created_at_ms) <= WEBRTC_SIGNAL_TTL_SECS * 1000);
+    let items = list.iter().take(limit).cloned().collect::<Vec<_>>();
+    axum::Json(serde_json::json!({ "ok": true, "messages": items })).into_response()
+}
+
+async fn webrtc_ack(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let (parts, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 128 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid body").into_response(),
+    };
+    let input: WebrtcAckReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if verify_webrtc_signature(&state, &parts.headers, &parts.method, &parts.uri, &bytes)
+        .await
+        .is_err()
+    {
+        return (StatusCode::UNAUTHORIZED, "invalid signature").into_response();
+    }
+    let to_peer_id = input.to_peer_id.trim().to_string();
+    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
+    }
+    if input.ids.is_empty() {
+        return axum::Json(serde_json::json!({ "ok": true, "deleted": 0 })).into_response();
+    }
+
+    let now = now_ms();
+    let mut signals = state.webrtc_signals.lock().await;
+    let list = signals.entry(to_peer_id).or_insert_with(Vec::new);
+    list.retain(|s| now.saturating_sub(s.created_at_ms) <= WEBRTC_SIGNAL_TTL_SECS * 1000);
+    let before = list.len();
+    let ids = input.ids;
+    list.retain(|s| !ids.contains(&s.id));
+    let deleted = before.saturating_sub(list.len());
+    axum::Json(serde_json::json!({ "ok": true, "deleted": deleted })).into_response()
 }
 
 async fn relay_telemetry_post(
@@ -7263,7 +9437,11 @@ async fn relay_telemetry_post(
 
     if !state
         .limiter
-        .check(peer_ip(&peer), "telemetry", state.cfg.rate_limit_forward_per_min)
+        .check(
+            peer_ip(&peer),
+            "telemetry",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7278,7 +9456,12 @@ async fn relay_telemetry_post(
         Some(v) if !v.trim().is_empty() => v.trim().to_string(),
         _ => return (StatusCode::BAD_REQUEST, "missing sign_pubkey_b64").into_response(),
     };
-    if input.signature_b64.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+    if input
+        .signature_b64
+        .as_deref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         return (StatusCode::BAD_REQUEST, "missing signature_b64").into_response();
     }
 
@@ -7295,7 +9478,12 @@ async fn relay_telemetry_post(
     }
 
     let telemetry_json = serde_json::to_string(&input).ok();
-    let _ = db.upsert_relay(&input.relay_url, input.base_domain.clone(), telemetry_json, Some(provided_pk.clone()));
+    let _ = db.upsert_relay(
+        &input.relay_url,
+        input.base_domain.clone(),
+        telemetry_json,
+        Some(provided_pk.clone()),
+    );
     for r in &input.relays {
         if r.starts_with("http://") || r.starts_with("https://") {
             let _ = db.upsert_relay(r, None, None, None);
@@ -7359,7 +9547,11 @@ async fn relay_move_post(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            peer_ip(&peer),
+            "forward",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7408,7 +9600,11 @@ async fn relay_move_delete(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            peer_ip(&peer),
+            "forward",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7447,7 +9643,11 @@ async fn relay_move_notice_post(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            peer_ip(&peer),
+            "forward",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7502,7 +9702,11 @@ async fn relay_move_notice_post(
         false
     };
     if !authorized {
-        return (StatusCode::UNAUTHORIZED, "signature or admin/user token required").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signature or admin/user token required",
+        )
+            .into_response();
     }
 
     let notice_id = notice_id_hex(&notice);
@@ -7515,179 +9719,21 @@ async fn relay_move_notice_post(
     if let Err(e) = db.set_user_move(&user, &moved_to) {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
-    let _ = db.upsert_move_notice(&notice_id, &serde_json::to_string(&notice).unwrap_or_default());
+    let _ = db.upsert_move_notice(
+        &notice_id,
+        &serde_json::to_string(&notice).unwrap_or_default(),
+    );
     drop(db);
 
     // Fan-out the signed notice to other relays (best-effort).
-    tokio::spawn(fanout_move_notice(state.clone(), notice_id, body.to_vec(), hop + 1));
+    tokio::spawn(fanout_move_notice(
+        state.clone(),
+        notice_id,
+        body.to_vec(),
+        hop + 1,
+    ));
 
     (StatusCode::OK, "ok").into_response()
-}
-
-async fn webrtc_signal_send(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    uri: OriginalUri,
-    body: Bytes,
-) -> impl IntoResponse {
-    if !state
-        .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
-        .await
-    {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
-    }
-
-    if body.len() > 256 * 1024 {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "payload too large").into_response();
-    }
-
-    let req: WebRtcSignalSendReq = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
-    };
-    let to_peer_id = req.to_peer_id.trim().to_string();
-    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
-        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
-    }
-    let session_id = req.session_id.trim().to_string();
-    if session_id.is_empty() || session_id.len() > 128 {
-        return (StatusCode::BAD_REQUEST, "invalid session_id").into_response();
-    }
-    let kind = req.kind.trim().to_ascii_lowercase();
-    if kind != "offer" && kind != "answer" && kind != "candidate" {
-        return (StatusCode::BAD_REQUEST, "invalid kind").into_response();
-    }
-
-    let (actor, _actor_json) = match verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body)).await {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
-    };
-
-    // Backpressure / anti-abuse: cap queued signals per peer.
-    {
-        let db = state.db.lock().await;
-        match db.count_webrtc_signals_for_peer(&to_peer_id) {
-            Ok(n) if n >= state.cfg.webrtc_signal_max_per_peer as u64 => {
-                return (StatusCode::TOO_MANY_REQUESTS, "queue full").into_response();
-            }
-            Ok(_) => {}
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
-        }
-    }
-
-    let signal_id = generate_token();
-    let payload_json = serde_json::to_string(&req.payload).unwrap_or_else(|_| "null".to_string());
-    {
-        let db = state.db.lock().await;
-        if let Err(e) = db.insert_webrtc_signal(&signal_id, &to_peer_id, &actor, &session_id, &kind, &payload_json) {
-            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
-        }
-    }
-
-    axum::Json(serde_json::json!({ "ok": true, "id": signal_id })).into_response()
-}
-
-async fn webrtc_signal_poll(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    uri: OriginalUri,
-    Query(q): Query<WebRtcSignalPollQuery>,
-) -> impl IntoResponse {
-    if !state
-        .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
-        .await
-    {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
-    }
-
-    let to_peer_id = q.to_peer_id.unwrap_or_default().trim().to_string();
-    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
-        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
-    }
-    let limit = q.limit.unwrap_or(50).max(1).min(200);
-
-    let (actor, actor_json) = match verify_actor_signature_for_request(&state, &Method::GET, &uri.0, &headers, None).await {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
-    };
-    let actor_peer = extract_peer_id_from_actor_json(&actor_json).unwrap_or_default();
-    if actor_peer != to_peer_id {
-        return (StatusCode::FORBIDDEN, "peer mismatch").into_response();
-    }
-
-    let rows = {
-        let db = state.db.lock().await;
-        match db.list_webrtc_signals(&to_peer_id, limit) {
-            Ok(v) => v,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
-        }
-    };
-
-    let mut out = Vec::new();
-    for (id, from_actor, session_id, kind, payload_json) in rows {
-        let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
-        out.push(serde_json::json!({
-          "id": id,
-          "from_actor": from_actor,
-          "session_id": session_id,
-          "kind": kind,
-          "payload": payload,
-        }));
-    }
-
-    axum::Json(serde_json::json!({ "ok": true, "actor": actor, "messages": out })).into_response()
-}
-
-async fn webrtc_signal_ack(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    uri: OriginalUri,
-    body: Bytes,
-) -> impl IntoResponse {
-    if !state
-        .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
-        .await
-    {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
-    }
-
-    if body.len() > 64 * 1024 {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "payload too large").into_response();
-    }
-
-    let req: WebRtcSignalAckReq = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
-    };
-    let to_peer_id = req.to_peer_id.trim().to_string();
-    if to_peer_id.is_empty() || to_peer_id.len() > 128 {
-        return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
-    }
-
-    let (_actor, actor_json) = match verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body)).await {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
-    };
-    let actor_peer = extract_peer_id_from_actor_json(&actor_json).unwrap_or_default();
-    if actor_peer != to_peer_id {
-        return (StatusCode::FORBIDDEN, "peer mismatch").into_response();
-    }
-
-    let deleted = {
-        let db = state.db.lock().await;
-        match db.delete_webrtc_signals(&to_peer_id, &req.ids) {
-            Ok(v) => v,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
-        }
-    };
-
-    axum::Json(serde_json::json!({ "ok": true, "deleted": deleted })).into_response()
 }
 
 async fn admin_delete_user(
@@ -7748,6 +9794,50 @@ async fn admin_delete_user(
     }
 }
 
+async fn admin_delete_peer(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(peer_id): Path<String>,
+) -> impl IntoResponse {
+    info!("admin_delete_peer called: peer_id = {}", peer_id);
+    let audit =
+        match admin_guard(&state, &peer, &headers, "admin_delete_peer", Some(&peer_id)).await {
+            Ok(v) => v,
+            Err(resp) => {
+                info!("admin_delete_peer: auth failed for peer_id = {}", peer_id);
+                return resp;
+            }
+        };
+    let db = state.db.lock().await;
+    match db.delete_peer_directory_entry(&peer_id) {
+        Ok(_) => {
+            let _ = db.insert_admin_audit(
+                "admin_delete_peer",
+                Some(&peer_id),
+                None,
+                Some(&audit.ip),
+                true,
+                None,
+                &audit.meta,
+            );
+            (StatusCode::OK, "deleted").into_response()
+        }
+        Err(e) => {
+            let _ = db.insert_admin_audit(
+                "admin_delete_peer",
+                Some(&peer_id),
+                None,
+                Some(&audit.ip),
+                false,
+                Some("db error"),
+                &audit.meta,
+            );
+            (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
+        }
+    }
+}
+
 async fn admin_audit_list(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -7758,8 +9848,15 @@ async fn admin_audit_list(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let limit = q.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(200).min(500);
-    let offset = q.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(200)
+        .min(500);
+    let offset = q
+        .get("offset")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
     let db = state.db.lock().await;
     match db.list_admin_audit(limit, offset) {
         Ok(rows) => {
@@ -7773,22 +9870,39 @@ async fn admin_audit_list(
                 &audit.meta,
             );
             axum::Json(
-                rows.into_iter().map(|(id, action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent)| {
-                    serde_json::json!({
-                        "id": id,
-                        "action": action,
-                        "username": username,
-                        "actor": actor,
-                        "ip": ip,
-                        "ok": ok,
-                        "detail": detail,
-                        "created_at_ms": created_at_ms,
-                        "request_id": request_id,
-                        "correlation_id": correlation_id,
-                        "user_agent": user_agent
-                    })
-                }).collect::<Vec<_>>()
-            ).into_response()
+                rows.into_iter()
+                    .map(
+                        |(
+                            id,
+                            action,
+                            username,
+                            actor,
+                            ip,
+                            ok,
+                            detail,
+                            created_at_ms,
+                            request_id,
+                            correlation_id,
+                            user_agent,
+                        )| {
+                            serde_json::json!({
+                                "id": id,
+                                "action": action,
+                                "username": username,
+                                "actor": actor,
+                                "ip": ip,
+                                "ok": ok,
+                                "detail": detail,
+                                "created_at_ms": created_at_ms,
+                                "request_id": request_id,
+                                "correlation_id": correlation_id,
+                                "user_agent": user_agent
+                            })
+                        },
+                    )
+                    .collect::<Vec<_>>(),
+            )
+            .into_response()
         }
         Err(e) => {
             let _ = db.insert_admin_audit(
@@ -7844,7 +9958,11 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-async fn fetch_peer_hello(state: &AppState, user: &str, tunnel_tx: mpsc::Sender<TunnelRequest>) -> Result<Option<PeerHello>> {
+async fn fetch_peer_hello(
+    state: &AppState,
+    user: &str,
+    tunnel_tx: mpsc::Sender<TunnelRequest>,
+) -> Result<Option<PeerHello>> {
     let id = format!("{user}-hello-{}", REQ_ID.fetch_add(1, Ordering::Relaxed));
     let req = RelayHttpRequest {
         id: id.clone(),
@@ -7855,11 +9973,17 @@ async fn fetch_peer_hello(state: &AppState, user: &str, tunnel_tx: mpsc::Sender<
         body_b64: "".to_string(),
     };
     let (resp_tx, resp_rx) = oneshot::channel();
-    let msg = TunnelRequest { id: id.clone(), req, resp_tx };
+    let msg = TunnelRequest {
+        id: id.clone(),
+        req,
+        resp_tx,
+    };
     if tunnel_tx.send(msg).await.is_err() {
         return Ok(None);
     }
-    let Ok(resp) = tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await else {
+    let Ok(resp) =
+        tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await
+    else {
         return Ok(None);
     };
     let Ok(resp) = resp else { return Ok(None) };
@@ -7879,16 +10003,7 @@ async fn fetch_peer_hello(state: &AppState, user: &str, tunnel_tx: mpsc::Sender<
 
 async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let online_users = state.tunnels.read().await.len() as u64;
-    let online_peers = {
-        let map = state.peer_hello.read().await;
-        let mut s = std::collections::HashSet::new();
-        for h in map.values() {
-            if let Some(pid) = h.p2p.as_ref().and_then(|p| p.peer_id.as_ref()) {
-                s.insert(pid.clone());
-            }
-        }
-        s.len() as u64
-    };
+    let online_peers = online_users;
 
     let peers_seen_window_ms: i64 = 30 * 24 * 3600 * 1000;
     let cutoff_ms = now_ms().saturating_sub(peers_seen_window_ms);
@@ -7896,7 +10011,19 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let search_cutoff_ms = now_ms().saturating_sub(search_window_ms);
     let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
     let relay_sync_cutoff_ms = now_ms().saturating_sub(relay_sync_window_ms);
-    let (total_users, total_peers_seen, relays, users, peers, search_indexed_users, search_last_index_ms, search_relays_total, search_relays_synced, search_relays_last_sync_ms) = {
+    let relay_p2p_peer_id = state.relay_mesh_peer_id.read().await.clone();
+    let (
+        total_users,
+        total_peers_seen,
+        relays,
+        users,
+        peers,
+        search_indexed_users,
+        search_last_index_ms,
+        search_relays_total,
+        search_relays_synced,
+        search_relays_last_sync_ms,
+    ) = {
         let db = state.db.lock().await;
         let total_users = db.count_users_total().unwrap_or(0);
         let total_peers_seen = db.count_peers_seen_since(cutoff_ms).unwrap_or(0);
@@ -7931,12 +10058,16 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
             .unwrap_or_default()
             .into_iter()
             .map(|(username, _, _)| RelayUserEntry {
-                actor_url: format!("{}/users/{}", user_base_url(&state.cfg, &username), username),
+                actor_url: format!(
+                    "{}/users/{}",
+                    user_base_url(&state.cfg, &username),
+                    username
+                ),
                 username,
             })
             .collect::<Vec<_>>();
         let peers = db
-            .list_peer_directory("", state.cfg.telemetry_peers_limit)
+            .list_peer_directory("", state.cfg.telemetry_peers_limit, Some(cutoff_ms))
             .unwrap_or_default()
             .into_iter()
             .map(|(peer_id, username, actor_url)| RelayPeerEntry {
@@ -7960,7 +10091,11 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     };
 
     let mut telemetry = RelayTelemetry {
-        relay_url: state.cfg.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+        relay_url: state
+            .cfg
+            .public_url
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         timestamp_ms: now_ms(),
         online_users,
         online_peers,
@@ -7978,6 +10113,9 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         search_relays_synced: Some(search_relays_synced),
         search_relays_last_sync_ms: search_relays_last_sync_ms,
         search_relay_sync_window_ms: Some(relay_sync_window_ms),
+        p2p_upnp_port_start: state.cfg.p2p_upnp_port_start,
+        p2p_upnp_port_end: state.cfg.p2p_upnp_port_end,
+        relay_p2p_peer_id,
         sign_pubkey_b64: None,
         signature_b64: None,
         users,
@@ -8098,7 +10236,12 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
             }
             let telemetry_json = serde_json::to_string(&remote).ok();
             let mut db = state.db.lock().await;
-            let _ = db.upsert_relay(&remote.relay_url, remote.base_domain.clone(), telemetry_json, remote.sign_pubkey_b64.clone());
+            let _ = db.upsert_relay(
+                &remote.relay_url,
+                remote.base_domain.clone(),
+                telemetry_json,
+                remote.sign_pubkey_b64.clone(),
+            );
             for r in remote.relays {
                 if r.starts_with("http://") || r.starts_with("https://") {
                     let _ = db.upsert_relay(&r, None, None, None);
@@ -8111,7 +10254,8 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                     continue;
                 }
                 let _ = db.upsert_relay_user_directory(username, actor_url, &remote.relay_url);
-                let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
+                let stub =
+                    actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
                     id: meili_doc_id(actor_url),
                     username: username.to_string(),
@@ -8129,7 +10273,8 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                     continue;
                 }
                 let _ = db.upsert_peer_directory(peer_id, username, actor_url);
-                let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
+                let stub =
+                    actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
                     id: meili_doc_id(actor_url),
                     username: username.to_string(),
@@ -8152,28 +10297,36 @@ async fn sync_relays_once(state: &AppState) -> Result<()> {
             .list_relays(500)
             .unwrap_or_default()
             .into_iter()
-            .map(|(url, _, _, _, _)| url)
+            .map(|(url, _, _, telemetry_json, _)| (url, telemetry_json))
             .collect::<Vec<_>>();
         for r in &state.cfg.seed_relays {
-            out.push(r.clone());
+            out.push((r.clone(), None));
         }
         out.sort();
         out.dedup();
         if let Some(self_url) = &self_url {
-            out.retain(|u| u != self_url);
+            out.retain(|(u, _)| u != self_url);
         }
         out
     };
 
-    for relay_url in relays {
+    for (relay_url, telemetry_json) in relays {
+        if state.cfg.relay_mesh_enable {
+            if let Some(json) = telemetry_json.as_deref() {
+                if telemetry_has_mesh_peer_id(json) {
+                    continue;
+                }
+            }
+        }
         if let Err(e) = sync_relay_notes(state, &relay_url).await {
-            error!(relay_url = %relay_url, "relay sync failed: {e:#}");
+            error!(relay_url = %relay_url, "relay http sync failed: {e:#}");
         }
     }
     Ok(())
 }
 
 async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
+    info!(relay_url = %relay_url, "relay http sync start");
     let key = format!("relay_sync_last_ms:{relay_url}");
     let last_seen = {
         let db = state.db.lock().await;
@@ -8187,6 +10340,7 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
     let mut since = last_seen;
     let mut max_seen = last_seen.unwrap_or(0);
     let mut pages = 0u32;
+    let mut total_items = 0usize;
 
     while pages < 3 {
         let mut url = format!(
@@ -8214,13 +10368,23 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
         if data.items.is_empty() {
             break;
         }
+        total_items += data.items.len();
         let db = state.db.lock().await;
         for item in data.items {
             if item.created_at_ms > max_seen {
                 max_seen = item.created_at_ms;
             }
-            if let Some(indexed) = note_to_index(&item.note) {
+            if let Some(mut indexed) = note_to_index(&item.note) {
+                indexed.created_at_ms = item.created_at_ms;
                 let _ = db.upsert_relay_note(&indexed);
+            }
+            for mut media in extract_media_from_note(&item.note) {
+                media.created_at_ms = item.created_at_ms;
+                let _ = db.upsert_relay_media(&media);
+            }
+            if let Some(mut actor_idx) = actor_to_index_from_note(&item.note) {
+                actor_idx.updated_at_ms = item.created_at_ms;
+                let _ = db.upsert_relay_actor(&actor_idx);
             }
         }
         drop(db);
@@ -8237,154 +10401,32 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
         let db = state.db.lock().await;
         let _ = db.relay_meta_set(&key, &max_seen.to_string());
     }
+    if total_items > 0 {
+        info!(
+            relay_url = %relay_url,
+            items = total_items,
+            max_seen = max_seen,
+            "relay http sync applied"
+        );
+    }
     Ok(())
 }
 
-fn escape_like(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
-}
-
-fn strip_html(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut in_tag = false;
-    for c in input.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ => {
-                if !in_tag {
-                    out.push(c);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_notes_from_value(value: &serde_json::Value) -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    match value {
-        serde_json::Value::Object(map) => {
-            let ty = map.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if ty == "Note" {
-                out.push(value.clone());
-                return out;
-            }
-            if ty == "Create" || ty == "Announce" {
-                if let Some(obj) = map.get("object") {
-                    if let serde_json::Value::Object(obj_map) = obj {
-                        let inner = if obj_map.get("type").and_then(|t| t.as_str()) == Some("Note") {
-                            Some(obj)
-                        } else {
-                            obj_map.get("object")
-                        };
-                        if let Some(note) = inner {
-                            if note.get("type").and_then(|t| t.as_str()) == Some("Note") {
-                                out.push(note.clone());
-                                return out;
-                            }
-                        }
-                    }
-                }
-            }
-            if ty == "OrderedCollection" || ty == "OrderedCollectionPage" || ty == "Collection" || ty == "CollectionPage" {
-                if let Some(items) = map.get("orderedItems").or_else(|| map.get("items")) {
-                    if let serde_json::Value::Array(arr) = items {
-                        for item in arr {
-                            out.extend(extract_notes_from_value(item));
-                        }
-                    }
-                }
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for item in arr {
-                out.extend(extract_notes_from_value(item));
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
-fn note_to_index(note: &serde_json::Value) -> Option<RelayNoteIndex> {
-    let id = note.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    if id.is_empty() {
-        return None;
-    }
-    let actor_id = note.get("attributedTo").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
-    let published_ms = note
-        .get("published")
-        .and_then(|v| v.as_str())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.timestamp_millis());
-    let content_html = note
-        .get("content")
-        .or_else(|| note.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let content_text = strip_html(&content_html);
-    let tags = extract_tags(note.get("tag"));
-    let note_json = serde_json::to_string(note).unwrap_or_default();
-    Some(RelayNoteIndex {
-        note_id: id,
-        actor_id,
-        published_ms,
-        content_text,
-        content_html,
-        note_json,
-        created_at_ms: now_ms(),
-        tags,
-    })
-}
-
-fn extract_tags(tag_value: Option<&serde_json::Value>) -> Vec<String> {
-    let Some(tag_value) = tag_value else { return Vec::new() };
-    let mut out = Vec::new();
-    let mut push_tag = |name: &str| {
-        let t = name.trim().trim_start_matches('#').to_string();
-        if !t.is_empty() && !out.contains(&t) {
-            out.push(t);
-        }
+fn telemetry_has_mesh_peer_id(telemetry_json: &str) -> bool {
+    let Ok(t) = serde_json::from_str::<RelayTelemetry>(telemetry_json) else {
+        return false;
     };
-    match tag_value {
-        serde_json::Value::Array(arr) => {
-            for item in arr {
-                if let Some(tag) = extract_tag_name(item) {
-                    push_tag(&tag);
-                }
-            }
-        }
-        _ => {
-            if let Some(tag) = extract_tag_name(tag_value) {
-                push_tag(&tag);
-            }
-        }
-    }
-    out
+    t.relay_p2p_peer_id
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
 }
 
-fn extract_tag_name(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(s) => {
-            if s.trim().starts_with('#') {
-                Some(s.trim().to_string())
-            } else {
-                None
-            }
-        }
-        serde_json::Value::Object(map) => {
-            let ty = map.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if ty == "Hashtag" || name.starts_with('#') {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn host_only(headers: &HeaderMap) -> &str {
@@ -8398,7 +10440,10 @@ fn host_only(headers: &HeaderMap) -> &str {
 }
 
 fn actor_stub_json(username: &str, base_template: &str) -> serde_json::Value {
-    let base = base_template.replace("{user}", username).trim_end_matches('/').to_string();
+    let base = base_template
+        .replace("{user}", username)
+        .trim_end_matches('/')
+        .to_string();
     let id = if base.contains("/users/") {
         base.clone()
     } else {
@@ -8416,7 +10461,11 @@ fn actor_stub_json(username: &str, base_template: &str) -> serde_json::Value {
     })
 }
 
-fn actor_stub_from_actor_url(username: &str, actor_url: &str, fallback_base: &str) -> serde_json::Value {
+fn actor_stub_from_actor_url(
+    username: &str,
+    actor_url: &str,
+    fallback_base: &str,
+) -> serde_json::Value {
     if actor_url.trim().is_empty() {
         return actor_stub_json(username, fallback_base);
     }
@@ -8431,12 +10480,18 @@ fn actor_stub_from_actor_url(username: &str, actor_url: &str, fallback_base: &st
 fn origin_for_links_with_cfg(cfg: &RelayConfig, headers: &HeaderMap) -> (String, String) {
     // For host-based routing, the Host header is the canonical origin (per-user subdomain).
     if cfg.base_domain.is_some() {
-        return (scheme_from_headers(headers).to_string(), host_only(headers).to_string());
+        return (
+            scheme_from_headers(headers).to_string(),
+            host_only(headers).to_string(),
+        );
     }
     if let Some((s, h)) = canonical_origin(cfg) {
         return (s, h);
     }
-    (scheme_from_headers(headers).to_string(), host_only(headers).to_string())
+    (
+        scheme_from_headers(headers).to_string(),
+        host_only(headers).to_string(),
+    )
 }
 
 fn canonical_origin(cfg: &RelayConfig) -> Option<(String, String)> {
@@ -8468,7 +10523,8 @@ fn maybe_redirect_canonical(
 
     let cur_scheme = scheme_from_headers(headers);
     let cur_host = host_only(headers);
-    if cur_scheme.eq_ignore_ascii_case(&canon_scheme) && cur_host.eq_ignore_ascii_case(&canon_host) {
+    if cur_scheme.eq_ignore_ascii_case(&canon_scheme) && cur_host.eq_ignore_ascii_case(&canon_host)
+    {
         return None;
     }
 
@@ -8478,7 +10534,10 @@ fn maybe_redirect_canonical(
 }
 
 fn scheme_from_headers(headers: &HeaderMap) -> &str {
-    if let Some(v) = headers.get("X-Forwarded-Proto").and_then(|v| v.to_str().ok()) {
+    if let Some(v) = headers
+        .get("X-Forwarded-Proto")
+        .and_then(|v| v.to_str().ok())
+    {
         if v.eq_ignore_ascii_case("https") {
             return "https";
         }
@@ -8534,7 +10593,8 @@ async fn fanout_move_notice_to_relay(
     // Retry/backoff per (notice_id, relay_url).
     {
         let db = state.db.lock().await;
-        if let Ok(Some((tries, last_try_ms, sent_ok))) = db.get_fanout_status(notice_id, relay_url) {
+        if let Ok(Some((tries, last_try_ms, sent_ok))) = db.get_fanout_status(notice_id, relay_url)
+        {
             if sent_ok != 0 {
                 return Ok(true);
             }
@@ -8546,7 +10606,10 @@ async fn fanout_move_notice_to_relay(
         }
     }
 
-    let url = format!("{}/_fedi3/relay/move_notice", relay_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/relay/move_notice",
+        relay_url.trim_end_matches('/')
+    );
     let resp = state
         .http
         .post(url)
@@ -8556,7 +10619,10 @@ async fn fanout_move_notice_to_relay(
         .body(body.to_vec())
         .send()
         .await;
-    let ok = resp.as_ref().map(|r| r.status().is_success()).unwrap_or(false);
+    let ok = resp
+        .as_ref()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
     let db = state.db.lock().await;
     let _ = db.record_fanout_attempt(notice_id, relay_url, ok);
     Ok(ok)
@@ -8601,12 +10667,17 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
     let mut map = std::collections::HashMap::<String, String>::new();
     for part in value.split(',') {
         let part = part.trim();
-        let Some((k, v)) = part.split_once('=') else { continue };
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
         let v = v.trim().trim_matches('"');
         map.insert(k.trim().to_string(), v.to_string());
     }
 
-    let headers = map.get("headers").cloned().unwrap_or_else(|| "date".to_string());
+    let headers = map
+        .get("headers")
+        .cloned()
+        .unwrap_or_else(|| "date".to_string());
     let signature_b64 = map
         .get("signature")
         .cloned()
@@ -8622,7 +10693,12 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
     })
 }
 
-fn build_signing_string(method: &Method, uri: &http::Uri, headers: &HeaderMap, signed_headers: &[String]) -> Result<String> {
+fn build_signing_string(
+    method: &Method,
+    uri: &http::Uri,
+    headers: &HeaderMap,
+    signed_headers: &[String],
+) -> Result<String> {
     let mut out = String::new();
     for (i, name) in signed_headers.iter().enumerate() {
         if i > 0 {
@@ -8650,17 +10726,22 @@ fn build_signing_string(method: &Method, uri: &http::Uri, headers: &HeaderMap, s
     Ok(out)
 }
 
-fn verify_signature_rsa_sha256(public_key_pem: &str, signing_string: &str, signature: &[u8]) -> bool {
-    use rsa::{
-        pkcs1v15::VerifyingKey,
-        pkcs8::DecodePublicKey,
-        signature::Verifier,
-        RsaPublicKey,
+fn verify_signature_rsa_sha256(
+    public_key_pem: &str,
+    signing_string: &str,
+    signature: &[u8],
+) -> bool {
+    use rsa::{pkcs1v15::VerifyingKey, pkcs8::DecodePublicKey, signature::Verifier, RsaPublicKey};
+    let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_key_pem) else {
+        return false;
     };
-    let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_key_pem) else { return false };
     let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(signature) else { return false };
-    verifying_key.verify(signing_string.as_bytes(), &sig).is_ok()
+    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(signature) else {
+        return false;
+    };
+    verifying_key
+        .verify(signing_string.as_bytes(), &sig)
+        .is_ok()
 }
 
 fn extract_public_key_pem_from_actor_json(actor_json: &str) -> Option<String> {
@@ -8668,125 +10749,51 @@ fn extract_public_key_pem_from_actor_json(actor_json: &str) -> Option<String> {
     let pk = v.get("publicKey")?;
     let pem = pk.get("publicKeyPem")?.as_str()?;
     let pem = pem.trim();
-    if pem.is_empty() { None } else { Some(pem.to_string()) }
-}
-
-fn extract_peer_id_from_actor_json(actor_json: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(actor_json).ok()?;
-    let endpoints = v.get("endpoints")?;
-    let pid = endpoints.get("fedi3PeerId")?.as_str()?;
-    let pid = pid.trim();
-    if pid.is_empty() { None } else { Some(pid.to_string()) }
-}
-
-fn actor_from_key_id(key_id: &str) -> Option<String> {
-    let k = key_id.trim();
-    if k.is_empty() {
-        return None;
-    }
-    // Typical ActivityPub `keyId` is `https://host/users/alice#main-key`.
-    let actor = k.split('#').next().unwrap_or("").trim();
-    if actor.starts_with("http://") || actor.starts_with("https://") {
-        Some(actor.to_string())
-    } else {
+    if pem.is_empty() {
         None
+    } else {
+        Some(pem.to_string())
     }
 }
 
-async fn verify_actor_signature_for_request(
+async fn verify_move_notice_signature(
     state: &AppState,
-    method: &Method,
-    uri: &http::Uri,
     headers: &HeaderMap,
-    body: Option<&[u8]>,
-) -> Result<(String, String)> {
-    let sig = headers.get("Signature").or_else(|| headers.get("signature")).and_then(|v| v.to_str().ok()).unwrap_or("");
+    user: &str,
+    body: &[u8],
+) -> Result<bool> {
+    let sig = headers
+        .get("Signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if sig.trim().is_empty() {
-        anyhow::bail!("missing Signature");
+        return Ok(false);
     }
-    let params = parse_signature_header(sig)?;
 
     // Date skew (5 minutes).
-    let date = headers.get("Date").or_else(|| headers.get("date")).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let date = headers
+        .get("Date")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if date.is_empty() {
-        anyhow::bail!("missing Date");
+        return Ok(false);
     }
     let ts = parse_http_date(date)?;
     let now = std::time::SystemTime::now();
-    let diff = if now > ts { now.duration_since(ts).unwrap_or_default() } else { ts.duration_since(now).unwrap_or_default() };
-    if diff > Duration::from_secs(300) {
-        anyhow::bail!("Date skew too large");
-    }
-
-    // Digest check if present and body provided.
-    if let Some(body) = body {
-        if let Some(d) = headers.get("Digest").or_else(|| headers.get("digest")).and_then(|v| v.to_str().ok()) {
-            let Some((alg, value)) = d.split_once('=') else { anyhow::bail!("bad Digest") };
-            if !alg.trim().eq_ignore_ascii_case("SHA-256") {
-                anyhow::bail!("unsupported Digest alg");
-            }
-            let expected = B64.decode(value.trim().as_bytes()).unwrap_or_default();
-            let actual = Sha256::digest(body);
-            if expected.as_slice() != actual.as_slice() {
-                anyhow::bail!("Digest mismatch");
-            }
-        }
-    }
-
-    let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
-
-    // Parse keyId from Signature header.
-    let key_id = {
-        let sig = headers.get("Signature").or_else(|| headers.get("signature")).and_then(|v| v.to_str().ok()).unwrap_or("");
-        let mut key_id = None;
-        for part in sig.split(',') {
-            let part = part.trim();
-            if let Some(v) = part.strip_prefix("keyId=") {
-                let v = v.trim().trim_matches('"').trim();
-                if !v.is_empty() {
-                    key_id = Some(v.to_string());
-                }
-            }
-        }
-        key_id.ok_or_else(|| anyhow::anyhow!("Signature missing keyId"))?
+    let diff = if now > ts {
+        now.duration_since(ts).unwrap_or_default()
+    } else {
+        ts.duration_since(now).unwrap_or_default()
     };
-
-    let actor = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
-    let resp = state
-        .http
-        .get(&actor)
-        .header("Accept", "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"")
-        .send()
-        .await?;
-    let actor_json = resp.text().await?;
-    let pem = extract_public_key_pem_from_actor_json(&actor_json).ok_or_else(|| anyhow::anyhow!("actor missing publicKeyPem"))?;
-    if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
-        anyhow::bail!("signature invalid");
-    }
-    Ok((actor, actor_json))
-}
-
-async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, user: &str, body: &[u8]) -> Result<bool> {
-    let sig = headers.get("Signature").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if sig.trim().is_empty() {
-        return Ok(false);
-    }
-
-    // Date skew (5 minutes).
-    let date = headers.get("Date").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if date.is_empty() {
-        return Ok(false);
-    }
-    let ts = parse_http_date(date)?;
-    let now = std::time::SystemTime::now();
-    let diff = if now > ts { now.duration_since(ts).unwrap_or_default() } else { ts.duration_since(now).unwrap_or_default() };
     if diff > Duration::from_secs(300) {
         return Ok(false);
     }
 
     // Digest check if present.
     if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
-        let Some((alg, value)) = d.split_once('=') else { return Ok(false) };
+        let Some((alg, value)) = d.split_once('=') else {
+            return Ok(false);
+        };
         if !alg.trim().eq_ignore_ascii_case("SHA-256") {
             return Ok(false);
         }
@@ -8812,7 +10819,12 @@ async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, use
     if pem.trim().is_empty() {
         // Fallback: try fetching old actor URL (helps relays that didn't previously cache the user).
         if let Ok(notice) = serde_json::from_slice::<RelayMoveNotice>(body) {
-            if let Some(old_actor) = notice.old_actor.as_deref().map(str::trim).filter(|v| v.starts_with("http://") || v.starts_with("https://")) {
+            if let Some(old_actor) = notice
+                .old_actor
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| v.starts_with("http://") || v.starts_with("https://"))
+            {
                 if let Ok(resp) = state
                     .http
                     .get(old_actor)
@@ -8832,5 +10844,9 @@ async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, use
     if pem.trim().is_empty() {
         return Ok(false);
     }
-    Ok(verify_signature_rsa_sha256(&pem, &signing_string, &params.signature))
+    Ok(verify_signature_rsa_sha256(
+        &pem,
+        &signing_string,
+        &params.signature,
+    ))
 }

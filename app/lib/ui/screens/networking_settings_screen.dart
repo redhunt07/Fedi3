@@ -96,13 +96,6 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
               subtitle: Text(cfg.bind),
             ),
           ),
-          const SizedBox(height: 10),
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.networkingP2p),
-              subtitle: Text(cfg.p2pEnable ? context.l10n.enabled : context.l10n.disabled),
-            ),
-          ),
           const SizedBox(height: 16),
           Text(context.l10n.networkingRelaysTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),

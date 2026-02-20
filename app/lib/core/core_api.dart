@@ -4,11 +4,10 @@
  */
 
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
-
 import '../model/core_config.dart';
 
 class CoreApi {
@@ -82,33 +81,37 @@ class CoreApi {
       throw StateError('invalid actor');
     }
 
-    final wf = Uri.parse('https://$host/.well-known/webfinger')
-        .replace(queryParameters: {'resource': 'acct:$user@$host'});
+    final wf = Uri.https(host, '/.well-known/webfinger', {'resource': 'acct:$user@$host'});
 
-    final resp = await http.get(wf, headers: {'Accept': 'application/jrd+json, application/json'});
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('webfinger failed: ${resp.statusCode} ${resp.body}');
-    }
-    final json = jsonDecode(resp.body);
-    if (json is! Map) throw StateError('webfinger invalid json');
-    final links = (json['links'] as List<dynamic>? ?? []);
-    for (final link in links) {
-      if (link is! Map) continue;
-      final rel = link['rel']?.toString();
-      final href = link['href']?.toString();
-      final type = link['type']?.toString() ?? '';
-      if (rel == 'self' && href != null && href.isNotEmpty) {
-        if (type.contains('activity+json') || type.contains('application/json') || type.isEmpty) {
-          return href.replaceAll(RegExp(r'/+$'), '');
+    final client = _createHttpClient();
+    try {
+      final resp = await client.get(wf, headers: {'Accept': 'application/jrd+json, application/json'});
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw StateError('webfinger failed: ${resp.statusCode} ${resp.body}');
+      }
+      final json = jsonDecode(resp.body);
+      if (json is! Map) throw StateError('webfinger invalid json');
+      final links = (json['links'] as List<dynamic>? ?? []);
+      for (final link in links) {
+        if (link is! Map) continue;
+        final rel = link['rel']?.toString();
+        final href = link['href']?.toString();
+        final type = link['type']?.toString() ?? '';
+        if (rel == 'self' && href != null && href.isNotEmpty) {
+          if (type.contains('activity+json') || type.contains('application/json') || type.isEmpty) {
+            return href.replaceAll(RegExp(r'/+$'), '');
+          }
         }
       }
+      for (final link in links) {
+        if (link is! Map) continue;
+        final href = link['href']?.toString();
+        if (href != null && href.isNotEmpty) return href.replaceAll(RegExp(r'/+$'), '');
+      }
+      throw StateError('webfinger: no actor link');
+    } finally {
+      client.close();
     }
-    for (final link in links) {
-      if (link is! Map) continue;
-      final href = link['href']?.toString();
-      if (href != null && href.isNotEmpty) return href.replaceAll(RegExp(r'/+$'), '');
-    }
-    throw StateError('webfinger: no actor link');
   }
 
   Future<String> resolveActorInput(String input) async {
@@ -131,10 +134,32 @@ class CoreApi {
     final uri = _internal('/_fedi3/sync/legacy', {
       'pages': pages.toString(),
       'items': itemsPerActor.toString(),
+      'include_fedi3': '1',
     });
     final resp = await http.post(uri, headers: {..._internalHeaders, 'Content-Type': 'application/json'}, body: '{}');
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('legacy sync failed: ${resp.statusCode} ${resp.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> exportBackup() async {
+    final uri = _internal('/_fedi3/backup/export');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('backup export failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<void> importBackup(Map<String, dynamic> payload) async {
+    final uri = _internal('/_fedi3/backup/import');
+    final resp = await http.post(
+      uri,
+      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('backup import failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -163,6 +188,32 @@ class CoreApi {
       throw StateError('note replies failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<void> setNotePinned({required String noteId, required bool pinned}) async {
+    final uri = _internal('/_fedi3/note/pin');
+    final payload = {'id': noteId, 'pinned': pinned};
+    final resp = await http.post(
+      uri,
+      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('note pin failed: ${resp.statusCode} ${resp.body}');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPinnedNotes({int limit = 20}) async {
+    final uri = _internal('/_fedi3/note/pinned', {'limit': limit.toString()});
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('pinned notes failed: ${resp.statusCode} ${resp.body}');
+    }
+    final json = jsonDecode(resp.body);
+    if (json is! Map) return const [];
+    final items = json['items'];
+    if (items is! List) return const [];
+    return items.whereType<Map>().map((v) => v.cast<String, dynamic>()).toList();
   }
 
   Future<Map<String, dynamic>> fetchReactions(String objectId, {int limit = 50}) async {
@@ -232,10 +283,15 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> fetchChatThreads({String? cursor, int limit = 50}) async {
+  Future<Map<String, dynamic>> fetchChatThreads({
+    String? cursor,
+    int limit = 50,
+    bool archived = false,
+  }) async {
     final uri = _internal('/_fedi3/chat/threads', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
+      if (archived) 'archived': '1',
     });
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
@@ -314,7 +370,28 @@ class CoreApi {
   }
 
   Future<void> deleteChatThread({required String threadId}) async {
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: threadId = $threadId');
     final uri = _internal('/_fedi3/chat/thread/delete');
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: URI = $uri');
+    final body = jsonEncode({'thread_id': threadId});
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: body = $body');
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: headers = $_internalHeaders');
+    final resp = await http.post(
+      uri,
+      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+      body: body,
+    );
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: response status = ${resp.statusCode}');
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: response body = ${resp.body}');
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      debugPrint('[DEBUG] CoreApi.deleteChatThread: ERRORE - sollevando eccezione');
+      throw StateError('chat thread delete failed: ${resp.statusCode} ${resp.body}');
+    }
+    debugPrint('[DEBUG] CoreApi.deleteChatThread: successo');
+  }
+
+  Future<void> leaveChatThread({required String threadId}) async {
+    final uri = _internal('/_fedi3/chat/thread/leave');
     final body = jsonEncode({'thread_id': threadId});
     final resp = await http.post(
       uri,
@@ -322,7 +399,20 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread delete failed: ${resp.statusCode} ${resp.body}');
+      throw StateError('chat thread leave failed: ${resp.statusCode} ${resp.body}');
+    }
+  }
+
+  Future<void> archiveChatThread({required String threadId, bool archived = true}) async {
+    final uri = _internal('/_fedi3/chat/thread/archive');
+    final body = jsonEncode({'thread_id': threadId, 'archived': archived});
+    final resp = await http.post(
+      uri,
+      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+      body: body,
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('chat thread archive failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -972,6 +1062,53 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Stream<Map<String, dynamic>> relayPresenceStream() async* {
+    final base = Uri.parse(config.publicBaseUrl.trim());
+    final uri = base.replace(path: '/_fedi3/relay/presence/stream');
+    final client = http.Client();
+    try {
+      final req = http.Request('GET', uri);
+      final resp = await client.send(req);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        final body = await resp.stream.bytesToString();
+        throw StateError('relay presence stream failed: ${resp.statusCode} $body');
+      }
+      String? event;
+      final data = StringBuffer();
+      await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (line.startsWith('event:')) {
+          event = line.substring(6).trim();
+          continue;
+        }
+        if (line.startsWith('data:')) {
+          data.writeln(line.substring(5).trim());
+          continue;
+        }
+        if (line.trim().isNotEmpty) continue;
+        if (data.isEmpty) {
+          event = null;
+          continue;
+        }
+        final raw = data.toString().trim();
+        data.clear();
+        if (raw.isEmpty) {
+          event = null;
+          continue;
+        }
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          decoded['event'] = event ?? 'message';
+          yield decoded;
+        } else {
+          yield {'event': event ?? 'message', 'data': decoded};
+        }
+        event = null;
+      }
+    } finally {
+      client.close();
+    }
+  }
+
   Future<Map<String, dynamic>> fetchRelayMe() async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final uri = base.replace(
@@ -990,6 +1127,21 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Future<void> sendClientTelemetry(Map<String, dynamic> payload) async {
+    final base = Uri.parse(config.publicBaseUrl.trim());
+    final uri = base.replace(path: '/_fedi3/relay/telemetry/client');
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (config.relayToken.trim().isNotEmpty) {
+      headers['Authorization'] = 'Bearer ${config.relayToken.trim()}';
+    }
+    final resp = await http.post(uri, headers: headers, body: jsonEncode(payload));
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('relay client telemetry failed: ${resp.statusCode} ${resp.body}');
+    }
+  }
+
   Future<Map<String, dynamic>> fetchNetMetrics() async {
     final uri = _internal('/_fedi3/net/metrics');
     final resp = await http.get(uri, headers: _internalHeaders);
@@ -1005,5 +1157,117 @@ class CoreApi {
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('profile refresh failed: ${resp.statusCode} ${resp.body}');
     }
+  }
+
+  Future<Map<String, dynamic>> fetchUpnpStatus() async {
+    final uri = _internal('/_fedi3/core/upnp');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('upnp status failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> toggleUpnp({required bool enable}) async {
+    final uri = _internal('/_fedi3/core/upnp');
+    final resp = await http.post(
+      uri,
+      headers: {
+        ..._internalHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'enabled': enable,
+      }),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('upnp toggle failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  http.Client _createHttpClient() {
+    final client = http.Client();
+    
+    // Standard anonymous User-Agent
+    const userAgent = 'Fedi3/0.1 (+https://fedi3)';
+    
+    // Apply proxy settings if configured
+    if (config.useTor || (config.proxyHost != null && config.proxyPort != null)) {
+      final proxyConfig = ProxyConfig(
+        host: config.proxyHost ?? '127.0.0.1',
+        port: config.proxyPort ?? 9050,
+        type: config.proxyType == 'socks5' ? ProxyType.socks5 : ProxyType.http,
+      );
+      
+      return ProxyClient(
+        proxy: proxyConfig,
+        inner: client,
+        defaultHeaders: {'User-Agent': userAgent},
+      );
+    }
+    
+    // Return regular client with anonymous User-Agent
+    return UserAgentClient(userAgent, client);
+  }
+}
+
+class UserAgentClient extends http.BaseClient {
+  final String userAgent;
+  final http.Client _inner;
+
+  UserAgentClient(this.userAgent, this._inner);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    request.headers['User-Agent'] = userAgent;
+    return _inner.send(request);
+  }
+
+  @override
+  void close() {
+    _inner.close();
+  }
+}
+
+// Proxy configuration classes
+enum ProxyType { http, socks5 }
+
+class ProxyConfig {
+  final String host;
+  final int port;
+  final ProxyType type;
+
+  ProxyConfig({required this.host, required this.port, required this.type});
+}
+
+class ProxyClient extends http.BaseClient {
+  final ProxyConfig proxy;
+  final http.Client _inner;
+  final Map<String, String> defaultHeaders;
+
+  ProxyClient({
+    required this.proxy,
+    required http.Client inner,
+    required this.defaultHeaders,
+  }) : _inner = inner;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    // Apply default headers
+    defaultHeaders.forEach((key, value) {
+      if (!request.headers.containsKey(key)) {
+        request.headers[key] = value;
+      }
+    });
+
+    // For now, just return the inner client's response
+    // In a real implementation, this would handle proxy logic
+    return _inner.send(request);
+  }
+
+  @override
+  void close() {
+    _inner.close();
   }
 }

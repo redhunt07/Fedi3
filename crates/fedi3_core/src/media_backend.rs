@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use crate::http_retry::send_with_retry;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use rand::{rngs::OsRng, RngCore};
 use std::path::{Path, PathBuf};
-use crate::http_retry::send_with_retry;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MediaConfig {
@@ -167,8 +167,12 @@ pub fn probe_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             }
             if chunk == b"VP8X" && size >= 10 && i + 10 <= bytes.len() {
                 // bytes[i+4..i+7] width-1 (24-bit LE), bytes[i+7..i+10] height-1
-                let w = (bytes[i + 4] as u32) | ((bytes[i + 5] as u32) << 8) | ((bytes[i + 6] as u32) << 16);
-                let h = (bytes[i + 7] as u32) | ((bytes[i + 8] as u32) << 8) | ((bytes[i + 9] as u32) << 16);
+                let w = (bytes[i + 4] as u32)
+                    | ((bytes[i + 5] as u32) << 8)
+                    | ((bytes[i + 6] as u32) << 16);
+                let h = (bytes[i + 7] as u32)
+                    | ((bytes[i + 8] as u32) << 8)
+                    | ((bytes[i + 9] as u32) << 16);
                 return Some((w + 1, h + 1));
             }
             // Chunks are padded to even size.
@@ -209,7 +213,11 @@ impl MediaBackend for LocalFsMediaBackend {
             .unwrap_or("");
         let media_type = content_type
             .map(|s| s.to_string())
-            .or_else(|| mime_guess::from_path(filename).first().map(|m| m.to_string()))
+            .or_else(|| {
+                mime_guess::from_path(filename)
+                    .first()
+                    .map(|m| m.to_string())
+            })
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
         let stored_name = if ext.is_empty() {
@@ -287,7 +295,11 @@ impl MediaBackend for WebDavMediaBackend {
 
         let media_type = content_type
             .map(|s| s.to_string())
-            .or_else(|| mime_guess::from_path(filename).first().map(|m| m.to_string()))
+            .or_else(|| {
+                mime_guess::from_path(filename)
+                    .first()
+                    .map(|m| m.to_string())
+            })
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
         let url = format!("{}/{}", self.base_url, stored_name);
@@ -331,7 +343,12 @@ pub struct RelayMediaBackend {
 }
 
 impl RelayMediaBackend {
-    pub fn new(data_dir: PathBuf, http: reqwest::Client, relay_base_url: String, relay_token: String) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        http: reqwest::Client,
+        relay_base_url: String,
+        relay_token: String,
+    ) -> Self {
         Self {
             data_dir,
             http,
@@ -359,7 +376,11 @@ impl MediaBackend for RelayMediaBackend {
             .unwrap_or("bin");
         let media_type = content_type
             .map(|s| s.to_string())
-            .or_else(|| mime_guess::from_path(filename).first().map(|m| m.to_string()))
+            .or_else(|| {
+                mime_guess::from_path(filename)
+                    .first()
+                    .map(|m| m.to_string())
+            })
             .unwrap_or_else(|| "application/octet-stream".to_string());
         let id = new_id();
         let stored_name = format!("{id}.{ext}");
@@ -382,7 +403,10 @@ impl MediaBackend for RelayMediaBackend {
             let text = resp.text().await.unwrap_or_default();
             anyhow::bail!("relay upload failed: {} {}", status, text);
         }
-        let response = resp.json::<MediaUploadResponse>().await.context("relay upload json")?;
+        let response = resp
+            .json::<MediaUploadResponse>()
+            .await
+            .context("relay upload json")?;
         Ok(MediaSaved {
             response,
             local_name: Some(stored_name),
@@ -390,15 +414,22 @@ impl MediaBackend for RelayMediaBackend {
     }
 }
 
-pub fn build_media_backend(cfg: MediaConfig, data_dir: PathBuf, http: reqwest::Client) -> Result<(MediaConfig, Box<dyn MediaBackend>)> {
-    let backend = cfg.backend.clone().unwrap_or_else(|| "local".to_string()).to_lowercase();
+pub fn build_media_backend(
+    cfg: MediaConfig,
+    data_dir: PathBuf,
+    http: reqwest::Client,
+) -> Result<(MediaConfig, Box<dyn MediaBackend>)> {
+    let backend = cfg
+        .backend
+        .clone()
+        .unwrap_or_else(|| "local".to_string())
+        .to_lowercase();
     match backend.as_str() {
         "local" => Ok((cfg, Box::new(LocalFsMediaBackend::new(data_dir)))),
         "webdav" => {
-            let base = cfg
-                .webdav_base_url
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=webdav requires media.webdav_base_url"))?;
+            let base = cfg.webdav_base_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=webdav requires media.webdav_base_url")
+            })?;
             Ok((
                 cfg.clone(),
                 Box::new(WebDavMediaBackend::new(
@@ -411,15 +442,17 @@ pub fn build_media_backend(cfg: MediaConfig, data_dir: PathBuf, http: reqwest::C
             ))
         }
         "relay" => {
-            let base = cfg
-                .relay_base_url
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=relay requires media.relay_base_url"))?;
+            let base = cfg.relay_base_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=relay requires media.relay_base_url")
+            })?;
             let token = cfg
                 .relay_token
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("media.backend=relay requires media.relay_token"))?;
-            Ok((cfg.clone(), Box::new(RelayMediaBackend::new(data_dir, http, base, token))))
+            Ok((
+                cfg.clone(),
+                Box::new(RelayMediaBackend::new(data_dir, http, base, token)),
+            ))
         }
         _ => anyhow::bail!("unsupported media.backend: {backend}"),
     }

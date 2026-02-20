@@ -64,15 +64,34 @@ pub fn start_legacy_sync_worker(
     });
 }
 
-pub async fn run_legacy_sync_now(state: &ap::ApState, max_pages: usize, max_items_per_actor: usize) -> Result<()> {
+pub async fn run_legacy_sync_now(
+    state: &ap::ApState,
+    max_pages: usize,
+    max_items_per_actor: usize,
+    include_fedi3: bool,
+) -> Result<()> {
     let delivery = state.delivery.clone();
     let social = state.social.clone();
     let http = state.http.clone();
-    run_once_with_limits(state, &delivery, &social, &http, max_pages, max_items_per_actor).await
+    run_once_with_limits(
+        state,
+        &delivery,
+        &social,
+        &http,
+        max_pages,
+        max_items_per_actor,
+        include_fedi3,
+    )
+    .await
 }
 
-async fn run_once(state: &ap::ApState, delivery: &Delivery, social: &SocialDb, http: &reqwest::Client) -> Result<()> {
-    run_once_with_limits(state, delivery, social, http, 2, 200).await
+async fn run_once(
+    state: &ap::ApState,
+    delivery: &Delivery,
+    social: &SocialDb,
+    http: &reqwest::Client,
+) -> Result<()> {
+    run_once_with_limits(state, delivery, social, http, 2, 200, false).await
 }
 
 async fn run_once_with_limits(
@@ -82,6 +101,7 @@ async fn run_once_with_limits(
     http: &reqwest::Client,
     max_pages: usize,
     max_items_per_actor: usize,
+    include_fedi3: bool,
 ) -> Result<()> {
     let following = social.list_following_accepted_ids(5000).unwrap_or_default();
     if following.is_empty() {
@@ -91,11 +111,21 @@ async fn run_once_with_limits(
     for actor_url in following {
         // Skip Fedi3 peers (they have p2p sync + direct delivery mechanisms already).
         if let Ok(Some(meta)) = social.get_actor_meta(&actor_url) {
-            if meta.is_fedi3 {
+            if meta.is_fedi3 && !include_fedi3 {
                 continue;
             }
         }
-        if let Err(e) = poll_actor_outbox(state, delivery, social, http, &actor_url, max_pages, max_items_per_actor).await {
+        if let Err(e) = poll_actor_outbox(
+            state,
+            delivery,
+            social,
+            http,
+            &actor_url,
+            max_pages,
+            max_items_per_actor,
+        )
+        .await
+        {
             debug!("legacy poll failed for {actor_url}: {e:#}");
         }
     }

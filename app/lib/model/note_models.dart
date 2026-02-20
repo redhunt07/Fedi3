@@ -41,6 +41,9 @@ class NoteAttachment {
   final String mediaType;
 
   static List<NoteAttachment> parseList(dynamic raw) {
+    if (raw is Map) {
+      raw = [raw];
+    }
     if (raw is! List) return const [];
     final out = <NoteAttachment>[];
     for (final it in raw) {
@@ -55,6 +58,25 @@ class NoteAttachment {
       final u = m['url'];
       if (u is String) url = u.trim();
       if (u is Map) url = (u['href'] as String?)?.trim() ?? '';
+      if (u is List) {
+        for (final v in u) {
+          if (v is String && v.trim().isNotEmpty) {
+            url = v.trim();
+            break;
+          }
+          if (v is Map) {
+            final href = (v['href'] as String?)?.trim() ?? '';
+            if (href.isNotEmpty) {
+              url = href;
+              break;
+            }
+          }
+        }
+      }
+      if (url.isEmpty) {
+        final href = (m['href'] as String?)?.trim() ?? '';
+        if (href.isNotEmpty) url = href;
+      }
       final mt = (m['mediaType'] as String?)?.trim() ?? '';
       if (url.isNotEmpty) out.add(NoteAttachment(url: url, mediaType: mt));
     }
@@ -158,6 +180,13 @@ class Note {
     var summary = (json['summary'] as String?)?.trim() ?? '';
     if (summary.isEmpty) {
       summary = _contentFromMap(json['summaryMap']);
+    }
+    if (summary.isNotEmpty && !_looksLikeHtml(summary)) {
+      if (MfmCodec.hasMarkers(summary)) {
+        summary = MfmCodec.toHtml(summary);
+      } else {
+        summary = _htmlFromPlain(summary);
+      }
     }
     final summaryHtml = _normalizeHtmlEntities(summary);
     final sensitive = (json['sensitive'] as bool?) ?? summary.isNotEmpty;

@@ -47,7 +47,11 @@ impl KeyResolver {
         };
 
         if let Some(hit) = self.get_cached(&actor_url).await {
-            if wanted_key_id.as_deref().map(|k| k == hit.key_id).unwrap_or(true) {
+            if wanted_key_id
+                .as_deref()
+                .map(|k| k == hit.key_id)
+                .unwrap_or(true)
+            {
                 return Ok(ActorSummary {
                     actor_url,
                     key_id: hit.key_id,
@@ -74,7 +78,9 @@ impl KeyResolver {
         let actor: ActorDoc = serde_json::from_str(&text)
             .with_context(|| format!("parse actor json from {actor_url}"))?;
 
-        let pk = actor.public_key.ok_or_else(|| anyhow!("actor missing publicKey"))?;
+        let pk = actor
+            .public_key
+            .ok_or_else(|| anyhow!("actor missing publicKey"))?;
         let pem = pk.public_key_pem;
         let actual_key_id = pk.id;
 
@@ -85,8 +91,14 @@ impl KeyResolver {
                 .and_then(|e| e.fedi3_peer_id.as_ref())
                 .is_some();
 
-        self.put_cached(&actor_url, pem.clone(), actual_key_id.clone(), is_fedi3, Duration::from_secs(300))
-            .await;
+        self.put_cached(
+            &actor_url,
+            pem.clone(),
+            actual_key_id.clone(),
+            is_fedi3,
+            Duration::from_secs(300),
+        )
+        .await;
 
         Ok(ActorSummary {
             actor_url,
@@ -113,7 +125,14 @@ impl KeyResolver {
         None
     }
 
-    async fn put_cached(&self, actor_url: &str, pem: String, key_id: String, is_fedi3: bool, ttl: Duration) {
+    async fn put_cached(
+        &self,
+        actor_url: &str,
+        pem: String,
+        key_id: String,
+        is_fedi3: bool,
+        ttl: Duration,
+    ) {
         let mut cache = self.cache.write().await;
         cache.insert(
             actor_url.to_string(),
@@ -147,7 +166,9 @@ pub fn parse_signature_header(value: &str) -> Result<SignatureParams> {
     let mut map = HashMap::<String, String>::new();
     for part in value.split(',') {
         let part = part.trim();
-        let Some((k, v)) = part.split_once('=') else { continue };
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
         let v = v.trim().trim_matches('"');
         map.insert(k.trim().to_string(), v.to_string());
     }
@@ -179,7 +200,12 @@ pub fn parse_signature_header(value: &str) -> Result<SignatureParams> {
     })
 }
 
-pub fn build_signing_string(method: &Method, uri: &Uri, headers: &HeaderMap, signed_headers: &[String]) -> Result<String> {
+pub fn build_signing_string(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    signed_headers: &[String],
+) -> Result<String> {
     let mut out = String::new();
     for (i, name) in signed_headers.iter().enumerate() {
         if i > 0 {
@@ -220,7 +246,9 @@ pub fn verify_digest_if_present(headers: &HeaderMap, body: &[u8]) -> Result<()> 
         return Err(anyhow!("invalid Digest header"));
     };
     if alg.trim().eq_ignore_ascii_case("SHA-256") {
-        let expected = B64.decode(value.trim().as_bytes()).context("decode digest")?;
+        let expected = B64
+            .decode(value.trim().as_bytes())
+            .context("decode digest")?;
         let actual = Sha256::digest(body);
         if expected.as_slice() != actual.as_slice() {
             return Err(anyhow!("digest mismatch"));
@@ -249,12 +277,16 @@ pub fn verify_date(headers: &HeaderMap, max_skew: Duration) -> Result<()> {
     Ok(())
 }
 
-pub fn verify_signature_rsa_sha256(public_key_pem: &str, signing_string: &str, signature: &[u8]) -> Result<()> {
-    let public_key = RsaPublicKey::from_public_key_pem(public_key_pem)
-        .context("parse public key pem")?;
+pub fn verify_signature_rsa_sha256(
+    public_key_pem: &str,
+    signing_string: &str,
+    signature: &[u8],
+) -> Result<()> {
+    let public_key =
+        RsaPublicKey::from_public_key_pem(public_key_pem).context("parse public key pem")?;
     let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let sig = rsa::pkcs1v15::Signature::try_from(signature)
-        .context("invalid rsa signature bytes")?;
+    let sig =
+        rsa::pkcs1v15::Signature::try_from(signature).context("invalid rsa signature bytes")?;
     verifying_key
         .verify(signing_string.as_bytes(), &sig)
         .context("signature verify failed")?;
@@ -262,11 +294,11 @@ pub fn verify_signature_rsa_sha256(public_key_pem: &str, signing_string: &str, s
 }
 
 pub fn verify_bytes_rsa_sha256(public_key_pem: &str, bytes: &[u8], signature: &[u8]) -> Result<()> {
-    let public_key = RsaPublicKey::from_public_key_pem(public_key_pem)
-        .context("parse public key pem")?;
+    let public_key =
+        RsaPublicKey::from_public_key_pem(public_key_pem).context("parse public key pem")?;
     let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let sig = rsa::pkcs1v15::Signature::try_from(signature)
-        .context("invalid rsa signature bytes")?;
+    let sig =
+        rsa::pkcs1v15::Signature::try_from(signature).context("invalid rsa signature bytes")?;
     verifying_key
         .verify(bytes, &sig)
         .context("signature verify failed")?;
@@ -287,7 +319,10 @@ pub fn sign_request_rsa_sha256(
         headers.insert("Date", date.parse().context("set Date")?);
     }
 
-    let signed_headers_lower: Vec<String> = signed_headers.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let signed_headers_lower: Vec<String> = signed_headers
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     let want_digest = headers.contains_key("Digest")
         || signed_headers_lower.iter().any(|h| h == "digest")
         || !body.is_empty();
@@ -310,8 +345,8 @@ pub fn sign_request_rsa_sha256(
 
     let signing_string = build_signing_string(method, uri, headers, &signed_headers_lower)?;
 
-    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
-        .context("parse private key pem")?;
+    let private_key =
+        RsaPrivateKey::from_pkcs8_pem(private_key_pem).context("parse private key pem")?;
     let signing_key = SigningKey::<Sha256>::new(private_key);
     let mut rng = rand::rngs::OsRng;
     let signature = signing_key.sign_with_rng(&mut rng, signing_string.as_bytes());
@@ -326,8 +361,8 @@ pub fn sign_request_rsa_sha256(
 }
 
 pub fn sign_bytes_rsa_sha256(private_key_pem: &str, bytes: &[u8]) -> Result<Vec<u8>> {
-    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
-        .context("parse private key pem")?;
+    let private_key =
+        RsaPrivateKey::from_pkcs8_pem(private_key_pem).context("parse private key pem")?;
     let signing_key = SigningKey::<Sha256>::new(private_key);
     let mut rng = rand::rngs::OsRng;
     let signature = signing_key.sign_with_rng(&mut rng, bytes);

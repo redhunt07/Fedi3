@@ -317,10 +317,16 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
     _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox') return;
+      final ty = (ev.activityType ?? '').toLowerCase();
+      final forceRefresh = ty == 'update' || ty == 'delete' || ty == 'undo';
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 250), () {
         for (final k in _listKeys) {
-          k.currentState?.pollNewFromStream();
+          if (forceRefresh) {
+            k.currentState?.refreshFromStream();
+          } else {
+            k.currentState?.pollNewFromStream();
+          }
         }
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
@@ -401,6 +407,12 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     if (!mounted) return;
     if (!widget.appState.isRunning) return;
     _pollNew();
+  }
+
+  void refreshFromStream() {
+    if (!mounted) return;
+    if (!widget.appState.isRunning) return;
+    _refresh();
   }
 
   @override
@@ -501,7 +513,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     if (!mounted) return;
     if (_loading) return;
     if (!widget.appState.isRunning) return;
-    if (_items.isEmpty) return;
     try {
       final resp = await widget.api.fetchTimeline(widget.kind, limit: 20);
       final items = (resp['items'] as List<dynamic>? ?? [])
@@ -524,8 +535,9 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       final atTop = _scroll.hasClients ? _scroll.offset <= 80 : true;
       setState(() {
         _sortActivities(fresh);
-        if (atTop) {
+        if (atTop && fresh.length <= 3) {
           _items.insertAll(0, fresh);
+          _pending.clear();
           _sortActivities(_items);
         } else {
           _pending.addAll(fresh);
@@ -641,71 +653,93 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     super.build(context);
     final filtered = _items.where(_matchesFilters).toList(growable: false);
     final pendingCount = _pending.where(_matchesFilters).length;
+    final panelColor = Theme.of(context).colorScheme.surfaceContainerLow;
+    final panelBorder = Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
     final list = RefreshIndicator(
       onRefresh: _refresh,
-      child: ListView.builder(
-        key: PageStorageKey('timeline-${widget.kind}'),
-        controller: _scroll,
-        padding: const EdgeInsets.all(12),
-        cacheExtent: 1200,
-        addAutomaticKeepAlives: false,
-        itemCount: filtered.length + 3,
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: panelColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: panelBorder),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: ListView.builder(
+            key: PageStorageKey('timeline-${widget.kind}'),
+            controller: _scroll,
+            padding: EdgeInsets.zero,
+            cacheExtent: 1200,
+            addAutomaticKeepAlives: false,
+            itemCount: filtered.length + 3,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Tooltip(
-                      message: widget.headerTooltip,
-                      child: Text(
-                        widget.headerTitle,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: panelBorder)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Tooltip(
+                                message: widget.headerTooltip,
+                                child: Text(
+                                  widget.headerTitle,
+                                  style: const TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              const Spacer(),
+                              IconButton(
+                                tooltip: context.l10n.timelineFilters,
+                                onPressed: () => _showFilters(context),
+                                icon: const Icon(Icons.filter_alt_outlined),
+                              ),
+                              IconButton(
+                                tooltip: context.l10n.timelineRefreshHint,
+                                onPressed: widget.appState.isRunning && !_syncing ? _forceSyncAndRefresh : null,
+                                icon: _syncing
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.refresh),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                       ),
                     ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Filters',
-                      onPressed: () => _showFilters(context),
-                      icon: const Icon(Icons.filter_alt_outlined),
-                    ),
-                    IconButton(
-                      tooltip: context.l10n.timelineRefreshHint,
-                      onPressed: widget.appState.isRunning && !_syncing ? _forceSyncAndRefresh : null,
-                      icon: _syncing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh),
-                    ),
+                    if (widget.showComposer) ...[
+                      InlineComposer(
+                        appState: widget.appState,
+                        api: widget.api,
+                        onPosted: _refresh,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                   ],
-                ),
-                if (widget.showComposer) ...[
-                  InlineComposer(
-                    appState: widget.appState,
-                    api: widget.api,
-                    onPosted: _refresh,
-                  ),
-                  const SizedBox(height: 10),
-                ],
-              ],
-            );
-          }
+                );
+              }
               if (index == 1) {
                 if (pendingCount > 0) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Card(
-                      child: ListTile(
-                        title: Text(context.l10n.timelineNewPosts(pendingCount)),
-                        subtitle: Text(context.l10n.timelineShowNewPostsHint),
-                        trailing: FilledButton(
-                          onPressed: _applyPending,
-                          child: Text(context.l10n.timelineShowNewPosts),
-                        ),
+                  return Container(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                    decoration: BoxDecoration(border: Border(bottom: BorderSide(color: panelBorder))),
+                    child: ListTile(
+                      title: Text(context.l10n.timelineNewPosts(pendingCount)),
+                      subtitle: Text(context.l10n.timelineShowNewPostsHint),
+                      trailing: FilledButton(
+                        onPressed: _applyPending,
+                        child: Text(context.l10n.timelineShowNewPosts),
                       ),
                     ),
                   );
@@ -750,12 +784,21 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                 );
               }
               final item = filtered[index - 2];
-              return TimelineActivityCard(
-                key: ValueKey(_activityId(item).isNotEmpty ? _activityId(item) : index),
-                appState: widget.appState,
-                activity: item,
+              final isLast = index == filtered.length + 1;
+              return Container(
+                decoration: BoxDecoration(
+                  border: isLast ? null : Border(bottom: BorderSide(color: panelBorder)),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: TimelineActivityCard(
+                  key: ValueKey(_activityId(item).isNotEmpty ? _activityId(item) : index),
+                  appState: widget.appState,
+                  activity: item,
+                ),
               );
-        },
+            },
+          ),
+        ),
       ),
     );
 
@@ -879,31 +922,36 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
               children: [
                 Row(
                   children: [
-                    const Expanded(child: Text('Filters', style: TextStyle(fontWeight: FontWeight.w800))),
+                    Expanded(
+                      child: Text(
+                        context.l10n.timelineFilters,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
                     IconButton(
-                      tooltip: 'Close',
+                      tooltip: context.l10n.close,
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close),
                     ),
                   ],
                 ),
                 SwitchListTile(
-                  title: const Text('Media'),
+                  title: Text(context.l10n.timelineFilterMedia),
                   value: _filterMedia,
                   onChanged: (v) => setState(() => _filterMedia = v),
                 ),
                 SwitchListTile(
-                  title: const Text('Reply'),
+                  title: Text(context.l10n.timelineFilterReply),
                   value: _filterReplies,
                   onChanged: (v) => setState(() => _filterReplies = v),
                 ),
                 SwitchListTile(
-                  title: const Text('Boost'),
+                  title: Text(context.l10n.timelineFilterBoost),
                   value: _filterBoosts,
                   onChanged: (v) => setState(() => _filterBoosts = v),
                 ),
                 SwitchListTile(
-                  title: const Text('Mention'),
+                  title: Text(context.l10n.timelineFilterMention),
                   value: _filterMentions,
                   onChanged: (v) => setState(() => _filterMentions = v),
                 ),

@@ -19,13 +19,11 @@ import 'services/telemetry_service.dart';
 Future<void> main(List<String> args) async {
   await runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
-    if (!Platform.isLinux || Platform.environment['FEDI3_ENABLE_MEDIA_KIT_LINUX'] == '1') {
-      MediaKit.ensureInitialized();
-    }
+    MediaKit.ensureInitialized();
     await NotificationService.init();
     if (!Platform.isLinux && runWebViewTitleBarWidget(args)) return;
     final appState = await AppState.load();
-    await TelemetryService.init(() => appState.prefs);
+    await TelemetryService.init(() => appState.prefs, () => appState.config);
 
     FlutterError.onError = (details) {
       FlutterError.presentError(details);

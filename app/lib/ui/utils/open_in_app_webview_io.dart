@@ -40,10 +40,18 @@ String _massageForWebView(String url) {
   return Uri.https('www.youtube.com', '/watch', {'v': id}).toString();
 }
 
+Uri? _normalizeUri(String url) {
+  final u = url.trim();
+  if (u.isEmpty) return null;
+  final raw = Uri.tryParse(u);
+  if (raw == null) return null;
+  return raw.hasScheme ? raw : Uri.parse('https://$u');
+}
+
 Future<bool> openInAppWebView(String url) async {
   final u = _massageForWebView(url);
   if (u.isEmpty) return false;
-  final uri = Uri.tryParse(u);
+  final uri = _normalizeUri(u);
   if (uri == null) return false;
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {

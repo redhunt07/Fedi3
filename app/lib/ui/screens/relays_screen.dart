@@ -4,12 +4,13 @@
  */
 
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
+import '../../model/core_config.dart';
+import '../../services/relay_admin_api.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 
@@ -34,12 +35,34 @@ class _RelaysScreenState extends State<RelaysScreen> {
   String? _recommendedRelay;
   Timer? _peerRefresh;
   bool _loadingPeers = false;
+  RelayAdminApi? _adminApi;
 
   @override
   void initState() {
     super.initState();
+    _initAdminApi();
     _refresh();
     _peerRefresh = Timer.periodic(const Duration(seconds: 10), (_) => _refreshPeers());
+  }
+
+  @override
+  void didUpdateWidget(RelaysScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(widget.appState.config, oldWidget.appState.config)) {
+      _initAdminApi();
+    }
+  }
+
+  void _initAdminApi() {
+    final token = widget.appState.prefs.relayAdminToken.trim();
+    if (token.isNotEmpty) {
+      _adminApi = RelayAdminApi(
+        relayWs: widget.appState.config!.relayWs,
+        adminToken: token,
+      );
+    } else {
+      _adminApi = null;
+    }
   }
 
   @override
@@ -80,6 +103,26 @@ class _RelaysScreenState extends State<RelaysScreen> {
       if (mounted) {
         setState(() => _loading = false);
       }
+    }
+  }
+
+
+  String? _relayBaseFromConfig(CoreConfig cfg) {
+    final raw = cfg.relayWs.trim();
+    if (raw.isEmpty) return null;
+    try {
+      var uri = Uri.parse(raw);
+      var scheme = uri.scheme;
+      if (scheme == 'wss') {
+        scheme = 'https';
+      } else if (scheme == 'ws') {
+        scheme = 'http';
+      }
+      if (scheme != 'http' && scheme != 'https') return null;
+      uri = uri.replace(scheme: scheme, path: '', query: '', fragment: '');
+      return uri.toString().replaceAll(RegExp(r'/+$'), '');
+    } catch (_) {
+      return null;
     }
   }
 
@@ -150,7 +193,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
           Text(context.l10n.relaysKnown, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           if (_loading) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
-          for (final r in (_relays ?? const [])) _relayTile(context, r as Map),
+          for (final r in (_relays ?? const [])) _relayTile(context, r),
           const SizedBox(height: 16),
           Text(context.l10n.relaysPeersTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
@@ -182,12 +225,25 @@ class _RelaysScreenState extends State<RelaysScreen> {
               child: ListTile(
                 leading: _peerAvatar(
                   context,
-                  (p as Map)['username']?.toString() ?? '',
+                  (p)['username']?.toString() ?? '',
                   (p)['online'] == true,
                 ),
-                title: Text((p as Map)['username']?.toString() ?? ''),
+                title: Text((p)['username']?.toString() ?? ''),
                 subtitle: Text((p)['actor_url']?.toString() ?? ''),
-                trailing: Text((p)['peer_id']?.toString() ?? ''),
+                trailing: _adminApi != null
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text((p)['peer_id']?.toString() ?? ''),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Delete peer',
+                            onPressed: _loadingPeers ? null : () => _deletePeer(p),
+                          ),
+                        ],
+                      )
+                    : Text((p)['peer_id']?.toString() ?? ''),
               ),
             ),
         ],
@@ -335,5 +391,38 @@ class _RelaysScreenState extends State<RelaysScreen> {
       sw.stop();
     }
     return null;
+  }
+
+  Future<void> _deletePeer(Map peer) async {
+    final api = _adminApi;
+    if (api == null) return;
+    final peerId = peer['peer_id']?.toString() ?? '';
+    if (peerId.isEmpty) return;
+    final username = peer['username']?.toString() ?? '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Peer'),
+        content: Text('Are you sure you want to delete peer "$username" ($peerId)?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() {
+      _loadingPeers = true;
+      _error = null;
+    });
+    try {
+      await api.deletePeer(peerId);
+      await _refreshPeers(showLoading: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loadingPeers = false);
+    }
   }
 }

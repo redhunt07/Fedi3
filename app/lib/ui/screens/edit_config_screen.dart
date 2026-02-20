@@ -28,13 +28,6 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
   late final TextEditingController _relayToken;
   late final TextEditingController _bind;
   late final TextEditingController _internalToken;
-  late final TextEditingController _p2pRelayReserve;
-  late final TextEditingController _webrtcIceUrls;
-  late final TextEditingController _webrtcIceUsername;
-  late final TextEditingController _webrtcIceCredential;
-  bool _p2pEnable = false;
-  bool _webrtcEnable = false;
-  String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
   bool _customRelay = false;
   bool _discovering = false;
   final List<_RelayOption> _relayOptions = [];
@@ -55,15 +48,7 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayToken = TextEditingController(text: cfg.relayToken);
     _bind = TextEditingController(text: cfg.bind);
     _internalToken = TextEditingController(text: cfg.internalToken);
-    _p2pRelayReserve = TextEditingController(text: cfg.p2pRelayReserve.join('\n'));
-    _p2pEnable = cfg.p2pEnable;
-    _webrtcIceUrls = TextEditingController(text: cfg.webrtcIceUrls.join('\n'));
-    _webrtcIceUsername = TextEditingController(text: cfg.webrtcIceUsername ?? '');
-    _webrtcIceCredential = TextEditingController(text: cfg.webrtcIceCredential ?? '');
-    _webrtcEnable = cfg.webrtcEnable;
-    _postDeliveryMode = cfg.postDeliveryMode;
     _seedRelayOptions(cfg.publicBaseUrl);
-    _autofillNetworkingDefaults(force: false);
   }
 
   @override
@@ -75,10 +60,6 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayToken.dispose();
     _bind.dispose();
     _internalToken.dispose();
-    _p2pRelayReserve.dispose();
-    _webrtcIceUrls.dispose();
-    _webrtcIceUsername.dispose();
-    _webrtcIceCredential.dispose();
     super.dispose();
   }
 
@@ -123,50 +104,6 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           _field(context.l10n.onboardingRelayToken, _relayToken),
           _field(context.l10n.onboardingBind, _bind),
           _field(context.l10n.onboardingInternalToken, _internalToken),
-          _field('P2P relay reserve (multiaddr, una per riga)', _p2pRelayReserve, maxLines: 3),
-          SwitchListTile(
-            title: Text(context.l10n.onboardingEnableP2p),
-            value: _p2pEnable,
-            onChanged: (v) => setState(() => _p2pEnable = v),
-          ),
-          DropdownButtonFormField<String>(
-            value: _postDeliveryMode,
-            decoration: const InputDecoration(
-              labelText: 'Modalità consegna post',
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pRelay,
-                child: Text('P2P + Relay (fallback dopo 5s)'),
-              ),
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pOnly,
-                child: Text('Solo P2P (mai relay)'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _postDeliveryMode = value);
-            },
-          ),
-          const SizedBox(height: 6),
-          SwitchListTile(
-            title: const Text('WebRTC (ICE/TURN)'),
-            subtitle: const Text('Usa TURN/STUN come fallback P2P (consigliato)'),
-            value: _webrtcEnable,
-            onChanged: (v) => setState(() => _webrtcEnable = v),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => setState(() => _autofillNetworkingDefaults(force: true)),
-              icon: const Icon(Icons.bolt),
-              label: const Text('Auto-popola ICE da relay'),
-            ),
-          ),
-          _field('WebRTC ICE URLs (una per riga)', _webrtcIceUrls, maxLines: 3),
-          _field('WebRTC ICE username', _webrtcIceUsername),
-          _field('WebRTC ICE credential', _webrtcIceCredential),
           const SizedBox(height: 12),
           OutlinedButton(
             onPressed: () => setState(() => _internalToken.text = CoreConfig.randomToken()),
@@ -299,7 +236,6 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayWs.text = relay.wsUrl;
     _domain.text = relay.domain;
     _customRelay = false;
-    _autofillNetworkingDefaults(force: true);
   }
 
   _RelayOption? _relayOptionFromUrl(String url) {
@@ -316,50 +252,6 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       domain: domain,
       label: uri.host,
     );
-  }
-
-  void _autofillNetworkingDefaults({required bool force}) {
-    final domain = _domain.text.trim().isNotEmpty
-        ? _domain.text.trim()
-        : (Uri.tryParse(_publicBaseUrl.text.trim())?.host ?? '');
-    if (domain.isEmpty) return;
-    if (_webrtcEnable == false && _p2pEnable) {
-      _webrtcEnable = true;
-    }
-    if (force || _webrtcIceUrls.text.trim().isEmpty) {
-      _webrtcIceUrls.text = [
-        'stun:$domain:3478',
-        'turn:$domain:3478?transport=udp',
-        'turn:$domain:3478?transport=tcp',
-      ].join('\n');
-    }
-    _autofillP2pRelayReserve(force: force, domain: domain);
-  }
-
-  Future<void> _autofillP2pRelayReserve({required bool force, required String domain}) async {
-    if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
-      return;
-    }
-    final base = _publicBaseUrl.text.trim().isNotEmpty ? _publicBaseUrl.text.trim() : 'https://$domain';
-    final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
-    if (uri == null) return;
-    try {
-      final resp = await http.get(uri).timeout(const Duration(seconds: 5));
-      if (resp.statusCode != 200) return;
-      final data = jsonDecode(resp.body);
-      if (data is! Map) return;
-      final items = data['multiaddrs'];
-      if (items is! List) return;
-      final multiaddrs = items
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (multiaddrs.isEmpty) return;
-      _p2pRelayReserve.text = multiaddrs.join('\n');
-    } catch (_) {
-      // Silent fallback; user can still enter multiaddrs manually.
-    }
   }
 
   Future<void> _save(BuildContext context) async {
@@ -379,21 +271,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       relayToken: relayToken,
       bind: _bind.text.trim(),
       internalToken: _internalToken.text.trim(),
-      p2pEnable: _p2pEnable,
-      p2pRelayReserve: _p2pRelayReserve.text
-          .split('\n')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcEnable: _webrtcEnable,
-      webrtcIceUrls: _webrtcIceUrls.text
-          .split('\n')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty ? null : _webrtcIceUsername.text.trim(),
-      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty ? null : _webrtcIceCredential.text.trim(),
       apRelays: widget.appState.config?.apRelays ?? const [],
+      bootstrapFollowActors: widget.appState.config?.bootstrapFollowActors ?? const [],
       displayName: widget.appState.config?.displayName ?? '',
       summary: widget.appState.config?.summary ?? '',
       iconUrl: widget.appState.config?.iconUrl ?? '',
@@ -404,10 +283,10 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       manuallyApprovesFollowers: widget.appState.config?.manuallyApprovesFollowers ?? false,
       blockedDomains: widget.appState.config?.blockedDomains ?? const [],
       blockedActors: widget.appState.config?.blockedActors ?? const [],
-      postDeliveryMode: _postDeliveryMode,
-      p2pCacheTtlSecs: widget.appState.config?.p2pCacheTtlSecs,
       previousPublicBaseUrl: widget.appState.config?.previousPublicBaseUrl,
       previousRelayToken: widget.appState.config?.previousRelayToken,
+      upnpPortRangeStart: null,
+      upnpPortRangeEnd: null,
     );
 
     await widget.appState.stopCore();

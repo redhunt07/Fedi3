@@ -7,20 +7,14 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
+use libp2p::futures::{future::Either, StreamExt};
 use libp2p::{
-    core::upgrade,
-    identify, identity,
-    kad,
-    noise,
-    ping,
-    quic,
-    relay,
-    request_response,
-    swarm::{derive_prelude::*, SwarmEvent},
     core::muxing::StreamMuxerBox,
+    core::upgrade,
+    identify, identity, kad, noise, ping, quic, relay, request_response,
+    swarm::{derive_prelude::*, SwarmEvent},
     tcp, websocket, yamux, Multiaddr, PeerId, Swarm, Transport,
 };
-use libp2p::futures::{future::Either, StreamExt};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -216,14 +210,22 @@ impl request_response::Codec for Fedi3Codec {
     type Request = RelayHttpRequest;
     type Response = RelayHttpResponse;
 
-    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Request>
     where
         T: futures_util::AsyncRead + Unpin + Send,
     {
         read_len_prefixed_json(io).await
     }
 
-    async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> std::io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _: &Self::Protocol,
+        io: &mut T,
+    ) -> std::io::Result<Self::Response>
     where
         T: futures_util::AsyncRead + Unpin + Send,
     {
@@ -266,7 +268,8 @@ where
     let len = u32::from_be_bytes(len_buf) as usize;
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
-    serde_json::from_slice(&buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 async fn write_len_prefixed_json<T, V>(io: &mut T, value: &V) -> std::io::Result<()>
@@ -275,7 +278,8 @@ where
     V: serde::Serialize,
 {
     use futures_util::AsyncWriteExt as _;
-    let bytes = serde_json::to_vec(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let len = (bytes.len() as u32).to_be_bytes();
     io.write_all(&len).await?;
     io.write_all(&bytes).await?;
@@ -405,7 +409,9 @@ async fn handle_mailbox_request(
             } else {
                 put.req.id.clone()
             };
-            let approx_size = serde_json::to_vec(&put.req).map(|v| v.len() as u64).unwrap_or(0);
+            let approx_size = serde_json::to_vec(&put.req)
+                .map(|v| v.len() as u64)
+                .unwrap_or(0);
             if !limiter.allow_put(&from_peer_id, approx_size).await {
                 return bad(req.id, 429, "rate limited".to_string());
             }
@@ -416,7 +422,10 @@ async fn handle_mailbox_request(
             {
                 return bad(req.id, 502, format!("store failed: {e:#}"));
             }
-            let out = MailboxPutResp { ok: true, id: msg_id };
+            let out = MailboxPutResp {
+                ok: true,
+                id: msg_id,
+            };
             let json = serde_json::to_vec(&out).unwrap_or_default();
             RelayHttpResponse {
                 id: req.id,
@@ -489,7 +498,10 @@ fn now_ms() -> i64 {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
     let cfg = load_config()?;
@@ -519,7 +531,10 @@ async fn main() -> Result<()> {
         cfg.mailbox_max_bytes_per_peer,
         cfg.mailbox_max_ttl_secs,
     )?;
-    let limiter = RateLimiter::new(cfg.mailbox_max_puts_per_min, cfg.mailbox_max_put_bytes_per_min);
+    let limiter = RateLimiter::new(
+        cfg.mailbox_max_puts_per_min,
+        cfg.mailbox_max_put_bytes_per_min,
+    );
 
     let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
         .upgrade(upgrade::Version::V1)
@@ -527,12 +542,14 @@ async fn main() -> Result<()> {
         .multiplex(yamux::Config::default())
         .timeout(Duration::from_secs(20))
         .boxed();
-    let ws_transport = websocket::WsConfig::new(tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)))
-        .upgrade(upgrade::Version::V1)
-        .authenticate(noise::Config::new(&keypair)?)
-        .multiplex(yamux::Config::default())
-        .timeout(Duration::from_secs(20))
-        .boxed();
+    let ws_transport = websocket::WsConfig::new(tcp::tokio::Transport::new(
+        tcp::Config::default().nodelay(true),
+    ))
+    .upgrade(upgrade::Version::V1)
+    .authenticate(noise::Config::new(&keypair)?)
+    .multiplex(yamux::Config::default())
+    .timeout(Duration::from_secs(20))
+    .boxed();
     let quic_transport = quic::tokio::Transport::new(quic::Config::new(&keypair));
     let tcp_or_ws = libp2p::core::transport::choice::OrTransport::new(ws_transport, tcp_transport);
     let transport = libp2p::core::transport::choice::OrTransport::new(quic_transport, tcp_or_ws)

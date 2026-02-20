@@ -19,6 +19,8 @@ services:
       - FEDI3_P2P_INFRA_MULTIADDRS=${FEDI3_P2P_INFRA_MULTIADDRS:-}
       - FEDI3_P2P_INFRA_HOST=${FEDI3_P2P_INFRA_HOST:-}
       - FEDI3_P2P_INFRA_PORT=${FEDI3_P2P_INFRA_PORT:-4001}
+      - FEDI3_RELAY_MESH_ENABLE=${FEDI3_RELAY_MESH_ENABLE:-true}
+      - FEDI3_RELAY_MESH_KEY=/data/fedi3_relay_mesh_keypair.pb
       - FEDI3_RELAY_TRUST_PROXY_HEADERS=true
       - FEDI3_RELAY_ALLOW_SELF_REGISTER=${FEDI3_RELAY_ALLOW_SELF_REGISTER:-false}
       - FEDI3_RELAY_ADMIN_TOKEN=${FEDI3_RELAY_ADMIN_TOKEN}
@@ -54,6 +56,9 @@ services:
       - FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS:-90}
       - FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST=${FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST:-8}
       - FEDI3_RELAY_MAX_BODY_BYTES=${FEDI3_RELAY_MAX_BODY_BYTES:-67108864}
+      - FEDI3_RELAY_BACKUP_MAX_BYTES=${FEDI3_RELAY_BACKUP_MAX_BYTES:-209715200}
+      - FEDI3_RELAY_BACKUP_RETENTION=${FEDI3_RELAY_BACKUP_RETENTION:-3}
+      - FEDI3_RELAY_BACKUP_RL_PER_HOUR=${FEDI3_RELAY_BACKUP_RL_PER_HOUR:-1}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}
@@ -97,6 +102,7 @@ services:
       - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:-fedi3}
     volumes:
       - relay_pg_data:/var/lib/postgresql/data
+      - .:/app
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${FEDI3_RELAY_PG_USER:-fedi3} -d ${FEDI3_RELAY_PG_DB:-fedi3_relay}"]
       interval: 10s
@@ -143,7 +149,6 @@ services:
       args:
         P2P_UID: ${P2P_UID:-1000}
         P2P_GID: ${P2P_GID:-1000}
-    user: "${P2P_UID:-1000}:${P2P_GID:-1000}"
     environment:
       - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
@@ -171,18 +176,18 @@ services:
     env_file:
       - ./.env
     command:
-      - "-n"
-      - "--log-file=stdout"
-      - "--fingerprint"
-      - "--no-cli"
-      - "--realm=${TURN_REALM:-relay.fedi3.com}"
-      - "--listening-port=${TURN_PORT:-3478}"
-      - "--min-port=${TURN_MIN_PORT:-49152}"
-      - "--max-port=${TURN_MAX_PORT:-65535}"
-      - "--lt-cred-mech"
-      - "--user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}"
-      - "--no-tlsv1"
-      - "--no-tlsv1_1"
+      - -n
+      - --log-file=stdout
+      - --fingerprint
+      - --no-cli
+      - --realm=${TURN_REALM:-relay.fedi3.com}
+      - --listening-port=${TURN_PORT:-3478}
+      - --min-port=${TURN_MIN_PORT:-49152}
+      - --max-port=${TURN_MAX_PORT:-65535}
+      - --lt-cred-mech
+      - --user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}
+      - --no-tlsv1
+      - --no-tlsv1_1
 
 volumes:
   relay_data:

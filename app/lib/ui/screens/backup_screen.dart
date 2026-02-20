@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../services/backup_codec.dart';
+import '../../services/cloud_backup_service.dart';
 import '../../state/app_state.dart';
 
 class BackupScreen extends StatefulWidget {
@@ -79,6 +80,27 @@ class _BackupScreenState extends State<BackupScreen> {
                 onPressed: _busy ? null : _exportToClipboard,
                 icon: const Icon(Icons.copy),
                 label: Text(context.l10n.backupExportCopy),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Text(context.l10n.backupCloudTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Text(context.l10n.backupCloudHint),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: _busy ? null : _uploadCloud,
+                icon: const Icon(Icons.cloud_upload),
+                label: Text(context.l10n.backupCloudUpload),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _downloadCloud,
+                icon: const Icon(Icons.cloud_download),
+                label: Text(context.l10n.backupCloudDownload),
               ),
             ],
           ),
@@ -213,6 +235,58 @@ class _BackupScreenState extends State<BackupScreen> {
         _import.clear();
         _status = context.l10n.backupImportOk;
       });
+    } catch (e) {
+      setState(() => _status = context.l10n.backupErr(e.toString()));
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _uploadCloud() async {
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    try {
+      final cfg = widget.appState.config;
+      if (cfg == null) throw StateError('missing config');
+      if (!widget.appState.isRunning) {
+        await widget.appState.startCore();
+      }
+      final service = CloudBackupService(config: cfg);
+      await service.upload(prefs: widget.appState.prefs);
+      if (!mounted) return;
+      setState(() => _status = context.l10n.backupCloudUploadOk);
+    } catch (e) {
+      setState(() => _status = context.l10n.backupErr(e.toString()));
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _downloadCloud() async {
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    try {
+      final cfg = widget.appState.config;
+      if (cfg == null) throw StateError('missing config');
+      final service = CloudBackupService(config: cfg);
+      final pkg = await service.download();
+
+      await widget.appState.stopCore();
+      await widget.appState.saveConfig(pkg.config);
+      await widget.appState.savePrefs(pkg.prefs);
+      await widget.appState.startCore();
+
+      final restoreService = CloudBackupService(config: pkg.config);
+      await restoreService.restore(pkg);
+      await widget.appState.stopCore();
+      await widget.appState.startCore();
+
+      if (!mounted) return;
+      setState(() => _status = context.l10n.backupCloudDownloadOk);
     } catch (e) {
       setState(() => _status = context.l10n.backupErr(e.toString()));
     } finally {

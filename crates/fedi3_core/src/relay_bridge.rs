@@ -10,9 +10,16 @@ use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request};
 use tower::util::ServiceExt;
 
-pub async fn handle_relay_http_request<S>(handler: &mut S, req: RelayHttpRequest) -> RelayHttpResponse
+pub async fn handle_relay_http_request<S>(
+    handler: &mut S,
+    req: RelayHttpRequest,
+) -> RelayHttpResponse
 where
-    S: tower::Service<Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible> + Clone,
+    S: tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        > + Clone,
 {
     let method = req.method.parse::<Method>().unwrap_or(Method::GET);
     let uri = format!("http://localhost{}{}", req.path, req.query);
@@ -52,4 +59,3 @@ fn headers_to_vec(headers: &HeaderMap) -> Vec<(String, String)> {
         .filter_map(|(k, v)| v.to_str().ok().map(|vs| (k.to_string(), vs.to_string())))
         .collect()
 }
-

@@ -236,7 +236,8 @@ class _ActivityCardState extends State<ActivityCard> {
 
   List<_Attachment> _extractAttachments(Map<String, dynamic>? note) {
     if (note == null) return const [];
-    final raw = note['attachment'];
+    dynamic raw = note['attachment'];
+    if (raw is Map) raw = [raw];
     if (raw is! List) return const [];
     final out = <_Attachment>[];
     for (final it in raw) {
@@ -251,6 +252,25 @@ class _ActivityCardState extends State<ActivityCard> {
       final u = m['url'];
       if (u is String) url = u.trim();
       if (u is Map) url = (u['href'] as String?)?.trim() ?? '';
+      if (u is List) {
+        for (final v in u) {
+          if (v is String && v.trim().isNotEmpty) {
+            url = v.trim();
+            break;
+          }
+          if (v is Map) {
+            final href = (v['href'] as String?)?.trim() ?? '';
+            if (href.isNotEmpty) {
+              url = href;
+              break;
+            }
+          }
+        }
+      }
+      if (url.isEmpty) {
+        final href = (m['href'] as String?)?.trim() ?? '';
+        if (href.isNotEmpty) url = href;
+      }
       final mt = (m['mediaType'] as String?)?.trim() ?? '';
       if (url.isNotEmpty) out.add(_Attachment(url: url, mediaType: mt));
     }

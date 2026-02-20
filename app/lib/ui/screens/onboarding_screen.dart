@@ -11,6 +11,7 @@ import 'dart:convert';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/backup_codec.dart';
+import '../../services/cloud_backup_service.dart';
 import '../../state/app_state.dart';
 
 enum OnboardingMode { loginExisting, createNew }
@@ -33,13 +34,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   late final TextEditingController _relayToken;
   late final TextEditingController _bind;
   late final TextEditingController _internalToken;
-  late final TextEditingController _p2pRelayReserve;
-  late final TextEditingController _webrtcIceUrls;
-  late final TextEditingController _webrtcIceUsername;
-  late final TextEditingController _webrtcIceCredential;
-  bool _p2pEnable = false;
-  bool _webrtcEnable = false;
-  String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
   bool _customRelay = false;
   bool _importing = false;
   bool _discovering = false;
@@ -61,11 +55,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _relayToken = TextEditingController(text: CoreConfig.randomToken());
     _bind = TextEditingController(text: isCreate ? '127.0.0.1:8788' : '127.0.0.1:8788');
     _internalToken = TextEditingController(text: CoreConfig.randomToken());
-    _p2pRelayReserve = TextEditingController();
-    _webrtcIceUrls = TextEditingController();
-    _webrtcIceUsername = TextEditingController();
-    _webrtcIceCredential = TextEditingController();
-    _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
     _seedRelayOptions();
   }
 
@@ -78,10 +67,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _relayToken.dispose();
     _bind.dispose();
     _internalToken.dispose();
-    _p2pRelayReserve.dispose();
-    _webrtcIceUrls.dispose();
-    _webrtcIceUsername.dispose();
-    _webrtcIceCredential.dispose();
     super.dispose();
   }
 
@@ -101,10 +86,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           if (widget.mode == OnboardingMode.loginExisting) ...[
             const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _importing ? null : _importBackupFile,
-              icon: const Icon(Icons.upload_file),
-              label: Text(context.l10n.onboardingImportBackup),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: _importing ? null : _importBackupFile,
+                  icon: const Icon(Icons.upload_file),
+                  label: Text(context.l10n.onboardingImportBackup),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _importing ? null : _importBackupCloud,
+                  icon: const Icon(Icons.cloud_download),
+                  label: Text(context.l10n.onboardingImportBackupCloud),
+                ),
+              ],
             ),
           ],
           const SizedBox(height: 16),
@@ -125,56 +121,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           _field(context.l10n.onboardingRelayToken, _relayToken),
           _field(context.l10n.onboardingBind, _bind),
           _field(context.l10n.onboardingInternalToken, _internalToken),
-          _field('P2P relay reserve (multiaddr, una per riga)', _p2pRelayReserve, maxLines: 3),
-          SwitchListTile(
-            title: Text(context.l10n.onboardingEnableP2p),
-            value: _p2pEnable,
-            onChanged: (v) => setState(() {
-              _p2pEnable = v;
-              if (v) {
-                _webrtcEnable = true;
-                _autofillNetworkingDefaults(force: false);
-              }
-            }),
-          ),
-          DropdownButtonFormField<String>(
-            value: _postDeliveryMode,
-            decoration: const InputDecoration(
-              labelText: 'Modalità consegna post',
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pRelay,
-                child: Text('P2P + Relay (fallback dopo 5s)'),
-              ),
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pOnly,
-                child: Text('Solo P2P (mai relay)'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _postDeliveryMode = value);
-            },
-          ),
-          const SizedBox(height: 6),
-          SwitchListTile(
-            title: const Text('WebRTC (ICE/TURN)'),
-            subtitle: const Text('Usa TURN/STUN come fallback P2P (consigliato)'),
-            value: _webrtcEnable,
-            onChanged: (v) => setState(() => _webrtcEnable = v),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => setState(() => _autofillNetworkingDefaults(force: true)),
-              icon: const Icon(Icons.bolt),
-              label: const Text('Auto-popola ICE da relay'),
-            ),
-          ),
-          _field('WebRTC ICE URLs (una per riga)', _webrtcIceUrls, maxLines: 3),
-          _field('WebRTC ICE username', _webrtcIceUsername),
-          _field('WebRTC ICE credential', _webrtcIceCredential),
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _save,
@@ -278,7 +224,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           final base = (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])?.toString().trim();
           if (base == null || base.isEmpty) continue;
           final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])?.toString().trim();
-          final opt = _relayOptionFromParts(base, ws);
+          final opt = _relayOptionFromParts(
+            base,
+            ws,
+          );
           if (opt != null && seen.add(opt.publicUrl)) {
             found.add(opt);
           }
@@ -305,7 +254,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _relayWs.text = relay.wsUrl;
     _domain.text = relay.domain;
     _customRelay = false;
-    _autofillNetworkingDefaults(force: true);
   }
 
   _RelayOption? _relayOptionFromUrl(String url) {
@@ -341,48 +289,49 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  void _autofillNetworkingDefaults({required bool force}) {
-    final domain = _domain.text.trim().isNotEmpty
-        ? _domain.text.trim()
-        : (Uri.tryParse(_publicBaseUrl.text.trim())?.host ?? '');
-    if (domain.isEmpty) return;
-    if (_webrtcEnable == false && _p2pEnable) {
-      _webrtcEnable = true;
-    }
-    if (force || _webrtcIceUrls.text.trim().isEmpty) {
-      _webrtcIceUrls.text = [
-        'stun:$domain:3478',
-        'turn:$domain:3478?transport=udp',
-        'turn:$domain:3478?transport=tcp',
-      ].join('\n');
-    }
-    _autofillP2pRelayReserve(force: force, domain: domain);
-  }
-
-  Future<void> _autofillP2pRelayReserve({required bool force, required String domain}) async {
-    if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
-      return;
-    }
-    final base = _publicBaseUrl.text.trim().isNotEmpty ? _publicBaseUrl.text.trim() : 'https://$domain';
-    final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
-    if (uri == null) return;
-    try {
-      final resp = await http.get(uri).timeout(const Duration(seconds: 5));
-      if (resp.statusCode != 200) return;
-      final data = jsonDecode(resp.body);
-      if (data is! Map) return;
-      final items = data['multiaddrs'];
-      if (items is! List) return;
-      final multiaddrs = items
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (multiaddrs.isEmpty) return;
-      _p2pRelayReserve.text = multiaddrs.join('\n');
-    } catch (_) {
-      // Silent fallback; user can still enter multiaddrs manually.
-    }
+  CoreConfig _buildConfig() {
+    final username = _username.text.trim();
+    final domain = _domain.text.trim();
+    final announceHandle = domain.isNotEmpty ? '@announce@$domain' : '';
+    final bootstrap = <String>[
+      if (username.toLowerCase() == 'announce')
+        ...const [
+          '@redhunt07@www.foxyhole.io',
+          '@engineering@newsmast.community',
+          '@mullvadnet@mastodon.online',
+          '@omgubuntu@floss.social',
+          '@tassoman@misskey.social',
+          '@informapirata@poliverso.org',
+          '@lealternative@mastodon.uno',
+          '@fsf@hostux.social',
+          '@informapirata@mastodon.uno',
+        ]
+      else if (announceHandle.isNotEmpty)
+        announceHandle,
+    ];
+    return CoreConfig(
+      username: username,
+      domain: domain,
+      publicBaseUrl: _publicBaseUrl.text.trim(),
+      relayWs: _relayWs.text.trim(),
+      relayToken: _relayToken.text.trim(),
+      bind: _bind.text.trim(),
+      internalToken: _internalToken.text.trim(),
+      apRelays: const [],
+      bootstrapFollowActors: bootstrap,
+      displayName: '',
+      summary: '',
+      iconUrl: '',
+      iconMediaType: '',
+      imageUrl: '',
+      imageMediaType: '',
+      profileFields: const [],
+      manuallyApprovesFollowers: false,
+      blockedDomains: const [],
+      blockedActors: const [],
+      upnpPortRangeStart: null,
+      upnpPortRangeEnd: null,
+    );
   }
 
   Future<void> _save() async {
@@ -394,42 +343,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       return;
     }
-    _autofillNetworkingDefaults(force: false);
-    final cfg = CoreConfig(
-      username: _username.text.trim(),
-      domain: _domain.text.trim(),
-      publicBaseUrl: _publicBaseUrl.text.trim(),
-      relayWs: _relayWs.text.trim(),
-      relayToken: relayToken,
-      bind: _bind.text.trim(),
-      internalToken: _internalToken.text.trim(),
-      p2pEnable: _p2pEnable,
-      p2pRelayReserve: _p2pRelayReserve.text
-          .split('\n')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcEnable: _webrtcEnable,
-      webrtcIceUrls: _webrtcIceUrls.text
-          .split('\n')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty ? null : _webrtcIceUsername.text.trim(),
-      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty ? null : _webrtcIceCredential.text.trim(),
-      apRelays: const [],
-      displayName: '',
-      summary: '',
-      iconUrl: '',
-      iconMediaType: '',
-      imageUrl: '',
-      imageMediaType: '',
-      profileFields: const [],
-      manuallyApprovesFollowers: false,
-      blockedDomains: const [],
-      blockedActors: const [],
-      postDeliveryMode: _postDeliveryMode,
-    );
+    final cfg = _buildConfig();
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();
     if (!mounted) return;
@@ -455,6 +369,45 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await widget.appState.stopCore();
       await widget.appState.saveConfig(bundle.config);
       await widget.appState.savePrefs(bundle.prefs);
+      await widget.appState.startCore();
+
+      if (!mounted) return;
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.backupErr(e.toString()))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _importing = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _importBackupCloud() async {
+    setState(() {
+      _importing = true;
+    });
+    try {
+      final relayToken = _relayToken.text.trim();
+      if (relayToken.length < 16) {
+        throw StateError(context.l10n.onboardingRelayTokenTooShort);
+      }
+      final cfg = _buildConfig();
+      final service = CloudBackupService(config: cfg);
+      final pkg = await service.download();
+
+      await widget.appState.stopCore();
+      await widget.appState.saveConfig(pkg.config);
+      await widget.appState.savePrefs(pkg.prefs);
+      await widget.appState.startCore();
+
+      final restoreService = CloudBackupService(config: pkg.config);
+      await restoreService.restore(pkg);
+      await widget.appState.stopCore();
       await widget.appState.startCore();
 
       if (!mounted) return;

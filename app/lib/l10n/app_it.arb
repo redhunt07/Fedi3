@@ -93,6 +93,7 @@
   "chatReplyClear": "Annulla risposta",
   "chatReplyAttachment": "Allegato",
   "chatReplyUnknown": "Messaggio originale",
+  "chatSenderMe": "io",
   "chatMembers": "Membri",
   "chatRename": "Rinomina chat",
   "chatRenameHint": "Nuovo titolo chat",
@@ -100,6 +101,19 @@
   "chatAddMemberHint": "Cerca o incolla un actor",
   "chatRemoveMember": "Rimuovi membro",
   "chatReact": "Reagisci",
+  "chatDeleteThread": "Elimina chat",
+  "chatDeleteThreadHint": "Questo eliminerà l'intera chat per tutti. Solo il creatore può eliminare la chat.",
+  "chatLeaveThreadOption": "Abbandona chat",
+  "chatArchiveThreadOption": "Archivia chat",
+  "chatLeaveThreadSuccess": "Hai abbandonato la chat.",
+  "chatLeaveThreadFailed": "Impossibile abbandonare la chat.",
+  "chatArchiveThreadSuccess": "Chat archiviata.",
+  "chatArchiveThreadFailed": "Impossibile archiviare la chat.",
+  "chatUnarchiveThreadSuccess": "Chat ripristinata.",
+  "chatUnarchiveThreadFailed": "Impossibile ripristinare la chat.",
+  "chatThreadsActive": "Attive",
+  "chatThreadsArchived": "Archiviate",
+  "chatUnarchiveThreadOption": "Ripristina chat",
   "chatPin": "Fissa chat",
   "chatUnpin": "Rimuovi fissata",
   "chatTyping": "{name} sta scrivendo…",
@@ -115,12 +129,17 @@
     }
   },
 
-  "timelineHomeTooltip": "Timeline Generica (P2P rete globale + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.",
-  "timelineLocalTooltip": "Timeline Follower/Follow (P2P + Legacy). Solo profili con cui hai relazione follow/follower.",
-  "timelineSocialTooltip": "Timeline Sociale (P2P). Contenuti best-effort diffusi via gossip/DHT (scoperta peer oltre i legacy).",
-  "timelineFederatedTooltip": "Timeline Federata (P2P + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.",
+  "timelineHomeTooltip": "Timeline Generica (Relay + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.",
+  "timelineLocalTooltip": "Timeline Follower/Follow (Relay + Legacy). Solo profili con cui hai relazione follow/follower.",
+  "timelineSocialTooltip": "Timeline Sociale (Relay). Feed globale best-effort via relay.",
+  "timelineFederatedTooltip": "Timeline Federata (Relay + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.",
   "timelineLayoutColumns": "Passa alle colonne",
   "timelineLayoutTabs": "Passa alle tab",
+  "timelineFilters": "Filtri",
+  "timelineFilterMedia": "Media",
+  "timelineFilterReply": "Risposte",
+  "timelineFilterBoost": "Boost",
+  "timelineFilterMention": "Menzioni",
 
   "coreStart": "Avvia core",
   "coreStop": "Ferma core",
@@ -173,6 +192,21 @@
   "noteShowContent": "Mostra",
   "noteHideContent": "Nascondi",
 
+  "noteActions": "Azioni",
+  "noteEdit": "Modifica",
+  "noteDelete": "Elimina",
+  "noteDeleted": "Nota eliminata",
+  "noteEditTitle": "Modifica nota",
+  "noteEditContentHint": "Modifica contenuto",
+  "noteEditSummaryHint": "Avviso contenuto (opzionale)",
+  "noteSensitiveLabel": "Contenuto sensibile",
+  "noteEditSave": "Salva",
+  "noteEditMissingAudience": "Destinatario mancante",
+  "noteDeleteTitle": "Elimina nota",
+  "noteDeleteHint": "Sei sicuro di voler eliminare questa nota?",
+  "noteDeleteConfirm": "Elimina",
+  "noteDeleteMissingAudience": "Destinatario mancante",
+
   "timeAgoJustNow": "adesso",
   "timeAgoMinutes": "{count,plural,=1{1 minuto fa}other{{count} minuti fa}}",
   "@timeAgoMinutes": { "placeholders": { "count": { "type": "int" } } },
@@ -202,6 +236,7 @@
   "onboardingLoginTitle": "Login",
   "onboardingLoginIntro": "Inserisci i campi del tuo setup esistente. Il core verrà avviato automaticamente dopo il salvataggio.",
   "onboardingImportBackup": "Importa backup JSON",
+  "onboardingImportBackupCloud": "Ripristina dal relay",
   "onboardingRelaySelect": "Selezione relay",
   "onboardingRelayDiscover": "Scopri",
   "onboardingRelayDiscovering": "Ricerca…",
@@ -347,6 +382,15 @@
   "profileBio": "Bio",
   "profileFollowers": "Follower",
   "profileFollowing": "Seguiti",
+  "profileFeatured": "In evidenza",
+  "profileAliases": "Alias",
+  "profileFollowPending": "In attesa",
+  "profileMovedTo": "Spostato su {actor}",
+  "@profileMovedTo": {
+    "placeholders": {
+      "actor": { "type": "String" }
+    }
+  },
   "profileAvatar": "Avatar",
   "profileBanner": "Banner",
   "profilePickFile": "Scegli file",
@@ -391,6 +435,23 @@
   "telemetryExportEmpty": "Nessuna diagnostica da esportare",
   "telemetryClear": "Svuota",
   "telemetryEmpty": "Nessuna diagnostica",
+  "updateAvailable": "Aggiornamento disponibile: {version}",
+  "@updateAvailable": {
+    "placeholders": {
+      "version": { "type": "String" }
+    }
+  },
+  "updateInstall": "Installa aggiornamento",
+  "updateDownloading": "Download in corso...",
+  "updateFailed": "Aggiornamento fallito: {error}",
+  "@updateFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "updateChangelog": "Changelog",
+  "updateDismiss": "Chiudi",
+  "updateOpenRelease": "Apro la pagina release",
 
   "securityTitle": "Sicurezza",
   "securityHint": "Token e endpoint interni",
@@ -408,11 +469,10 @@
   "moderationHint": "I blocchi si applicano a interazioni in ingresso e in uscita.",
 
   "networkingTitle": "Networking",
-  "networkingHintTitle": "Relay, P2P e AP relays",
+  "networkingHintTitle": "Relay e AP relays",
   "networkingRelay": "Relay public base URL",
   "networkingRelayWs": "Relay WebSocket",
   "networkingBind": "Bind locale",
-  "networkingP2p": "P2P",
   "networkingRelaysTitle": "Discovery relay",
   "networkingRelaysCount": "{count} relay noti",
   "@networkingRelaysCount": {
@@ -489,6 +549,12 @@
   "backupImportApply": "Importa ora",
   "backupImportFile": "Importa da file",
   "backupImportOk": "OK: importato (core riavviato)",
+  "backupCloudTitle": "Backup cloud",
+  "backupCloudHint": "Backup cifrato salvato sul relay (o S3) per sincronizzare i dispositivi.",
+  "backupCloudUpload": "Carica sul relay",
+  "backupCloudDownload": "Ripristina dal relay",
+  "backupCloudUploadOk": "OK: backup caricato",
+  "backupCloudDownloadOk": "OK: backup ripristinato",
   "backupErr": "Errore backup: {error}",
   "@backupErr": {
     "placeholders": {
@@ -497,16 +563,11 @@
   },
 
   "statusRelay": "Relay",
-  "statusP2p": "P2P",
   "statusMailbox": "Mailbox",
-  "statusWebrtc": "WebRTC",
   "statusRelayRtt": "R",
-  "statusP2pRtt": "P",
   "statusMailboxRtt": "M",
   "statusRelayTraffic": "R ↑/↓",
-  "statusP2pTraffic": "P ↑/↓",
   "statusMailboxTraffic": "M ↑/↓",
-  "statusWebrtcTraffic": "W ↑/↓",
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
   "statusConnectedShort": "on",
@@ -564,7 +625,6 @@
   "onboardingRelayToken": "Relay token",
   "onboardingBind": "Local bind (host:port)",
   "onboardingInternalToken": "Internal token (UI ↔ core)",
-  "onboardingEnableP2p": "Abilita P2P",
   "onboardingSave": "Salva e apri app",
   "onboardingRelayTokenTooShort": "Relay token troppo corto (min 16 caratteri).",
 
@@ -604,6 +664,7 @@
   "notificationsReact": "Ha reagito al post",
   "notificationsBoost": "Ha boostato il post",
   "notificationsMentionOrReply": "Menzione / risposta",
+  "notificationsNewActivity": "Nuova attività",
 
   "uiSettingsTitle": "Aspetto e lingua",
   "uiSettingsHint": "Tema, lingua, densità, dimensione testo",
@@ -638,7 +699,7 @@
   "composeEmojiButton": "Emoji",
   "composeMfmCheatsheet": "MFM cheatsheet",
   "composeMfmCheatsheetTitle": "MFM cheatsheet",
-  "composeMfmCheatsheetBody": "**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n#tag -> hashtag\n:emoji: -> emoji personalizzata\nA capo: nuova linea",
+  "composeMfmCheatsheetBody": "**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n```codice``` -> blocco di codice\n> citazione -> citazione\n[titolo](https://esempio.com) -> link\n#tag -> hashtag\n@utente@dominio -> menzione\n:emoji: -> emoji personalizzata\nA capo -> nuova linea",
   "close": "Chiudi",
   "composeVisibilityTitle": "Visibilità",
   "composeVisibilityHint": "Chi può vedere questo post",
@@ -687,5 +748,8 @@
   "uiEmojiPickerPresetCompact": "Compatto",
   "uiEmojiPickerPresetComfort": "Comodo",
   "uiEmojiPickerPresetLarge": "Grande",
-  "uiEmojiPickerPreviewLabel": "Anteprima"
+  "uiEmojiPickerPreviewLabel": "Anteprima",
+  "uiNotificationsTitle": "Notifiche",
+  "uiNotificationsChat": "Messaggi chat",
+  "uiNotificationsDirect": "Interazioni dirette"
 }

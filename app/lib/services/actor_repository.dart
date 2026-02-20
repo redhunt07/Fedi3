@@ -23,8 +23,12 @@ class ActorProfile {
     required this.followers,
     required this.following,
     required this.url,
+    required this.featured,
     required this.fields,
-    required this.fedi3PeerId,
+    required this.verifiedLinks,
+    required this.aliases,
+    required this.movedTo,
+    required this.hasFedi3Did,
   });
 
   final String id;
@@ -38,19 +42,24 @@ class ActorProfile {
   final String followers;
   final String following;
   final String url;
+  final String featured;
   final List<ProfileFieldKV> fields;
-  final String fedi3PeerId;
+  final List<String> verifiedLinks;
+  final List<String> aliases;
+  final String movedTo;
+  final bool hasFedi3Did;
 
   String get displayName => name.isNotEmpty ? name : preferredUsername;
-  bool get isFedi3 => fedi3PeerId.isNotEmpty;
+  bool get isFedi3 => hasFedi3Did;
 
   String get statusKey {
-    if (preferredUsername.isNotEmpty) return preferredUsername;
+    if (!isFedi3) return '';
+    if (preferredUsername.isNotEmpty) return preferredUsername.toLowerCase();
     final uri = Uri.tryParse(id);
     if (uri == null) return '';
     final segs = uri.pathSegments;
     if (segs.length >= 2 && segs.first == 'users') {
-      return segs[1];
+      return segs[1].toLowerCase();
     }
     return '';
   }
@@ -67,13 +76,22 @@ class ActorProfile {
     final outbox = (json['outbox'] as String?)?.trim() ?? '';
     final followers = (json['followers'] as String?)?.trim() ?? '';
     final following = (json['following'] as String?)?.trim() ?? '';
-    final endpoints = json['endpoints'];
-    var fedi3PeerId = '';
-    if (endpoints is Map) {
-      fedi3PeerId = (endpoints['fedi3PeerId'] as String?)?.trim() ?? '';
+    final featured = (json['featured'] as String?)?.trim() ?? '';
+    var hasFedi3Did = false;
+    final alsoKnownAsList = json['alsoKnownAs'];
+    if (alsoKnownAsList is List) {
+      for (final v in alsoKnownAsList) {
+        if (v is String && v.trim().startsWith('did:fedi3:')) {
+          hasFedi3Did = true;
+          break;
+        }
+      }
     }
-    if (fedi3PeerId.isEmpty) {
-      fedi3PeerId = (json['fedi3PeerId'] as String?)?.trim() ?? '';
+    if (!hasFedi3Did) {
+      final did = (json['did'] as String?)?.trim() ?? '';
+      if (did.startsWith('did:fedi3:')) {
+        hasFedi3Did = true;
+      }
     }
 
     String iconUrl = '';
@@ -139,6 +157,7 @@ class ActorProfile {
     }
 
     final fields = <ProfileFieldKV>[];
+    final verifiedLinks = <String>{};
     final attachment = json['attachment'];
     if (attachment is List) {
       for (final v in attachment) {
@@ -147,8 +166,23 @@ class ActorProfile {
         final value = (v['value'] as String?)?.trim() ?? '';
         if (name.isEmpty || value.isEmpty) continue;
         fields.add(ProfileFieldKV(name: name, value: value));
+        if (_hasRelMe(value)) {
+          for (final href in _extractLinks(value)) {
+            if (href.isNotEmpty) verifiedLinks.add(href);
+          }
+        }
       }
     }
+
+    final aliases = <String>[];
+    if (alsoKnownAsList is List) {
+      for (final v in alsoKnownAsList) {
+        if (v is String && v.trim().isNotEmpty) {
+          aliases.add(v.trim());
+        }
+      }
+    }
+    final movedTo = (json['movedTo'] as String?)?.trim() ?? '';
 
     return ActorProfile(
       id: id,
@@ -162,9 +196,26 @@ class ActorProfile {
       followers: followers,
       following: following,
       url: url,
+      featured: featured,
       fields: fields,
-      fedi3PeerId: fedi3PeerId,
+      verifiedLinks: verifiedLinks.toList(),
+      aliases: aliases,
+      movedTo: movedTo,
+      hasFedi3Did: hasFedi3Did,
     );
+  }
+}
+
+bool _hasRelMe(String html) {
+  final relRe = RegExp('rel\\s*=\\s*([\'"]?)me\\1', caseSensitive: false);
+  return relRe.hasMatch(html);
+}
+
+Iterable<String> _extractLinks(String html) sync* {
+  final hrefRe = RegExp('href\\s*=\\s*([\'"])([^\'"]+)\\1', caseSensitive: false);
+  for (final m in hrefRe.allMatches(html)) {
+    final href = m.group(2)?.trim() ?? '';
+    if (href.isNotEmpty) yield href;
   }
 }
 
@@ -249,6 +300,24 @@ class ActorRepository {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  Future<List<dynamic>> fetchCollectionItems(String collectionUrl, {int limit = 20}) async {
+    final first = await _fetchJson(collectionUrl);
+    if (first == null) return const [];
+
+    Map<String, dynamic>? page = first;
+    final firstLink = first['first'];
+    if (firstLink is String && firstLink.trim().isNotEmpty) {
+      page = await _fetchJson(firstLink.trim());
+    } else if (firstLink is Map) {
+      final href = (firstLink['id'] as String?)?.trim() ?? (firstLink['href'] as String?)?.trim() ?? '';
+      if (href.isNotEmpty) page = await _fetchJson(href);
+    }
+
+    final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
+    if (items.length <= limit) return items;
+    return items.take(limit).toList();
   }
 
   Future<int?> fetchCollectionCount(String collectionUrl) async {

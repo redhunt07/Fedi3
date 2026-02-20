@@ -7,9 +7,11 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
+import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../widgets/emoji_picker.dart';
@@ -17,6 +19,7 @@ import '../../state/emoji_recent_store.dart';
 import '../../state/direct_recipient_store.dart';
 import '../widgets/mfm_cheatsheet.dart';
 import '../../utils/mfm_codec.dart';
+import '../widgets/status_avatar.dart';
 
 class ComposeScreen extends StatefulWidget {
   const ComposeScreen({super.key, required this.appState});
@@ -28,6 +31,7 @@ class ComposeScreen extends StatefulWidget {
 }
 
 class _ComposeScreenState extends State<ComposeScreen> {
+  static const maxChars = 7000;
   final _text = TextEditingController();
   final _cw = TextEditingController();
   final _filePath = TextEditingController();
@@ -42,6 +46,12 @@ class _ComposeScreenState extends State<ComposeScreen> {
   final _media = <_PickedMedia>[];
   bool _restoredDraft = false;
   Timer? _draftDebounce;
+  bool _showPreview = false;
+  Timer? _mentionDebounce;
+  bool _mentionSearching = false;
+  List<ActorProfile> _mentionSuggestions = const [];
+  int? _mentionStart;
+  String _mentionQuery = '';
 
   @override
   void initState() {
@@ -54,6 +64,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   @override
   void dispose() {
     _draftDebounce?.cancel();
+    _mentionDebounce?.cancel();
     _text.removeListener(_scheduleDraftSave);
     _text.dispose();
     _cw.dispose();
@@ -72,6 +83,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   Widget build(BuildContext context) {
     final cfg = widget.appState.config!;
     final api = CoreApi(config: cfg);
+    final used = _text.text.characters.length;
 
     return Shortcuts(
       shortcuts: {
@@ -107,93 +119,213 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 ),
               ),
             ),
-          TextField(
-            controller: _text,
-            minLines: 5,
-            maxLines: 12,
-            decoration: InputDecoration(labelText: context.l10n.composeWhatsHappening),
-          ),
-          if (_draftStatus != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _draftStatus!,
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              OutlinedButton.icon(
-                onPressed: widget.appState.isRunning ? _addMediaFromPath : null,
-                icon: const Icon(Icons.attach_file),
-                label: Text(context.l10n.composeAddMediaPath),
-              ),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final picked = await EmojiPicker.show(context, prefs: widget.appState.prefs);
-                  if (picked == null) return;
-                  _insertEmoji(_text, picked);
-                  await EmojiRecentStore.add(picked);
-                },
-                icon: const Icon(Icons.emoji_emotions_outlined),
-                label: Text(context.l10n.composeEmojiButton),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => MfmCheatsheet.show(context),
-                icon: const Icon(Icons.text_snippet_outlined),
-                label: Text(context.l10n.composeMfmCheatsheet),
-              ),
-              FilterChip(
-                label: Text(context.l10n.composeContentWarningTitle),
-                selected: _cwEnabled,
-                onSelected: (v) {
-                  setState(() => _cwEnabled = v);
-                  _scheduleDraftSave();
-                },
-              ),
-              FilterChip(
-                label: Text(context.l10n.composeSensitiveMediaTitle),
-                selected: _sensitive,
-                onSelected: (v) {
-                  setState(() => _sensitive = v);
-                  _scheduleDraftSave();
-                },
-              ),
-              PopupMenuButton<String>(
-                tooltip: context.l10n.composeVisibilityTitle,
-                onSelected: (v) {
-                  setState(() => _visibility = v);
-                  _scheduleDraftSave();
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(value: 'public', child: Text(context.l10n.composeVisibilityPublic)),
-                  PopupMenuItem(value: 'home', child: Text(context.l10n.composeVisibilityHome)),
-                  PopupMenuItem(value: 'followers', child: Text(context.l10n.composeVisibilityFollowers)),
-                  PopupMenuItem(value: 'direct', child: Text(context.l10n.composeVisibilityDirect)),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      PopupMenuButton<String>(
+                        tooltip: context.l10n.composeVisibilityTitle,
+                        onSelected: (v) {
+                          setState(() => _visibility = v);
+                          _scheduleDraftSave();
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(value: 'public', child: Text(context.l10n.composeVisibilityPublic)),
+                          PopupMenuItem(value: 'home', child: Text(context.l10n.composeVisibilityHome)),
+                          PopupMenuItem(value: 'followers', child: Text(context.l10n.composeVisibilityFollowers)),
+                          PopupMenuItem(value: 'direct', child: Text(context.l10n.composeVisibilityDirect)),
+                        ],
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(140)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _visibility == 'public'
+                                    ? Icons.public
+                                    : _visibility == 'home'
+                                        ? Icons.home_outlined
+                                        : _visibility == 'direct'
+                                            ? Icons.mail_outline
+                                            : Icons.lock_outline,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(_visibilityLabel(context), style: const TextStyle(fontWeight: FontWeight.w700)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      FilledButton.icon(
+                        onPressed: widget.appState.isRunning && !_posting ? () => _post(api) : null,
+                        icon: const Icon(Icons.send),
+                        label: Text(context.l10n.composePost),
+                      ),
+                    ],
+                  ),
+                  if (_draftStatus != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _draftStatus!,
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      context.l10n.composeCharCount(used, maxChars),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: used > maxChars ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
+                    ),
+                    child: TextField(
+                      controller: _text,
+                      minLines: 6,
+                      maxLines: 12,
+                      maxLength: maxChars,
+                      decoration: InputDecoration(
+                        hintText: context.l10n.composeWhatsHappening,
+                        border: InputBorder.none,
+                        counterText: '',
+                      ),
+                      onChanged: _onTextChanged,
+                    ),
+                  ),
+                  if (_mentionSuggestions.isNotEmpty)
+                    _MentionSuggestions(
+                      suggestions: _mentionSuggestions,
+                      searching: _mentionSearching,
+                      onPick: _applyMention,
+                    ),
+                  if (_showPreview && _text.text.trim().isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHigh.withAlpha(140),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(100)),
+                      ),
+                      child: HtmlWidget(MfmCodec.toHtml(_text.text.trim())),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHigh.withAlpha(140),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(100)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            IconButton(
+                              tooltip: context.l10n.composeEmojiButton,
+                              onPressed: () async {
+                                final picked = await EmojiPicker.show(context, prefs: widget.appState.prefs);
+                                if (picked == null) return;
+                                _insertEmoji(_text, picked);
+                                await EmojiRecentStore.add(picked);
+                              },
+                              icon: const Icon(Icons.emoji_emotions_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Bold',
+                              onPressed: () => _wrapSelection(_text, '**', '**'),
+                              icon: const Icon(Icons.format_bold),
+                            ),
+                            IconButton(
+                              tooltip: 'Italic',
+                              onPressed: () => _wrapSelection(_text, '*', '*'),
+                              icon: const Icon(Icons.format_italic),
+                            ),
+                            IconButton(
+                              tooltip: 'Strike',
+                              onPressed: () => _wrapSelection(_text, '~~', '~~'),
+                              icon: const Icon(Icons.strikethrough_s),
+                            ),
+                            IconButton(
+                              tooltip: 'Code',
+                              onPressed: () => _wrapSelection(_text, '`', '`'),
+                              icon: const Icon(Icons.code),
+                            ),
+                            IconButton(
+                              tooltip: 'Quote',
+                              onPressed: () => _prefixSelectionLines(_text, '> '),
+                              icon: const Icon(Icons.format_quote),
+                            ),
+                            IconButton(
+                              tooltip: context.l10n.composeMfmCheatsheet,
+                              onPressed: () => MfmCheatsheet.show(context),
+                              icon: const Icon(Icons.text_snippet_outlined),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            FilterChip(
+                              label: Text(context.l10n.composeContentWarningTitle),
+                              selected: _cwEnabled,
+                              onSelected: (v) {
+                                setState(() => _cwEnabled = v);
+                                _scheduleDraftSave();
+                              },
+                            ),
+                            const SizedBox(width: 6),
+                            FilterChip(
+                              label: Text(context.l10n.composeSensitiveMediaTitle),
+                              selected: _sensitive,
+                              onSelected: (v) {
+                                setState(() => _sensitive = v);
+                                _scheduleDraftSave();
+                              },
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              tooltip: _showPreview ? 'Hide preview' : 'Preview',
+                              onPressed: () => setState(() => _showPreview = !_showPreview),
+                              icon: Icon(_showPreview ? Icons.visibility : Icons.visibility_outlined),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _posting ? null : _clearDraft,
+                              icon: const Icon(Icons.delete_outline),
+                              label: Text(context.l10n.composeClearDraft),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-                icon: Icon(
-                  _visibility == 'public'
-                      ? Icons.public
-                      : _visibility == 'home'
-                          ? Icons.home_outlined
-                          : _visibility == 'direct'
-                              ? Icons.mail_outline
-                              : Icons.lock_outline,
-                ),
               ),
-              OutlinedButton.icon(
-                onPressed: _posting ? null : _clearDraft,
-                icon: const Icon(Icons.delete_outline),
-                label: Text(context.l10n.composeClearDraft),
-              ),
-              FilledButton.icon(
-                onPressed: widget.appState.isRunning && !_posting ? () => _post(api) : null,
-                icon: const Icon(Icons.send),
-                label: Text(context.l10n.composePost),
-              ),
-            ],
+            ),
           ),
           if (_cwEnabled) ...[
             const SizedBox(height: 10),
@@ -214,12 +346,24 @@ class _ComposeScreenState extends State<ComposeScreen> {
             ),
           ],
           const SizedBox(height: 10),
-          TextField(
-            controller: _filePath,
-            decoration: InputDecoration(
-              labelText: context.l10n.composeMediaFilePathLabel,
-              hintText: context.l10n.composeMediaFilePathHint,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _filePath,
+                  decoration: InputDecoration(
+                    labelText: context.l10n.composeMediaFilePathLabel,
+                    hintText: context.l10n.composeMediaFilePathHint,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: widget.appState.isRunning ? _addMediaFromPath : null,
+                icon: const Icon(Icons.attach_file),
+                label: Text(context.l10n.composeAddMediaPath),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           if (_status != null)
@@ -424,6 +568,104 @@ class _ComposeScreenState extends State<ComposeScreen> {
     _media[b] = tmp;
   }
 
+  void _onTextChanged(String _) {
+    setState(() {});
+    _scheduleDraftSave();
+    _runMentionSearch();
+  }
+
+  void _runMentionSearch() {
+    final value = _text.value;
+    final cursor = value.selection.baseOffset;
+    if (cursor <= 0) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final before = value.text.substring(0, cursor);
+    final lastSpace = before.lastIndexOf(RegExp(r'[\s\n]'));
+    final start = lastSpace == -1 ? 0 : lastSpace + 1;
+    final token = before.substring(start);
+    if (!token.startsWith('@') || token.length < 2) {
+      _clearMentionSuggestions();
+      return;
+    }
+    final query = token.substring(1).trim();
+    if (query.isEmpty) {
+      _clearMentionSuggestions();
+      return;
+    }
+    if (query == _mentionQuery) return;
+    _mentionQuery = query;
+    _mentionStart = start;
+    _mentionDebounce?.cancel();
+    _mentionDebounce = Timer(const Duration(milliseconds: 250), () async {
+      if (mounted) setState(() => _mentionSearching = true);
+      try {
+        final cfg = widget.appState.config;
+        if (cfg == null) return;
+        final resp = await CoreApi(config: cfg).searchUsers(
+          query: query,
+          source: 'all',
+          consistency: 'best',
+          limit: 6,
+        );
+        final rawItems = resp['items'];
+        final list = <ActorProfile>[];
+        if (rawItems is List) {
+          for (final it in rawItems) {
+            if (it is! Map) continue;
+            final profile = ActorProfile.tryParse(it.cast<String, dynamic>());
+            if (profile != null) list.add(profile);
+          }
+        }
+        if (mounted) setState(() => _mentionSuggestions = list);
+      } catch (_) {
+        if (mounted) setState(() => _mentionSuggestions = const []);
+      } finally {
+        if (mounted) setState(() => _mentionSearching = false);
+      }
+    });
+  }
+
+  void _applyMention(ActorProfile profile) {
+    final value = _text.value;
+    final cursor = value.selection.baseOffset;
+    if (cursor < 0) return;
+    final start = _mentionStart ?? (cursor - _mentionQuery.length - 1);
+    if (start < 0 || start > value.text.length) return;
+    final handle = _formatHandle(profile);
+    final next = value.text.replaceRange(start, cursor, '$handle ');
+    final offset = start + handle.length + 1;
+    _text.value = value.copyWith(
+      text: next,
+      selection: TextSelection.collapsed(offset: offset),
+      composing: TextRange.empty,
+    );
+    _clearMentionSuggestions();
+  }
+
+  String _formatHandle(ActorProfile profile) {
+    final username = profile.preferredUsername.trim();
+    final uri = Uri.tryParse(profile.id);
+    final host = uri?.host ?? '';
+    if (username.isEmpty || host.isEmpty) return '@${profile.displayName}';
+    return '@$username@$host';
+  }
+
+  void _clearMentionSuggestions() {
+    if (_mentionSuggestions.isNotEmpty || _mentionSearching) {
+      setState(() {
+        _mentionSuggestions = const [];
+        _mentionSearching = false;
+        _mentionStart = null;
+        _mentionQuery = '';
+      });
+    } else {
+      _mentionStart = null;
+      _mentionQuery = '';
+    }
+  }
+
   void _insertEmoji(TextEditingController ctrl, String emoji) {
     final value = ctrl.value;
     final selection = value.selection;
@@ -436,6 +678,63 @@ class _ComposeScreenState extends State<ComposeScreen> {
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
     _scheduleDraftSave();
+  }
+
+  void _wrapSelection(TextEditingController ctrl, String before, String after) {
+    final value = ctrl.value;
+    final text = value.text;
+    var start = value.selection.start >= 0 ? value.selection.start : text.length;
+    var end = value.selection.end >= 0 ? value.selection.end : text.length;
+    if (start > end) {
+      final tmp = start;
+      start = end;
+      end = tmp;
+    }
+    final selected = text.substring(start, end);
+    final next = text.replaceRange(start, end, '$before$selected$after');
+    ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + before.length + selected.length + after.length),
+    );
+    _scheduleDraftSave();
+    setState(() {});
+  }
+
+  void _prefixSelectionLines(TextEditingController ctrl, String prefix) {
+    final value = ctrl.value;
+    final text = value.text;
+    var start = value.selection.start >= 0 ? value.selection.start : text.length;
+    var end = value.selection.end >= 0 ? value.selection.end : text.length;
+    if (start > end) {
+      final tmp = start;
+      start = end;
+      end = tmp;
+    }
+    final lineStart = text.lastIndexOf('\n', start - 1);
+    final lineEnd = text.indexOf('\n', end);
+    final startIndex = lineStart < 0 ? 0 : lineStart + 1;
+    final endIndex = lineEnd < 0 ? text.length : lineEnd;
+    final segment = text.substring(startIndex, endIndex);
+    final lines = segment.split('\n').map((line) {
+      if (line.startsWith(prefix)) return line;
+      return '$prefix$line';
+    }).join('\n');
+    final next = text.replaceRange(startIndex, endIndex, lines);
+    ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: startIndex + lines.length),
+    );
+    _scheduleDraftSave();
+    setState(() {});
+  }
+
+  String _visibilityLabel(BuildContext context) {
+    return switch (_visibility) {
+      'home' => context.l10n.composeVisibilityHome,
+      'followers' => context.l10n.composeVisibilityFollowers,
+      'direct' => context.l10n.composeVisibilityDirect,
+      _ => context.l10n.composeVisibilityPublic,
+    };
   }
 
 }
@@ -494,4 +793,87 @@ class _PickedMedia {
 
 class _SubmitComposeIntent extends Intent {
   const _SubmitComposeIntent();
+}
+
+class _MentionSuggestions extends StatelessWidget {
+  const _MentionSuggestions({
+    required this.suggestions,
+    required this.searching,
+    required this.onPick,
+  });
+
+  final List<ActorProfile> suggestions;
+  final bool searching;
+  final ValueChanged<ActorProfile> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh.withAlpha(180),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(100)),
+        ),
+        child: Column(
+          children: [
+            if (searching)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+            for (final profile in suggestions)
+              InkWell(
+                onTap: () => onPick(profile),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Row(
+                    children: [
+                      StatusAvatar(
+                        imageUrl: profile.iconUrl,
+                        size: 24,
+                        showStatus: profile.isFedi3,
+                        statusKey: profile.statusKey,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              profile.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            Text(
+                              _formatHandle(profile),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatHandle(ActorProfile profile) {
+    final username = profile.preferredUsername.trim();
+    final uri = Uri.tryParse(profile.id);
+    final host = uri?.host ?? '';
+    if (username.isEmpty || host.isEmpty) return '@${profile.displayName}';
+    return '@$username@$host';
+  }
 }

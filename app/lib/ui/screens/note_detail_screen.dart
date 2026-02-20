@@ -225,7 +225,10 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   List<_ThreadEntry> _flattenThread(String rootId) {
     final out = <_ThreadEntry>[];
     if (!_notes.containsKey(rootId)) return out;
+    final seen = <String>{};
     void walk(String id, int depth) {
+      if (seen.contains(id)) return;
+      seen.add(id);
       final note = _notes[id];
       if (note == null) return;
       out.add(_ThreadEntry(note: note, depth: depth));

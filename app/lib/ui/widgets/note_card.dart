@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -218,12 +219,15 @@ class _NoteCardState extends State<NoteCard> {
     final content = _injectCustomEmoji(note.contentHtml, note.emojis);
     final previewUrl = _extractFirstLinkPreviewUrl(note.contentHtml, note.attachments);
     final display = _noteActor?.displayName ?? _fallbackActorLabel(note.attributedTo);
-    final handle = _noteActor?.preferredUsername.isNotEmpty == true ? _noteActor!.preferredUsername : note.attributedTo;
+    final handle = _handleFor(note);
     final shouldCw = note.sensitive || note.summary.isNotEmpty;
     final cwTitle = note.summary.isNotEmpty ? note.summary : context.l10n.noteContentWarning;
 
+    final borderColor = Theme.of(context).colorScheme.outlineVariant.withAlpha(110);
     return Card(
       elevation: widget.elevated ? 2 : 0,
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: widget.rawActivity == null
@@ -233,33 +237,37 @@ class _NoteCardState extends State<NoteCard> {
                   MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: widget.appState, activity: widget.rawActivity!)),
                 );
               },
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_boostActor != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.repeat, size: 16),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          context.l10n.noteBoostedBy(_boostActor!.displayName),
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+        child: Container(
+          decoration: BoxDecoration(
+            border: _borderForActivity(context),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_boostActor != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.repeat, size: 16),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            context.l10n.noteBoostedBy(_boostActor!.displayName),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _Avatar(
                     url: _noteActor?.iconUrl ?? '',
-                    size: 44,
+                    size: 40,
                     showStatus: _noteActor?.isFedi3 == true,
                     statusKey: _noteActor?.statusKey,
                   ),
@@ -274,25 +282,22 @@ class _NoteCardState extends State<NoteCard> {
                               child: ActorHoverCard(
                                 actorUrl: note.attributedTo,
                                 onTap: () => _openProfile(context, note.attributedTo),
-                                child: Text(
-                                  display,
-                                  style: const TextStyle(fontWeight: FontWeight.w800),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ActorHoverCard(
-                                actorUrl: note.attributedTo,
-                                onTap: () => _openProfile(context, note.attributedTo),
-                                child: Text(
-                                  handle,
-                                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: display,
+                                        style: const TextStyle(fontWeight: FontWeight.w800),
+                                      ),
+                                      TextSpan(
+                                        text: handle.isNotEmpty ? ' · $handle' : '',
+                                        style: TextStyle(
+                                          color: Theme.of(context).colorScheme.onSurface.withAlpha(170),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -319,12 +324,31 @@ class _NoteCardState extends State<NoteCard> {
                               ),
                           ],
                         ),
+                        Row(
+                          children: [
+                            if (widget.item.activityType == 'Announce')
+                              _HeaderBadge(
+                                label: context.l10n.notificationsBoost,
+                                color: Theme.of(context).colorScheme.primary.withAlpha(180),
+                                icon: Icons.repeat,
+                              ),
+                            if (note.inReplyTo.isNotEmpty)
+                              Padding(
+                                padding: EdgeInsets.only(left: widget.item.activityType == 'Announce' ? 6 : 0),
+                                child: _HeaderBadge(
+                                  label: context.l10n.noteInReplyTo,
+                                  color: Theme.of(context).colorScheme.secondary.withAlpha(180),
+                                  icon: Icons.reply,
+                                ),
+                              ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               if (isDeleted)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
@@ -398,7 +422,7 @@ class _NoteCardState extends State<NoteCard> {
                   const SizedBox.shrink(),
               ],
               if (note.hashtags.isNotEmpty) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
@@ -450,7 +474,7 @@ class _NoteCardState extends State<NoteCard> {
                 ),
               ],
               if (stats != null) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 _StatsRow(
                   stats: stats,
                   noteEmojis: note.emojis,
@@ -458,11 +482,11 @@ class _NoteCardState extends State<NoteCard> {
                 ),
               ],
               if (previewUrl != null) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 LinkPreviewCard(url: previewUrl),
               ],
               if (note.attachments.isNotEmpty) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 _AttachmentsGrid(
                   attachments: note.attachments,
                   onOpen: (index) {
@@ -543,7 +567,7 @@ class _NoteCardState extends State<NoteCard> {
                       : () async => _loadReplies(api, note.id, cursor: _repliesCursor),
                 ),
               ],
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -551,104 +575,112 @@ class _NoteCardState extends State<NoteCard> {
                     spacing: 4,
                     runSpacing: 4,
                     children: [
-                      Tooltip(
-                        message: context.l10n.activityReply,
-                        child: IconButton(
-                          onPressed: canAct
-                              ? () => setState(() {
-                                    _replying = !_replying;
-                                    if (!_replying) _replyCtrl.clear();
-                                  })
-                              : null,
-                          icon: const Icon(Icons.reply),
-                        ),
+                      _ActionButton(
+                        tooltip: context.l10n.activityReply,
+                        icon: const Icon(Icons.reply, size: 18),
+                        onPressed: canAct
+                            ? () => setState(() {
+                                  _replying = !_replying;
+                                  if (!_replying) _replyCtrl.clear();
+                                })
+                            : null,
                       ),
-                      Tooltip(
-                        message: context.l10n.activityBoost,
-                        child: IconButton(
-                          onPressed: canAct ? () => _toggleBoost(context, api, note.id, note.attributedTo) : null,
-                          icon: Icon(
-                            Icons.repeat,
-                            color: _myAnnounceId != null ? Theme.of(context).colorScheme.primary : null,
-                          ),
-                        ),
+                      _ActionButton(
+                        tooltip: context.l10n.activityBoost,
+                        icon: Icon(Icons.repeat, size: 18, color: _myAnnounceId != null ? Theme.of(context).colorScheme.primary : null),
+                        count: stats?.boostCount ?? 0,
+                        onPressed: canAct ? () => _toggleBoost(context, api, note.id, note.attributedTo) : null,
                       ),
-                      Tooltip(
-                        message: context.l10n.activityLike,
-                        child: IconButton(
-                          onPressed: (canAct && note.attributedTo.isNotEmpty) ? () => _toggleLike(context, api, note.id, note.attributedTo) : null,
-                          icon: Icon(
-                            _myLikeId != null ? Icons.favorite : Icons.favorite_border,
-                            color: _myLikeId != null ? Theme.of(context).colorScheme.primary : null,
-                          ),
+                      _ActionButton(
+                        tooltip: context.l10n.activityLike,
+                        icon: Icon(
+                          _myLikeId != null ? Icons.favorite : Icons.favorite_border,
+                          size: 18,
+                          color: _myLikeId != null ? Theme.of(context).colorScheme.primary : null,
                         ),
+                        count: stats?.likeCount ?? 0,
+                        onPressed: (canAct && note.attributedTo.isNotEmpty) ? () => _toggleLike(context, api, note.id, note.attributedTo) : null,
                       ),
-                      Tooltip(
-                        message: context.l10n.activityReact,
-                        child: IconButton(
-                          onPressed: (canAct && note.attributedTo.isNotEmpty)
-                              ? () async {
-                                  final next = !_reactionsOpen;
-                                  setState(() => _reactionsOpen = next);
-                                  if (next && _reactionCounts.isEmpty && !_reactionsLoading) {
-                                    await _loadReactions(api, note.id);
-                                  }
+                      _ActionButton(
+                        tooltip: context.l10n.activityReact,
+                        icon: Icon(
+                          Icons.add_reaction_outlined,
+                          size: 18,
+                          color: _myEmojiIds.isNotEmpty ? Theme.of(context).colorScheme.primary : null,
+                        ),
+                        count: stats == null ? 0 : stats.emojis.fold(0, (sum, e) => sum + e.count),
+                        onPressed: (canAct && note.attributedTo.isNotEmpty)
+                            ? () async {
+                                final next = !_reactionsOpen;
+                                setState(() => _reactionsOpen = next);
+                                if (next && _reactionCounts.isEmpty && !_reactionsLoading) {
+                                  await _loadReactions(api, note.id);
                                 }
-                              : null,
-                          icon: Icon(
-                            Icons.add_reaction_outlined,
-                            color: _myEmojiIds.isNotEmpty ? Theme.of(context).colorScheme.primary : null,
-                          ),
-                        ),
+                              }
+                            : null,
                       ),
-                      Tooltip(
-                        message: _translatedText == null
+                      _ActionButton(
+                        tooltip: _translatedText == null
                             ? context.l10n.noteTranslate
                             : (_translationVisible ? context.l10n.noteShowOriginal : context.l10n.noteShowTranslation),
-                        child: IconButton(
-                          onPressed: _translationLoading ? null : () => _toggleTranslate(context, note.contentHtml),
-                          icon: _translationLoading
-                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                              : Icon(
-                                  Icons.translate,
-                                  color: _translationVisible ? Theme.of(context).colorScheme.primary : null,
-                                ),
-                        ),
+                        icon: _translationLoading
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(
+                                Icons.translate,
+                                size: 18,
+                                color: _translationVisible ? Theme.of(context).colorScheme.primary : null,
+                              ),
+                        onPressed: _translationLoading ? null : () => _toggleTranslate(context, note.contentHtml),
                       ),
-                      Tooltip(
-                        message: 'Bookmark',
-                        child: IconButton(
-                          onPressed: () => _toggleFlag(context, 'bookmark', note.id),
-                          icon: Icon(_bookmarked ? Icons.bookmark : Icons.bookmark_border),
-                        ),
+                      _ActionButton(
+                        tooltip: 'Bookmark',
+                        icon: Icon(_bookmarked ? Icons.bookmark : Icons.bookmark_border, size: 18),
+                        onPressed: () => _toggleFlag(context, 'bookmark', note.id),
                       ),
-                      Tooltip(
-                        message: 'Pin',
-                        child: IconButton(
-                          onPressed: () => _toggleFlag(context, 'pin', note.id),
-                          icon: Icon(_pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                        ),
+                      _ActionButton(
+                        tooltip: 'Pin',
+                        icon: Icon(_pinned ? Icons.push_pin : Icons.push_pin_outlined, size: 18),
+                        onPressed: () => _toggleFlag(context, 'pin', note.id),
                       ),
-                      Tooltip(
-                        message: _muted ? 'Unmute thread' : 'Mute thread',
-                        child: IconButton(
-                          onPressed: () => _toggleFlag(context, 'mute', note.id),
-                          icon: Icon(_muted ? Icons.volume_off : Icons.volume_up),
-                        ),
+                      _ActionButton(
+                        tooltip: _muted ? 'Unmute thread' : 'Mute thread',
+                        icon: Icon(_muted ? Icons.volume_off : Icons.volume_up, size: 18),
+                        onPressed: () => _toggleFlag(context, 'mute', note.id),
                       ),
-                      Tooltip(
-                        message: 'Copy link',
-                        child: IconButton(
-                          onPressed: () async {
-                            await Clipboard.setData(ClipboardData(text: note.id));
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
-                          },
-                          icon: const Icon(Icons.link),
-                        ),
+                      _ActionButton(
+                        tooltip: 'Copy link',
+                        icon: const Icon(Icons.link, size: 18),
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: note.id));
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+                        },
                       ),
                     ],
                   ),
+                  if (note.inReplyTo.isNotEmpty || widget.item.activityType == 'Announce') ...[
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceContainerHigh.withAlpha(120),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: Text(
+                          widget.item.activityType == 'Announce'
+                              ? context.l10n.notificationsBoost
+                              : context.l10n.noteInReplyTo,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                   if (widget.showRawFallback && widget.rawActivity != null)
                     Align(
                       alignment: Alignment.centerRight,
@@ -717,7 +749,8 @@ class _NoteCardState extends State<NoteCard> {
                     ),
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -791,6 +824,16 @@ class _NoteCardState extends State<NoteCard> {
   }
 
   String _escape(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+
+  BoxBorder? _borderForActivity(BuildContext context) {
+    final type = widget.item.activityType;
+    if (type != 'Announce' && widget.item.note.inReplyTo.trim().isEmpty) return null;
+    final scheme = Theme.of(context).colorScheme;
+    final color = type == 'Announce'
+        ? scheme.primary.withAlpha(160)
+        : scheme.secondary.withAlpha(160);
+    return Border(left: BorderSide(color: color, width: 3));
+  }
 
   bool _looksLikeActorUrl(String url) {
     final uri = Uri.tryParse(url);
@@ -1099,6 +1142,17 @@ class _NoteCardState extends State<NoteCard> {
     final id = noteId.trim();
     if (id.isEmpty) return;
     final next = await NoteFlagsStore.toggle(key, id);
+    if (key == 'pin') {
+      final cfg = widget.appState.config;
+      if (cfg != null) {
+        try {
+          final api = CoreApi(config: cfg);
+          await api.setNotePinned(noteId: id, pinned: next);
+        } catch (_) {
+          // Best-effort: keep local flag even if server fails.
+        }
+      }
+    }
     if (!mounted) return;
     setState(() {
       if (key == 'bookmark') _bookmarked = next;
@@ -1491,6 +1545,23 @@ class _NoteCardState extends State<NoteCard> {
     return host;
   }
 
+  String _handleFor(Note note) {
+    final url = note.attributedTo.trim();
+    final uri = Uri.tryParse(url);
+    final host = uri?.host ?? '';
+    final username = _noteActor?.preferredUsername.trim() ?? '';
+    if (username.isNotEmpty && host.isNotEmpty) return '@$username@$host';
+    if (username.isNotEmpty) return '@$username';
+    if (host.isNotEmpty && uri != null) {
+      final segs = uri.pathSegments;
+      if (segs.isNotEmpty && segs.first == 'users' && segs.length >= 2) {
+        return '@${segs[1]}@$host';
+      }
+      return '@$host';
+    }
+    return url;
+  }
+
   String? _extractFirstLinkPreviewUrl(String html, List<NoteAttachment> attachments) {
     final h = html.trim();
     if (h.isEmpty) return null;
@@ -1597,13 +1668,21 @@ class _StatsRow extends StatelessWidget {
 
     Widget counter(IconData icon, int count) {
       if (count <= 0) return const SizedBox.shrink();
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: fg),
-          const SizedBox(width: 4),
-          Text('$count', style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w700)),
-        ],
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withAlpha(110),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: theme.colorScheme.outlineVariant.withAlpha(120)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: fg),
+            const SizedBox(width: 4),
+            Text('$count', style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w700)),
+          ],
+        ),
       );
     }
 
@@ -1613,17 +1692,18 @@ class _StatsRow extends StatelessWidget {
     };
 
     final row = Wrap(
-      spacing: 10,
-      runSpacing: 8,
+      spacing: 8,
+      runSpacing: 6,
       children: [
         counter(Icons.repeat, stats.boostCount),
         counter(Icons.favorite, stats.likeCount),
         for (final e in emojiChips)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest.withAlpha(150),
-              borderRadius: BorderRadius.circular(999),
+              color: theme.colorScheme.surfaceContainerHighest.withAlpha(130),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.colorScheme.outlineVariant.withAlpha(120)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1667,6 +1747,86 @@ class _EmojiOrImage extends StatelessWidget {
       height: 16,
       fit: BoxFit.contain,
       errorBuilder: (_, __, ___) => Text(c, style: const TextStyle(fontSize: 14)),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.tooltip,
+    required this.icon,
+    this.onPressed,
+    this.count = 0,
+  });
+
+  final String tooltip;
+  final Widget icon;
+  final VoidCallback? onPressed;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          foregroundColor: theme.colorScheme.onSurface.withAlpha(200),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            icon,
+            if (count > 0) ...[
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withAlpha(190)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderBadge extends StatelessWidget {
+  const _HeaderBadge({
+    required this.label,
+    required this.color,
+    required this.icon,
+  });
+
+  final String label;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(50),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1823,7 +1983,11 @@ class _QuotedPreview extends StatelessWidget {
             children: [
               Text(label, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12)),
               const SizedBox(height: 6),
-              HtmlWidget(inner),
+              HtmlWidget(
+                inner,
+                buildAsync: !Platform.isLinux,
+                enableCaching: !Platform.isLinux,
+              ),
               if (inReplyTo.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Text(
@@ -1849,10 +2013,11 @@ class _NoteContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final allowAsync = !Platform.isLinux;
     return HtmlWidget(
       html,
-      buildAsync: true,
-      enableCaching: true,
+      buildAsync: allowAsync,
+      enableCaching: allowAsync,
       onTapUrl: onTapUrl,
       customWidgetBuilder: (element) {
         if (element.localName != 'a') return null;
@@ -1898,7 +2063,13 @@ class _ContentWarning extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(child: HtmlWidget(titleHtml, buildAsync: true, enableCaching: true)),
+              Expanded(
+                child: HtmlWidget(
+                  titleHtml,
+                  buildAsync: !Platform.isLinux,
+                  enableCaching: !Platform.isLinux,
+                ),
+              ),
               TextButton(
                 onPressed: onToggle,
                 child: Text(open ? context.l10n.noteHideContent : context.l10n.noteShowContent),

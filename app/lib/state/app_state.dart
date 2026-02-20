@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,7 @@ import '../core/fedi3_core.dart';
 import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
 import '../services/telemetry_service.dart';
+import '../services/cloud_backup_service.dart';
 import 'config_store.dart';
 import 'peer_presence_store.dart';
 import 'prefs_store.dart';
@@ -26,6 +28,8 @@ class AppState extends ChangeNotifier {
   String? _lastError;
   int _unreadNotifications = 0;
   int _unreadChats = 0;
+  Timer? _cloudBackupTimer;
+  bool _cloudBackupRunning = false;
 
   CoreConfig? get config => _config;
   UiPrefs get prefs => _prefs;
@@ -136,13 +140,8 @@ class AppState extends ChangeNotifier {
             relayToken: effective.relayToken,
             bind: effective.bind,
             internalToken: effective.internalToken,
-            p2pEnable: effective.p2pEnable,
-            p2pRelayReserve: effective.p2pRelayReserve,
-            webrtcEnable: effective.webrtcEnable,
-            webrtcIceUrls: effective.webrtcIceUrls,
-            webrtcIceUsername: effective.webrtcIceUsername,
-            webrtcIceCredential: effective.webrtcIceCredential,
             apRelays: effective.apRelays,
+            bootstrapFollowActors: effective.bootstrapFollowActors,
             displayName: effective.displayName,
             summary: effective.summary,
             iconUrl: effective.iconUrl,
@@ -153,10 +152,12 @@ class AppState extends ChangeNotifier {
             manuallyApprovesFollowers: effective.manuallyApprovesFollowers,
             blockedDomains: effective.blockedDomains,
             blockedActors: effective.blockedActors,
-            postDeliveryMode: effective.postDeliveryMode,
-            p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
             previousPublicBaseUrl: effective.previousPublicBaseUrl,
             previousRelayToken: effective.previousRelayToken,
+            upnpPortRangeStart: effective.upnpPortRangeStart,
+            upnpPortRangeEnd: effective.upnpPortRangeEnd,
+            upnpLeaseSecs: effective.upnpLeaseSecs,
+            upnpTimeoutSecs: effective.upnpTimeoutSecs,
           );
           await saveConfig(effective);
         }
@@ -175,13 +176,8 @@ class AppState extends ChangeNotifier {
           relayToken: CoreConfig.randomToken(),
           bind: effective.bind,
           internalToken: effective.internalToken,
-          p2pEnable: effective.p2pEnable,
-          p2pRelayReserve: effective.p2pRelayReserve,
-          webrtcEnable: effective.webrtcEnable,
-          webrtcIceUrls: effective.webrtcIceUrls,
-          webrtcIceUsername: effective.webrtcIceUsername,
-          webrtcIceCredential: effective.webrtcIceCredential,
           apRelays: effective.apRelays,
+          bootstrapFollowActors: effective.bootstrapFollowActors,
           displayName: effective.displayName,
           summary: effective.summary,
           iconUrl: effective.iconUrl,
@@ -192,11 +188,13 @@ class AppState extends ChangeNotifier {
           manuallyApprovesFollowers: effective.manuallyApprovesFollowers,
           blockedDomains: effective.blockedDomains,
           blockedActors: effective.blockedActors,
-          postDeliveryMode: effective.postDeliveryMode,
-          p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
-          previousPublicBaseUrl: effective.previousPublicBaseUrl,
-          previousRelayToken: prev.isEmpty ? effective.previousRelayToken : prev,
-        );
+            previousPublicBaseUrl: effective.previousPublicBaseUrl,
+            previousRelayToken: prev.isEmpty ? effective.previousRelayToken : prev,
+            upnpPortRangeStart: effective.upnpPortRangeStart,
+            upnpPortRangeEnd: effective.upnpPortRangeEnd,
+            upnpLeaseSecs: effective.upnpLeaseSecs,
+            upnpTimeoutSecs: effective.upnpTimeoutSecs,
+          );
         await saveConfig(effective);
       }
       if (effective.internalToken.trim().isEmpty) {
@@ -208,13 +206,8 @@ class AppState extends ChangeNotifier {
           relayToken: effective.relayToken,
           bind: effective.bind,
           internalToken: CoreConfig.randomToken(),
-          p2pEnable: effective.p2pEnable,
-          p2pRelayReserve: effective.p2pRelayReserve,
-          webrtcEnable: effective.webrtcEnable,
-          webrtcIceUrls: effective.webrtcIceUrls,
-          webrtcIceUsername: effective.webrtcIceUsername,
-          webrtcIceCredential: effective.webrtcIceCredential,
           apRelays: effective.apRelays,
+          bootstrapFollowActors: effective.bootstrapFollowActors,
           displayName: effective.displayName,
           summary: effective.summary,
           iconUrl: effective.iconUrl,
@@ -225,16 +218,19 @@ class AppState extends ChangeNotifier {
           manuallyApprovesFollowers: effective.manuallyApprovesFollowers,
           blockedDomains: effective.blockedDomains,
           blockedActors: effective.blockedActors,
-          postDeliveryMode: effective.postDeliveryMode,
-          p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
-          previousPublicBaseUrl: effective.previousPublicBaseUrl,
-          previousRelayToken: effective.previousRelayToken,
-        );
+            previousPublicBaseUrl: effective.previousPublicBaseUrl,
+            previousRelayToken: effective.previousRelayToken,
+            upnpPortRangeStart: effective.upnpPortRangeStart,
+            upnpPortRangeEnd: effective.upnpPortRangeEnd,
+            upnpLeaseSecs: effective.upnpLeaseSecs,
+            upnpTimeoutSecs: effective.upnpTimeoutSecs,
+          );
         await saveConfig(effective);
       }
 
       final handle = Fedi3Core.instance.startJson(jsonEncode(effective.toCoreStartJson()));
       _coreHandle = handle;
+      _scheduleCloudBackup();
     } catch (e) {
       _lastError = e.toString();
       TelemetryService.record('core_start_failed', _lastError ?? 'unknown error');
@@ -249,10 +245,38 @@ class AppState extends ChangeNotifier {
     try {
       Fedi3Core.instance.stop(handle);
       _coreHandle = null;
+      _cloudBackupTimer?.cancel();
+      _cloudBackupTimer = null;
     } catch (e) {
       _lastError = e.toString();
       TelemetryService.record('core_stop_failed', _lastError ?? 'unknown error');
     }
     notifyListeners();
+  }
+
+  void _scheduleCloudBackup() {
+    _cloudBackupTimer?.cancel();
+    final cfg = _config;
+    if (cfg == null) return;
+    _cloudBackupTimer = Timer.periodic(const Duration(hours: 6), (_) {
+      _runCloudBackup();
+    });
+    Timer(const Duration(minutes: 2), _runCloudBackup);
+  }
+
+  Future<void> _runCloudBackup() async {
+    if (_cloudBackupRunning) return;
+    final cfg = _config;
+    if (cfg == null || _coreHandle == null) return;
+    _cloudBackupRunning = true;
+    try {
+      final service = CloudBackupService(config: cfg);
+      await service.upload(prefs: _prefs);
+      TelemetryService.record('cloud_backup_ok', cfg.username);
+    } catch (e) {
+      TelemetryService.record('cloud_backup_failed', e.toString());
+    } finally {
+      _cloudBackupRunning = false;
+    }
   }
 }

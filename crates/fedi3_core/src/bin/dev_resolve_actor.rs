@@ -9,7 +9,10 @@ use std::env;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
     let actor_url = env::args().nth(1).unwrap_or_default();
@@ -28,4 +31,3 @@ async fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
-

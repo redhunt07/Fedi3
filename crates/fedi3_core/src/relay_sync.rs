@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use fedi3_protocol::RelayHttpRequest;
 use tokio::sync::watch;
 use tracing::info;
 
@@ -25,11 +23,6 @@ struct RelayListItem {
     relay_ws_url: Option<String>,
     base: Option<String>,
     ws: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct PeerRelayListResponse {
-    items: Option<Vec<RelayListItem>>,
 }
 
 pub fn start_relay_sync_worker(state: ApState, mut shutdown: watch::Receiver<bool>) {
@@ -64,55 +57,23 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
     if let Some(base) = state.cfg.relay_base_url.as_ref() {
         let url = format!("{}/_fedi3/relay/relays", base.trim_end_matches('/'));
         let mut req = state.http.get(&url);
-        if let Some(tok) = state.cfg.relay_token.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(tok) = state
+            .cfg
+            .relay_token
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             req = req.header("Authorization", format!("Bearer {}", tok));
         }
-        if let Ok(resp) = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await {
+        if let Ok(resp) = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await
+        {
             if resp.status().is_success() {
                 if let Ok(body) = resp.json::<RelayListResponse>().await {
                     if let Some(items) = body.relays.or(body.items) {
                         store_relay_items(state, items, "relay");
                     }
                 }
-            }
-        }
-    }
-
-    // Fetch relay lists from known peers (best-effort).
-    let actors = state.social.list_actor_meta_fedi3(50).unwrap_or_default();
-    for actor_url in actors {
-        let info = match state.delivery.resolve_actor_info(&actor_url).await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let Some(peer_id) = info.p2p_peer_id else {
-            continue;
-        };
-        if !info.p2p_peer_addrs.is_empty() {
-            let _ = state
-                .delivery
-                .p2p_add_peer_addrs(&peer_id, info.p2p_peer_addrs)
-                .await;
-        }
-        let req = RelayHttpRequest {
-            id: format!("relay-list-{}", now_ms()),
-            method: "GET".to_string(),
-            path: "/.fedi3/relays".to_string(),
-            query: "".to_string(),
-            headers: vec![("accept".to_string(), "application/json".to_string())],
-            body_b64: "".to_string(),
-        };
-        let resp = match state.delivery.p2p_request(&peer_id, req).await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if !(200..300).contains(&resp.status) {
-            continue;
-        }
-        let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-        if let Ok(list) = serde_json::from_slice::<PeerRelayListResponse>(&body) {
-            if let Some(items) = list.items {
-                store_relay_items(state, items, "peer");
             }
         }
     }
@@ -133,7 +94,13 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
                     })
                     .collect::<Vec<_>>()
             }));
-            if let Some(tok) = state.cfg.relay_token.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(tok) = state
+                .cfg
+                .relay_token
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
                 req = req.header("Authorization", format!("Bearer {}", tok));
             }
             let _ = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await;
@@ -159,7 +126,9 @@ fn store_relay_items(state: &ApState, items: Vec<RelayListItem>, source: &str) {
             let ws_url = ws
                 .map(|v| v.to_string())
                 .or_else(|| infer_ws_from_base(base_url));
-            let _ = state.social.upsert_relay_entry(base_url, ws_url.as_deref(), source);
+            let _ = state
+                .social
+                .upsert_relay_entry(base_url, ws_url.as_deref(), source);
         }
     }
 }
@@ -176,11 +145,4 @@ fn infer_ws_from_base(base: &str) -> Option<String> {
         return Some(format!("ws://{}", rest.trim_end_matches('/')));
     }
     None
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }

@@ -93,6 +93,7 @@
   "chatReplyClear": "Cancel reply",
   "chatReplyAttachment": "Attachment",
   "chatReplyUnknown": "Original message",
+  "chatSenderMe": "me",
   "chatMembers": "Members",
   "chatRename": "Rename chat",
   "chatRenameHint": "New chat title",
@@ -100,6 +101,19 @@
   "chatAddMemberHint": "Search or paste an actor",
   "chatRemoveMember": "Remove member",
   "chatReact": "React",
+  "chatDeleteThread": "Delete chat",
+  "chatDeleteThreadHint": "This will delete the entire chat thread for everyone.",
+  "chatLeaveThreadOption": "Leave chat",
+  "chatArchiveThreadOption": "Archive chat",
+  "chatLeaveThreadSuccess": "You left the chat.",
+  "chatLeaveThreadFailed": "Could not leave the chat.",
+  "chatArchiveThreadSuccess": "Chat archived.",
+  "chatArchiveThreadFailed": "Could not archive the chat.",
+  "chatUnarchiveThreadSuccess": "Chat restored.",
+  "chatUnarchiveThreadFailed": "Could not restore the chat.",
+  "chatThreadsActive": "Active",
+  "chatThreadsArchived": "Archived",
+  "chatUnarchiveThreadOption": "Unarchive chat",
   "chatPin": "Pin chat",
   "chatUnpin": "Unpin chat",
   "chatTyping": "{name} is typing…",
@@ -115,12 +129,17 @@
     }
   },
 
-  "timelineHomeTooltip": "Generic timeline (Global P2P + Legacy). Shows incoming/outgoing interactions, including with users you don't follow and who don't follow you.",
-  "timelineLocalTooltip": "Follower/Following timeline (P2P + Legacy). Only profiles with a follow/follower relationship.",
-  "timelineSocialTooltip": "Social timeline (P2P). Best-effort global feed via gossip/DHT (discover peers beyond legacy).",
-  "timelineFederatedTooltip": "Federated timeline (P2P + Legacy). Public content seen by your instance across federation.",
+  "timelineHomeTooltip": "Generic timeline (Relay + Legacy). Shows incoming/outgoing interactions, including with users you don't follow and who don't follow you.",
+  "timelineLocalTooltip": "Follower/Following timeline (Relay + Legacy). Only profiles with a follow/follower relationship.",
+  "timelineSocialTooltip": "Social timeline (Relay). Best-effort global feed via relay federation.",
+  "timelineFederatedTooltip": "Federated timeline (Relay + Legacy). Public content seen by your instance across federation.",
   "timelineLayoutColumns": "Switch to columns",
   "timelineLayoutTabs": "Switch to tabs",
+  "timelineFilters": "Filters",
+  "timelineFilterMedia": "Media",
+  "timelineFilterReply": "Reply",
+  "timelineFilterBoost": "Boost",
+  "timelineFilterMention": "Mention",
 
   "coreStart": "Start core",
   "coreStop": "Stop core",
@@ -171,6 +190,20 @@
   "noteContentWarning": "Content warning",
   "noteShowContent": "Show",
   "noteHideContent": "Hide",
+  "noteActions": "Actions",
+  "noteEdit": "Edit",
+  "noteDelete": "Delete",
+  "noteDeleted": "Note deleted",
+  "noteEditTitle": "Edit note",
+  "noteEditContentHint": "Edit content",
+  "noteEditSummaryHint": "Content warning (optional)",
+  "noteSensitiveLabel": "Sensitive content",
+  "noteEditSave": "Save",
+  "noteEditMissingAudience": "Missing audience",
+  "noteDeleteTitle": "Delete note",
+  "noteDeleteHint": "Are you sure you want to delete this note?",
+  "noteDeleteConfirm": "Delete",
+  "noteDeleteMissingAudience": "Missing audience",
 
   "timeAgoJustNow": "just now",
   "timeAgoMinutes": "{count,plural,=1{1 minute ago}other{{count} minutes ago}}",
@@ -201,6 +234,7 @@
   "onboardingLoginTitle": "Log in",
   "onboardingLoginIntro": "Enter your existing setup fields. The core will start automatically after saving.",
   "onboardingImportBackup": "Import backup JSON",
+  "onboardingImportBackupCloud": "Restore from relay backup",
   "onboardingRelaySelect": "Relay selection",
   "onboardingRelayDiscover": "Discover",
   "onboardingRelayDiscovering": "Discovering…",
@@ -346,6 +380,15 @@
   "profileBio": "Bio",
   "profileFollowers": "Followers",
   "profileFollowing": "Following",
+  "profileFeatured": "Featured",
+  "profileAliases": "Also known as",
+  "profileFollowPending": "Pending",
+  "profileMovedTo": "Moved to {actor}",
+  "@profileMovedTo": {
+    "placeholders": {
+      "actor": { "type": "String" }
+    }
+  },
   "profileAvatar": "Avatar",
   "profileBanner": "Banner",
   "profilePickFile": "Choose file",
@@ -390,6 +433,23 @@
   "telemetryExportEmpty": "No diagnostics to export",
   "telemetryClear": "Clear",
   "telemetryEmpty": "No diagnostics yet",
+  "updateAvailable": "Update available: {version}",
+  "@updateAvailable": {
+    "placeholders": {
+      "version": { "type": "String" }
+    }
+  },
+  "updateInstall": "Install update",
+  "updateDownloading": "Downloading...",
+  "updateFailed": "Update failed: {error}",
+  "@updateFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "updateChangelog": "Changelog",
+  "updateDismiss": "Dismiss",
+  "updateOpenRelease": "Opening release page",
 
   "securityTitle": "Security",
   "securityHint": "Tokens and internal endpoints",
@@ -407,11 +467,10 @@
   "moderationHint": "Blocks apply to inbound and outbound interactions.",
 
   "networkingTitle": "Networking",
-  "networkingHintTitle": "Relay, P2P, and AP relays",
+  "networkingHintTitle": "Relay and AP relays",
   "networkingRelay": "Relay public base URL",
   "networkingRelayWs": "Relay WebSocket",
   "networkingBind": "Local bind",
-  "networkingP2p": "P2P",
   "networkingRelaysTitle": "Relay discovery",
   "networkingRelaysCount": "{count} relays known",
   "@networkingRelaysCount": {
@@ -488,6 +547,12 @@
   "backupImportApply": "Import now",
   "backupImportFile": "Import from file",
   "backupImportOk": "OK: imported (core restarted)",
+  "backupCloudTitle": "Cloud backup",
+  "backupCloudHint": "Encrypted backup stored on your relay (or S3) for fast device sync.",
+  "backupCloudUpload": "Upload to relay",
+  "backupCloudDownload": "Restore from relay",
+  "backupCloudUploadOk": "OK: backup uploaded",
+  "backupCloudDownloadOk": "OK: backup restored",
   "backupErr": "Backup error: {error}",
   "@backupErr": {
     "placeholders": {
@@ -496,16 +561,11 @@
   },
 
   "statusRelay": "Relay",
-  "statusP2p": "P2P",
   "statusMailbox": "Mailbox",
-  "statusWebrtc": "WebRTC",
   "statusRelayRtt": "R",
-  "statusP2pRtt": "P",
   "statusMailboxRtt": "M",
   "statusRelayTraffic": "R ↑/↓",
-  "statusP2pTraffic": "P ↑/↓",
   "statusMailboxTraffic": "M ↑/↓",
-  "statusWebrtcTraffic": "W ↑/↓",
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
   "statusConnectedShort": "on",
@@ -563,7 +623,6 @@
   "onboardingRelayToken": "Relay token",
   "onboardingBind": "Local bind (host:port)",
   "onboardingInternalToken": "Internal token (UI ↔ core)",
-  "onboardingEnableP2p": "Enable P2P",
   "onboardingSave": "Save & open app",
   "onboardingRelayTokenTooShort": "Relay token too short (min 16 characters).",
 
@@ -603,6 +662,7 @@
   "notificationsReact": "Reacted to your post",
   "notificationsBoost": "Boosted your post",
   "notificationsMentionOrReply": "Mention / reply",
+  "notificationsNewActivity": "New activity",
 
   "uiSettingsTitle": "Appearance & language",
   "uiSettingsHint": "Theme, language, density, font size",
@@ -637,7 +697,7 @@
   "composeEmojiButton": "Emoji",
   "composeMfmCheatsheet": "MFM cheatsheet",
   "composeMfmCheatsheetTitle": "MFM cheatsheet",
-  "composeMfmCheatsheetBody": "**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strike\n`code` -> inline code\n#tag -> hashtag\n:emoji: -> custom emoji\nLine breaks: new line",
+  "composeMfmCheatsheetBody": "**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strikethrough\n`code` -> inline code\n```code``` -> code block\n> quote -> quote block\n[title](https://example.com) -> link\n#tag -> hashtag\n@user@domain -> mention\n:emoji: -> custom emoji\nLine breaks -> new line",
   "close": "Close",
   "composeVisibilityTitle": "Visibility",
   "composeVisibilityHint": "Who can see this post",
@@ -686,5 +746,8 @@
   "uiEmojiPickerPresetCompact": "Compact",
   "uiEmojiPickerPresetComfort": "Comfort",
   "uiEmojiPickerPresetLarge": "Large",
-  "uiEmojiPickerPreviewLabel": "Preview"
+  "uiEmojiPickerPreviewLabel": "Preview",
+  "uiNotificationsTitle": "Notifications",
+  "uiNotificationsChat": "Chat messages",
+  "uiNotificationsDirect": "Direct interactions"
 }

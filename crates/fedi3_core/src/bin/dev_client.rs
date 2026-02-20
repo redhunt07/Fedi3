@@ -10,9 +10,10 @@ use fedi3_core::delivery_queue::{DeliveryQueue, QueueSettings};
 use fedi3_core::http_sig::KeyResolver;
 use fedi3_core::keys::{default_data_dir, load_or_generate_identity};
 use fedi3_core::media_backend::{build_media_backend, MediaConfig};
+use fedi3_core::nat::UpnpController;
 use fedi3_core::net_metrics::NetMetrics;
-use fedi3_core::social_db::SocialDb;
 use fedi3_core::object_fetch::ObjectFetchWorker;
+use fedi3_core::social_db::SocialDb;
 use fedi3_core::ui_events::UiEvent;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,13 +23,18 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
     let username = std::env::var("FEDI3_USER").unwrap_or_else(|_| "alice".to_string());
     let domain = std::env::var("FEDI3_DOMAIN").unwrap_or_else(|_| "example.invalid".to_string());
-    let base_url = std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
-    let relay_ws = std::env::var("FEDI3_RELAY_WS").unwrap_or_else(|_| "ws://127.0.0.1:8787".to_string());
+    let base_url =
+        std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+    let relay_ws =
+        std::env::var("FEDI3_RELAY_WS").unwrap_or_else(|_| "ws://127.0.0.1:8787".to_string());
     let relay_token = std::env::var("FEDI3_RELAY_TOKEN").unwrap_or_else(|_| "devtoken".to_string());
     let bind = std::env::var("FEDI3_BIND").unwrap_or_else(|_| "127.0.0.1:8788".to_string());
 
@@ -67,7 +73,8 @@ async fn main() -> anyhow::Result<()> {
     let (ui_events, _) = tokio::sync::broadcast::channel::<UiEvent>(128);
 
     let http = reqwest::Client::new();
-    let (media_cfg, media_backend) = build_media_backend(MediaConfig::default(), data_dir.clone(), http.clone())?;
+    let (media_cfg, media_backend) =
+        build_media_backend(MediaConfig::default(), data_dir.clone(), http.clone())?;
 
     let state = ApState {
         cfg: cfg.clone(),
@@ -84,13 +91,18 @@ async fn main() -> anyhow::Result<()> {
         media_backend: Arc::from(media_backend),
         net: net.clone(),
         ui_events,
+        upnp: Arc::new(tokio::sync::Mutex::new(UpnpController::new(
+            None,
+            3600,
+            "dev-client".to_string(),
+            Duration::from_secs(5),
+        ))),
         internal_token: random_token(),
         global_ingest: GlobalIngestPolicy {
             max_items_per_actor_per_min: 20,
             max_bytes_per_actor_per_min: 256 * 1024,
         },
         post_delivery_mode: QueueSettings::default().post_delivery_mode,
-        p2p_relay_fallback: Duration::from_secs(QueueSettings::default().p2p_relay_fallback_secs),
         inbox_limits: InboxRateLimits {
             max_reqs_per_min: 120,
             max_bytes_per_min: 2 * 1024 * 1024,
@@ -113,29 +125,43 @@ async fn main() -> anyhow::Result<()> {
         state.private_key_pem.clone(),
         key_id,
         QueueSettings::default(),
+        state.ui_events.clone(),
     );
-    state
-        .object_fetch
-        .start(shutdown_rx.clone(), state.social.clone(), state.http.clone());
+    state.object_fetch.start(
+        shutdown_rx.clone(),
+        state.social.clone(),
+        state.http.clone(),
+    );
 
     let state_for_router = state.clone();
-    let router = Router::new().fallback(any(move |req| async move { handle_request(&state_for_router, req).await }));
+    let router = Router::new().fallback(any(move |req| async move {
+        handle_request(&state_for_router, req).await
+    }));
 
     let addr: SocketAddr = bind.parse()?;
     info!("local AP server on http://{addr} (debug)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let server = tokio::spawn(async move { axum::serve(listener, router.into_make_service()).await });
+    let server =
+        tokio::spawn(async move { axum::serve(listener, router.into_make_service()).await });
 
     let state_for_tunnel = state.clone();
-    let router2 = Router::new().fallback(any(move |req| async move { handle_request(&state_for_tunnel, req).await }));
+    let router2 = Router::new().fallback(any(move |req| async move {
+        handle_request(&state_for_tunnel, req).await
+    }));
     let tunnel = tokio::spawn(async move {
         fedi3_core::tunnel::run_tunnel(&username, &relay_ws, &relay_token, router2).await
     });
 
-    let _ = tokio::try_join!(async { server.await??; Ok::<(), anyhow::Error>(()) }, async {
-        tunnel.await??;
-        Ok::<(), anyhow::Error>(())
-    })?;
+    let _ = tokio::try_join!(
+        async {
+            server.await??;
+            Ok::<(), anyhow::Error>(())
+        },
+        async {
+            tunnel.await??;
+            Ok::<(), anyhow::Error>(())
+        }
+    )?;
 
     Ok(())
 }

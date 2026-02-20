@@ -3,9 +3,12 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  audioplayers_windows
   desktop_drop
   desktop_webview_window
   file_selector_windows
+  flutter_secure_storage_windows
+  local_notifier
   media_kit_libs_windows_video
   media_kit_video
   share_plus

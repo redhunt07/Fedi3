@@ -8,8 +8,7 @@ use async_trait::async_trait;
 use aws_sdk_s3::{
     config::{Credentials, Region},
     primitives::ByteStream,
-    Client as S3Client,
-    Config as S3Config,
+    Client as S3Client, Config as S3Config,
 };
 use reqwest::Client as HttpClient;
 use std::path::PathBuf;
@@ -40,6 +39,7 @@ pub struct MediaSaved {
 pub trait MediaBackend: Send + Sync {
     async fn save_upload(&self, key: &str, media_type: &str, bytes: &[u8]) -> Result<MediaSaved>;
     async fn load(&self, key: &str) -> Result<Vec<u8>>;
+    async fn delete(&self, key: &str) -> Result<()>;
     async fn health_check(&self) -> Result<()>;
 }
 
@@ -72,6 +72,14 @@ impl MediaBackend for LocalMediaBackend {
         let path = self.dir.join(key);
         let bytes = std::fs::read(&path).with_context(|| format!("read media {path:?}"))?;
         Ok(bytes)
+    }
+
+    async fn delete(&self, key: &str) -> Result<()> {
+        let path = self.dir.join(key);
+        if path.exists() {
+            std::fs::remove_file(&path).with_context(|| format!("delete media {path:?}"))?;
+        }
+        Ok(())
     }
 
     async fn health_check(&self) -> Result<()> {
@@ -147,6 +155,23 @@ impl MediaBackend for WebDavMediaBackend {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    async fn delete(&self, key: &str) -> Result<()> {
+        let url = format!("{}/{}", self.base_url, key);
+        let mut req = self.http.request(reqwest::Method::DELETE, &url);
+        if let Some(tok) = &self.bearer_token {
+            req = req.header("Authorization", format!("Bearer {}", tok));
+        } else if let (Some(u), Some(p)) = (&self.username, &self.password) {
+            req = req.basic_auth(u, Some(p));
+        }
+        let resp = req.send().await.context("webdav delete")?;
+        if !resp.status().is_success() && resp.status().as_u16() != 404 {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("webdav delete failed: {} {}", status, text);
+        }
+        Ok(())
+    }
+
     async fn health_check(&self) -> Result<()> {
         let mut req = self.http.request(reqwest::Method::OPTIONS, &self.base_url);
         if let Some(tok) = &self.bearer_token {
@@ -206,6 +231,17 @@ impl MediaBackend for S3MediaBackend {
         Ok(data.into_bytes().to_vec())
     }
 
+    async fn delete(&self, key: &str) -> Result<()> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .context("s3 delete")?;
+        Ok(())
+    }
+
     async fn health_check(&self) -> Result<()> {
         self.client
             .head_bucket()
@@ -217,14 +253,16 @@ impl MediaBackend for S3MediaBackend {
     }
 }
 
-pub async fn build_media_backend(cfg: &MediaConfig, http: HttpClient) -> Result<Box<dyn MediaBackend>> {
+pub async fn build_media_backend(
+    cfg: &MediaConfig,
+    http: HttpClient,
+) -> Result<Box<dyn MediaBackend>> {
     match cfg.backend.as_str() {
         "local" => Ok(Box::new(LocalMediaBackend::new(cfg.local_dir.clone()))),
         "webdav" => {
-            let base = cfg
-                .webdav_base_url
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=webdav requires FEDI3_RELAY_MEDIA_WEBDAV_BASE_URL"))?;
+            let base = cfg.webdav_base_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=webdav requires FEDI3_RELAY_MEDIA_WEBDAV_BASE_URL")
+            })?;
             Ok(Box::new(WebDavMediaBackend::new(
                 base,
                 cfg.webdav_username.clone(),
@@ -234,22 +272,18 @@ pub async fn build_media_backend(cfg: &MediaConfig, http: HttpClient) -> Result<
             )))
         }
         "s3" => {
-            let region = cfg
-                .s3_region
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_REGION"))?;
-            let bucket = cfg
-                .s3_bucket
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_BUCKET"))?;
-            let access = cfg
-                .s3_access_key
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_ACCESS_KEY"))?;
-            let secret = cfg
-                .s3_secret_key
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_SECRET_KEY"))?;
+            let region = cfg.s3_region.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_REGION")
+            })?;
+            let bucket = cfg.s3_bucket.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_BUCKET")
+            })?;
+            let access = cfg.s3_access_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_ACCESS_KEY")
+            })?;
+            let secret = cfg.s3_secret_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("media.backend=s3 requires FEDI3_RELAY_MEDIA_S3_SECRET_KEY")
+            })?;
             let credentials = Credentials::new(access, secret, None, None, "relay");
             let mut builder = S3Config::builder()
                 .region(Region::new(region))

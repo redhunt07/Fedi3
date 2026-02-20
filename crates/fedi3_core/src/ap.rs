@@ -3,40 +3,47 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use anyhow::Context;
 use axum::{
     body::Body,
     http::{header, HeaderValue, Request, Response, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Json},
 };
-use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use serde::Serialize;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use std::sync::atomic::Ordering;
 use http::{HeaderMap, Method, Uri};
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::RsaPrivateKey;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::Ordering;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
-use fedi3_protocol::RelayHttpRequest;
 
+use crate::chat;
 use crate::delivery::{extract_recipients, is_public_activity, Delivery};
 use crate::delivery_queue::{DeliveryQueue, PostDeliveryMode};
-use crate::object_fetch::ObjectFetchWorker;
-use crate::social_db::{FollowingStatus, SocialDb};
-use crate::chat;
-use crate::net_metrics::NetMetrics;
-use crate::ui_events::UiEvent;
 use crate::http_retry::send_with_retry_metrics;
 use crate::http_sig::{
-    build_signing_string, parse_signature_header, verify_date, verify_digest_if_present,
-    verify_signature_rsa_sha256, KeyResolver, sign_request_rsa_sha256,
+    build_signing_string, parse_signature_header, sign_request_rsa_sha256, verify_date,
+    verify_digest_if_present, verify_signature_rsa_sha256, KeyResolver,
 };
 use crate::media_backend as media_store;
-use serde_json::Value;
-use tracing::warn;
-use tokio::sync::broadcast;
-use tokio::time::sleep;
+use crate::nat::UpnpController;
+use crate::net_metrics::NetMetrics;
+use crate::object_fetch::ObjectFetchWorker;
+use crate::social_db::{FollowingStatus, SocialDb};
+use crate::ui_events::UiEvent;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::stream::unfold;
+use serde_json::Value;
 use std::convert::Infallible;
+use tokio::sync::{broadcast, watch};
+use tokio::time::sleep;
+use tracing::warn;
+
+const CHAT_BUNDLE_CACHE_TTL_MS: i64 = 15 * 60 * 1000;
+const CHAT_RETRY_INTERVAL_SECS: u64 = 20;
+const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
+const CHAT_RETRY_BATCH: u32 = 50;
 
 #[derive(Clone)]
 pub struct ApConfig {
@@ -88,11 +95,11 @@ pub struct ApState {
     pub media_backend: std::sync::Arc<dyn media_store::MediaBackend>,
     pub net: Arc<NetMetrics>,
     pub ui_events: broadcast::Sender<UiEvent>,
+    pub upnp: Arc<Mutex<UpnpController>>,
     /// Token (best-effort) to prevent exposure of internal endpoints if the embedded server is reachable.
     pub internal_token: String,
     pub global_ingest: GlobalIngestPolicy,
     pub post_delivery_mode: PostDeliveryMode,
-    pub p2p_relay_fallback: Duration,
     pub inbox_limits: InboxRateLimits,
     pub inbox_limiter: Arc<Mutex<HashMap<String, RateState>>>,
 }
@@ -145,10 +152,6 @@ struct PublicKey {
 struct ActorEndpoints {
     #[serde(rename = "sharedInbox")]
     shared_inbox: String,
-    #[serde(rename = "fedi3PeerId", skip_serializing_if = "Option::is_none")]
-    fedi3_peer_id: Option<String>,
-    #[serde(rename = "fedi3PeerAddrs", skip_serializing_if = "Vec::is_empty")]
-    fedi3_peer_addrs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -168,7 +171,10 @@ struct Actor {
     summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     published: Option<String>,
-    #[serde(rename = "manuallyApprovesFollowers", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "manuallyApprovesFollowers",
+        skip_serializing_if = "Option::is_none"
+    )]
     manually_approves_followers: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     attachment: Vec<ActorField>,
@@ -224,17 +230,41 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/.well-known/host-meta.json") => host_meta_json(&state.cfg),
         ("GET", "/.well-known/links") => well_known_links(&state.cfg),
         ("GET", "/.well-known/webfinger") => webfinger(&state.cfg, req),
-        ("GET", p) if p == format!("/users/{}", state.cfg.username) => actor_get(state, req, accept).await,
-        ("GET", p) if p.starts_with(&format!("/users/{}/objects/", state.cfg.username)) => object_deref_get(state, req).await,
-        ("GET", p) if p == format!("/users/{}/followers", state.cfg.username) => followers_get(state, req, accept).await,
-        ("GET", p) if p == format!("/users/{}/following", state.cfg.username) => following_get(state, req, accept).await,
-        ("GET", p) if p == format!("/users/{}/outbox", state.cfg.username) => outbox_get(state, req, accept).await,
-        ("POST", p) if p == format!("/users/{}/outbox", state.cfg.username) => outbox_post(state, req).await,
-        ("POST", p) if p == format!("/users/{}/media", state.cfg.username) => media_upload(state, req).await,
-        ("GET", p) if p.starts_with(&format!("/users/{}/media/", state.cfg.username)) => media_get(state, req).await,
-        ("GET", p) if p == format!("/users/{}/collections/featured", state.cfg.username) => empty_collection_get(state, req, accept, "featured").await,
-        ("GET", p) if p == format!("/users/{}/collections/featuredTags", state.cfg.username) => empty_collection_get(state, req, accept, "featuredTags").await,
+        ("GET", p) if p == format!("/users/{}", state.cfg.username) => {
+            actor_get(state, req, accept).await
+        }
+        ("GET", p) if p.starts_with(&format!("/users/{}/objects/", state.cfg.username)) => {
+            object_deref_get(state, req).await
+        }
+        ("GET", p) if p == format!("/users/{}/followers", state.cfg.username) => {
+            followers_get(state, req, accept).await
+        }
+        ("GET", p) if p == format!("/users/{}/following", state.cfg.username) => {
+            following_get(state, req, accept).await
+        }
+        ("GET", p) if p == format!("/users/{}/outbox", state.cfg.username) => {
+            outbox_get(state, req, accept).await
+        }
+        ("POST", p) if p == format!("/users/{}/outbox", state.cfg.username) => {
+            outbox_post(state, req).await
+        }
+        ("POST", p) if p == format!("/users/{}/media", state.cfg.username) => {
+            media_upload(state, req).await
+        }
+        ("GET", p) if p.starts_with(&format!("/users/{}/media/", state.cfg.username)) => {
+            media_get(state, req).await
+        }
+        ("HEAD", p) if p.starts_with(&format!("/users/{}/media/", state.cfg.username)) => {
+            media_get(state, req).await
+        }
+        ("GET", p) if p == format!("/users/{}/collections/featured", state.cfg.username) => {
+            empty_collection_get(state, req, accept, "featured").await
+        }
+        ("GET", p) if p == format!("/users/{}/collections/featuredTags", state.cfg.username) => {
+            empty_collection_get(state, req, accept, "featuredTags").await
+        }
         ("GET", "/.fedi3/media") => media_p2p_get(state, req).await,
+        ("HEAD", "/.fedi3/media") => media_p2p_get(state, req).await,
         // Endpoint interno per la UI: fetch di un oggetto già in cache/DB.
         // Esempio: `GET /_fedi3/object?url=<urlencoded>`
         ("GET", "/_fedi3/object") => object_get(state, req).await,
@@ -247,15 +277,21 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("POST", "/_fedi3/relays") => relays_update_post(state, req).await,
         ("POST", "/_fedi3/relays/refresh") => relays_refresh_post(state, req).await,
         ("POST", "/_fedi3/profile/refresh") => profile_refresh_post(state, req).await,
+        ("GET", "/_fedi3/core/upnp") => core_upnp_status(state, req).await,
+        ("POST", "/_fedi3/core/upnp") => core_upnp_toggle(state, req).await,
         ("GET", "/.fedi3/relays") => relays_public_get(state).await,
         // Migration helper (internal).
         ("GET", "/_fedi3/migration/status") => migration_status(state, req).await,
-        ("POST", "/_fedi3/migration/legacy_aliases") => migration_legacy_aliases_set(state, req).await,
+        ("POST", "/_fedi3/migration/legacy_aliases") => {
+            migration_legacy_aliases_set(state, req).await
+        }
         // UI timelines (internal).
         ("GET", "/_fedi3/timeline/home") => timeline_home(state, req).await,
         ("GET", "/_fedi3/timeline/unified") => timeline_unified(state, req).await,
         ("GET", "/_fedi3/timeline/federated") => timeline_federated(state, req).await,
         ("GET", "/_fedi3/timeline/dht") => global_timeline(state, req).await,
+        ("POST", "/_fedi3/note/pin") => note_pin_post(state, req).await,
+        ("GET", "/_fedi3/note/pinned") => note_pinned_get(state, req).await,
         ("GET", "/_fedi3/note/replies") => note_replies_get(state, req).await,
         ("GET", "/_fedi3/search/notes") => search_notes(state, req).await,
         ("GET", "/_fedi3/search/users") => search_users(state, req).await,
@@ -263,18 +299,22 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
         ("GET", "/_fedi3/chat/threads") => chat_threads_get(state, req).await,
-        ("GET", p) if p.starts_with("/_fedi3/chat/threads/") => chat_thread_messages_get(state, req).await,
+        ("GET", p) if p.starts_with("/_fedi3/chat/threads/") => {
+            chat_thread_messages_get(state, req).await
+        }
         ("POST", "/_fedi3/chat/send") => chat_send_post(state, req).await,
-        ("POST", "/_fedi3/chat/typing") => chat_typing_post(state, req).await,
         ("POST", "/_fedi3/chat/react") => chat_react_post(state, req).await,
         ("POST", "/_fedi3/chat/reactions") => chat_reactions_post(state, req).await,
         ("POST", "/_fedi3/chat/edit") => chat_edit_post(state, req).await,
         ("POST", "/_fedi3/chat/delete") => chat_delete_post(state, req).await,
         ("POST", "/_fedi3/chat/seen") => chat_seen_post(state, req).await,
         ("POST", "/_fedi3/chat/status") => chat_status_post(state, req).await,
+        ("POST", "/_fedi3/chat/typing") => chat_typing_post(state, req).await,
         ("GET", "/_fedi3/chat/thread/members") => chat_thread_members_get(state, req).await,
         ("POST", "/_fedi3/chat/thread/update") => chat_thread_update_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/delete") => chat_thread_delete_post(state, req).await,
+        ("POST", "/_fedi3/chat/thread/leave") => chat_thread_leave_post(state, req).await,
+        ("POST", "/_fedi3/chat/thread/archive") => chat_thread_archive_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/members") => chat_thread_members_post(state, req).await,
         ("GET", "/_fedi3/reactions") => reactions_get(state, req).await,
         ("GET", "/_fedi3/reactions/me") => reactions_me_get(state, req).await,
@@ -288,16 +328,19 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/p2p/resolve") => p2p_resolve(state, req).await,
         ("GET", "/_fedi3/p2p/resolve_did") => p2p_resolve_did(state, req).await,
         ("POST", "/_fedi3/p2p/follow") => p2p_follow(state, req).await,
-        ("POST", "/_fedi3/social/follow") => p2p_follow(state, req).await,
+        ("POST", "/_fedi3/social/follow") => social_follow(state, req).await,
         ("POST", "/_fedi3/p2p/unfollow") => social_unfollow(state, req).await,
         ("POST", "/_fedi3/social/unfollow") => social_unfollow(state, req).await,
         ("GET", "/_fedi3/social/status") => social_follow_status_get(state, req).await,
         ("GET", "/_fedi3/net/metrics") => net_metrics_get(state, req).await,
         ("GET", "/_fedi3/net/metrics.prom") => net_metrics_prom(state, req).await,
+        ("GET", "/_fedi3/backup/export") => backup_export(state, req).await,
+        ("POST", "/_fedi3/backup/import") => backup_import(state, req).await,
         ("GET", "/_fedi3/health") => core_health(state, req).await,
         ("GET", "/_fedi3/stream") => ui_stream_get(state, req).await,
         // P2P sync endpoints (peer-to-peer, public-only).
         ("GET", "/.fedi3/sync/outbox") => p2p_sync_outbox(state, req).await,
+        ("POST", "/.fedi3/sync/activities") => p2p_sync_activities(state, req).await,
         // Delivery receipts (peer-to-peer, requires HTTP Signature).
         ("POST", "/.fedi3/receipt") => receipt_post(state, req).await,
         // Device sync endpoints (peer-to-peer, requires shared identity key).
@@ -305,8 +348,12 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/.fedi3/device/inbox") => device_inbox(state, req).await,
         ("GET", "/inbox") => simple(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
         ("POST", "/inbox") => inbox(state, req).await,
-        ("GET", p) if p == format!("/users/{}/inbox", state.cfg.username) => simple(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
-        ("POST", p) if p == format!("/users/{}/inbox", state.cfg.username) => inbox(state, req).await,
+        ("GET", p) if p == format!("/users/{}/inbox", state.cfg.username) => {
+            simple(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
+        }
+        ("POST", p) if p == format!("/users/{}/inbox", state.cfg.username) => {
+            inbox(state, req).await
+        }
         _ => simple(StatusCode::NOT_FOUND, "not found"),
     };
     add_security_headers(resp)
@@ -322,12 +369,20 @@ fn readyz_get(state: &ApState) -> Response<Body> {
 
 fn add_security_headers(mut resp: Response<Body>) -> Response<Body> {
     let headers = resp.headers_mut();
-    headers.entry("X-Content-Type-Options").or_insert(HeaderValue::from_static("nosniff"));
-    headers.entry("X-Frame-Options").or_insert(HeaderValue::from_static("DENY"));
-    headers.entry("Referrer-Policy").or_insert(HeaderValue::from_static("no-referrer"));
+    headers
+        .entry("X-Content-Type-Options")
+        .or_insert(HeaderValue::from_static("nosniff"));
+    headers
+        .entry("X-Frame-Options")
+        .or_insert(HeaderValue::from_static("DENY"));
+    headers
+        .entry("Referrer-Policy")
+        .or_insert(HeaderValue::from_static("no-referrer"));
     headers
         .entry("Permissions-Policy")
-        .or_insert(HeaderValue::from_static("geolocation=(), microphone=(), camera=()"));
+        .or_insert(HeaderValue::from_static(
+            "geolocation=(), microphone=(), camera=()",
+        ));
     resp
 }
 
@@ -351,10 +406,18 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
         .and_then(|(_, v)| v.parse::<usize>().ok())
         .unwrap_or(200)
         .clamp(20, 2000);
+    let include_fedi3 = query
+        .split('&')
+        .find(|p| p.starts_with("include_fedi3="))
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     let st = state.clone();
     tokio::spawn(async move {
-        let _ = crate::legacy_sync::run_legacy_sync_now(&st, pages, items_per_actor).await;
+        let _ =
+            crate::legacy_sync::run_legacy_sync_now(&st, pages, items_per_actor, include_fedi3)
+                .await;
     });
 
     simple(StatusCode::ACCEPTED, "ok")
@@ -390,7 +453,10 @@ async fn object_deref_get(state: &ApState, req: Request<Body>) -> Response<Body>
     }
 }
 
-async fn verify_signature_if_present(state: &ApState, parts: &http::request::Parts) -> Result<(), Response<Body>> {
+async fn verify_signature_if_present(
+    state: &ApState,
+    parts: &http::request::Parts,
+) -> Result<(), Response<Body>> {
     // For GET requests, Signature is optional in the wild.
     let Some(sig_header) = parts
         .headers
@@ -402,23 +468,51 @@ async fn verify_signature_if_present(state: &ApState, parts: &http::request::Par
     };
 
     if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        return Err(simple(StatusCode::UNAUTHORIZED, &format!("date invalid: {e}")));
+        return Err(simple(
+            StatusCode::UNAUTHORIZED,
+            &format!("date invalid: {e}"),
+        ));
     }
 
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
-        Err(e) => return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"))),
+        Err(e) => {
+            return Err(simple(
+                StatusCode::UNAUTHORIZED,
+                &format!("bad Signature: {e}"),
+            ))
+        }
     };
-    let signing_string = match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
+    let signing_string =
+        match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(simple(
+                    StatusCode::UNAUTHORIZED,
+                    &format!("bad signed headers: {e}"),
+                ))
+            }
+        };
+    let summary = match state
+        .key_resolver
+        .resolve_actor_summary_for_key_id(&sig.key_id)
+        .await
+    {
         Ok(s) => s,
-        Err(e) => return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad signed headers: {e}"))),
+        Err(e) => {
+            return Err(simple(
+                StatusCode::UNAUTHORIZED,
+                &format!("key resolve failed: {e}"),
+            ))
+        }
     };
-    let summary = match state.key_resolver.resolve_actor_summary_for_key_id(&sig.key_id).await {
-        Ok(s) => s,
-        Err(e) => return Err(simple(StatusCode::UNAUTHORIZED, &format!("key resolve failed: {e}"))),
-    };
-    if let Err(e) = verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature) {
-        return Err(simple(StatusCode::UNAUTHORIZED, &format!("signature invalid: {e}")));
+    if let Err(e) =
+        verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature)
+    {
+        return Err(simple(
+            StatusCode::UNAUTHORIZED,
+            &format!("signature invalid: {e}"),
+        ));
     }
     Ok(())
 }
@@ -433,7 +527,10 @@ fn nodeinfo_links(cfg: &ApConfig) -> Response<Body> {
     });
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         body.to_string(),
     )
         .into_response()
@@ -455,7 +552,10 @@ fn nodeinfo_2_0(cfg: &ApConfig) -> Response<Body> {
     });
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         body.to_string(),
     )
         .into_response()
@@ -472,7 +572,10 @@ fn host_meta(cfg: &ApConfig) -> Response<Body> {
     );
     (
         StatusCode::OK,
-        [("Content-Type", "application/xrd+xml; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/xrd+xml; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         xml,
     )
         .into_response()
@@ -489,7 +592,10 @@ fn host_meta_json(cfg: &ApConfig) -> Response<Body> {
     });
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         body.to_string(),
     )
         .into_response()
@@ -518,7 +624,10 @@ fn well_known_links(cfg: &ApConfig) -> Response<Body> {
     });
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         body.to_string(),
     )
         .into_response()
@@ -539,9 +648,15 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
     if let Some(ip) = client_ip_from_headers(&parts.headers) {
         if let Err(resp) = inbox_rate_limit(state, &format!("ip:{ip}"), bytes.len() as u64).await {
             state.net.rate_limit_hit();
-            let _ = state
-                .social
-                .insert_audit_event("rate_limit", None, None, None, false, Some("429"), Some("media_upload ip"));
+            let _ = state.social.insert_audit_event(
+                "rate_limit",
+                None,
+                None,
+                None,
+                false,
+                Some("429"),
+                Some("media_upload ip"),
+            );
             return resp;
         }
     }
@@ -576,7 +691,9 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
                     .await
                 {
                     Ok(v) => v,
-                    Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("store failed: {e:#}")),
+                    Err(e) => {
+                        return simple(StatusCode::BAD_GATEWAY, &format!("store failed: {e:#}"))
+                    }
                 }
             }
         }
@@ -598,7 +715,11 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
     };
 
     let mut response = saved.response.clone();
-    if response.media_type.to_ascii_lowercase().starts_with("image/") {
+    if response
+        .media_type
+        .to_ascii_lowercase()
+        .starts_with("image/")
+    {
         if let Some((w, h)) = media_store::probe_image_dimensions(&bytes) {
             response.width = Some(w);
             response.height = Some(h);
@@ -662,9 +783,17 @@ async fn relay_upload_and_cache(
     }
     let media_type = content_type
         .map(|s| s.to_string())
-        .or_else(|| mime_guess::from_path(filename).first().map(|m| m.to_string()))
+        .or_else(|| {
+            mime_guess::from_path(filename)
+                .first()
+                .map(|m| m.to_string())
+        })
         .unwrap_or_else(|| "application/octet-stream".to_string());
-    let url = format!("{}/users/{}/media", relay_base.trim_end_matches('/'), state.cfg.username);
+    let url = format!(
+        "{}/users/{}/media",
+        relay_base.trim_end_matches('/'),
+        state.cfg.username
+    );
     let resp = state
         .http
         .post(url)
@@ -721,9 +850,7 @@ fn compute_blurhash(bytes: &[u8]) -> Option<String> {
     }
     // blurhash expects pixels in RGB order.
     let pixels = rgb.into_raw();
-    let expected = (w as usize)
-        .saturating_mul(h as usize)
-        .saturating_mul(3);
+    let expected = (w as usize).saturating_mul(h as usize).saturating_mul(3);
     if pixels.len() != expected {
         return None;
     }
@@ -733,9 +860,130 @@ fn compute_blurhash(bytes: &[u8]) -> Option<String> {
         Ok(Ok(v)) => Some(v),
         Ok(Err(_)) => None,
         Err(_) => {
-            warn!(w, h, bytes = pixels.len(), "blurhash encode panicked; skipping");
+            warn!(
+                w,
+                h,
+                bytes = pixels.len(),
+                "blurhash encode panicked; skipping"
+            );
             None
         }
+    }
+}
+
+enum RangeSpec {
+    Full,
+    Partial { start: usize, end: usize },
+    Unsatisfiable,
+}
+
+fn parse_range_header(header: Option<&HeaderValue>, len: usize) -> RangeSpec {
+    let Some(header) = header.and_then(|v| v.to_str().ok()) else {
+        return RangeSpec::Full;
+    };
+    let header = header.trim();
+    if !header.starts_with("bytes=") {
+        return RangeSpec::Full;
+    }
+    let range = &header["bytes=".len()..];
+    let Some((start_s, end_s)) = range.split_once('-') else {
+        return RangeSpec::Full;
+    };
+    if start_s.is_empty() {
+        let Ok(suffix) = end_s.parse::<usize>() else {
+            return RangeSpec::Full;
+        };
+        if suffix == 0 || len == 0 {
+            return RangeSpec::Unsatisfiable;
+        }
+        let start = len.saturating_sub(suffix);
+        let end = len.saturating_sub(1);
+        if start > end {
+            return RangeSpec::Unsatisfiable;
+        }
+        return RangeSpec::Partial { start, end };
+    }
+    let Ok(start) = start_s.parse::<usize>() else {
+        return RangeSpec::Full;
+    };
+    if start >= len {
+        return RangeSpec::Unsatisfiable;
+    }
+    let end = if end_s.is_empty() {
+        len.saturating_sub(1)
+    } else {
+        let Ok(end) = end_s.parse::<usize>() else {
+            return RangeSpec::Full;
+        };
+        end.min(len.saturating_sub(1))
+    };
+    if end < start {
+        return RangeSpec::Unsatisfiable;
+    }
+    RangeSpec::Partial { start, end }
+}
+
+fn response_without_body(resp: Response<Body>) -> Response<Body> {
+    let (parts, _) = resp.into_parts();
+    Response::from_parts(parts, Body::empty())
+}
+
+fn build_media_response(bytes: Vec<u8>, mime: String, range: Option<&HeaderValue>) -> Response<Body> {
+    let len = bytes.len();
+    match parse_range_header(range, len) {
+        RangeSpec::Full => {
+            let mut resp = Response::new(Body::from(bytes));
+            *resp.status_mut() = StatusCode::OK;
+            let headers = resp.headers_mut();
+            if let Ok(value) = HeaderValue::from_str(&mime) {
+                headers.insert(header::CONTENT_TYPE, value);
+            }
+            headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            if let Ok(value) = HeaderValue::from_str(&len.to_string()) {
+                headers.insert(header::CONTENT_LENGTH, value);
+            }
+            resp
+        }
+        RangeSpec::Partial { start, end } => {
+            let end_inclusive = end.min(len.saturating_sub(1));
+            let slice = bytes[start..=end_inclusive].to_vec();
+            let mut resp = Response::new(Body::from(slice));
+            *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
+            let headers = resp.headers_mut();
+            if let Ok(value) = HeaderValue::from_str(&mime) {
+                headers.insert(header::CONTENT_TYPE, value);
+            }
+            headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            let content_range = format!("bytes {start}-{end_inclusive}/{len}");
+            if let Ok(value) = HeaderValue::from_str(&content_range) {
+                headers.insert(header::CONTENT_RANGE, value);
+            }
+            let content_len = end_inclusive.saturating_sub(start).saturating_add(1);
+            if let Ok(value) = HeaderValue::from_str(&content_len.to_string()) {
+                headers.insert(header::CONTENT_LENGTH, value);
+            }
+            resp
+        }
+        RangeSpec::Unsatisfiable => {
+            let mut resp = Response::new(Body::from(Vec::<u8>::new()));
+            *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            let headers = resp.headers_mut();
+            headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            let content_range = format!("bytes */{len}");
+            if let Ok(value) = HeaderValue::from_str(&content_range) {
+                headers.insert(header::CONTENT_RANGE, value);
+            }
+            resp
+        }
+    }
+}
+
+fn choose_media_type(item_media_type: &str, fallback: String) -> String {
+    let t = item_media_type.trim();
+    if t.is_empty() {
+        fallback
+    } else {
+        t.to_string()
     }
 }
 
@@ -745,32 +993,52 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     let Some(stored_name) = path.strip_prefix(&prefix) else {
         return simple(StatusCode::NOT_FOUND, "not found");
     };
-    if stored_name.is_empty() || stored_name.contains("..") || stored_name.contains('/') || stored_name.contains('\\') {
+    if stored_name.is_empty()
+        || stored_name.contains("..")
+        || stored_name.contains('/')
+        || stored_name.contains('\\')
+    {
         return simple(StatusCode::BAD_REQUEST, "invalid media id");
     }
 
+    let range = req.headers().get(header::RANGE);
+    let is_head = req.method() == Method::HEAD;
     if let Ok(Some(item)) = state.social.get_media(stored_name) {
         if item.local_name.is_some() {
             if let Ok((bytes, mime)) = media_store::load_media(&state.data_dir, stored_name) {
-                return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
+                let mime = choose_media_type(&item.media_type, mime);
+                let resp = build_media_response(bytes, mime, range);
+                return if is_head { response_without_body(resp) } else { resp };
             }
         }
         if let Ok(Some((bytes, mime))) = fetch_and_cache_media(state, &item).await {
-            return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
+            let resp = build_media_response(bytes, mime, range);
+            return if is_head { response_without_body(resp) } else { resp };
         }
         if state.post_delivery_mode == PostDeliveryMode::P2pOnly {
             return simple(StatusCode::NOT_FOUND, "not found");
         }
-        return (StatusCode::FOUND, [("Location", item.url)], Vec::<u8>::new()).into_response();
+        return (
+            StatusCode::FOUND,
+            [("Location", item.url)],
+            Vec::<u8>::new(),
+        )
+            .into_response();
     }
 
     match media_store::load_media(&state.data_dir, stored_name) {
-        Ok((bytes, mime)) => (StatusCode::OK, [("Content-Type", mime)], bytes).into_response(),
+        Ok((bytes, mime)) => {
+            let resp = build_media_response(bytes, mime, range);
+            if is_head { response_without_body(resp) } else { resp }
+        }
         Err(_) => simple(StatusCode::NOT_FOUND, "not found"),
     }
 }
 
-async fn fetch_and_cache_media(state: &ApState, item: &crate::social_db::MediaItem) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
+async fn fetch_and_cache_media(
+    state: &ApState,
+    item: &crate::social_db::MediaItem,
+) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
     let url = item.url.trim();
     if url.is_empty() {
         return Ok(None);
@@ -778,22 +1046,16 @@ async fn fetch_and_cache_media(state: &ApState, item: &crate::social_db::MediaIt
     let mut bytes = Vec::new();
     let mut mime = item.media_type.clone();
     let mut ok = false;
-    let mut p2p_attempted = false;
 
-    p2p_attempted = true;
     if let Ok(Some((b, m))) = fetch_media_from_peer(state, item).await {
         bytes = b;
         mime = m;
         ok = true;
-        p2p_attempted = true;
     }
 
     if !ok {
         if state.post_delivery_mode == PostDeliveryMode::P2pOnly {
             return Ok(None);
-        }
-        if p2p_attempted && state.p2p_relay_fallback.as_secs() > 0 {
-            sleep(state.p2p_relay_fallback).await;
         }
         if let Ok(resp) = send_with_retry_metrics(|| state.http.get(url), 3, &state.net).await {
             let status = resp.status();
@@ -822,10 +1084,15 @@ async fn fetch_and_cache_media(state: &ApState, item: &crate::social_db::MediaIt
     if std::fs::write(&path, &bytes).is_ok() {
         let base = state.cfg.public_base_url.trim_end_matches('/');
         let me = format!("{base}/users/{}", state.cfg.username);
+        let stored_media_type = if mime.trim().is_empty() {
+            item.media_type.clone()
+        } else {
+            mime.clone()
+        };
         let _ = state.social.upsert_media(
             &item.id,
             &item.url,
-            &item.media_type,
+            &stored_media_type,
             item.size,
             Some(&stored_name),
             Some(&me),
@@ -838,6 +1105,20 @@ async fn fetch_and_cache_media(state: &ApState, item: &crate::social_db::MediaIt
 }
 
 async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _ = state;
+    let _ = req;
+    return simple(StatusCode::GONE, "p2p disabled");
+}
+
+async fn fetch_media_from_peer(
+    _state: &ApState,
+    _item: &crate::social_db::MediaItem,
+) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
+    Ok(None)
+}
+
+/*
+async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     let query = req.uri().query().unwrap_or("");
     let media_id = query
         .split('&')
@@ -848,66 +1129,21 @@ async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     if media_id.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing id");
     }
+    let range = req.headers().get(header::RANGE);
+    let is_head = req.method() == Method::HEAD;
     if let Ok(Some(item)) = state.social.get_media(&media_id) {
         if let Some(local) = item.local_name.clone() {
             if let Ok((bytes, mime)) = media_store::load_media(&state.data_dir, &local) {
-                return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
+                let mime = choose_media_type(&item.media_type, mime);
+                let resp = build_media_response(bytes, mime, range);
+                return if is_head { response_without_body(resp) } else { resp };
             }
         }
     }
     simple(StatusCode::NOT_FOUND, "not found")
 }
 
-async fn fetch_media_from_peer(
-    state: &ApState,
-    item: &crate::social_db::MediaItem,
-) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
-    let actor = item.actor_id.as_deref().unwrap_or("").trim();
-    if actor.is_empty() {
-        return Ok(None);
-    }
-    let info = match state.delivery.resolve_actor_info(actor).await {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let Some(peer_id) = info.p2p_peer_id else {
-        return Ok(None);
-    };
-    if !info.p2p_peer_addrs.is_empty() {
-        let _ = state
-            .delivery
-            .p2p_add_peer_addrs(&peer_id, info.p2p_peer_addrs)
-            .await;
-    }
-    let query = format!("?id={}", urlencoding::encode(&item.id));
-    let req = RelayHttpRequest {
-        id: format!("media-{}", now_ms()),
-        method: "GET".to_string(),
-        path: "/.fedi3/media".to_string(),
-        query,
-        headers: vec![("accept".to_string(), "*/*".to_string())],
-        body_b64: "".to_string(),
-    };
-    let resp = match state.delivery.p2p_request(&peer_id, req).await {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    if !(200..300).contains(&resp.status) {
-        return Ok(None);
-    }
-    let bytes = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    let mut mime = item.media_type.clone();
-    for (k, v) in resp.headers {
-        if k.to_ascii_lowercase() == "content-type" && !v.trim().is_empty() {
-            mime = v;
-            break;
-        }
-    }
-    Ok(Some((bytes, mime)))
-}
+*/
 
 async fn object_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     let query = req.uri().query().unwrap_or("");
@@ -950,11 +1186,7 @@ async fn hello_get(state: &ApState) -> Response<Body> {
       "username": state.cfg.username,
       "actor": actor_id,
       "core_version": env!("CARGO_PKG_VERSION"),
-      "did": did,
-      "p2p": {
-        "peer_id": state.cfg.p2p_peer_id,
-        "addrs": state.cfg.p2p_peer_addrs,
-      }
+      "did": did
     });
     (
         StatusCode::OK,
@@ -999,9 +1231,11 @@ async fn relays_update_post(state: &ApState, req: Request<Body>) -> Response<Bod
     };
     if let Some(add) = input.add {
         for item in add {
-            let _ = state
-                .social
-                .upsert_relay_entry(&item.relay_base_url, item.relay_ws_url.as_deref(), "manual");
+            let _ = state.social.upsert_relay_entry(
+                &item.relay_base_url,
+                item.relay_ws_url.as_deref(),
+                "manual",
+            );
         }
     }
     if let Some(remove) = input.remove {
@@ -1094,11 +1328,19 @@ async fn global_ingest(state: &ApState, req: Request<Body>) -> Response<Body> {
         return simple(StatusCode::BAD_REQUEST, "empty body");
     }
     if let Some(ip) = client_ip_from_headers(&parts.headers) {
-        if let Err(resp) = inbox_rate_limit(state, &format!("ingest:{ip}"), bytes.len() as u64).await {
+        if let Err(resp) =
+            inbox_rate_limit(state, &format!("ingest:{ip}"), bytes.len() as u64).await
+        {
             state.net.rate_limit_hit();
-            let _ = state
-                .social
-                .insert_audit_event("rate_limit", None, None, None, false, Some("429"), Some("global_ingest ip"));
+            let _ = state.social.insert_audit_event(
+                "rate_limit",
+                None,
+                None,
+                None,
+                false,
+                Some("429"),
+                Some("global_ingest ip"),
+            );
             return resp;
         }
     }
@@ -1154,7 +1396,10 @@ async fn global_ingest(state: &ApState, req: Request<Body>) -> Response<Body> {
         activity_id.to_string()
     };
 
-    if let Err(e) = state.social.insert_global_feed_item(&id, Some(actor_id), bytes) {
+    if let Err(e) = state
+        .social
+        .insert_global_feed_item(&id, Some(actor_id), bytes)
+    {
         return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
     }
     simple(StatusCode::ACCEPTED, "ok")
@@ -1191,13 +1436,6 @@ async fn net_metrics_get(state: &ApState, req: Request<Body>) -> Response<Body> 
             );
         }
         map.insert("db".to_string(), serde_json::json!({ "ok": db_ok }));
-        map.insert(
-            "p2p_config".to_string(),
-            serde_json::json!({
-                "peer_id": state.cfg.p2p_peer_id,
-                "peer_addrs": state.cfg.p2p_peer_addrs,
-            }),
-        );
         if let Some(Value::Object(relay)) = map.get_mut("relay") {
             relay.insert(
                 "base_url".to_string(),
@@ -1214,7 +1452,10 @@ async fn net_metrics_get(state: &ApState, req: Request<Body>) -> Response<Body> 
     }
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         snapshot.to_string(),
     )
         .into_response()
@@ -1232,7 +1473,11 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
     out.push_str("# TYPE fedi3_core_relay_connected gauge\n");
     out.push_str(&format!(
         "fedi3_core_relay_connected {}\n",
-        if net.relay_connected.load(Ordering::Relaxed) { 1 } else { 0 }
+        if net.relay_connected.load(Ordering::Relaxed) {
+            1
+        } else {
+            0
+        }
     ));
     out.push_str("# TYPE fedi3_core_relay_rx_bytes counter\n");
     out.push_str(&format!(
@@ -1248,51 +1493,6 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
     out.push_str(&format!(
         "fedi3_core_relay_rtt_ms {}\n",
         net.relay_rtt_ema_ms.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_enabled gauge\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_enabled {}\n",
-        if net.p2p_enabled.load(Ordering::Relaxed) { 1 } else { 0 }
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_connected_peers gauge\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_connected_peers {}\n",
-        net.p2p_connected_peers.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_active_peers gauge\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_active_peers {}\n",
-        net.p2p_active_peers.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_rx_bytes counter\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_rx_bytes {}\n",
-        net.p2p_rx_bytes.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_tx_bytes counter\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_tx_bytes {}\n",
-        net.p2p_tx_bytes.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_p2p_rtt_ms gauge\n");
-    out.push_str(&format!(
-        "fedi3_core_p2p_rtt_ms {}\n",
-        net.p2p_rtt_ema_ms.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_webrtc_active_peers gauge\n");
-    out.push_str(&format!(
-        "fedi3_core_webrtc_active_peers {}\n",
-        net.webrtc_active_peers.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_webrtc_rx_bytes counter\n");
-    out.push_str(&format!(
-        "fedi3_core_webrtc_rx_bytes {}\n",
-        net.webrtc_rx_bytes.load(Ordering::Relaxed)
-    ));
-    out.push_str("# TYPE fedi3_core_webrtc_tx_bytes counter\n");
-    out.push_str(&format!(
-        "fedi3_core_webrtc_tx_bytes {}\n",
-        net.webrtc_tx_bytes.load(Ordering::Relaxed)
     ));
     out.push_str("# TYPE fedi3_core_http_timeouts counter\n");
     out.push_str(&format!(
@@ -1326,10 +1526,104 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
     out.push_str(&format!("fedi3_core_db_ok {}\n", if db_ok { 1 } else { 0 }));
     (
         StatusCode::OK,
-        [("Content-Type", "text/plain; version=0.0.4"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "text/plain; version=0.0.4"),
+            ("Cache-Control", "no-store"),
+        ],
         out,
     )
         .into_response()
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BackupExportResp {
+    version: u32,
+    created_at_ms: i64,
+    db_b64: String,
+    identity_private_key_pem: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BackupImportReq {
+    db_b64: String,
+    identity_private_key_pem: String,
+}
+
+async fn backup_export(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let parts = req.into_parts().0;
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let db_bytes = match state.social.export_snapshot_bytes() {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db export failed: {e}")),
+    };
+    let key_path = state.data_dir.join("identity_private_key.pem");
+    let key_pem = match std::fs::read_to_string(&key_path) {
+        Ok(v) => v,
+        Err(e) => {
+            return simple(
+                StatusCode::BAD_GATEWAY,
+                &format!("read identity key failed: {e}"),
+            )
+        }
+    };
+    axum::Json(BackupExportResp {
+        version: 1,
+        created_at_ms: now_ms(),
+        db_b64: B64.encode(db_bytes),
+        identity_private_key_pem: key_pem,
+    })
+    .into_response()
+}
+
+async fn backup_import(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let max_bytes = std::env::var("FEDI3_CORE_BACKUP_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(256 * 1024 * 1024);
+    let bytes = match axum::body::to_bytes(body, max_bytes).await {
+        Ok(b) => b,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let payload: BackupImportReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let db_bytes = match B64.decode(payload.db_b64.trim()) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid db_b64"),
+    };
+    if let Err(e) = state.social.import_snapshot_bytes(&db_bytes) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db import failed: {e}"));
+    }
+    let key_path = state.data_dir.join("identity_private_key.pem");
+    let key_pem = payload.identity_private_key_pem.trim();
+    if key_pem.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "invalid identity_private_key_pem");
+    }
+    if let Err(e) = RsaPrivateKey::from_pkcs8_pem(key_pem) {
+        return simple(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid identity_private_key_pem: {e}"),
+        );
+    }
+    if let Err(e) = std::fs::write(&key_path, key_pem) {
+        return simple(
+            StatusCode::BAD_GATEWAY,
+            &format!("write identity key failed: {e}"),
+        );
+    }
+    axum::Json(serde_json::json!({
+      "ok": true,
+      "restart_required": true
+    }))
+    .into_response()
 }
 
 async fn core_health(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -1362,10 +1656,61 @@ async fn core_health(state: &ApState, req: Request<Body>) -> Response<Body> {
     });
     (
         StatusCode::OK,
-        [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
         body.to_string(),
     )
         .into_response()
+}
+
+const UPNP_BODY_LIMIT: usize = 16 * 1024;
+
+#[derive(Deserialize)]
+struct UpnpToggleRequest {
+    enabled: bool,
+}
+
+async fn core_upnp_status(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if let Err(resp) = require_internal(state, req.headers()) {
+        return resp;
+    }
+    let status = state.upnp.lock().await.status();
+    Json(status).into_response()
+}
+
+async fn core_upnp_toggle(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if let Err(resp) = require_internal(state, req.headers()) {
+        return resp;
+    }
+    let body_bytes = match axum::body::to_bytes(req.into_body(), UPNP_BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let action: UpnpToggleRequest = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let mut controller = state.upnp.lock().await;
+    let status = if action.enabled {
+        match controller.enable().await {
+            Ok(status) => status,
+            Err(e) => {
+                controller.record_error(format!("{e:#}"));
+                controller.status.clone()
+            }
+        }
+    } else {
+        match controller.disable().await {
+            Ok(status) => status,
+            Err(e) => {
+                controller.record_error(format!("{e:#}"));
+                controller.status.clone()
+            }
+        }
+    };
+    (StatusCode::OK, Json(status)).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1393,7 +1738,10 @@ async fn blocks_list(state: &ApState, req: Request<Body>) -> Response<Body> {
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<u32>().ok())
         .unwrap_or(0);
-    let items = state.social.list_blocked_actors(limit, offset).unwrap_or_default();
+    let items = state
+        .social
+        .list_blocked_actors(limit, offset)
+        .unwrap_or_default();
     (
         StatusCode::OK,
         [("Content-Type", "application/json; charset=utf-8")],
@@ -1508,7 +1856,10 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
     let key_id = format!("{actor}#main-key");
     let did = fedi3_did(state);
     let followers_count = state.social.count_followers().unwrap_or(0);
-    let legacy_followers_count = state.social.count_legacy_followers().unwrap_or(followers_count);
+    let legacy_followers_count = state
+        .social
+        .count_legacy_followers()
+        .unwrap_or(followers_count);
 
     let also_known_as = state.cfg.also_known_as.clone();
     let legacy_aliases = also_known_as
@@ -1518,7 +1869,9 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
         .cloned()
         .collect::<Vec<_>>();
 
-    let has_previous_actor_alias = also_known_as.iter().any(|v| v.contains("/users/") && v != &actor);
+    let has_previous_actor_alias = also_known_as
+        .iter()
+        .any(|v| v.contains("/users/") && v != &actor);
     let relay_note = if legacy_followers_count > 0 && !has_previous_actor_alias {
         "Hai follower legacy: per cambiare relay usa migrazione (Move + alsoKnownAs) e mantieni il vecchio relay attivo per un po' (movedTo/redirect).".to_string()
     } else {
@@ -1640,120 +1993,27 @@ async fn migration_legacy_aliases_set(state: &ApState, req: Request<Body>) -> Re
 }
 
 async fn p2p_resolve(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, _body) = req.into_parts();
-    if let Err(resp) = require_internal(state, &parts.headers) {
-        return resp;
-    }
-
-    let query = parts.uri.query().unwrap_or("");
-    let peer_id = query
-        .split('&')
-        .find(|p| p.starts_with("peer_id="))
-        .and_then(|p| p.split_once('='))
-        .map(|(_, v)| url_decode(v))
-        .unwrap_or_default();
-    if peer_id.is_empty() {
-        return simple(StatusCode::BAD_REQUEST, "missing peer_id");
-    }
-
-    match state.delivery.p2p_resolve_peer(&peer_id).await {
-        Ok(Some(rec)) => axum::Json(rec).into_response(),
-        Ok(None) => simple(StatusCode::NOT_FOUND, "not found"),
-        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("resolve failed: {e}")),
-    }
+    let _ = state;
+    let _ = req;
+    simple(StatusCode::GONE, "p2p disabled")
 }
 
 async fn p2p_resolve_did(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, _body) = req.into_parts();
-    if let Err(resp) = require_internal(state, &parts.headers) {
-        return resp;
-    }
-
-    let query = parts.uri.query().unwrap_or("");
-    let did = query
-        .split('&')
-        .find(|p| p.starts_with("did="))
-        .and_then(|p| p.split_once('='))
-        .map(|(_, v)| url_decode(v))
-        .unwrap_or_default();
-    if did.is_empty() {
-        return simple(StatusCode::BAD_REQUEST, "missing did");
-    }
-
-    match state.delivery.p2p_resolve_did(&did).await {
-        Ok(Some(rec)) => axum::Json(rec).into_response(),
-        Ok(None) => simple(StatusCode::NOT_FOUND, "not found"),
-        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("resolve failed: {e}")),
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct P2pFollowReq {
-    peer_id: Option<String>,
-    actor: Option<String>,
+    let _ = state;
+    let _ = req;
+    simple(StatusCode::GONE, "p2p disabled")
 }
 
 async fn p2p_follow(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, body) = req.into_parts();
-    if let Err(resp) = require_internal(state, &parts.headers) {
-        return resp;
-    }
-
-    let bytes = match axum::body::to_bytes(body, 32 * 1024).await {
-        Ok(b) => b.to_vec(),
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
-    };
-    let follow: P2pFollowReq = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-
-    let target_actor = if let Some(peer_id) = follow.peer_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        match state.delivery.p2p_resolve_peer(peer_id).await {
-            Ok(Some(rec)) => rec.actor,
-            Ok(None) => return simple(StatusCode::NOT_FOUND, "peer not found"),
-            Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("resolve failed: {e}")),
-        }
-    } else if let Some(actor) = follow.actor.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        actor.to_string()
-    } else {
-        return simple(StatusCode::BAD_REQUEST, "missing peer_id or actor");
-    };
-    let target_actor = target_actor.trim_end_matches('/').to_string();
-
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
-    let id = state.social.new_activity_id(&me);
-    let activity = serde_json::json!({
-      "@context": "https://www.w3.org/ns/activitystreams",
-      "id": id,
-      "type": "Follow",
-      "actor": me,
-      "object": &target_actor,
-      "to": [&target_actor],
-    });
-
-    let bytes = match serde_json::to_vec(&activity) {
-        Ok(v) => v,
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "encode failed"),
-    };
-    let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    if !act_id.is_empty() {
-        let _ = state.social.store_outbox(act_id, bytes.clone());
-    }
-    if let Some(obj) = activity.get("object").and_then(|v| v.as_str()) {
-        let obj = obj.trim_end_matches('/');
-        let _ = state.social.set_following(obj, FollowingStatus::Pending);
-        match state.queue.enqueue_activity(bytes, vec![obj.to_string()]).await {
-            Ok(pending) => axum::Json(serde_json::json!({"ok": true, "pending": pending, "target": obj})).into_response(),
-            Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
-        }
-    } else {
-        simple(StatusCode::BAD_REQUEST, "missing object")
-    }
+    let _ = state;
+    let _ = req;
+    simple(StatusCode::GONE, "p2p disabled")
 }
 
-fn require_internal(state: &ApState, headers: &http::HeaderMap) -> std::result::Result<(), Response<Body>> {
+fn require_internal(
+    state: &ApState,
+    headers: &http::HeaderMap,
+) -> std::result::Result<(), Response<Body>> {
     if state.internal_token.is_empty() {
         return Ok(());
     }
@@ -1763,50 +2023,30 @@ fn require_internal(state: &ApState, headers: &http::HeaderMap) -> std::result::
         .unwrap_or("");
     if token != state.internal_token {
         state.net.auth_failure();
-        let _ = state
-            .social
-            .insert_audit_event("internal_auth", None, None, None, false, Some("403"), Some("invalid internal token"));
+        let _ = state.social.insert_audit_event(
+            "internal_auth",
+            None,
+            None,
+            None,
+            false,
+            Some("403"),
+            Some("invalid internal token"),
+        );
         return Err(simple(StatusCode::FORBIDDEN, "forbidden"));
     }
     Ok(())
 }
 
 async fn p2p_sync_outbox(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, _body) = req.into_parts();
-    let query = parts.uri.query().unwrap_or("");
-    let limit = query
-        .split('&')
-        .find(|p| p.starts_with("limit="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<u32>().ok())
-        .unwrap_or(50)
-        .min(200);
-    let since = query
-        .split('&')
-        .find(|p| p.starts_with("since="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<i64>().ok())
-        .unwrap_or(0);
+    let _ = state;
+    let _ = req;
+    simple(StatusCode::GONE, "p2p disabled")
+}
 
-    let (rows, latest_ms) = match state.social.list_outbox_since(since, limit) {
-        Ok(v) => v,
-        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
-    };
-
-    let mut items = Vec::<serde_json::Value>::new();
-    for bytes in rows {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            if is_public_activity(&v) {
-                items.push(v);
-            }
-        }
-    }
-
-    axum::Json(serde_json::json!({
-      "items": items,
-      "latest_ms": latest_ms,
-    }))
-    .into_response()
+async fn p2p_sync_activities(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _ = state;
+    let _ = req;
+    simple(StatusCode::GONE, "p2p disabled")
 }
 
 fn fedi3_did(state: &ApState) -> Option<String> {
@@ -1818,7 +2058,11 @@ fn fedi3_did(state: &ApState) -> Option<String> {
         .cloned()
 }
 
-fn verify_device_signature(state: &ApState, parts: &http::request::Parts, body: &[u8]) -> std::result::Result<(), Response<Body>> {
+fn verify_device_signature(
+    state: &ApState,
+    parts: &http::request::Parts,
+    body: &[u8],
+) -> std::result::Result<(), Response<Body>> {
     let sig = parts
         .headers
         .get("Signature")
@@ -1829,7 +2073,10 @@ fn verify_device_signature(state: &ApState, parts: &http::request::Parts, body: 
     }
 
     if let Err(e) = verify_digest_if_present(&parts.headers, body) {
-        return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad Digest: {e}")));
+        return Err(simple(
+            StatusCode::UNAUTHORIZED,
+            &format!("bad Digest: {e}"),
+        ));
     }
     if let Err(e) = verify_date(&parts.headers, Duration::from_secs(300)) {
         return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad Date: {e}")));
@@ -1837,14 +2084,30 @@ fn verify_device_signature(state: &ApState, parts: &http::request::Parts, body: 
 
     let params = match parse_signature_header(sig) {
         Ok(v) => v,
-        Err(e) => return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"))),
+        Err(e) => {
+            return Err(simple(
+                StatusCode::UNAUTHORIZED,
+                &format!("bad Signature: {e}"),
+            ))
+        }
     };
-    let signing = match build_signing_string(&parts.method, &parts.uri, &parts.headers, &params.headers) {
-        Ok(v) => v,
-        Err(e) => return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad signing string: {e}"))),
-    };
-    if let Err(e) = verify_signature_rsa_sha256(&state.cfg.public_key_pem, &signing, &params.signature) {
-        return Err(simple(StatusCode::UNAUTHORIZED, &format!("signature verify failed: {e}")));
+    let signing =
+        match build_signing_string(&parts.method, &parts.uri, &parts.headers, &params.headers) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(simple(
+                    StatusCode::UNAUTHORIZED,
+                    &format!("bad signing string: {e}"),
+                ))
+            }
+        };
+    if let Err(e) =
+        verify_signature_rsa_sha256(&state.cfg.public_key_pem, &signing, &params.signature)
+    {
+        return Err(simple(
+            StatusCode::UNAUTHORIZED,
+            &format!("signature verify failed: {e}"),
+        ));
     }
     Ok(())
 }
@@ -1909,8 +2172,17 @@ async fn device_outbox(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     let mut items = Vec::<DeviceOutboxItem>::new();
     for (bytes, created_at_ms) in rows {
-        let Ok(activity) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
-        let Some(id) = activity.get("id").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()) else { continue };
+        let Ok(activity) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(id) = activity
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
         items.push(DeviceOutboxItem {
             id: id.to_string(),
             created_at_ms,
@@ -1986,8 +2258,17 @@ async fn device_inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     let mut items = Vec::<DeviceInboxItem>::new();
     for (bytes, created_at_ms) in rows {
-        let Ok(activity) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
-        let Some(id) = activity.get("id").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()) else { continue };
+        let Ok(activity) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(id) = activity
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
         items.push(DeviceInboxItem {
             id: id.to_string(),
             created_at_ms,
@@ -2027,7 +2308,8 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
             hydrate_activity(state, &mut v, &mut cache);
@@ -2067,7 +2349,8 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
             hydrate_activity(state, &mut v, &mut cache);
@@ -2106,7 +2389,8 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
             hydrate_activity(state, &mut v, &mut cache);
@@ -2145,7 +2429,8 @@ async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body>
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
             hydrate_activity(state, &mut v, &mut cache);
@@ -2193,7 +2478,8 @@ async fn note_replies_get(state: &ApState, req: Request<Body>) -> Response<Body>
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
             hydrate_activity(state, &mut v, &mut cache);
@@ -2206,6 +2492,71 @@ async fn note_replies_get(state: &ApState, req: Request<Body>) -> Response<Body>
       "next": page.next,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct NotePinReq {
+    id: String,
+    pinned: bool,
+}
+
+async fn note_pin_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: NotePinReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let id = input.id.trim();
+    if id.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing id");
+    }
+    if let Ok(None) = state.social.get_object_json(id) {
+        return simple(StatusCode::NOT_FOUND, "note not found");
+    }
+    if let Err(e) = state.social.set_object_pinned(id, input.pinned) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "profile",
+        Some("featured".to_string()),
+        Some(id.to_string()),
+    ));
+    axum::Json(serde_json::json!({ "ok": true, "id": id, "pinned": input.pinned })).into_response()
+}
+
+async fn note_pinned_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
+    let query = parts.uri.query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find(|p| p.starts_with("limit="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .unwrap_or(20)
+        .min(200);
+    let rows = match state.social.list_pinned_objects_json(&me, limit) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let mut items = Vec::new();
+    for bytes in rows {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            items.push(v);
+        }
+    }
+    axum::Json(serde_json::json!({ "items": items })).into_response()
 }
 
 async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -2257,7 +2608,8 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
     let source = normalize_search_source(&source);
     let consistency = normalize_search_consistency(&consistency);
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     let mut total = 0u64;
     let mut next = None;
     let mut seen = std::collections::HashSet::new();
@@ -2279,11 +2631,16 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
             next = page.next.clone();
         }
         for it in page.items {
-            let Ok(note_value) = serde_json::from_slice::<serde_json::Value>(&it.object_json) else { continue };
+            let Ok(note_value) = serde_json::from_slice::<serde_json::Value>(&it.object_json)
+            else {
+                continue;
+            };
             if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
                 continue;
             }
-            let Some(activity) = activity_from_note(&note_value) else { continue };
+            let Some(activity) = activity_from_note(&note_value) else {
+                continue;
+            };
             let mut hydrated = activity;
             hydrate_activity(state, &mut hydrated, &mut cache);
             set_search_source(&mut hydrated, "local");
@@ -2297,13 +2654,15 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
+    let mut relay_ready = true;
     if source != "local" {
         if consistency == "full" {
-            if let Err(resp) = require_relay_search_coverage(state).await {
-                return resp;
+            if require_relay_search_coverage(state).await.is_err() {
+                relay_ready = false;
             }
         }
-        if let Ok(Some(relay_page)) = relay_search_notes(state, &q, &tag, limit, cursor).await {
+        if relay_ready {
+            if let Ok(Some(relay_page)) = relay_search_notes(state, &q, &tag, limit, cursor).await {
             total = total.saturating_add(relay_page.total);
             if next.is_none() {
                 next = relay_page.next.clone();
@@ -2312,7 +2671,9 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
                 if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
                     continue;
                 }
-                let Some(activity) = activity_from_note(&note_value) else { continue };
+                let Some(activity) = activity_from_note(&note_value) else {
+                    continue;
+                };
                 let mut hydrated = activity;
                 hydrate_activity(state, &mut hydrated, &mut cache);
                 set_search_source(&mut hydrated, "relay");
@@ -2324,6 +2685,7 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
                     items.push(hydrated);
                 }
             }
+            }
         }
     }
 
@@ -2331,6 +2693,8 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
       "total": total,
       "items": items,
       "next": next,
+      "partial": !relay_ready,
+      "relay_ready": relay_ready,
     }))
     .into_response()
 }
@@ -2392,7 +2756,9 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
             next = page.next.clone();
         }
         for it in page.items {
-            let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.object_json) else { continue };
+            let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.object_json) else {
+                continue;
+            };
             if !is_actor_value(&v) {
                 continue;
             }
@@ -2407,13 +2773,15 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
+    let mut relay_ready = true;
     if source != "local" {
         if consistency == "full" {
-            if let Err(resp) = require_relay_search_coverage(state).await {
-                return resp;
+            if require_relay_search_coverage(state).await.is_err() {
+                relay_ready = false;
             }
         }
-        if let Ok(Some(relay_page)) = relay_search_users(state, &q, limit, cursor).await {
+        if relay_ready {
+            if let Ok(Some(relay_page)) = relay_search_users(state, &q, limit, cursor).await {
             total = total.saturating_add(relay_page.total);
             if next.is_none() {
                 next = relay_page.next.clone();
@@ -2431,6 +2799,7 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
                     items.push(v);
                 }
             }
+            }
         }
     }
 
@@ -2438,6 +2807,8 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
       "total": total,
       "items": items,
       "next": next,
+      "partial": !relay_ready,
+      "relay_ready": relay_ready,
     }))
     .into_response()
 }
@@ -2515,7 +2886,11 @@ async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> 
         .into_iter()
         .map(|(name, count)| serde_json::json!({"name": name, "count": count}))
         .collect();
-    items.sort_by(|a, b| b.get("count").and_then(|v| v.as_u64()).cmp(&a.get("count").and_then(|v| v.as_u64())));
+    items.sort_by(|a, b| {
+        b.get("count")
+            .and_then(|v| v.as_u64())
+            .cmp(&a.get("count").and_then(|v| v.as_u64()))
+    });
     if items.len() > limit as usize {
         items.truncate(limit as usize);
     }
@@ -2606,6 +2981,17 @@ struct ChatThreadDeleteReq {
     thread_id: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct ChatThreadLeaveReq {
+    thread_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatThreadArchiveReq {
+    thread_id: String,
+    archived: Option<bool>,
+}
+
 async fn chat_bundle_get(state: &ApState, _req: Request<Body>) -> Response<Body> {
     match chat::build_chat_bundle(state) {
         Ok(bundle) => (
@@ -2644,18 +3030,24 @@ async fn chat_inbox_post(state: &ApState, req: Request<Body>) -> Response<Body> 
     }
 
     if payload.op == "message" {
-        let _ = state
-            .ui_events
-            .send(UiEvent::new("chat", Some("message".to_string()), Some(env.thread_id.clone())));
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("message".to_string()),
+            Some(env.thread_id.clone()),
+        ));
         let _ = send_chat_receipt(state, &env, "delivered").await;
     } else if payload.op == "react" {
-        let _ = state
-            .ui_events
-            .send(UiEvent::new("chat", Some("react".to_string()), Some(env.thread_id.clone())));
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("react".to_string()),
+            Some(env.thread_id.clone()),
+        ));
     } else if payload.op == "system" {
-        let _ = state
-            .ui_events
-            .send(UiEvent::new("chat", Some("system".to_string()), Some(env.thread_id.clone())));
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("system".to_string()),
+            Some(env.thread_id.clone()),
+        ));
     }
 
     simple(StatusCode::OK, "ok")
@@ -2679,13 +3071,51 @@ async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body>
         .find(|p| p.starts_with("cursor="))
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
-    match chat::list_threads(state, limit, cursor) {
-        Ok(page) => axum::Json(serde_json::json!({
-            "total": page.total,
-            "items": page.items,
-            "next": page.next,
-        }))
-        .into_response(),
+    let archived = query
+        .split('&')
+        .find(|p| p.starts_with("archived="))
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let _ = state.social.repair_dm_membership(&self_actor);
+    match chat::list_threads_for_actor(state, &self_actor, archived, limit, cursor) {
+        Ok(page) => {
+            let mut items = Vec::with_capacity(page.items.len());
+            for thread in page.items {
+                let mut dm_actor: Option<String> = None;
+                if thread.kind == "dm" {
+                    if let Ok(members) = state.social.list_chat_members(&thread.thread_id) {
+                        for (actor, _role) in members {
+                            if actor != self_actor {
+                                dm_actor = Some(actor);
+                                break;
+                            }
+                        }
+                    }
+                }
+                items.push(serde_json::json!({
+                    "thread_id": thread.thread_id,
+                    "kind": thread.kind,
+                    "title": thread.title,
+                    "created_at_ms": thread.created_at_ms,
+                    "updated_at_ms": thread.updated_at_ms,
+                    "last_message_ms": thread.last_message_ms,
+                    "last_message_preview": thread.last_message_preview,
+                    "dm_actor": dm_actor,
+                }));
+            }
+            axum::Json(serde_json::json!({
+                "total": page.total,
+                "items": items,
+                "next": page.next,
+            }))
+            .into_response()
+        }
         Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     }
 }
@@ -2737,8 +3167,14 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Ok(v) => v,
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
-    if input.text.trim().is_empty() {
-        return simple(StatusCode::BAD_REQUEST, "empty text");
+    let has_text = !input.text.trim().is_empty();
+    let has_attachments = input
+        .attachments
+        .as_ref()
+        .map(|list| !list.is_empty())
+        .unwrap_or(false);
+    if !has_text && !has_attachments {
+        return simple(StatusCode::BAD_REQUEST, "empty message");
     }
     let self_actor = format!(
         "{}/users/{}",
@@ -2770,21 +3206,50 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     } else if members.len() == 2 {
         (chat_dm_thread_id(&members), "dm".to_string())
     } else {
-        (format!("urn:fedi3:chat:{}", chat::random_id()), "group".to_string())
+        (
+            format!("urn:fedi3:chat:{}", chat::random_id()),
+            "group".to_string(),
+        )
     };
 
     if input.thread_id.is_none() {
-        let _ = state.social.create_chat_thread(&thread_id, &kind, input.title.as_deref());
+        let _ = state
+            .social
+            .create_chat_thread(&thread_id, &kind, input.title.as_deref());
         for actor in &members {
-            let role = if actor == &self_actor { "owner" } else { "member" };
+            let role = if actor == &self_actor {
+                "owner"
+            } else {
+                "member"
+            };
             let _ = state.social.upsert_chat_member(&thread_id, actor, role);
         }
     }
 
+    if input.thread_id.is_none() && kind == "group" {
+        let payload = chat::ChatPayload {
+            op: "system".to_string(),
+            text: None,
+            reply_to: None,
+            message_id: None,
+            status: None,
+            thread_id: Some(thread_id.clone()),
+            attachments: None,
+            action: Some("create_thread".to_string()),
+            targets: None,
+            members: Some(members.clone()),
+            title: input.title.clone(),
+            reaction: None,
+        };
+        let env_id = chat::random_id();
+        let _sent = send_chat_payload_to_members(state, &thread_id, &payload, &env_id).await;
+    }
+
     let message_id = format!("urn:fedi3:chat:msg:{}", chat::random_id());
+    let text = input.text.trim();
     let payload = chat::ChatPayload {
         op: "message".to_string(),
-        text: Some(input.text.clone()),
+        text: if text.is_empty() { None } else { Some(text.to_string()) },
         reply_to: input.reply_to.clone(),
         message_id: None,
         status: None,
@@ -2813,7 +3278,11 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         message_id: message_id.clone(),
         thread_id: thread_id.clone(),
         sender_actor: self_actor.clone(),
-        sender_device: state.social.get_local_meta("chat_device_id").unwrap_or(None).unwrap_or_default(),
+        sender_device: state
+            .social
+            .get_local_meta("chat_device_id")
+            .unwrap_or(None)
+            .unwrap_or_default(),
         created_at_ms: now_ms(),
         edited_at_ms: None,
         deleted: false,
@@ -2821,36 +3290,75 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     };
     let _ = state.social.insert_chat_message(&msg);
     let _ = state.social.touch_chat_thread(&thread_id);
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("message".to_string()),
+        Some(thread_id.clone()),
+    ));
 
-    let mut sent = 0u32;
+    let sent = 0u32;
     let mut queued = 0u32;
+
+    if input.thread_id.is_none() && kind == "group" {
+        let _ = send_chat_system(
+            state,
+            &thread_id,
+            &members,
+            "create_thread",
+            None,
+            input.title.clone(),
+            Some("Group created".to_string()),
+            Some(members.clone()),
+        )
+        .await;
+    }
+
+    let mut recipients = Vec::new();
     for actor in members {
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(state, &bundle, &thread_id, &message_id, &payload) {
-                        match chat::send_envelope_to_peer(state, &peer_id, &env).await {
-                            Ok(chat::ChatSendOutcome::Sent) => {
-                                let _ = state.social.upsert_chat_message_status(&message_id, &actor, "sent");
-                                sent = sent.saturating_add(1);
-                            }
-                            Ok(chat::ChatSendOutcome::Queued) => {
-                                let _ = state.social.upsert_chat_message_status(&message_id, &actor, "queued");
-                                queued = queued.saturating_add(1);
-                            }
-                            Err(_) => {}
-                        }
-                    }
+        recipients.push(actor);
+    }
+    for actor in &recipients {
+        let _ = state
+            .social
+            .upsert_chat_message_status(&message_id, actor, "queued");
+        queued = queued.saturating_add(1);
+    }
+    let state2 = state.clone();
+    let thread_id2 = thread_id.clone();
+    let message_id2 = message_id.clone();
+    let payload2 = payload.clone();
+    tokio::spawn(async move {
+        for actor in recipients {
+            match deliver_chat_payload_to_actor(
+                &state2,
+                &actor,
+                &thread_id2,
+                &message_id2,
+                &payload2,
+            )
+            .await
+            {
+                ChatDeliveryOutcome::Sent => {
+                    let _ = state2
+                        .social
+                        .upsert_chat_message_status(&message_id2, &actor, "sent");
+                }
+                ChatDeliveryOutcome::Failed => {
+                    let _ = state2
+                        .social
+                        .upsert_chat_message_status(&message_id2, &actor, "queued");
                 }
             }
         }
-    }
+        let _ = state2.ui_events.send(UiEvent::new(
+            "chat",
+            Some("delivery".to_string()),
+            Some(thread_id2),
+        ));
+    });
 
     axum::Json(serde_json::json!({
         "ok": true,
@@ -2873,101 +3381,36 @@ async fn send_chat_payload_to_members(
         state.cfg.public_base_url.trim_end_matches('/'),
         state.cfg.username
     );
-    let members = state.social.list_chat_members(thread_id).unwrap_or_default();
+    let members = state
+        .social
+        .list_chat_members(thread_id)
+        .unwrap_or_default();
     let mut sent = 0u32;
     for (actor, _role) in members {
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) =
-                        chat::encrypt_payload_for_bundle(state, &bundle, thread_id, envelope_message_id, payload)
-                    {
-                        if matches!(chat::send_envelope_to_peer(state, &peer_id, &env).await, Ok(_)) {
-                            sent = sent.saturating_add(1);
-                        }
-                    }
-                }
+        match deliver_chat_payload_to_actor(state, &actor, thread_id, envelope_message_id, payload)
+            .await
+        {
+            ChatDeliveryOutcome::Sent => {
+                let _ = state.social.upsert_chat_message_status(
+                    envelope_message_id,
+                    &actor,
+                    "sent",
+                );
+                sent = sent.saturating_add(1);
+            }
+            ChatDeliveryOutcome::Failed => {
+                let _ = state.social.upsert_chat_message_status(
+                    envelope_message_id,
+                    &actor,
+                    "queued",
+                );
             }
         }
     }
     sent
-}
-
-async fn chat_typing_post(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, body) = req.into_parts();
-    if let Err(resp) = require_internal(state, &parts.headers) {
-        return resp;
-    }
-    let bytes = match axum::body::to_bytes(body, 32 * 1024).await {
-        Ok(b) => b.to_vec(),
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
-    };
-    let input: ChatTypingReq = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
-    };
-    if input.thread_id.trim().is_empty() {
-        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
-    }
-    let self_actor = format!(
-        "{}/users/{}",
-        state.cfg.public_base_url.trim_end_matches('/'),
-        state.cfg.username
-    );
-    let members = state
-        .social
-        .list_chat_members(&input.thread_id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(actor, _role)| actor)
-        .collect::<Vec<_>>();
-    if members.is_empty() {
-        return simple(StatusCode::OK, "ok");
-    }
-
-    let payload = chat::ChatPayload {
-        op: "typing".to_string(),
-        text: None,
-        reply_to: None,
-        message_id: None,
-        status: None,
-        thread_id: Some(input.thread_id.clone()),
-        attachments: None,
-        action: None,
-        targets: None,
-        members: None,
-        title: None,
-        reaction: None,
-    };
-
-    let mut sent = 0u32;
-    for actor in members {
-        if actor == self_actor {
-            continue;
-        }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(state, &bundle, &input.thread_id, &chat::random_id(), &payload) {
-                        if matches!(chat::send_envelope_to_peer(state, &peer_id, &env).await, Ok(_)) {
-                            sent = sent.saturating_add(1);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    axum::Json(serde_json::json!({ "ok": true, "sent": sent })).into_response()
 }
 
 async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -2995,14 +3438,25 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
     );
     let remove = input.remove.unwrap_or(false);
     if remove {
-        let _ = state.social.remove_chat_reaction(message_id, &self_actor, reaction);
+        let _ = state
+            .social
+            .remove_chat_reaction(message_id, &self_actor, reaction);
     } else {
-        let _ = state.social.add_chat_reaction(message_id, &self_actor, reaction);
+        let _ = state
+            .social
+            .add_chat_reaction(message_id, &self_actor, reaction);
     }
-    let Some(thread_id) = state.social.get_chat_message_thread_id(message_id).unwrap_or(None) else {
+    let Some(thread_id) = state
+        .social
+        .get_chat_message_thread_id(message_id)
+        .unwrap_or(None)
+    else {
         return simple(StatusCode::OK, "ok");
     };
-    let members = state.social.list_chat_members(&thread_id).unwrap_or_default();
+    let members = state
+        .social
+        .list_chat_members(&thread_id)
+        .unwrap_or_default();
     let member_ids = members.into_iter().map(|(a, _)| a).collect::<Vec<_>>();
     let payload = chat::ChatPayload {
         op: "react".to_string(),
@@ -3012,7 +3466,11 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
         status: None,
         thread_id: Some(thread_id.clone()),
         attachments: None,
-        action: Some(if remove { "remove".to_string() } else { "add".to_string() }),
+        action: Some(if remove {
+            "remove".to_string()
+        } else {
+            "add".to_string()
+        }),
         targets: None,
         members: None,
         title: None,
@@ -3023,24 +3481,28 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(state, &bundle, &thread_id, &chat::random_id(), &payload) {
-                        if matches!(chat::send_envelope_to_peer(state, &peer_id, &env).await, Ok(_)) {
-                            sent = sent.saturating_add(1);
-                        }
-                    }
+        if let Ok(Some(bundle)) = fetch_chat_bundle(state, &actor).await {
+            if chat::verify_bundle(state, &bundle).await.is_err() {
+                continue;
+            }
+            if let Ok(env) = chat::encrypt_payload_for_bundle(
+                state,
+                &bundle,
+                &thread_id,
+                &chat::random_id(),
+                &payload,
+            ) {
+                if send_chat_envelope_http(state, &actor, &env).await {
+                    sent = sent.saturating_add(1);
                 }
             }
         }
     }
-    let _ = state
-        .ui_events
-        .send(UiEvent::new("chat", Some("react".to_string()), Some(thread_id)));
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("react".to_string()),
+        Some(thread_id),
+    ));
     axum::Json(serde_json::json!({ "ok": true, "sent": sent })).into_response()
 }
 
@@ -3065,11 +3527,15 @@ async fn chat_reactions_post(state: &ApState, req: Request<Body>) -> Response<Bo
         state.cfg.public_base_url.trim_end_matches('/'),
         state.cfg.username
     );
-    let rows = match state.social.list_chat_reactions(&input.message_ids, &self_actor) {
+    let rows = match state
+        .social
+        .list_chat_reactions(&input.message_ids, &self_actor)
+    {
         Ok(v) => v,
         Err(_) => return simple(StatusCode::BAD_GATEWAY, "list reactions failed"),
     };
-    let mut map: std::collections::HashMap<String, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
     for (message_id, reaction, count, me) in rows {
         map.entry(message_id)
             .or_default()
@@ -3147,13 +3613,18 @@ async fn chat_edit_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         title: None,
         reaction: None,
     };
-    let _ = state.social.update_chat_message_edit(&input.message_id, &serde_json::to_string(&payload).unwrap_or_default());
+    let _ = state.social.update_chat_message_edit(
+        &input.message_id,
+        &serde_json::to_string(&payload).unwrap_or_default(),
+    );
     if let Ok(Some(thread_id)) = state.social.get_chat_message_thread_id(&input.message_id) {
         let env_id = chat::random_id();
         let _sent = send_chat_payload_to_members(state, &thread_id, &payload, &env_id).await;
-        let _ = state
-            .ui_events
-            .send(UiEvent::new("chat", Some("edit".to_string()), Some(thread_id)));
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("edit".to_string()),
+            Some(thread_id),
+        ));
     }
     simple(StatusCode::OK, "ok")
 }
@@ -3217,9 +3688,11 @@ async fn chat_delete_post(state: &ApState, req: Request<Body>) -> Response<Body>
         };
         let env_id = chat::random_id();
         let _sent = send_chat_payload_to_members(state, &thread_id, &payload, &env_id).await;
-        let _ = state
-            .ui_events
-            .send(UiEvent::new("chat", Some("delete".to_string()), Some(thread_id)));
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("delete".to_string()),
+            Some(thread_id),
+        ));
     }
     simple(StatusCode::OK, "ok")
 }
@@ -3240,7 +3713,10 @@ async fn chat_seen_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     if input.thread_id.trim().is_empty() || input.message_id.trim().is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing fields");
     }
-    let members = state.social.list_chat_members(&input.thread_id).unwrap_or_default();
+    let members = state
+        .social
+        .list_chat_members(&input.thread_id)
+        .unwrap_or_default();
     let self_actor = format!(
         "{}/users/{}",
         state.cfg.public_base_url.trim_end_matches('/'),
@@ -3250,30 +3726,32 @@ async fn chat_seen_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-    let payload = chat::ChatPayload {
-        op: "receipt".to_string(),
-        text: None,
-        reply_to: None,
-        message_id: Some(input.message_id.clone()),
-        status: Some("seen".to_string()),
-        thread_id: Some(input.thread_id.clone()),
-        attachments: None,
-        action: None,
-        targets: None,
-        members: None,
-        title: None,
-        reaction: None,
-    };
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(state, &bundle, &input.thread_id, &input.message_id, &payload) {
-                        let _ = chat::send_envelope_to_peer(state, &peer_id, &env).await;
-                    }
-                }
+        let payload = chat::ChatPayload {
+            op: "receipt".to_string(),
+            text: None,
+            reply_to: None,
+            message_id: Some(input.message_id.clone()),
+            status: Some("seen".to_string()),
+            thread_id: Some(input.thread_id.clone()),
+            attachments: None,
+            action: None,
+            targets: None,
+            members: None,
+            title: None,
+            reaction: None,
+        };
+        if let Ok(Some(bundle)) = fetch_chat_bundle(state, &actor).await {
+            if chat::verify_bundle(state, &bundle).await.is_err() {
+                continue;
+            }
+            if let Ok(env) = chat::encrypt_payload_for_bundle(
+                state,
+                &bundle,
+                &input.thread_id,
+                &input.message_id,
+                &payload,
+            ) {
+                let _ = send_chat_envelope_http(state, &actor, &env).await;
             }
         }
     }
@@ -3338,6 +3816,62 @@ async fn chat_thread_members_get(state: &ApState, req: Request<Body>) -> Respons
     axum::Json(serde_json::json!({ "items": items })).into_response()
 }
 
+async fn chat_typing_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 16 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatTypingReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let thread_id = input.thread_id.trim();
+    if thread_id.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let members = state
+        .social
+        .list_chat_members(thread_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(actor, _role)| actor)
+        .collect::<Vec<_>>();
+    if members.is_empty() {
+        return simple(StatusCode::OK, "ok");
+    }
+    let payload = chat::ChatPayload {
+        op: "typing".to_string(),
+        text: None,
+        reply_to: None,
+        message_id: None,
+        status: None,
+        thread_id: Some(thread_id.to_string()),
+        attachments: None,
+        action: None,
+        targets: None,
+        members: None,
+        title: None,
+        reaction: None,
+    };
+    let env_id = format!("urn:fedi3:chat:typing:{}", chat::random_id());
+    for actor in members {
+        if actor == self_actor {
+            continue;
+        }
+        let _ = deliver_chat_payload_to_actor(state, &actor, thread_id, &env_id, &payload).await;
+    }
+    simple(StatusCode::OK, "ok")
+}
+
 async fn chat_thread_update_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (parts, body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
@@ -3355,8 +3889,13 @@ async fn chat_thread_update_post(state: &ApState, req: Request<Body>) -> Respons
         return simple(StatusCode::BAD_REQUEST, "missing fields");
     }
 
-    let _ = state.social.update_chat_thread_title(&input.thread_id, Some(input.title.trim()));
-    let members = state.social.list_chat_members(&input.thread_id).unwrap_or_default();
+    let _ = state
+        .social
+        .update_chat_thread_title(&input.thread_id, Some(input.title.trim()));
+    let members = state
+        .social
+        .list_chat_members(&input.thread_id)
+        .unwrap_or_default();
     let member_ids = members.into_iter().map(|(a, _)| a).collect::<Vec<_>>();
     let text = format!("Renamed: {}", input.title.trim());
     let _ = send_chat_system(
@@ -3370,9 +3909,11 @@ async fn chat_thread_update_post(state: &ApState, req: Request<Body>) -> Respons
         None,
     )
     .await;
-    let _ = state
-        .ui_events
-        .send(UiEvent::new("chat", Some("thread".to_string()), Some(input.thread_id.clone())));
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("thread".to_string()),
+        Some(input.thread_id.clone()),
+    ));
     simple(StatusCode::OK, "ok")
 }
 
@@ -3397,7 +3938,10 @@ async fn chat_thread_delete_post(state: &ApState, req: Request<Body>) -> Respons
         state.cfg.public_base_url.trim_end_matches('/'),
         state.cfg.username
     );
-    let role = match state.social.get_chat_member_role(&input.thread_id, &self_actor) {
+    let role = match state
+        .social
+        .get_chat_member_role(&input.thread_id, &self_actor)
+    {
         Ok(v) => v,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
@@ -3423,9 +3967,137 @@ async fn chat_thread_delete_post(state: &ApState, req: Request<Body>) -> Respons
     if let Err(e) = state.social.delete_chat_thread(&input.thread_id) {
         return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
     }
-    let _ = state
-        .ui_events
-        .send(UiEvent::new("chat", Some("thread".to_string()), Some(input.thread_id.clone())));
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("thread".to_string()),
+        Some(input.thread_id.clone()),
+    ));
+    simple(StatusCode::OK, "ok")
+}
+
+async fn chat_thread_leave_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatThreadLeaveReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    if input.thread_id.trim().is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let role = match state
+        .social
+        .get_chat_member_role(&input.thread_id, &self_actor)
+    {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let role = if let Some(r) = role {
+        r
+    } else {
+        return simple(StatusCode::BAD_REQUEST, "not member");
+    };
+    if role == "owner" {
+        return simple(StatusCode::FORBIDDEN, "owner cannot leave");
+    }
+    match state
+        .social
+        .leave_chat_member(&input.thread_id, &self_actor)
+    {
+        Ok(true) => {}
+        Ok(false) => return simple(StatusCode::BAD_REQUEST, "not member"),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
+    let members = state
+        .social
+        .list_chat_members(&input.thread_id)
+        .unwrap_or_default();
+    let members_full = members
+        .iter()
+        .map(|(actor, _)| actor.clone())
+        .collect::<Vec<_>>();
+    let notify_members = members_full
+        .iter()
+        .filter(|actor| *actor != &self_actor)
+        .cloned()
+        .collect::<Vec<_>>();
+    let display_name = self_actor
+        .rsplit('/')
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| self_actor.clone());
+    let text = format!("{} left the chat", display_name);
+    let _ = send_chat_system(
+        state,
+        &input.thread_id,
+        &notify_members,
+        "leave_thread",
+        Some(vec![self_actor.clone()]),
+        None,
+        Some(text),
+        Some(members_full.clone()),
+    )
+    .await;
+    if let Err(e) = state.social.delete_chat_thread(&input.thread_id) {
+        warn!("chat leave: local delete failed thread_id={} err={e}", input.thread_id);
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("thread".to_string()),
+        Some(input.thread_id.clone()),
+    ));
+    simple(StatusCode::OK, "ok")
+}
+
+async fn chat_thread_archive_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatThreadArchiveReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    if input.thread_id.trim().is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+    }
+    let archived = input.archived.unwrap_or(true);
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    match state
+        .social
+        .get_chat_member_role(&input.thread_id, &self_actor)
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => return simple(StatusCode::BAD_REQUEST, "not member"),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    match state
+        .social
+        .set_chat_member_archived(&input.thread_id, &self_actor, archived)
+    {
+        Ok(true) => {}
+        Ok(false) => return simple(StatusCode::BAD_REQUEST, "not member"),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
     simple(StatusCode::OK, "ok")
 }
 
@@ -3448,7 +4120,10 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
 
     let add = input.add.unwrap_or_default();
     let remove = input.remove.unwrap_or_default();
-    let current = state.social.list_chat_members(&input.thread_id).unwrap_or_default();
+    let current = state
+        .social
+        .list_chat_members(&input.thread_id)
+        .unwrap_or_default();
     let mut current_ids = current.into_iter().map(|(a, _)| a).collect::<Vec<_>>();
     current_ids.sort();
     current_ids.dedup();
@@ -3461,9 +4136,11 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
     }
     new_members.retain(|m| !remove.contains(m));
 
-    let _ = state.social.set_chat_members(&input.thread_id, &new_members);
+    let _ = state
+        .social
+        .set_chat_members(&input.thread_id, &new_members);
 
-    let mut notify_targets = current_ids.clone();
+    let mut notify_targets = new_members.clone();
     for a in &remove {
         if !notify_targets.contains(a) {
             notify_targets.push(a.clone());
@@ -3480,7 +4157,11 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
         state,
         &input.thread_id,
         &notify_targets,
-        if !add.is_empty() { "add_member" } else { "remove_member" },
+        if !add.is_empty() {
+            "add_member"
+        } else {
+            "remove_member"
+        },
         Some(if !add.is_empty() { add } else { remove }),
         None,
         Some(text),
@@ -3490,7 +4171,11 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
     simple(StatusCode::OK, "ok")
 }
 
-async fn send_chat_receipt(state: &ApState, env: &chat::ChatEnvelope, status: &str) -> anyhow::Result<()> {
+async fn send_chat_receipt(
+    state: &ApState,
+    env: &chat::ChatEnvelope,
+    status: &str,
+) -> anyhow::Result<()> {
     let payload = chat::ChatPayload {
         op: "receipt".to_string(),
         text: None,
@@ -3507,18 +4192,24 @@ async fn send_chat_receipt(state: &ApState, env: &chat::ChatEnvelope, status: &s
     };
     let peer_id = env.sender_peer_id.trim();
     if peer_id.is_empty() {
+        let _ = deliver_chat_payload_to_actor(
+            state,
+            &env.sender_actor,
+            &env.thread_id,
+            &env.message_id,
+            &payload,
+        )
+        .await;
         return Ok(());
     }
-    let Some(bundle) = fetch_chat_bundle(state, peer_id).await? else {
-        return Ok(());
-    };
-    if chat::verify_bundle(state, &bundle).await.is_err() {
-        return Ok(());
-    }
-    let receipt_env = chat::encrypt_payload_for_bundle(state, &bundle, &env.thread_id, &env.message_id, &payload)?;
-    chat::send_envelope_to_peer(state, peer_id, &receipt_env)
-        .await
-        .map(|_| ())?;
+    let _ = deliver_chat_payload_to_actor(
+        state,
+        &env.sender_actor,
+        &env.thread_id,
+        &env.message_id,
+        &payload,
+    )
+    .await;
     Ok(())
 }
 
@@ -3563,7 +4254,11 @@ async fn send_chat_system(
         message_id: message_id.clone(),
         thread_id: thread_id.to_string(),
         sender_actor: self_actor.clone(),
-        sender_device: state.social.get_local_meta("chat_device_id").unwrap_or(None).unwrap_or_default(),
+        sender_device: state
+            .social
+            .get_local_meta("chat_device_id")
+            .unwrap_or(None)
+            .unwrap_or_default(),
         created_at_ms: now_ms(),
         edited_at_ms: None,
         deleted: false,
@@ -3577,25 +4272,23 @@ async fn send_chat_system(
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(state, &bundle, thread_id, &message_id, &payload) {
-                        match chat::send_envelope_to_peer(state, &peer_id, &env).await {
-                            Ok(chat::ChatSendOutcome::Sent) => {
-                                let _ = state.social.upsert_chat_message_status(&message_id, &actor, "sent");
-                                sent = sent.saturating_add(1);
-                            }
-                            Ok(chat::ChatSendOutcome::Queued) => {
-                                let _ = state.social.upsert_chat_message_status(&message_id, &actor, "queued");
-                                sent = sent.saturating_add(1);
-                            }
-                            Err(_) => {}
-                        }
-                    }
+        if let Ok(Some(bundle)) = fetch_chat_bundle(state, &actor).await {
+            if chat::verify_bundle(state, &bundle).await.is_err() {
+                continue;
+            }
+            if let Ok(env) = chat::encrypt_payload_for_bundle(
+                state,
+                &bundle,
+                thread_id,
+                &message_id,
+                &payload,
+            ) {
+                if send_chat_envelope_http(state, &actor, &env).await {
+                    let _ =
+                        state
+                            .social
+                            .upsert_chat_message_status(&message_id, &actor, "sent");
+                    sent = sent.saturating_add(1);
                 }
             }
         }
@@ -3603,73 +4296,297 @@ async fn send_chat_system(
     Ok(sent)
 }
 
-async fn fetch_chat_bundle(state: &ApState, peer_id: &str) -> anyhow::Result<Option<chat::ChatBundle>> {
-    let req = RelayHttpRequest {
-        id: format!("chat-bundle-{}", chat::random_id()),
-        method: "GET".to_string(),
-        path: "/_fedi3/chat/bundle".to_string(),
-        query: "".to_string(),
-        headers: vec![("accept".to_string(), "application/json".to_string())],
-        body_b64: "".to_string(),
-    };
-    let resp = match state.delivery.p2p_request(peer_id, req).await {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    if !(200..300).contains(&resp.status) {
-        return Ok(None);
+async fn fetch_chat_bundle(
+    state: &ApState,
+    actor_url: &str,
+) -> anyhow::Result<Option<chat::ChatBundle>> {
+    let actor_url = actor_url.trim_end_matches('/').to_string();
+    if let Ok(Some(cached)) = state.social.get_chat_bundle(&actor_url) {
+        if let Ok(bundle) = serde_json::from_str::<chat::ChatBundle>(&cached) {
+            return Ok(Some(bundle));
+        }
     }
-    let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-    let bundle = serde_json::from_slice::<chat::ChatBundle>(&body).ok();
-    Ok(bundle)
+    if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+        return Ok(bundle);
+    }
+    sleep(Duration::from_millis(150)).await;
+    if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+        return Ok(bundle);
+    }
+    Ok(None)
 }
 
-async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<Vec<String>> {
-    let resp = state
-        .http
-        .get(actor_id)
-        .header(
-            "Accept",
-            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-        )
-        .send()
-        .await?;
-    let text = resp.text().await?;
-    let actor_json: serde_json::Value = serde_json::from_str(&text)?;
-    let peer_id = actor_json
-        .get("endpoints")
-        .and_then(|e| e.get("fedi3PeerId"))
-        .and_then(|v| v.as_str())
-        .or_else(|| actor_json.get("fedi3PeerId").and_then(|v| v.as_str()))
-        .map(|s| s.to_string());
-    let did = actor_json
-        .get("alsoKnownAs")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .find(|s| s.starts_with("did:fedi3:"))
-                .map(|s| s.to_string())
-        });
+async fn fetch_chat_bundle_http(
+    state: &ApState,
+    actor_url: &str,
+) -> anyhow::Result<Option<chat::ChatBundle>> {
+    let Some(origin) = actor_origin(actor_url) else {
+        return Ok(None);
+    };
+    let mut urls = Vec::new();
+    if let Some(user) = actor_user_from_url(actor_url) {
+        urls.push(format!("{origin}/users/{user}/_fedi3/chat/bundle"));
+    }
+    urls.push(format!("{origin}/_fedi3/chat/bundle"));
 
-    if let Some(did) = did {
-        if let Ok(Some(rec)) = state.delivery.p2p_resolve_did(&did).await {
-            let mut out = Vec::new();
-            for p in rec.peers {
-                if !p.addrs.is_empty() {
-                    let _ = state.delivery.p2p_add_peer_addrs(&p.peer_id, p.addrs.clone()).await;
-                }
-                out.push(p.peer_id);
-            }
-            if !out.is_empty() {
-                return Ok(out);
+    for url in urls {
+        let resp = state
+            .http
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            continue;
+        }
+        let body = resp.bytes().await?;
+        if let Ok(bundle) = serde_json::from_slice::<chat::ChatBundle>(&body) {
+            if should_accept_bundle(state, actor_url, &bundle).await {
+                store_bundle_cache(state, actor_url, &bundle);
+                return Ok(Some(bundle));
             }
         }
     }
-    if let Some(peer_id) = peer_id {
-        return Ok(vec![peer_id]);
+    Ok(None)
+}
+
+#[derive(Clone, Copy)]
+enum ChatDeliveryOutcome {
+    Sent,
+    Failed,
+}
+
+async fn deliver_chat_payload_to_actor(
+    state: &ApState,
+    actor_url: &str,
+    thread_id: &str,
+    message_id: &str,
+    payload: &chat::ChatPayload,
+) -> ChatDeliveryOutcome {
+    if let Ok(Some(bundle)) = fetch_chat_bundle(state, actor_url).await {
+        if let Ok(env) =
+            chat::encrypt_payload_for_bundle(state, &bundle, thread_id, message_id, payload)
+        {
+            if send_chat_envelope_http(state, actor_url, &env).await {
+                return ChatDeliveryOutcome::Sent;
+            }
+        }
     }
-    Ok(Vec::new())
+    ChatDeliveryOutcome::Failed
+}
+
+async fn send_chat_envelope_http(
+    state: &ApState,
+    actor_url: &str,
+    env: &chat::ChatEnvelope,
+) -> bool {
+    let Some(origin) = actor_origin(actor_url) else {
+        return false;
+    };
+    let mut urls = Vec::new();
+    if let Some(user) = actor_user_from_url(actor_url) {
+        urls.push(format!("{origin}/users/{user}/_fedi3/chat/inbox"));
+    }
+    urls.push(format!("{origin}/_fedi3/chat/inbox"));
+    let body = match serde_json::to_vec(env) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    for url in urls {
+        let resp = state
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body.clone())
+            .send()
+            .await;
+        if matches!(resp, Ok(r) if r.status().is_success()) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn should_accept_bundle(
+    state: &ApState,
+    actor_url: &str,
+    bundle: &chat::ChatBundle,
+) -> bool {
+    if bundle.actor.trim_end_matches('/') != actor_url.trim_end_matches('/') {
+        return false;
+    }
+    chat::verify_bundle(state, bundle).await.is_ok()
+}
+
+fn store_bundle_cache(state: &ApState, actor_url: &str, bundle: &chat::ChatBundle) {
+    if let Ok(json) = serde_json::to_string(bundle) {
+        let now = now_ms();
+        let expires_at_ms = now.saturating_add(CHAT_BUNDLE_CACHE_TTL_MS);
+        let _ = state
+            .social
+            .upsert_chat_bundle(actor_url, &json, now, expires_at_ms);
+    }
+}
+
+fn actor_origin(actor_url: &str) -> Option<String> {
+    let uri: Uri = actor_url.parse().ok()?;
+    let scheme = uri.scheme_str()?;
+    let authority = uri.authority()?;
+    Some(format!("{scheme}://{authority}"))
+}
+
+fn actor_user_from_url(actor_url: &str) -> Option<String> {
+    let uri: Uri = actor_url.parse().ok()?;
+    let path = uri.path();
+    let mut parts = path.split('/').filter(|s| !s.is_empty());
+    if parts.next()? != "users" {
+        return None;
+    }
+    parts.next().map(|s| s.to_string())
+}
+
+pub fn start_chat_retry_worker(state: ApState, mut shutdown: watch::Receiver<bool>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(CHAT_RETRY_INTERVAL_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() { break; }
+                }
+                _ = tick.tick() => {}
+            }
+            if *shutdown.borrow() {
+                break;
+            }
+            let cutoff = now_ms().saturating_sub(CHAT_RETRY_MIN_AGE_MS);
+            let queued = state
+                .social
+                .list_queued_chat_statuses(CHAT_RETRY_BATCH, cutoff)
+                .unwrap_or_default();
+            if queued.is_empty() {
+                continue;
+            }
+            for (message_id, actor_id, _updated_at_ms) in queued {
+                if *shutdown.borrow() {
+                    break;
+                }
+                let ok = retry_chat_message_to_actor(&state, &message_id, &actor_id).await;
+                if !ok {
+                    let _ = state
+                        .social
+                        .upsert_chat_message_status(&message_id, &actor_id, "queued");
+                }
+            }
+        }
+    });
+}
+
+async fn retry_chat_message_to_actor(
+    state: &ApState,
+    message_id: &str,
+    actor_id: &str,
+) -> bool {
+    let Some(msg) = state.social.get_chat_message(message_id).unwrap_or(None) else {
+        return false;
+    };
+    if msg.deleted {
+        return false;
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    if msg.sender_actor != self_actor {
+        return false;
+    }
+    let payload: chat::ChatPayload = match serde_json::from_str(&msg.body_json) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    if let Ok(Some(bundle)) = fetch_chat_bundle(state, actor_id).await {
+        if let Ok(env) = chat::encrypt_payload_for_bundle(
+            state,
+            &bundle,
+            &msg.thread_id,
+            message_id,
+            &payload,
+        ) {
+            if send_chat_envelope_http(state, actor_id, &env).await {
+                let _ = state
+                    .social
+                    .upsert_chat_message_status(message_id, actor_id, "sent");
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SocialFollowReq {
+    actor: String,
+}
+
+async fn social_follow(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+
+    let bytes = match axum::body::to_bytes(body, 32 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let follow: SocialFollowReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+
+    let target_actor = follow.actor.trim().trim_end_matches('/').to_string();
+    if target_actor.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing actor");
+    }
+
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
+    let id = state.social.new_activity_id(&me);
+    let activity = serde_json::json!({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "id": id,
+      "type": "Follow",
+      "actor": me,
+      "object": &target_actor,
+      "to": [&target_actor],
+    });
+
+    let bytes = match serde_json::to_vec(&activity) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "encode failed"),
+    };
+    let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    if !act_id.is_empty() {
+        let _ = state.social.store_outbox(act_id, bytes.clone());
+    }
+    if let Some(obj) = activity.get("object").and_then(|v| v.as_str()) {
+        let obj = obj.trim_end_matches('/');
+        let _ = state.social.set_following(obj, FollowingStatus::Pending);
+        match state
+            .queue
+            .enqueue_activity(bytes, vec![obj.to_string()])
+            .await
+        {
+            Ok(pending) => {
+                axum::Json(serde_json::json!({"ok": true, "pending": pending, "target": obj}))
+                    .into_response()
+            }
+            Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
+        }
+    } else {
+        simple(StatusCode::BAD_REQUEST, "missing object")
+    }
 }
 
 async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -3682,23 +4599,15 @@ async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> 
         Ok(b) => b.to_vec(),
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
     };
-    let follow: P2pFollowReq = match serde_json::from_slice(&bytes) {
+    let follow: SocialFollowReq = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
 
-    let target_actor = if let Some(peer_id) = follow.peer_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        match state.delivery.p2p_resolve_peer(peer_id).await {
-            Ok(Some(rec)) => rec.actor,
-            Ok(None) => return simple(StatusCode::NOT_FOUND, "peer not found"),
-            Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("resolve failed: {e}")),
-        }
-    } else if let Some(actor) = follow.actor.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        actor.to_string()
-    } else {
-        return simple(StatusCode::BAD_REQUEST, "missing peer_id or actor");
-    };
-    let target_actor = target_actor.trim_end_matches('/').to_string();
+    let target_actor = follow.actor.trim().trim_end_matches('/').to_string();
+    if target_actor.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing actor");
+    }
 
     let base = state.cfg.public_base_url.trim_end_matches('/');
     let me = format!("{base}/users/{}", state.cfg.username);
@@ -3726,8 +4635,15 @@ async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> 
     }
 
     let _ = state.social.remove_following(&target_actor);
-    match state.queue.enqueue_activity(bytes, vec![target_actor.clone()]).await {
-        Ok(pending) => axum::Json(serde_json::json!({"ok": true, "pending": pending, "target": target_actor})).into_response(),
+    match state
+        .queue
+        .enqueue_activity(bytes, vec![target_actor.clone()])
+        .await
+    {
+        Ok(pending) => {
+            axum::Json(serde_json::json!({"ok": true, "pending": pending, "target": target_actor}))
+                .into_response()
+        }
         Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
     }
 }
@@ -3802,16 +4718,22 @@ fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
 
     let body = Webfinger {
         subject: expected_acct,
-        links: vec![WebfingerLink {
-            rel: "self".to_string(),
-            ty: "application/activity+json".to_string(),
-            href: actor_url,
-        },
-        WebfingerLink {
-            rel: "http://webfinger.net/rel/profile-page".to_string(),
-            ty: "text/html".to_string(),
-            href: format!("{}/users/{}", cfg.public_base_url.trim_end_matches('/'), cfg.username),
-        }],
+        links: vec![
+            WebfingerLink {
+                rel: "self".to_string(),
+                ty: "application/activity+json".to_string(),
+                href: actor_url,
+            },
+            WebfingerLink {
+                rel: "http://webfinger.net/rel/profile-page".to_string(),
+                ty: "text/html".to_string(),
+                href: format!(
+                    "{}/users/{}",
+                    cfg.public_base_url.trim_end_matches('/'),
+                    cfg.username
+                ),
+            },
+        ],
     };
 
     jrd(StatusCode::OK, &body)
@@ -3887,8 +4809,6 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
         outbox,
         endpoints: ActorEndpoints {
             shared_inbox,
-            fedi3_peer_id: cfg.p2p_peer_id.clone(),
-            fedi3_peer_addrs: cfg.p2p_peer_addrs.clone(),
         },
         publicKey: PublicKey {
             id: key_id,
@@ -3904,7 +4824,11 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
     }
 }
 
-async fn actor_get(state: &ApState, req: Request<Body>, accept: Option<ActivityAccept>) -> Response<Body> {
+async fn actor_get(
+    state: &ApState,
+    req: Request<Body>,
+    accept: Option<ActivityAccept>,
+) -> Response<Body> {
     let (parts, _body) = req.into_parts();
     if let Err(resp) = verify_signature_if_present(state, &parts).await {
         return resp;
@@ -3918,8 +4842,10 @@ async fn actor_get(state: &ApState, req: Request<Body>, accept: Option<ActivityA
 fn ms_to_rfc3339(ms: i64) -> Option<String> {
     let secs = ms.checked_div(1000)?;
     let nanos = (ms.rem_euclid(1000) * 1_000_000) as u32;
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs).ok()? + time::Duration::nanoseconds(nanos as i64);
-    dt.format(&time::format_description::well_known::Rfc3339).ok()
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).ok()?
+        + time::Duration::nanoseconds(nanos as i64);
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .ok()
 }
 
 #[derive(Serialize)]
@@ -3947,11 +4873,19 @@ struct OrderedCollectionPage<T> {
     next: Option<String>,
 }
 
-async fn followers_get(state: &ApState, req: Request<Body>, accept: Option<ActivityAccept>) -> Response<Body> {
+async fn followers_get(
+    state: &ApState,
+    req: Request<Body>,
+    accept: Option<ActivityAccept>,
+) -> Response<Body> {
     collection_get_string(state, req, accept, "followers").await
 }
 
-async fn following_get(state: &ApState, req: Request<Body>, accept: Option<ActivityAccept>) -> Response<Body> {
+async fn following_get(
+    state: &ApState,
+    req: Request<Body>,
+    accept: Option<ActivityAccept>,
+) -> Response<Body> {
     collection_get_string(state, req, accept, "following").await
 }
 
@@ -3979,7 +4913,11 @@ async fn collection_get_string(
             // Some client/server implementations send Mastodon-like paging params.
             query
                 .split('&')
-                .find(|p| p.starts_with("max_id=") || p.starts_with("since_id=") || p.starts_with("min_id="))
+                .find(|p| {
+                    p.starts_with("max_id=")
+                        || p.starts_with("since_id=")
+                        || p.starts_with("min_id=")
+                })
                 .and_then(|p| p.split_once('='))
                 .and_then(|(_, v)| v.parse::<i64>().ok())
         });
@@ -4006,7 +4944,11 @@ async fn collection_get_string(
     let page = match kind {
         "followers" => state.social.list_followers(limit, cursor),
         "following" => state.social.list_following(limit, cursor),
-        _ => Ok(crate::social_db::CollectionPage { total: 0, items: vec![], next: None }),
+        _ => Ok(crate::social_db::CollectionPage {
+            total: 0,
+            items: vec![],
+            next: None,
+        }),
     };
     let page = match page {
         Ok(p) => p,
@@ -4045,9 +4987,56 @@ async fn empty_collection_get(
     }
     let req = Request::from_parts(parts, body);
     let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
     let col = format!("{base}/users/{}/collections/{kind}", state.cfg.username);
     let query = req.uri().query().unwrap_or("");
     let is_page = query.contains("page=");
+
+    if kind == "featured" {
+        if !is_page {
+            let total = match state.social.count_pinned_objects(&me) {
+                Ok(v) => v,
+                Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+            };
+            let body = OrderedCollection {
+                context: "https://www.w3.org/ns/activitystreams".to_string(),
+                id: col.clone(),
+                ty: "OrderedCollection".to_string(),
+                totalItems: total,
+                first: format!("{col}?page=true"),
+            };
+            return json_activity(StatusCode::OK, accept, &body);
+        }
+
+        let limit = 20;
+        let cursor = query
+            .split('&')
+            .find(|p| p.starts_with("cursor="))
+            .and_then(|p| p.split_once('='))
+            .and_then(|(_, v)| v.parse::<i64>().ok());
+        let page = match state.social.list_pinned_object_ids(&me, limit, cursor) {
+            Ok(p) => p,
+            Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+        };
+        let next = page
+            .next
+            .as_ref()
+            .map(|c| format!("{col}?page=true&cursor={c}"));
+        let id = if let Some(c) = cursor {
+            format!("{col}?page=true&cursor={c}")
+        } else {
+            format!("{col}?page=true")
+        };
+        let body = OrderedCollectionPage {
+            context: "https://www.w3.org/ns/activitystreams".to_string(),
+            id,
+            ty: "OrderedCollectionPage".to_string(),
+            partOf: col,
+            orderedItems: page.items,
+            next,
+        };
+        return json_activity(StatusCode::OK, accept, &body);
+    }
 
     if !is_page {
         let body = OrderedCollection {
@@ -4072,7 +5061,11 @@ async fn empty_collection_get(
     json_activity(StatusCode::OK, accept, &body)
 }
 
-async fn outbox_get(state: &ApState, req: Request<Body>, accept: Option<ActivityAccept>) -> Response<Body> {
+async fn outbox_get(
+    state: &ApState,
+    req: Request<Body>,
+    accept: Option<ActivityAccept>,
+) -> Response<Body> {
     let (parts, body) = req.into_parts();
     if let Err(resp) = verify_signature_if_present(state, &parts).await {
         return resp;
@@ -4089,7 +5082,11 @@ async fn outbox_get(state: &ApState, req: Request<Body>, accept: Option<Activity
         .and_then(|(_, v)| v.parse::<i64>().ok());
 
     if !is_page {
-        let total = state.social.list_outbox(0, None).map(|p| p.total).unwrap_or(0);
+        let total = state
+            .social
+            .list_outbox(0, None)
+            .map(|p| p.total)
+            .unwrap_or(0);
         let body = OrderedCollection {
             context: "https://www.w3.org/ns/activitystreams".to_string(),
             id: col.clone(),
@@ -4113,7 +5110,10 @@ async fn outbox_get(state: &ApState, req: Request<Body>, accept: Option<Activity
         }
     }
 
-    let next = page.next.as_ref().map(|c| format!("{col}?page=true&cursor={c}"));
+    let next = page
+        .next
+        .as_ref()
+        .map(|c| format!("{col}?page=true&cursor={c}"));
     let id = if let Some(c) = cursor {
         format!("{col}?page=true&cursor={c}")
     } else {
@@ -4159,7 +5159,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     } else {
         if let serde_json::Value::Object(map) = &mut activity {
-            map.insert("actor".to_string(), serde_json::Value::String(expected_actor.clone()));
+            map.insert(
+                "actor".to_string(),
+                serde_json::Value::String(expected_actor.clone()),
+            );
         }
     }
 
@@ -4175,7 +5178,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         .unwrap_or_else(|| state.social.new_activity_id(&expected_actor));
 
     if let serde_json::Value::Object(map) = &mut activity {
-        map.insert("id".to_string(), serde_json::Value::String(activity_id.clone()));
+        map.insert(
+            "id".to_string(),
+            serde_json::Value::String(activity_id.clone()),
+        );
     }
 
     let activity_to = activity.get("to").cloned();
@@ -4197,7 +5203,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     let suffix = short_hash(&activity_id);
                     format!("{base}/users/{}/objects/{suffix}", state.cfg.username)
                 });
-                obj_map.insert("id".to_string(), serde_json::Value::String(object_id.clone()));
+                obj_map.insert(
+                    "id".to_string(),
+                    serde_json::Value::String(object_id.clone()),
+                );
                 obj_map
                     .entry("attributedTo".to_string())
                     .or_insert_with(|| serde_json::Value::String(expected_actor.clone()));
@@ -4220,13 +5229,24 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     }
                 }
 
-                normalize_note_for_compat(&state.cfg, obj_map, activity_to.as_ref(), activity_cc.as_ref());
+                normalize_note_for_compat(
+                    &state.cfg,
+                    obj_map,
+                    activity_to.as_ref(),
+                    activity_cc.as_ref(),
+                );
 
                 // If the UI references uploaded media by id, expand to ActivityStreams attachments.
                 expand_media_attachments(state, obj_map);
 
-                if let Ok(obj_bytes) = serde_json::to_vec(&serde_json::Value::Object(obj_map.clone())) {
-                    let _ = state.social.upsert_object_with_actor(&object_id, Some(&expected_actor), obj_bytes);
+                if let Ok(obj_bytes) =
+                    serde_json::to_vec(&serde_json::Value::Object(obj_map.clone()))
+                {
+                    let _ = state.social.upsert_object_with_actor(
+                        &object_id,
+                        Some(&expected_actor),
+                        obj_bytes,
+                    );
                 }
             }
         }
@@ -4256,7 +5276,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 return simple(StatusCode::FORBIDDEN, "not owner");
             }
         } else {
-            obj_map.insert("attributedTo".to_string(), serde_json::Value::String(expected_actor.clone()));
+            obj_map.insert(
+                "attributedTo".to_string(),
+                serde_json::Value::String(expected_actor.clone()),
+            );
         }
         if !obj_map.contains_key("updated") {
             if let Some(p) = ms_to_rfc3339(now_ms()) {
@@ -4273,10 +5296,18 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 obj_map.insert("cc".to_string(), v.clone());
             }
         }
-        normalize_note_for_compat(&state.cfg, obj_map, activity_to.as_ref(), activity_cc.as_ref());
+        normalize_note_for_compat(
+            &state.cfg,
+            obj_map,
+            activity_to.as_ref(),
+            activity_cc.as_ref(),
+        );
         expand_media_attachments(state, obj_map);
         if let Ok(obj_bytes) = serde_json::to_vec(&serde_json::Value::Object(obj_map.clone())) {
-            let _ = state.social.upsert_object_with_actor(&obj_id, Some(&expected_actor), obj_bytes);
+            let _ =
+                state
+                    .social
+                    .upsert_object_with_actor(&obj_id, Some(&expected_actor), obj_bytes);
         }
     } else if activity_type == "Delete" {
         let obj_id = extract_object_id(&activity).unwrap_or_default();
@@ -4289,7 +5320,11 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
         if let Some((oid, tombstone_json, is_tombstone)) = extract_object_or_tombstone(&activity) {
             if is_tombstone {
-                let _ = state.social.upsert_object_with_actor(&oid, Some(&expected_actor), tombstone_json);
+                let _ = state.social.upsert_object_with_actor(
+                    &oid,
+                    Some(&expected_actor),
+                    tombstone_json,
+                );
                 let _ = state.social.mark_object_deleted(&oid);
             } else {
                 let _ = state.social.mark_object_deleted(&oid);
@@ -4305,7 +5340,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Err(_) => return simple(StatusCode::BAD_REQUEST, "unable to encode activity"),
     };
 
-    if let Err(e) = state.social.store_outbox(&activity_id, activity_bytes.clone()) {
+    if let Err(e) = state
+        .social
+        .store_outbox(&activity_id, activity_bytes.clone())
+    {
         return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
     }
 
@@ -4319,9 +5357,13 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     .and_then(|v| v.as_str())
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
-                let _ = state
-                    .social
-                    .upsert_reaction_with_content(&activity_id, ty, actor, &obj_id, content);
+                let _ = state.social.upsert_reaction_with_content(
+                    &activity_id,
+                    ty,
+                    actor,
+                    &obj_id,
+                    content,
+                );
             }
         } else if ty == "Undo" {
             // Undo { object: { id?, type: Like|Announce|EmojiReact, object: <id>, content? } }
@@ -4329,7 +5371,11 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             if let Some(obj) = inner {
                 let inner_ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if inner_ty == "Like" || inner_ty == "Announce" || inner_ty == "EmojiReact" {
-                    let object_id = obj.get("object").and_then(|v| v.as_str()).unwrap_or("").trim();
+                    let object_id = obj
+                        .get("object")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
                     if !object_id.is_empty() {
                         let content = obj
                             .get("content")
@@ -4342,7 +5388,13 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .map(|s| s.to_string())
-                            .or_else(|| state.social.find_reaction_id(actor, inner_ty, object_id, content).ok().flatten());
+                            .or_else(|| {
+                                state
+                                    .social
+                                    .find_reaction_id(actor, inner_ty, object_id, content)
+                                    .ok()
+                                    .flatten()
+                            });
                         if let Some(rid) = rid {
                             let _ = state.social.remove_reaction(&rid);
                         }
@@ -4354,18 +5406,25 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     // Add our own public posts to the federated feed (what our "instance" has seen).
     if is_public_activity(&activity) {
-        let _ = state
-            .social
-            .insert_federated_feed_item(&activity_id, Some(&expected_actor), activity_bytes.clone());
+        let _ = state.social.insert_federated_feed_item(
+            &activity_id,
+            Some(&expected_actor),
+            activity_bytes.clone(),
+        );
 
         // Also add to the DHT/global feed locally so a single peer sees its own public notes even
         // before any gossip round-trips.
-        let _ = state
-            .social
-            .insert_global_feed_item(&activity_id, Some(&expected_actor), activity_bytes.clone());
+        let _ = state.social.insert_global_feed_item(
+            &activity_id,
+            Some(&expected_actor),
+            activity_bytes.clone(),
+        );
     }
 
-    let ty = activity.get("type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let ty = activity
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let _ = state
         .ui_events
         .send(UiEvent::new("timeline", ty, Some(activity_id.clone())));
@@ -4377,7 +5436,9 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 if let Some(in_reply_to) = obj.get("inReplyTo").and_then(|v| v.as_str()) {
                     let in_reply_to = in_reply_to.trim();
                     if !in_reply_to.is_empty() {
-                        let _ = state.social.upsert_note_reply(in_reply_to, &activity_id, now_ms());
+                        let _ = state
+                            .social
+                            .upsert_note_reply(in_reply_to, &activity_id, now_ms());
                     }
                 }
             }
@@ -4410,14 +5471,26 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             }
 
             let mut batch = base_recipients.clone();
-            batch.extend(page.items.into_iter().filter(|r| !is_blocked_actor(state, r)));
+            batch.extend(
+                page.items
+                    .into_iter()
+                    .filter(|r| !is_blocked_actor(state, r)),
+            );
             batch.sort();
             batch.dedup();
             if !batch.is_empty() {
-                pending = pending.saturating_add(match state.queue.enqueue_activity(activity_bytes.clone(), batch).await {
-                    Ok(v) => v,
-                    Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
-                });
+                pending = pending.saturating_add(
+                    match state
+                        .queue
+                        .enqueue_activity(activity_bytes.clone(), batch)
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}"))
+                        }
+                    },
+                );
             }
 
             cursor = page.next.as_deref().and_then(|s| s.parse::<i64>().ok());
@@ -4427,7 +5500,11 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     } else {
         if !recipients.is_empty() {
-            pending = match state.queue.enqueue_activity(activity_bytes, recipients).await {
+            pending = match state
+                .queue
+                .enqueue_activity(activity_bytes, recipients)
+                .await
+            {
                 Ok(v) => v,
                 Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
             };
@@ -4438,13 +5515,19 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     if is_public_activity(&activity) {
         let _ = state
             .delivery
-            .publish_gossip("/fedi3/global/1", serde_json::to_vec(&activity).unwrap_or_default())
+            .publish_gossip(
+                "/fedi3/global/1",
+                serde_json::to_vec(&activity).unwrap_or_default(),
+            )
             .await;
     }
 
     // Mastodon spesso accetta 202 per outbox processing.
     let _ = parts;
-    simple(StatusCode::ACCEPTED, &format!("accepted (pending={pending})"))
+    simple(
+        StatusCode::ACCEPTED,
+        &format!("accepted (pending={pending})"),
+    )
 }
 
 fn activity_has_recipient(activity: &serde_json::Value, target: &str) -> bool {
@@ -4497,14 +5580,22 @@ async fn ui_stream_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     });
 
     Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive"))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
         .into_response()
 }
 
 fn activity_add_cc(activity: &mut serde_json::Value, target: &str) {
-    let Some(map) = activity.as_object_mut() else { return };
+    let Some(map) = activity.as_object_mut() else {
+        return;
+    };
     match map.get_mut("cc") {
-        Some(serde_json::Value::Array(arr)) => arr.push(serde_json::Value::String(target.to_string())),
+        Some(serde_json::Value::Array(arr)) => {
+            arr.push(serde_json::Value::String(target.to_string()))
+        }
         Some(serde_json::Value::String(_)) => {
             map.insert(
                 "cc".to_string(),
@@ -4520,7 +5611,10 @@ fn activity_add_cc(activity: &mut serde_json::Value, target: &str) {
     }
 }
 
-fn expand_media_attachments(state: &ApState, obj_map: &mut serde_json::Map<String, serde_json::Value>) {
+fn expand_media_attachments(
+    state: &ApState,
+    obj_map: &mut serde_json::Map<String, serde_json::Value>,
+) {
     // Support either `fedi3Media: ["<id>", ...]` or `attachment: ["<id>", ...]` (strings).
     let mut ids: Vec<String> = Vec::new();
 
@@ -4564,14 +5658,19 @@ fn expand_media_attachments(state: &ApState, obj_map: &mut serde_json::Map<Strin
 
     if ids.is_empty() {
         if !existing_objects.is_empty() {
-            obj_map.insert("attachment".to_string(), serde_json::Value::Array(existing_objects));
+            obj_map.insert(
+                "attachment".to_string(),
+                serde_json::Value::Array(existing_objects),
+            );
         }
         return;
     }
 
     let mut out = existing_objects;
     for id in ids {
-        let Ok(Some(item)) = state.social.get_media(&id) else { continue };
+        let Ok(Some(item)) = state.social.get_media(&id) else {
+            continue;
+        };
         let ty = if item.media_type.to_ascii_lowercase().starts_with("image/") {
             "Image"
         } else if item.media_type.to_ascii_lowercase().starts_with("video/") {
@@ -4583,14 +5682,23 @@ fn expand_media_attachments(state: &ApState, obj_map: &mut serde_json::Map<Strin
         };
 
         let mut doc = serde_json::Map::new();
-        doc.insert("type".to_string(), serde_json::Value::String(ty.to_string()));
+        doc.insert(
+            "type".to_string(),
+            serde_json::Value::String(ty.to_string()),
+        );
         doc.insert(
             "mediaType".to_string(),
             serde_json::Value::String(item.media_type.clone()),
         );
-        doc.insert("url".to_string(), serde_json::Value::String(item.url.clone()));
+        doc.insert(
+            "url".to_string(),
+            serde_json::Value::String(item.url.clone()),
+        );
         if let Some(bh) = item.blurhash.as_deref().filter(|s| !s.trim().is_empty()) {
-            doc.insert("blurhash".to_string(), serde_json::Value::String(bh.to_string()));
+            doc.insert(
+                "blurhash".to_string(),
+                serde_json::Value::String(bh.to_string()),
+            );
         }
         if let Some(w) = item.width.and_then(|v| (v > 0).then_some(v as u64)) {
             doc.insert("width".to_string(), serde_json::Value::Number(w.into()));
@@ -4797,23 +5905,48 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
     };
     if let Some(ip) = client_ip_from_headers(&parts.headers) {
-        if let Err(resp) = inbox_rate_limit(state, &format!("ip:{ip}"), body_bytes.len() as u64).await {
+        if let Err(resp) =
+            inbox_rate_limit(state, &format!("ip:{ip}"), body_bytes.len() as u64).await
+        {
             state.net.rate_limit_hit();
-            let _ = state
-                .social
-                .insert_audit_event("rate_limit", None, None, None, false, Some("429"), Some("inbox ip"));
+            let _ = state.social.insert_audit_event(
+                "rate_limit",
+                None,
+                None,
+                None,
+                false,
+                Some("429"),
+                Some("inbox ip"),
+            );
             return resp;
         }
     }
 
-    let receipt_activity_id = crate::delivery_queue::activity_id_from_bytes(&body_bytes).unwrap_or_default();
+    let receipt_activity_id =
+        crate::delivery_queue::activity_id_from_bytes(&body_bytes).unwrap_or_default();
 
     if let Err(e) = verify_digest_if_present(&parts.headers, &body_bytes) {
-        let _ = state.social.insert_audit_event("inbox", None, None, None, false, Some("401"), Some("digest invalid"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("digest invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
     if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        let _ = state.social.insert_audit_event("inbox", None, None, None, false, Some("401"), Some("date invalid"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("date invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("date invalid: {e}"));
     }
 
@@ -4824,21 +5957,48 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         .and_then(|v| v.to_str().ok());
 
     let Some(sig_header) = sig_header else {
-        let _ = state.social.insert_audit_event("inbox", None, None, None, false, Some("401"), Some("missing Signature"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("missing Signature"),
+        );
         return simple(StatusCode::UNAUTHORIZED, "missing Signature header");
     };
 
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
         Err(e) => {
-            let _ = state.social.insert_audit_event("inbox", None, None, None, false, Some("401"), Some("bad Signature"));
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                None,
+                None,
+                None,
+                false,
+                Some("401"),
+                Some("bad Signature"),
+            );
             return simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"));
         }
     };
 
     // Temp blocks (best-effort anti-abuse) on keyId, before expensive key resolution.
-    if let Ok(Some(_until)) = state.social.abuse_check_blocked(&abuse_key_for_key_id(&sig.key_id)) {
-        let _ = state.social.insert_audit_event("inbox", None, Some(&sig.key_id), None, false, Some("429"), Some("temp blocked keyId"));
+    if let Ok(Some(_until)) = state
+        .social
+        .abuse_check_blocked(&abuse_key_for_key_id(&sig.key_id))
+    {
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("temp blocked keyId"),
+        );
         return simple(StatusCode::TOO_MANY_REQUESTS, "rate limited");
     }
 
@@ -4847,42 +6007,100 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         return resp;
     }
 
-    let signing_string = match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
-        Ok(s) => s,
-        Err(e) => return simple(StatusCode::UNAUTHORIZED, &format!("bad signed headers: {e}")),
-    };
+    let signing_string =
+        match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
+            Ok(s) => s,
+            Err(e) => {
+                return simple(
+                    StatusCode::UNAUTHORIZED,
+                    &format!("bad signed headers: {e}"),
+                )
+            }
+        };
 
-    let summary = match state.key_resolver.resolve_actor_summary_for_key_id(&sig.key_id).await {
+    let summary = match state
+        .key_resolver
+        .resolve_actor_summary_for_key_id(&sig.key_id)
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
-            let _ = state.social.abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
-            let _ = state.social.insert_audit_event("inbox", None, Some(&sig.key_id), None, false, Some("401"), Some("key resolve failed"));
-            return simple(StatusCode::UNAUTHORIZED, &format!("key resolve failed: {e}"));
+            let _ = state
+                .social
+                .abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                None,
+                Some(&sig.key_id),
+                None,
+                false,
+                Some("401"),
+                Some("key resolve failed"),
+            );
+            return simple(
+                StatusCode::UNAUTHORIZED,
+                &format!("key resolve failed: {e}"),
+            );
         }
     };
     let pem = summary.public_key_pem.clone();
 
     if let Err(e) = verify_signature_rsa_sha256(&pem, &signing_string, &sig.signature) {
-        let _ = state.social.abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
-        let _ = state.social.abuse_record_strike(&abuse_key_for_actor(&summary.actor_url), 1);
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("401"), Some("signature invalid"));
+        let _ = state
+            .social
+            .abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
+        let _ = state
+            .social
+            .abuse_record_strike(&abuse_key_for_actor(&summary.actor_url), 1);
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("signature invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("signature invalid: {e}"));
     }
 
     // Post-auth temp block on actor id.
-    if let Ok(Some(_until)) = state.social.abuse_check_blocked(&abuse_key_for_actor(&summary.actor_url)) {
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("429"), Some("temp blocked actor"));
+    if let Ok(Some(_until)) = state
+        .social
+        .abuse_check_blocked(&abuse_key_for_actor(&summary.actor_url))
+    {
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("temp blocked actor"),
+        );
         return simple(StatusCode::TOO_MANY_REQUESTS, "rate limited");
     }
 
     if is_blocked_actor(state, &summary.actor_url) {
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("403"), Some("blocked"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("403"),
+            Some("blocked"),
+        );
         return simple(StatusCode::FORBIDDEN, "blocked");
     }
 
     // Secondary rate limiting on resolved actor url (post-auth).
-    if let Err(resp) =
-        inbox_rate_limit(state, &format!("actor:{}", summary.actor_url), body_bytes.len() as u64).await
+    if let Err(resp) = inbox_rate_limit(
+        state,
+        &format!("actor:{}", summary.actor_url),
+        body_bytes.len() as u64,
+    )
+    .await
     {
         return resp;
     }
@@ -4891,29 +6109,63 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
     let bytes = body_bytes.len() as u64;
     let key_quota = format!("day:key:{}", short_hash(&sig.key_id));
     if let Err(resp) = inbox_quota_limit(state, &key_quota, bytes) {
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("429"), Some("quota keyId/day"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("quota keyId/day"),
+        );
         return resp;
     }
     let actor_quota = format!("day:actor:{}", short_hash(&summary.actor_url));
     if let Err(resp) = inbox_quota_limit(state, &actor_quota, bytes) {
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("429"), Some("quota actor/day"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("quota actor/day"),
+        );
         return resp;
     }
     if let Some(host) = host_from_url(&summary.actor_url) {
         let host_quota = format!("day:host:{}", short_hash(&host));
         if let Err(resp) = inbox_quota_limit(state, &host_quota, bytes) {
-            let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("429"), Some("quota host/day"));
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                Some(&summary.actor_url),
+                Some(&sig.key_id),
+                None,
+                false,
+                Some("429"),
+                Some("quota host/day"),
+            );
             return resp;
         }
     }
 
-    let _ = state.social.upsert_actor_meta(&summary.actor_url, summary.is_fedi3);
+    let _ = state
+        .social
+        .upsert_actor_meta(&summary.actor_url, summary.is_fedi3);
 
     // Processing minimale: Follow / Accept / Undo (per compatibilità).
     let activity: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(_) => {
-            let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("400"), Some("invalid json"));
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                Some(&summary.actor_url),
+                Some(&sig.key_id),
+                None,
+                false,
+                Some("400"),
+                Some("invalid json"),
+            );
             return simple(StatusCode::BAD_REQUEST, "invalid activity json");
         }
     };
@@ -4921,26 +6173,64 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
     match state.social.mark_inbox_seen(&dedup_id) {
         Ok(true) => {}
         Ok(false) => {
-            let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), Some(&dedup_id), true, Some("202"), Some("duplicate"));
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                Some(&summary.actor_url),
+                Some(&sig.key_id),
+                Some(&dedup_id),
+                true,
+                Some("202"),
+                Some("duplicate"),
+            );
             return simple(StatusCode::ACCEPTED, "duplicate");
         }
         Err(e) => {
-            let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), Some(&dedup_id), false, Some("502"), Some("db error"));
+            let _ = state.social.insert_audit_event(
+                "inbox",
+                Some(&summary.actor_url),
+                Some(&sig.key_id),
+                Some(&dedup_id),
+                false,
+                Some("502"),
+                Some("db error"),
+            );
             return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
         }
     }
 
     if let Err(e) = process_inbox_activity(state, &activity).await {
-        let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), Some(&dedup_id), false, Some("502"), Some("processing error"));
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            Some(&dedup_id),
+            false,
+            Some("502"),
+            Some("processing error"),
+        );
         return simple(StatusCode::BAD_GATEWAY, &format!("processing error: {e}"));
     }
 
     // Best-effort delivery receipt for Fedi3 peers: helps the sender's queue handle long offline periods.
     if summary.is_fedi3 && !receipt_activity_id.is_empty() {
-        let _ = send_delivery_receipt_best_effort(state, &summary.actor_url, &summary.public_key_pem, &receipt_activity_id).await;
+        let _ = send_delivery_receipt_best_effort(
+            state,
+            &summary.actor_url,
+            &summary.public_key_pem,
+            &receipt_activity_id,
+        )
+        .await;
     }
 
-    let _ = state.social.insert_audit_event("inbox", Some(&summary.actor_url), Some(&sig.key_id), Some(&dedup_id), true, Some("202"), None);
+    let _ = state.social.insert_audit_event(
+        "inbox",
+        Some(&summary.actor_url),
+        Some(&sig.key_id),
+        Some(&dedup_id),
+        true,
+        Some("202"),
+        None,
+    );
     simple(StatusCode::ACCEPTED, "accepted")
 }
 
@@ -4957,11 +6247,27 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     };
 
     if let Err(e) = verify_digest_if_present(&parts.headers, &body_bytes) {
-        let _ = state.social.insert_audit_event("receipt", None, None, None, false, Some("401"), Some("digest invalid"));
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("digest invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
     if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        let _ = state.social.insert_audit_event("receipt", None, None, None, false, Some("401"), Some("date invalid"));
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("date invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("date invalid: {e}"));
     }
 
@@ -4972,46 +6278,121 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         .and_then(|v| v.to_str().ok());
 
     let Some(sig_header) = sig_header else {
-        let _ = state.social.insert_audit_event("receipt", None, None, None, false, Some("401"), Some("missing Signature"));
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            None,
+            None,
+            false,
+            Some("401"),
+            Some("missing Signature"),
+        );
         return simple(StatusCode::UNAUTHORIZED, "missing Signature header");
     };
 
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
         Err(e) => {
-            let _ = state.social.insert_audit_event("receipt", None, None, None, false, Some("401"), Some("bad Signature"));
+            let _ = state.social.insert_audit_event(
+                "receipt",
+                None,
+                None,
+                None,
+                false,
+                Some("401"),
+                Some("bad Signature"),
+            );
             return simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"));
         }
     };
 
-    if let Ok(Some(_until)) = state.social.abuse_check_blocked(&abuse_key_for_key_id(&sig.key_id)) {
-        let _ = state.social.insert_audit_event("receipt", None, Some(&sig.key_id), None, false, Some("429"), Some("temp blocked keyId"));
+    if let Ok(Some(_until)) = state
+        .social
+        .abuse_check_blocked(&abuse_key_for_key_id(&sig.key_id))
+    {
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("temp blocked keyId"),
+        );
         return simple(StatusCode::TOO_MANY_REQUESTS, "rate limited");
     }
 
-    let signing_string = match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
-        Ok(s) => s,
-        Err(e) => return simple(StatusCode::UNAUTHORIZED, &format!("bad signed headers: {e}")),
-    };
+    let signing_string =
+        match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
+            Ok(s) => s,
+            Err(e) => {
+                return simple(
+                    StatusCode::UNAUTHORIZED,
+                    &format!("bad signed headers: {e}"),
+                )
+            }
+        };
 
-    let summary = match state.key_resolver.resolve_actor_summary_for_key_id(&sig.key_id).await {
+    let summary = match state
+        .key_resolver
+        .resolve_actor_summary_for_key_id(&sig.key_id)
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
-            let _ = state.social.abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
-            let _ = state.social.insert_audit_event("receipt", None, Some(&sig.key_id), None, false, Some("401"), Some("key resolve failed"));
-            return simple(StatusCode::UNAUTHORIZED, &format!("key resolve failed: {e}"));
+            let _ = state
+                .social
+                .abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
+            let _ = state.social.insert_audit_event(
+                "receipt",
+                None,
+                Some(&sig.key_id),
+                None,
+                false,
+                Some("401"),
+                Some("key resolve failed"),
+            );
+            return simple(
+                StatusCode::UNAUTHORIZED,
+                &format!("key resolve failed: {e}"),
+            );
         }
     };
 
-    if let Err(e) = verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature) {
-        let _ = state.social.abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
-        let _ = state.social.abuse_record_strike(&abuse_key_for_actor(&summary.actor_url), 1);
-        let _ = state.social.insert_audit_event("receipt", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("401"), Some("signature invalid"));
+    if let Err(e) =
+        verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature)
+    {
+        let _ = state
+            .social
+            .abuse_record_strike(&abuse_key_for_key_id(&sig.key_id), 1);
+        let _ = state
+            .social
+            .abuse_record_strike(&abuse_key_for_actor(&summary.actor_url), 1);
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("signature invalid"),
+        );
         return simple(StatusCode::UNAUTHORIZED, &format!("signature invalid: {e}"));
     }
 
-    if let Ok(Some(_until)) = state.social.abuse_check_blocked(&abuse_key_for_actor(&summary.actor_url)) {
-        let _ = state.social.insert_audit_event("receipt", Some(&summary.actor_url), Some(&sig.key_id), None, false, Some("429"), Some("temp blocked actor"));
+    if let Ok(Some(_until)) = state
+        .social
+        .abuse_check_blocked(&abuse_key_for_actor(&summary.actor_url))
+    {
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            Some(&summary.actor_url),
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("429"),
+            Some("temp blocked actor"),
+        );
         return simple(StatusCode::TOO_MANY_REQUESTS, "rate limited");
     }
 
@@ -5029,14 +6410,22 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
 
-    let _ = state.social.insert_audit_event("receipt", Some(&summary.actor_url), Some(&sig.key_id), Some(&input.activity_id), true, Some("200"), Some(&format!("updated={updated}")));
+    let _ = state.social.insert_audit_event(
+        "receipt",
+        Some(&summary.actor_url),
+        Some(&sig.key_id),
+        Some(&input.activity_id),
+        true,
+        Some("200"),
+        Some(&format!("updated={updated}")),
+    );
     axum::Json(serde_json::json!({ "ok": true, "updated": updated })).into_response()
 }
 
 async fn send_delivery_receipt_best_effort(
     state: &ApState,
     sender_actor_url: &str,
-    sender_public_key_pem: &str,
+    _sender_public_key_pem: &str,
     activity_id: &str,
 ) -> anyhow::Result<()> {
     let sender_actor_url = sender_actor_url.trim();
@@ -5046,8 +6435,12 @@ async fn send_delivery_receipt_best_effort(
     }
 
     let sender_uri: Uri = sender_actor_url.parse()?;
-    let Some(scheme) = sender_uri.scheme_str() else { return Ok(()) };
-    let Some(auth) = sender_uri.authority() else { return Ok(()) };
+    let Some(scheme) = sender_uri.scheme_str() else {
+        return Ok(());
+    };
+    let Some(auth) = sender_uri.authority() else {
+        return Ok(());
+    };
     let sender_base = format!("{scheme}://{auth}");
     let receipt_url = format!("{sender_base}/.fedi3/receipt");
 
@@ -5060,35 +6453,14 @@ async fn send_delivery_receipt_best_effort(
     });
     let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
 
-    // Prefer P2P/WebRTC when available; fall back to HTTPS.
-    let actor_info = state.delivery.resolve_actor_info(sender_actor_url).await.ok();
-    if let Some(info) = actor_info {
-        if let Some(peer_id) = info.p2p_peer_id.as_deref() {
-            if !info.p2p_peer_addrs.is_empty() {
-                let _ = state.delivery.p2p_add_peer_addrs(peer_id, info.p2p_peer_addrs).await;
-            }
-            if state
-                .delivery
-                .deliver_json_p2p(peer_id, &state.private_key_pem, &my_key_id, &receipt_url, Some(sender_public_key_pem), &body_bytes)
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-            if state
-                .delivery
-                .deliver_json_webrtc(sender_actor_url, peer_id, &state.private_key_pem, &my_key_id, &receipt_url, &body_bytes)
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-        }
-    }
-
     let _ = state
         .delivery
-        .deliver_json(&state.private_key_pem, &my_key_id, &receipt_url, &body_bytes)
+        .deliver_json(
+            &state.private_key_pem,
+            &my_key_id,
+            &receipt_url,
+            &body_bytes,
+        )
         .await;
     Ok(())
 }
@@ -5100,8 +6472,14 @@ fn is_blocked_actor(state: &ApState, actor_url: &str) -> bool {
     if state.social.is_actor_blocked(actor_url).unwrap_or(false) {
         return true;
     }
-    let Some(host) = host_from_url(actor_url) else { return false };
-    state.cfg.blocked_domains.iter().any(|p| domain_matches(&host, p))
+    let Some(host) = host_from_url(actor_url) else {
+        return false;
+    };
+    state
+        .cfg
+        .blocked_domains
+        .iter()
+        .any(|p| domain_matches(&host, p))
 }
 
 fn host_from_url(url: &str) -> Option<String> {
@@ -5111,7 +6489,12 @@ fn host_from_url(url: &str) -> Option<String> {
 
 fn client_ip_from_headers(headers: &HeaderMap) -> Option<String> {
     if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(ip) = v.split(',').next().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(ip) = v
+            .split(',')
+            .next()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             return Some(ip.to_string());
         }
     }
@@ -5168,7 +6551,13 @@ fn inbox_quota_limit(state: &ApState, key: &str, bytes: u64) -> Result<(), Respo
     let window_ms: i64 = 24 * 3600 * 1000;
     let ok = state
         .social
-        .bump_inbox_quota(key, window_ms, limits.max_reqs_per_day, limits.max_bytes_per_day, bytes)
+        .bump_inbox_quota(
+            key,
+            window_ms,
+            limits.max_reqs_per_day,
+            limits.max_bytes_per_day,
+            bytes,
+        )
         .unwrap_or(true);
     if !ok {
         return Err(simple(StatusCode::TOO_MANY_REQUESTS, "rate limited"));
@@ -5233,7 +6622,10 @@ fn canonicalize_json(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_json::Value) -> anyhow::Result<()> {
+pub(crate) async fn process_inbox_activity(
+    state: &ApState,
+    activity: &serde_json::Value,
+) -> anyhow::Result<()> {
     let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let base = state.cfg.public_base_url.trim_end_matches('/');
     let me = format!("{base}/users/{}", state.cfg.username);
@@ -5247,24 +6639,69 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
             match ty {
                 "Create" | "Update" => {
                     if let Some((obj_id, obj_json)) = extract_object(activity) {
-                        let actor_opt = if actor.is_empty() { None } else { Some(actor) };
+                        let activity_to = activity.get("to");
+                        let activity_cc = activity.get("cc");
+                        if let Ok(mut obj_v) =
+                            serde_json::from_slice::<serde_json::Value>(&obj_json)
+                        {
+                            if let Some(obj_map) = obj_v.as_object_mut() {
+                                let obj_type = obj_map
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if obj_type == "Tombstone" {
+                                    let actor_opt =
+                                        if actor.is_empty() { None } else { Some(actor) };
+                                    if let Ok(bytes) = serde_json::to_vec(&obj_v) {
+                                        let _ = state
+                                            .social
+                                            .upsert_object_with_actor(&obj_id, actor_opt, bytes);
+                                        let _ = state.social.mark_object_deleted(&obj_id);
+                                    }
+                                } else if is_object_reference(obj_map) {
+                                    let _ = fetch_and_store_object(state, &obj_id).await;
+                                } else {
+                                    normalize_note_for_compat(
+                                        &state.cfg,
+                                        obj_map,
+                                        activity_to,
+                                        activity_cc,
+                                    );
+                                    let normalized_json = serde_json::to_vec(&obj_v)
+                                        .unwrap_or_else(|_| obj_json.clone());
+                                    let actor_opt =
+                                        if actor.is_empty() { None } else { Some(actor) };
 
-                        // Index replies (Create Note with inReplyTo) so UI can show replies under posts.
-                        if ty == "Create" {
-                            if let Ok(obj_v) = serde_json::from_slice::<serde_json::Value>(&obj_json) {
-                                if obj_v.get("type").and_then(|v| v.as_str()) == Some("Note") {
-                                    if let Some(in_reply_to) = obj_v.get("inReplyTo").and_then(|v| v.as_str()) {
-                                        let in_reply_to = in_reply_to.trim();
-                                        if !in_reply_to.is_empty() {
-                                            let act_store_id = activity_dedup_id(activity);
-                                            let _ = state.social.upsert_note_reply(in_reply_to, &act_store_id, now_ms());
+                                    // Index replies (Create Note with inReplyTo) so UI can show replies under posts.
+                                    if ty == "Create" {
+                                        if obj_v.get("type").and_then(|v| v.as_str())
+                                            == Some("Note")
+                                        {
+                                            if let Some(in_reply_to) =
+                                                obj_v.get("inReplyTo").and_then(|v| v.as_str())
+                                            {
+                                                let in_reply_to = in_reply_to.trim();
+                                                if !in_reply_to.is_empty() {
+                                                    let act_store_id =
+                                                        activity_dedup_id(activity);
+                                                    let _ = state.social.upsert_note_reply(
+                                                        in_reply_to,
+                                                        &act_store_id,
+                                                        now_ms(),
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
+
+                                    let _ = state.social.upsert_object_with_actor(
+                                        &obj_id,
+                                        actor_opt,
+                                        normalized_json,
+                                    );
                                 }
                             }
                         }
-
-                        let _ = state.social.upsert_object_with_actor(&obj_id, actor_opt, obj_json);
                     } else if let Some(obj_id) = extract_object_id(activity) {
                         let _ = fetch_and_store_object(state, &obj_id).await;
                     }
@@ -5272,10 +6709,16 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                 "Delete" => {
                     if let Some(obj_id) = extract_object_id(activity) {
                         // Delete is terminal; store tombstone if provided, otherwise mark deleted and try fetch.
-                        if let Some((oid, tombstone_json, is_tombstone)) = extract_object_or_tombstone(activity) {
+                        if let Some((oid, tombstone_json, is_tombstone)) =
+                            extract_object_or_tombstone(activity)
+                        {
                             if is_tombstone {
                                 let actor_opt = if actor.is_empty() { None } else { Some(actor) };
-                                let _ = state.social.upsert_object_with_actor(&oid, actor_opt, tombstone_json);
+                                let _ = state.social.upsert_object_with_actor(
+                                    &oid,
+                                    actor_opt,
+                                    tombstone_json,
+                                );
                                 let _ = state.social.mark_object_deleted(&oid);
                             } else {
                                 let _ = state.social.mark_object_deleted(&oid);
@@ -5288,13 +6731,44 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                 }
                 "Announce" | "Like" | "EmojiReact" => {
                     if !actor.is_empty() {
-                        if let Some(obj_id) = extract_object_id(activity) {
-                            let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let mut obj_id: Option<String> = None;
+                        if let Some((oid, obj_json)) = extract_object(activity) {
+                            obj_id = Some(oid.clone());
+                            if let Ok(mut obj_v) =
+                                serde_json::from_slice::<serde_json::Value>(&obj_json)
+                            {
+                                if let Some(obj_map) = obj_v.as_object_mut() {
+                                    if !is_object_reference(obj_map) {
+                                        normalize_note_for_compat(
+                                            &state.cfg,
+                                            obj_map,
+                                            activity.get("to"),
+                                            activity.get("cc"),
+                                        );
+                                        if let Ok(bytes) = serde_json::to_vec(&obj_v) {
+                                            let actor_opt = Some(actor);
+                                            let _ = state
+                                                .social
+                                                .upsert_object_with_actor(&oid, actor_opt, bytes);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Some(oid) = extract_object_id(activity) {
+                            obj_id = Some(oid);
+                        }
+                        if let Some(obj_id) = obj_id {
+                            let act_id =
+                                activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
                             if !act_id.is_empty() {
-                                let content = activity.get("content").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
-                                let _ = state
-                                    .social
-                                    .upsert_reaction_with_content(act_id, ty, actor, &obj_id, content);
+                                let content = activity
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty());
+                                let _ = state.social.upsert_reaction_with_content(
+                                    act_id, ty, actor, &obj_id, content,
+                                );
                             }
                             // Ensure we have the object locally.
                             let _ = fetch_and_store_object(state, &obj_id).await;
@@ -5316,7 +6790,10 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
         }
         "Follow" => {
             let actor = activity.get("actor").and_then(|v| v.as_str()).unwrap_or("");
-            let object = activity.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            let object = activity
+                .get("object")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if actor.is_empty() || object != me {
                 return Ok(());
             }
@@ -5325,9 +6802,11 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let _ = state
-                .ui_events
-                .send(UiEvent::new("notification", Some("Follow".to_string()), act_id));
+            let _ = state.ui_events.send(UiEvent::new(
+                "notification",
+                Some("Follow".to_string()),
+                act_id,
+            ));
             state.social.add_follower(actor)?;
             if let Some(fid) = activity.get("id").and_then(|v| v.as_str()) {
                 let _ = state.social.remember_inbox_follow(fid, actor);
@@ -5348,10 +6827,15 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
             if !id.is_empty() {
                 let _ = state.social.store_outbox(id, bytes.clone());
             }
-            state.queue.enqueue_activity(bytes, vec![actor.to_string()]).await?;
-            let _ = state
-                .ui_events
-                .send(UiEvent::new("timeline", Some("Accept".to_string()), Some(accept_id.clone())));
+            state
+                .queue
+                .enqueue_activity(bytes, vec![actor.to_string()])
+                .await?;
+            let _ = state.ui_events.send(UiEvent::new(
+                "timeline",
+                Some("Accept".to_string()),
+                Some(accept_id.clone()),
+            ));
             Ok(())
         }
         "Accept" => {
@@ -5362,43 +6846,62 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
 
             // Some servers send object as the Follow activity id (string). Best-effort fetch.
             let follow_obj: serde_json::Value = match obj {
-                serde_json::Value::String(id_or_url) => {
-                    resolve_activity_ref(state, id_or_url).await.unwrap_or(serde_json::Value::Null)
-                }
+                serde_json::Value::String(id_or_url) => resolve_activity_ref(state, id_or_url)
+                    .await
+                    .unwrap_or(serde_json::Value::Null),
                 _ => obj.clone(),
             };
 
-            let obj_type = follow_obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let obj_type = follow_obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if obj_type != "Follow" {
                 if !accept_actor.is_empty() {
-                    if let Ok(Some(FollowingStatus::Pending)) = state.social.get_following_status(accept_actor) {
-                        state.social.set_following(accept_actor, FollowingStatus::Accepted)?;
+                    if let Ok(Some(FollowingStatus::Pending)) =
+                        state.social.get_following_status(accept_actor)
+                    {
+                        state
+                            .social
+                            .set_following(accept_actor, FollowingStatus::Accepted)?;
                         let act_id = activity
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .filter(|s| !s.trim().is_empty());
-                        let _ = state
-                            .ui_events
-                            .send(UiEvent::new("notification", Some("Accept".to_string()), act_id));
+                        let _ = state.ui_events.send(UiEvent::new(
+                            "notification",
+                            Some("Accept".to_string()),
+                            act_id,
+                        ));
                     }
                 }
                 return Ok(());
             }
-            let obj_actor = follow_obj.get("actor").and_then(|v| v.as_str()).unwrap_or("");
-            let obj_object = follow_obj.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            let obj_actor = follow_obj
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let obj_object = follow_obj
+                .get("object")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if obj_actor != me || obj_object.is_empty() {
                 return Ok(());
             }
-            state.social.set_following(obj_object, FollowingStatus::Accepted)?;
+            state
+                .social
+                .set_following(obj_object, FollowingStatus::Accepted)?;
             let act_id = activity
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let _ = state
-                .ui_events
-                .send(UiEvent::new("notification", Some("Accept".to_string()), act_id));
+            let _ = state.ui_events.send(UiEvent::new(
+                "notification",
+                Some("Accept".to_string()),
+                act_id,
+            ));
             Ok(())
         }
         "Reject" => {
@@ -5407,29 +6910,44 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
             let obj = activity.get("object");
             let Some(obj) = obj else { return Ok(()) };
             let follow_obj: serde_json::Value = match obj {
-                serde_json::Value::String(id_or_url) => {
-                    resolve_activity_ref(state, id_or_url).await.unwrap_or(serde_json::Value::Null)
-                }
+                serde_json::Value::String(id_or_url) => resolve_activity_ref(state, id_or_url)
+                    .await
+                    .unwrap_or(serde_json::Value::Null),
                 _ => obj.clone(),
             };
-            if follow_obj.get("type").and_then(|v| v.as_str()).unwrap_or("") != "Follow" {
+            if follow_obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                != "Follow"
+            {
                 if !reject_actor.is_empty() {
-                    if let Ok(Some(FollowingStatus::Pending)) = state.social.get_following_status(reject_actor) {
+                    if let Ok(Some(FollowingStatus::Pending)) =
+                        state.social.get_following_status(reject_actor)
+                    {
                         let _ = state.social.remove_following(reject_actor);
                         let act_id = activity
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .filter(|s| !s.trim().is_empty());
-                        let _ = state
-                            .ui_events
-                            .send(UiEvent::new("notification", Some("Reject".to_string()), act_id));
+                        let _ = state.ui_events.send(UiEvent::new(
+                            "notification",
+                            Some("Reject".to_string()),
+                            act_id,
+                        ));
                     }
                 }
                 return Ok(());
             }
-            let obj_actor = follow_obj.get("actor").and_then(|v| v.as_str()).unwrap_or("");
-            let obj_object = follow_obj.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            let obj_actor = follow_obj
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let obj_object = follow_obj
+                .get("object")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if obj_actor != me || obj_object.is_empty() {
                 return Ok(());
             }
@@ -5439,9 +6957,11 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let _ = state
-                .ui_events
-                .send(UiEvent::new("notification", Some("Reject".to_string()), act_id));
+            let _ = state.ui_events.send(UiEvent::new(
+                "notification",
+                Some("Reject".to_string()),
+                act_id,
+            ));
             Ok(())
         }
         "Undo" => {
@@ -5452,11 +6972,9 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
 
             // Some servers send object as the original activity id (string). Best-effort fetch.
             let obj_val: serde_json::Value = match obj {
-                serde_json::Value::String(id_or_url) => {
-                    resolve_activity_ref(state, id_or_url)
-                        .await
-                        .unwrap_or_else(|| serde_json::Value::String(id_or_url.clone()))
-                }
+                serde_json::Value::String(id_or_url) => resolve_activity_ref(state, id_or_url)
+                    .await
+                    .unwrap_or_else(|| serde_json::Value::String(id_or_url.clone())),
                 _ => obj.clone(),
             };
 
@@ -5469,6 +6987,15 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                         if follow_actor == actor {
                             let _ = state.social.remove_follower(&follow_actor);
                             let _ = state.social.forget_inbox_follow(id);
+                        }
+                    }
+                    if id.starts_with("http://") || id.starts_with("https://") {
+                        for ty in ["Like", "Announce", "EmojiReact"] {
+                            if let Ok(Some(rid)) =
+                                state.social.find_reaction_id(actor, ty, id, None)
+                            {
+                                let _ = state.social.remove_reaction(&rid);
+                            }
                         }
                     }
                 }
@@ -5489,11 +7016,36 @@ pub(crate) async fn process_inbox_activity(state: &ApState, activity: &serde_jso
                     state.social.remove_follower(actor)?;
                     Ok(())
                 }
-                "Like" | "Announce" => {
+                "Like" | "Announce" | "EmojiReact" => {
                     // Many servers use object.id for the reaction activity id; fallback to embedded id.
                     let reaction_id = obj_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     if !reaction_id.is_empty() {
                         let _ = state.social.remove_reaction(reaction_id);
+                        return Ok(());
+                    }
+                    if !actor.is_empty() {
+                        let object_id = obj_val
+                            .get("object")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                obj_val.get("object").and_then(|v| {
+                                    v.get("id").and_then(|v| v.as_str())
+                                })
+                            })
+                            .unwrap_or("");
+                        let content = obj_val
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        if !object_id.is_empty() {
+                            if let Ok(Some(rid)) = state
+                                .social
+                                .find_reaction_id(actor, obj_type, object_id, content)
+                            {
+                                let _ = state.social.remove_reaction(&rid);
+                            }
+                        }
                     }
                     Ok(())
                 }
@@ -5510,9 +7062,13 @@ fn store_generic_activity(state: &ApState, activity: &serde_json::Value) -> anyh
     let bytes = canonical_json_bytes(activity);
     let id = activity_dedup_id(activity);
 
-    state.social.store_inbox_activity(&id, actor.as_deref(), ty, bytes.clone())?;
+    state
+        .social
+        .store_inbox_activity(&id, actor.as_deref(), ty, bytes.clone())?;
     if is_public_activity(activity) {
-        let _ = state.social.insert_federated_feed_item(&id, actor.as_deref(), bytes);
+        let _ = state
+            .social
+            .insert_federated_feed_item(&id, actor.as_deref(), bytes);
     }
     Ok(())
 }
@@ -5570,7 +7126,10 @@ async fn reactions_me_get(state: &ApState, req: Request<Body>) -> Response<Body>
     let base = state.cfg.public_base_url.trim_end_matches('/');
     let me = format!("{base}/users/{}", state.cfg.username);
 
-    let rows = match state.social.list_reactions_for_actor_object(&me, &object_id, 100) {
+    let rows = match state
+        .social
+        .list_reactions_for_actor_object(&me, &object_id, 100)
+    {
         Ok(v) => v,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
@@ -5647,7 +7206,12 @@ async fn reactions_actors_get(state: &ApState, req: Request<Body>) -> Response<B
         .unwrap_or(50)
         .min(200);
 
-    let rows = match state.social.list_reaction_actors_for_object(&object_id, &ty, content.as_deref(), limit) {
+    let rows = match state.social.list_reaction_actors_for_object(
+        &object_id,
+        &ty,
+        content.as_deref(),
+        limit,
+    ) {
         Ok(v) => v,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
@@ -5679,7 +7243,10 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
 
-    let page = match state.social.list_inbox_notifications(limit.saturating_mul(3), cursor) {
+    let page = match state
+        .social
+        .list_inbox_notifications(limit.saturating_mul(3), cursor)
+    {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
@@ -5689,7 +7256,8 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
     let my_handle = format!("@{}@{}", state.cfg.username, state.cfg.domain);
 
     let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     for (raw, ts) in page.items {
         if items.len() as u32 >= limit {
             break;
@@ -5697,7 +7265,7 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&raw) {
             hydrate_activity(state, &mut v, &mut cache);
             if let Some(ty) = v.get("type").and_then(|v| v.as_str()) {
-                if ty == "Create" || ty == "Announce" {
+                if ty == "Create" || ty == "Announce" || ty == "Like" || ty == "EmojiReact" {
                     if let Some(serde_json::Value::String(obj_ref)) = v.get("object") {
                         if let Some(obj) = resolve_activity_ref(state, obj_ref).await {
                             if let Some(map) = v.as_object_mut() {
@@ -5707,7 +7275,7 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
                     }
                 }
             }
-            if is_notification(&v, &me_actor, &my_handle) {
+            if is_notification(state, &v, &me_actor, &my_handle) {
                 items.push(serde_json::json!({ "ts": ts, "activity": v }));
             }
         }
@@ -5720,21 +7288,56 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
     .into_response()
 }
 
-fn is_notification(activity: &serde_json::Value, me_actor: &str, my_handle: &str) -> bool {
+fn is_notification(
+    state: &ApState,
+    activity: &serde_json::Value,
+    me_actor: &str,
+    my_handle: &str,
+) -> bool {
     let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match ty {
-        "Follow" | "Accept" | "Reject" | "Announce" | "Like" | "EmojiReact" => true,
-        "Create" => {
-            let Some(obj) = activity.get("object").and_then(|v| v.as_object()) else {
-                return false;
-            };
-            if obj.get("type").and_then(|v| v.as_str()) != Some("Note") {
+        "Follow" => activity_has_recipient(activity, me_actor)
+            || activity
+                .get("object")
+                .and_then(|v| v.as_str())
+                .map(|v| v == me_actor)
+                .unwrap_or(false),
+        "Accept" | "Reject" => {
+            let obj = activity.get("object").and_then(|v| v.as_object());
+            let obj_ty = obj.and_then(|o| o.get("type")).and_then(|v| v.as_str());
+            if obj_ty != Some("Follow") {
                 return false;
             }
+            obj.and_then(|o| o.get("actor"))
+                .and_then(|v| v.as_str())
+                .map(|v| v == me_actor)
+                .unwrap_or(false)
+        }
+        "Announce" | "Like" | "EmojiReact" => {
+            activity_targets_my_object(activity, me_actor)
+                || activity_mentions_me(activity, me_actor, my_handle)
+        }
+        "Create" => {
+            let Some(obj) = activity.get("object").and_then(|v| v.as_object()) else {
+                return activity_mentions_me(activity, me_actor, my_handle);
+            };
+            if obj.get("type").and_then(|v| v.as_str()) != Some("Note") {
+                return activity_mentions_me(activity, me_actor, my_handle);
+            }
             if let Some(serde_json::Value::String(in_reply_to)) = obj.get("inReplyTo") {
-                if in_reply_to.contains("/users/") {
-                    // Best-effort: treat replies to our local objects as notifications.
-                    if in_reply_to.contains("/objects/") {
+                let my_prefix = format!("{}/objects/", me_actor.trim_end_matches('/'));
+                if in_reply_to.starts_with(&my_prefix) {
+                    return true;
+                }
+                if state.social.has_local_reply(in_reply_to).unwrap_or(false) {
+                    return true;
+                }
+            }
+            if !obj.contains_key("inReplyTo") || obj.get("inReplyTo").is_none() {
+                if let Some(actor) = activity.get("actor").and_then(|v| v.as_str()) {
+                    if let Ok(Some(FollowingStatus::Accepted)) =
+                        state.social.get_following_status(actor)
+                    {
                         return true;
                     }
                 }
@@ -5749,7 +7352,9 @@ fn is_notification(activity: &serde_json::Value, me_actor: &str, my_handle: &str
                             }
                         }
                         if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
-                            if name == my_handle || name.trim_start_matches('@') == my_handle.trim_start_matches('@') {
+                            if name == my_handle
+                                || name.trim_start_matches('@') == my_handle.trim_start_matches('@')
+                            {
                                 return true;
                             }
                         }
@@ -5761,10 +7366,78 @@ fn is_notification(activity: &serde_json::Value, me_actor: &str, my_handle: &str
                     return true;
                 }
             }
-            false
+            activity_mentions_me(activity, me_actor, my_handle)
         }
         _ => false,
     }
+}
+
+fn activity_targets_my_object(activity: &serde_json::Value, me_actor: &str) -> bool {
+    let Some(obj_id) = activity
+        .get("object")
+        .and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s.as_str()),
+            serde_json::Value::Object(map) => map
+                .get("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    map.get("object")
+                        .and_then(|o| o.get("id"))
+                        .and_then(|v| v.as_str())
+                }),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+    let my_prefix = format!("{}/objects/", me_actor.trim_end_matches('/'));
+    obj_id.starts_with(&my_prefix)
+}
+
+fn activity_mentions_me(activity: &serde_json::Value, me_actor: &str, my_handle: &str) -> bool {
+    let check_tags = |v: &serde_json::Value| {
+        if let Some(tags) = v.get("tag").and_then(|v| v.as_array()) {
+            for t in tags {
+                if t.get("type").and_then(|v| v.as_str()) == Some("Mention") {
+                    if let Some(href) = t.get("href").and_then(|v| v.as_str()) {
+                        if href == me_actor {
+                            return true;
+                        }
+                    }
+                    if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
+                        let name = name.trim();
+                        if name == my_handle
+                            || name.trim_start_matches('@')
+                                == my_handle.trim_start_matches('@')
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(content) = v.get("content").and_then(|v| v.as_str()) {
+            if content.contains(my_handle) {
+                return true;
+            }
+        }
+        false
+    };
+
+    if check_tags(activity) {
+        return true;
+    }
+    if let Some(obj) = activity.get("object") {
+        if check_tags(obj) {
+            return true;
+        }
+        if let Some(inner) = obj.get("object") {
+            if check_tags(inner) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn hydrate_activity(
@@ -5778,13 +7451,21 @@ fn hydrate_activity(
         let obj_id = match activity.get("object") {
             Some(Value::String(url)) => {
                 let u = url.trim();
-                if u.is_empty() { None } else { Some(u.to_string()) }
+                if u.is_empty() {
+                    None
+                } else {
+                    Some(u.to_string())
+                }
             }
             Some(v) => {
                 // Support both `Create{object: Note}` and wrapper forms `Create{object: {object: Note}}`.
                 v.get("id")
                     .and_then(|v| v.as_str())
-                    .or_else(|| v.get("object").and_then(|o| o.get("id")).and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        v.get("object")
+                            .and_then(|o| o.get("id"))
+                            .and_then(|v| v.as_str())
+                    })
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
@@ -5802,15 +7483,20 @@ fn hydrate_activity(
                           "count": count,
                         }));
                     }
-                    activity
-                        .as_object_mut()
-                        .map(|m| m.insert("fedi3ReactionCounts".to_string(), serde_json::Value::Array(out)));
+                    activity.as_object_mut().map(|m| {
+                        m.insert(
+                            "fedi3ReactionCounts".to_string(),
+                            serde_json::Value::Array(out),
+                        )
+                    });
                 }
             }
         }
     }
 
-    let Some(obj) = activity.get_mut("object") else { return };
+    let Some(obj) = activity.get_mut("object") else {
+        return;
+    };
 
     // 1) Replace `object: "<url>"` with the fetched object json if available.
     if let Value::String(url) = obj {
@@ -5831,8 +7517,37 @@ fn hydrate_activity(
         return;
     }
 
-    // 2) If `object` is embedded, attach best-effort context previews (reply/quote).
-    let Some(obj_map) = obj.as_object_mut() else { return };
+    // 2) If `object` is embedded, prefer the stored object for edits/deletes.
+    let embedded_id = obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            obj.get("object")
+                .and_then(|o| o.get("id"))
+                .and_then(|v| v.as_str())
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(obj_id) = embedded_id {
+        if obj_id.starts_with("http://") || obj_id.starts_with("https://") {
+            if let Some(v) = cache.get(obj_id).cloned() {
+                *obj = v;
+                return;
+            }
+            if let Ok(Some(bytes)) = state.social.get_object_json(obj_id) {
+                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                    cache.insert(obj_id.to_string(), v.clone());
+                    *obj = v;
+                    return;
+                }
+            }
+        }
+    }
+
+    // 3) If `object` is embedded, attach best-effort context previews (reply/quote).
+    let Some(obj_map) = obj.as_object_mut() else {
+        return;
+    };
     hydrate_link_field(state, cache, obj_map, "inReplyTo", "fedi3InReplyToObject");
     hydrate_link_field(state, cache, obj_map, "quoteUrl", "fedi3QuoteObject");
     hydrate_link_field(state, cache, obj_map, "quoteUri", "fedi3QuoteObject");
@@ -5849,7 +7564,9 @@ fn hydrate_link_field(
     if obj_map.contains_key(out_field) {
         return;
     }
-    let Some(Value::String(url)) = obj_map.get(field) else { return };
+    let Some(Value::String(url)) = obj_map.get(field) else {
+        return;
+    };
     let url = url.trim();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return;
@@ -5925,14 +7642,18 @@ fn extract_object_id(activity: &serde_json::Value) -> Option<String> {
     let obj = activity.get("object")?;
     match obj {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Object(map) => map.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .find_map(|it| match it {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Object(map) => map.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                _ => None,
-            }),
+        serde_json::Value::Object(map) => map
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        serde_json::Value::Array(arr) => arr.iter().find_map(|it| match it {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(map) => map
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            _ => None,
+        }),
         _ => None,
     }
 }
@@ -5974,72 +7695,35 @@ fn extract_object_or_tombstone(activity: &serde_json::Value) -> Option<(String, 
     }
 }
 
-fn actor_from_object_url(object_url: &str) -> Option<String> {
-    let uri: Uri = object_url.parse().ok()?;
-    let scheme = uri.scheme_str()?;
-    let authority = uri.authority()?;
-    let base = format!("{scheme}://{authority}");
-    let path = uri.path();
-    let marker = "/users/";
-    let idx = path.find(marker)?;
-    let rest = &path[idx + marker.len()..];
-    let mut parts = rest.split('/');
-    let username = parts.next()?.trim();
-    if username.is_empty() {
-        return None;
+fn is_object_reference(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let ty = map.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if ty == "Tombstone" {
+        return false;
     }
-    if parts.next()? != "objects" {
-        return None;
-    }
-    Some(format!("{base}/users/{username}"))
+    let has_payload = ["content", "name", "summary", "attachment", "source", "tag", "inReplyTo"]
+        .iter()
+        .any(|k| match map.get(*k) {
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(serde_json::Value::Array(a)) => !a.is_empty(),
+            Some(serde_json::Value::Object(o)) => !o.is_empty(),
+            _ => false,
+        });
+    !has_payload
 }
 
-async fn fetch_object_from_peer(state: &ApState, object_url: &str) -> anyhow::Result<(bool, Option<Vec<u8>>)> {
-    let Some(actor) = actor_from_object_url(object_url) else {
-        return Ok((false, None));
-    };
-    let info = match state.delivery.resolve_actor_info(&actor).await {
-        Ok(v) => v,
-        Err(_) => return Ok((false, None)),
-    };
-    let Some(peer_id) = info.p2p_peer_id else {
-        return Ok((false, None));
-    };
-    if !info.p2p_peer_addrs.is_empty() {
-        let _ = state
-            .delivery
-            .p2p_add_peer_addrs(&peer_id, info.p2p_peer_addrs)
-            .await;
-    }
-
-    let query = format!("?url={}", urlencoding::encode(object_url));
-    let req = RelayHttpRequest {
-        id: format!("obj-{}", now_ms()),
-        method: "GET".to_string(),
-        path: "/_fedi3/object".to_string(),
-        query,
-        headers: vec![(
-            "accept".to_string(),
-            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\""
-                .to_string(),
-        )],
-        body_b64: "".to_string(),
-    };
-    let resp = match state.delivery.p2p_request(&peer_id, req).await {
-        Ok(v) => v,
-        Err(_) => return Ok((true, None)),
-    };
-    if !(200..300).contains(&resp.status) {
-        return Ok((true, None));
-    }
-    let bytes = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-    if bytes.is_empty() {
-        return Ok((true, None));
-    }
-    Ok((true, Some(bytes)))
+async fn fetch_object_from_peer(
+    state: &ApState,
+    object_url: &str,
+) -> anyhow::Result<(bool, Option<Vec<u8>>)> {
+    let _ = state;
+    let _ = object_url;
+    Ok((false, None))
 }
 
-pub(crate) async fn fetch_and_store_object(state: &ApState, object_url: &str) -> anyhow::Result<()> {
+pub(crate) async fn fetch_and_store_object(
+    state: &ApState,
+    object_url: &str,
+) -> anyhow::Result<()> {
     // Avoid fetching local objects.
     if object_url.contains("/users/")
         && object_url.contains(state.cfg.public_base_url.trim_end_matches('/'))
@@ -6047,14 +7731,11 @@ pub(crate) async fn fetch_and_store_object(state: &ApState, object_url: &str) ->
         return Ok(());
     }
 
-    let (p2p_attempted, mut bytes) = fetch_object_from_peer(state, object_url).await?;
+    let (_p2p_attempted, mut bytes) = fetch_object_from_peer(state, object_url).await?;
     if bytes.is_none() {
         if state.post_delivery_mode == PostDeliveryMode::P2pOnly {
             enqueue_object_fetch(state, object_url, "p2p-only: object not available")?;
             return Ok(());
-        }
-        if p2p_attempted && state.p2p_relay_fallback.as_secs() > 0 {
-            sleep(state.p2p_relay_fallback).await;
         }
         let resp = {
             let uri: Uri = match object_url.parse() {
@@ -6141,18 +7822,24 @@ pub(crate) async fn fetch_and_store_object(state: &ApState, object_url: &str) ->
         .or_else(|| v.get("actor").and_then(|a| a.as_str()));
 
     if ty == "Tombstone" {
-        let _ = state.social.upsert_object_with_actor(id, actor_opt, bytes.to_vec());
+        let _ = state
+            .social
+            .upsert_object_with_actor(id, actor_opt, bytes.to_vec());
         let _ = state.social.mark_object_deleted(id);
         return Ok(());
     }
 
-    let _ = state.social.upsert_object_with_actor(id, actor_opt, bytes.to_vec());
+    let _ = state
+        .social
+        .upsert_object_with_actor(id, actor_opt, bytes.to_vec());
     Ok(())
 }
 
 fn enqueue_object_fetch(state: &ApState, object_url: &str, err: &str) -> anyhow::Result<()> {
     let next = now_ms().saturating_add(10_000);
-    state.social.enqueue_object_fetch(object_url, next, Some(err))?;
+    state
+        .social
+        .enqueue_object_fetch(object_url, next, Some(err))?;
     state.object_fetch.notify();
     Ok(())
 }
@@ -6171,24 +7858,37 @@ enum ActivityAccept {
 }
 
 fn accept_activity(headers: &http::HeaderMap) -> Option<ActivityAccept> {
-    let accept = headers.get(header::ACCEPT)?.to_str().ok()?.to_ascii_lowercase();
+    let accept = headers
+        .get(header::ACCEPT)?
+        .to_str()
+        .ok()?
+        .to_ascii_lowercase();
     if accept.contains("application/ld+json") {
         Some(ActivityAccept::LdJson)
-    } else if accept.contains("application/activity+json") || accept.contains("application/json") || accept.contains("*/*") {
+    } else if accept.contains("application/activity+json")
+        || accept.contains("application/json")
+        || accept.contains("*/*")
+    {
         Some(ActivityAccept::ActivityJson)
     } else {
         None
     }
 }
 
-fn json_activity<T: Serialize>(status: StatusCode, accept: Option<ActivityAccept>, value: &T) -> Response<Body> {
+fn json_activity<T: Serialize>(
+    status: StatusCode,
+    accept: Option<ActivityAccept>,
+    value: &T,
+) -> Response<Body> {
     let body = serde_json::to_vec(value).unwrap_or_default();
     let mut resp = Response::new(Body::from(body));
     *resp.status_mut() = status;
     let headers = resp.headers_mut();
     let ct = match accept.unwrap_or(ActivityAccept::ActivityJson) {
         ActivityAccept::ActivityJson => "application/activity+json; charset=utf-8",
-        ActivityAccept::LdJson => "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"; charset=utf-8",
+        ActivityAccept::LdJson => {
+            "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"; charset=utf-8"
+        }
     };
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap());
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -6211,7 +7911,11 @@ fn jrd<T: Serialize>(status: StatusCode, value: &T) -> Response<Body> {
 fn is_actor_value(v: &serde_json::Value) -> bool {
     matches!(
         v.get("type").and_then(|t| t.as_str()),
-        Some("Person") | Some("Service") | Some("Organization") | Some("Group") | Some("Application")
+        Some("Person")
+            | Some("Service")
+            | Some("Organization")
+            | Some("Group")
+            | Some("Application")
     )
 }
 
@@ -6266,22 +7970,50 @@ fn normalize_search_consistency(input: &str) -> String {
 
 async fn require_relay_search_coverage(state: &ApState) -> Result<(), Response<Body>> {
     let coverage = relay_search_coverage(state).await.map_err(|e| {
-        simple(StatusCode::BAD_GATEWAY, &format!("relay coverage failed: {e}"))
+        simple(
+            StatusCode::BAD_GATEWAY,
+            &format!("relay coverage failed: {e}"),
+        )
     })?;
-    let total_users = coverage.get("total_users").and_then(|v| v.as_u64()).unwrap_or(0);
-    let indexed_users = coverage.get("indexed_users").and_then(|v| v.as_u64()).unwrap_or(0);
-    let coverage_window_ms = coverage.get("coverage_window_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    let last_index_ms = coverage.get("last_index_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    let relays_total = coverage.get("relays_total").and_then(|v| v.as_u64()).unwrap_or(0);
-    let relays_synced = coverage.get("relays_synced").and_then(|v| v.as_u64()).unwrap_or(0);
-    let relay_sync_window_ms = coverage.get("relay_sync_window_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    let relays_last_sync_ms = coverage.get("relays_last_sync_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+    let total_users = coverage
+        .get("total_users")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let indexed_users = coverage
+        .get("indexed_users")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let coverage_window_ms = coverage
+        .get("coverage_window_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let last_index_ms = coverage
+        .get("last_index_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let relays_total = coverage
+        .get("relays_total")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let relays_synced = coverage
+        .get("relays_synced")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let relay_sync_window_ms = coverage
+        .get("relay_sync_window_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let relays_last_sync_ms = coverage
+        .get("relays_last_sync_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let now = now_ms();
 
     let index_ok = indexed_users >= total_users && total_users > 0;
     let index_fresh = coverage_window_ms <= 0 || (now - last_index_ms) <= coverage_window_ms;
     let relays_ok = relays_total == 0 || relays_synced >= relays_total;
-    let relays_fresh = relay_sync_window_ms <= 0 || (now - relays_last_sync_ms) <= relay_sync_window_ms;
+    let relays_fresh =
+        relay_sync_window_ms <= 0 || (now - relays_last_sync_ms) <= relay_sync_window_ms;
 
     if index_ok && index_fresh && relays_ok && relays_fresh {
         Ok(())
@@ -6328,7 +8060,13 @@ async fn relay_search_notes(
         .map(str::trim)
         .filter(|v| !v.is_empty());
     let Some(base) = base else { return Ok(None) };
-    let token = state.cfg.relay_token.as_deref().unwrap_or("").trim().to_string();
+    let token = state
+        .cfg
+        .relay_token
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if token.is_empty() {
         return Ok(None);
     }
@@ -6360,14 +8098,21 @@ async fn relay_search_notes(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    let data = resp.json::<RelaySearchNotesResponse>().await.unwrap_or(RelaySearchNotesResponse {
-        total: Some(0),
-        next: None,
-        items: Some(Vec::new()),
-    });
+    let data = resp
+        .json::<RelaySearchNotesResponse>()
+        .await
+        .unwrap_or(RelaySearchNotesResponse {
+            total: Some(0),
+            next: None,
+            items: Some(Vec::new()),
+        });
     let items = data.items.unwrap_or_default();
     let total = data.total.unwrap_or(items.len() as u64);
-    Ok(Some(crate::social_db::CollectionPage { total, items, next: data.next }))
+    Ok(Some(crate::social_db::CollectionPage {
+        total,
+        items,
+        next: data.next,
+    }))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -6390,7 +8135,13 @@ async fn relay_search_users(
         .map(str::trim)
         .filter(|v| !v.is_empty());
     let Some(base) = base else { return Ok(None) };
-    let token = state.cfg.relay_token.as_deref().unwrap_or("").trim().to_string();
+    let token = state
+        .cfg
+        .relay_token
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if token.is_empty() {
         return Ok(None);
     }
@@ -6418,14 +8169,21 @@ async fn relay_search_users(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    let data = resp.json::<RelaySearchUsersResponse>().await.unwrap_or(RelaySearchUsersResponse {
-        total: Some(0),
-        next: None,
-        items: Some(Vec::new()),
-    });
+    let data = resp
+        .json::<RelaySearchUsersResponse>()
+        .await
+        .unwrap_or(RelaySearchUsersResponse {
+            total: Some(0),
+            next: None,
+            items: Some(Vec::new()),
+        });
     let items = data.items.unwrap_or_default();
     let total = data.total.unwrap_or(items.len() as u64);
-    Ok(Some(crate::social_db::CollectionPage { total, items, next: data.next }))
+    Ok(Some(crate::social_db::CollectionPage {
+        total,
+        items,
+        next: data.next,
+    }))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -6451,11 +8209,20 @@ async fn relay_search_hashtags(
         .map(str::trim)
         .filter(|v| !v.is_empty());
     let Some(base) = base else { return Ok(None) };
-    let token = state.cfg.relay_token.as_deref().unwrap_or("").trim().to_string();
+    let token = state
+        .cfg
+        .relay_token
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if token.is_empty() {
         return Ok(None);
     }
-    let url = format!("{}/_fedi3/relay/search/hashtags", base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/relay/search/hashtags",
+        base.trim_end_matches('/')
+    );
     let resp = send_with_retry_metrics(
         || {
             state
@@ -6475,7 +8242,10 @@ async fn relay_search_hashtags(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    let data = resp.json::<RelaySearchTagsResponse>().await.unwrap_or(RelaySearchTagsResponse { items: None });
+    let data = resp
+        .json::<RelaySearchTagsResponse>()
+        .await
+        .unwrap_or(RelaySearchTagsResponse { items: None });
     let items = data.items.unwrap_or_default();
     Ok(Some(items.into_iter().map(|i| (i.name, i.count)).collect()))
 }
@@ -6490,11 +8260,20 @@ async fn relay_search_coverage(state: &ApState) -> anyhow::Result<serde_json::Va
     else {
         return Err(anyhow::anyhow!("missing relay_base_url"));
     };
-    let token = state.cfg.relay_token.as_deref().unwrap_or("").trim().to_string();
+    let token = state
+        .cfg
+        .relay_token
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if token.is_empty() {
         return Err(anyhow::anyhow!("missing relay_token"));
     }
-    let url = format!("{}/_fedi3/relay/search/coverage", base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/relay/search/coverage",
+        base.trim_end_matches('/')
+    );
     let resp = send_with_retry_metrics(
         || {
             state
@@ -6552,7 +8331,6 @@ fn url_decode(s: &str) -> String {
     }
     out
 }
-
 
 fn from_hex(c: u8) -> Option<u8> {
     match c {

@@ -1,6 +1,114 @@
-cd ~/Scrivania/Fedi3-Linux/app
-flutter clean
-rm -rf flutter/ephemeral
-flutter pub get
-flutter build linux --release
-7t2qKx8mE5nQp3LrV9xwAh1B
+Auto-generated telemetry (Fedi3)
+This issue was created automatically from anonymous client telemetry.
+
+user: @redhunt07@relay.fedi3.com
+type: zone_error
+level: error
+mode: release
+ts: 2026-01-20T20:01:30.458763Z
+fingerprint: a7adf032c3ab0a08d2173bb8f78ffe6c819acca7005290a145f79c45b34f6ea9
+Message
+FileSystemException: writeFrom failed, path = '' (OS Error: Handle non valido, errno = 6)
+Stack (sanitized)
+#0      _RandomAccessFile.writeFromSync (dart:io/file_impl.dart:1027)
+#1      _StdConsumer.addStream.<anonymous closure> (dart:io/stdio.dart:328)
+#2      _rootRunUnary (dart:async/zone.dart:1538)
+#3      _CustomZone.runUnary (dart:async/zone.dart:1429)
+#4      _CustomZone.runUnaryGuarded (dart:async/zone.dart:1329)
+#5      _BufferingStreamSubscription._sendData (dart:async/stream_impl.dart:381)
+#6      _BufferingStreamSubscription._add (dart:async/stream_impl.dart:312)
+#7      _SyncStreamControllerDispatch._sendData (dart:async/stream_controller.dart:798)
+#8      _StreamController._add (dart:async/stream_controller.dart:663)
+#9      _StreamController.add (dart:async/stream_controller.dart:618)
+
+Auto-generated telemetry (Fedi3)
+This issue was created automatically from anonymous client telemetry.
+
+user: @panormus@relay.fedi3.com
+type: flutter_error
+level: error
+mode: release
+ts: 2026-01-20T19:59:56.072569Z
+fingerprint: 55202434a5a86e62fe6b6d105ecd2ac5703b849105cdc9d65e2c2413a741b576
+Message
+Exception: MediaKit.ensureInitialized must be called before using any API from package:media_kit.
+Stack (sanitized)
+#0      NativeLibrary.path (package:media_kit/src/player/native/core/native_library.dart:22)
+#1      new NativePlayer (package:media_kit/src/player/native/player/real.dart:78)
+#2      new Player (package:media_kit/src/player/player.dart:112)
+#3      _FediMediaPlayerState._player (package:fedi3/ui/widgets/fedi_media_player.dart:39)
+#4      _FediMediaPlayerState.initState (package:fedi3/ui/widgets/fedi_media_player.dart)
+#5      StatefulElement._firstBuild (package:flutter/src/widgets/framework.dart:5953)
+#6      ComponentElement.mount (package:flutter/src/widgets/framework.dart:5796)
+#7      Element.inflateWidget (package:flutter/src/widgets/framework.dart:4590)
+#8      MultiChildRenderObjectElement.inflateWidget (package:flutter/src/widgets/framework.dart:7269)
+#9      MultiChildRenderObjectElement.mount (package:flutter/src/widgets/framework.dart:7285)
+
+Auto-generated telemetry (Fedi3)
+This issue was created automatically from anonymous client telemetry.
+
+user: @panormus@relay.fedi3.com
+type: flutter_error
+level: error
+mode: release
+ts: 2026-01-20T19:59:42.373289Z
+fingerprint: 13947ec65b29e2f5f4a9511e9c8037115c08efe0adba055ba819d64ddd255ea7
+Message
+Exception: MediaKit.ensureInitialized must be called before using any API from package:media_kit.
+Stack (sanitized)
+#0      NativeLibrary.path (package:media_kit/src/player/native/core/native_library.dart:22)
+#1      new NativePlayer (package:media_kit/src/player/native/player/real.dart:78)
+#2      new Player (package:media_kit/src/player/player.dart:112)
+#3      _FediMediaPlayerState._player (package:fedi3/ui/widgets/fedi_media_player.dart:39)
+#4      _FediMediaPlayerState.initState (package:fedi3/ui/widgets/fedi_media_player.dart)
+#5      StatefulElement._firstBuild (package:flutter/src/widgets/framework.dart:5953)
+#6      ComponentElement.mount (package:flutter/src/widgets/framework.dart:5796)
+#7      Element.inflateWidget (package:flutter/src/widgets/framework.dart:4590)
+#8      MultiChildRenderObjectElement.inflateWidget (package:flutter/src/widgets/framework.dart:7269)
+#9      Element.updateChild (package:flutter/src/widgets/framework.dart:4059)
+
+Auto-generated telemetry (Fedi3)
+This issue was created automatically from anonymous client telemetry.
+
+user: @redhunt07@relay.fedi3.com
+type: zone_error
+level: error
+mode: release
+ts: 2026-01-20T17:18:35.916998Z
+fingerprint: a7adf032c3ab0a08d2173bb8f78ffe6c819acca7005290a145f79c45b34f6ea9
+Message
+FileSystemException: writeFrom failed, path = '' (OS Error: Handle non valido, errno = 6)
+Stack (sanitized)
+#0      _RandomAccessFile.writeFromSync (dart:io/file_impl.dart:1027)
+#1      _StdConsumer.addStream.<anonymous closure> (dart:io/stdio.dart:328)
+#2      _rootRunUnary (dart:async/zone.dart:1538)
+#3      _CustomZone.runUnary (dart:async/zone.dart:1429)
+#4      _CustomZone.runUnaryGuarded (dart:async/zone.dart:1329)
+#5      _BufferingStreamSubscription._sendData (dart:async/stream_impl.dart:381)
+#6      _BufferingStreamSubscription._add (dart:async/stream_impl.dart:312)
+#7      _SyncStreamControllerDispatch._sendData (dart:async/stream_controller.dart:798)
+#8      _StreamController._add (dart:async/stream_controller.dart:663)
+#9      _StreamController.add (dart:async/stream_controller.dart:618)
+
+Auto-generated telemetry (Fedi3)
+This issue was created automatically from anonymous client telemetry.
+
+user: @panormus@relay.fedi3.com
+type: flutter_error
+level: error
+mode: release
+ts: 2026-01-20T15:53:32.433522Z
+fingerprint: 13947ec65b29e2f5f4a9511e9c8037115c08efe0adba055ba819d64ddd255ea7
+Message
+Exception: MediaKit.ensureInitialized must be called before using any API from package:media_kit.
+Stack (sanitized)
+#0      NativeLibrary.path (package:media_kit/src/player/native/core/native_library.dart:22)
+#1      new NativePlayer (package:media_kit/src/player/native/player/real.dart:78)
+#2      new Player (package:media_kit/src/player/player.dart:112)
+#3      _FediMediaPlayerState._player (package:fedi3/ui/widgets/fedi_media_player.dart:39)
+#4      _FediMediaPlayerState.initState (package:fedi3/ui/widgets/fedi_media_player.dart)
+#5      StatefulElement._firstBuild (package:flutter/src/widgets/framework.dart:5953)
+#6      ComponentElement.mount (package:flutter/src/widgets/framework.dart:5796)
+#7      Element.inflateWidget (package:flutter/src/widgets/framework.dart:4590)
+#8      MultiChildRenderObjectElement.inflateWidget (package:flutter/src/widgets/framework.dart:7269)
+#9      Element.updateChild (package:flutter/src/widgets/framework.dart:4059)

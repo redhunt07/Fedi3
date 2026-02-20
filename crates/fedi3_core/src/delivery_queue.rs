@@ -4,8 +4,7 @@
  */
 
 use crate::delivery::Delivery;
-use crate::delivery::build_signed_post_relay_http_request;
-use crate::crypto_envelope::encrypt_relay_http_request_body;
+use crate::ui_events::UiEvent;
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, Connection};
@@ -15,7 +14,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::{watch, Notify};
+use tokio::sync::{broadcast, watch, Notify};
 use tracing::{info, warn};
 
 #[derive(Clone)]
@@ -57,7 +56,9 @@ impl PostDeliveryMode {
     pub fn from_str(input: &str) -> Option<Self> {
         match input.trim().to_ascii_lowercase().as_str() {
             "p2p_only" | "p2ponly" | "p2p-only" => Some(Self::P2pOnly),
-            "p2p_relay" | "p2prelay" | "p2p-relay" | "p2p_first" | "p2p-first" => Some(Self::P2pRelay),
+            "p2p_relay" | "p2prelay" | "p2p-relay" | "p2p_first" | "p2p-first" => {
+                Some(Self::P2pRelay)
+            }
             _ => None,
         }
     }
@@ -82,7 +83,8 @@ impl DeliveryQueue {
         activity_json: Vec<u8>,
         targets: Vec<String>,
     ) -> Result<u64> {
-        self.enqueue_activity_with_key_id(activity_json, targets, None).await
+        self.enqueue_activity_with_key_id(activity_json, targets, None)
+            .await
     }
 
     pub async fn enqueue_activity_with_key_id(
@@ -133,11 +135,19 @@ impl DeliveryQueue {
         private_key_pem: String,
         key_id: String,
         settings: QueueSettings,
+        ui_events: broadcast::Sender<UiEvent>,
     ) {
         let queue = self.clone();
         tokio::spawn(async move {
             if let Err(e) = queue
-                .run_loop(shutdown, delivery, private_key_pem, key_id, settings)
+                .run_loop(
+                    shutdown,
+                    delivery,
+                    private_key_pem,
+                    key_id,
+                    settings,
+                    ui_events.clone(),
+                )
                 .await
             {
                 warn!("delivery worker stopped: {e:#}");
@@ -152,6 +162,7 @@ impl DeliveryQueue {
         private_key_pem: String,
         key_id: String,
         settings: QueueSettings,
+        ui_events: broadcast::Sender<UiEvent>,
     ) -> Result<()> {
         info!("delivery queue db: {}", self.db_path.display());
 
@@ -183,12 +194,37 @@ impl DeliveryQueue {
 
                 // Keep P2P-capable jobs as-is: no sharedInbox concern and may use mailbox fallback.
                 if !job.target.contains("/inbox") {
-                    match resolve_actor_cached(&delivery, &private_key_pem, job.key_id.as_deref().unwrap_or(&key_id), &job.target, &mut actor_cache).await {
+                    match resolve_actor_cached(
+                        &delivery,
+                        &private_key_pem,
+                        job.key_id.as_deref().unwrap_or(&key_id),
+                        &job.target,
+                        &mut actor_cache,
+                    )
+                    .await
+                    {
                         Ok(info) if info.p2p_peer_id.is_some() => {
                             passthrough.push(job);
                             continue;
                         }
-                        _ => {}
+                        Ok(_) => {
+                            // Actor resolved but no P2P peer, fall through to HTTP delivery
+                        }
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            if err_str.contains("404")
+                                || err_str.contains("410")
+                                || err_str.contains("429")
+                                || err_str.contains("peer deleted")
+                            {
+                                let _ =
+                                    self.mark_dead(&job.id, "peer deleted or unreachable").await;
+                                continue;
+                            } else {
+                                // For other errors, skip this job for now
+                                continue;
+                            }
+                        }
                     }
                 }
 
@@ -196,11 +232,30 @@ impl DeliveryQueue {
                 let inbox_url = if job.target.contains("/inbox") {
                     job.target.clone()
                 } else {
-                    match resolve_actor_cached(&delivery, &private_key_pem, &effective_key_id, &job.target, &mut actor_cache).await {
+                    match resolve_actor_cached(
+                        &delivery,
+                        &private_key_pem,
+                        &effective_key_id,
+                        &job.target,
+                        &mut actor_cache,
+                    )
+                    .await
+                    {
                         Ok(info) => info.inbox,
                         Err(e) => {
-                            warn!("delivery resolve error: {e:#}");
-                            continue;
+                            let err_str = e.to_string();
+                            if err_str.contains("404")
+                                || err_str.contains("410")
+                                || err_str.contains("429")
+                                || err_str.contains("peer deleted")
+                            {
+                                let _ =
+                                    self.mark_dead(&job.id, "peer deleted or unreachable").await;
+                                continue;
+                            } else {
+                                warn!("delivery resolve error: {e:#}");
+                                continue;
+                            }
                         }
                     }
                 };
@@ -218,7 +273,14 @@ impl DeliveryQueue {
                     break;
                 }
                 if let Err(e) = self
-                    .process_group_http(&delivery, &private_key_pem, &effective_key_id, &settings, &inbox_url, jobs)
+                    .process_group_http(
+                        &delivery,
+                        &private_key_pem,
+                        &effective_key_id,
+                        &settings,
+                        &inbox_url,
+                        jobs,
+                    )
                     .await
                 {
                     warn!("delivery group error: {e:#}");
@@ -230,7 +292,16 @@ impl DeliveryQueue {
                 if *shutdown.borrow() {
                     break;
                 }
-                let res = self.process_one(&delivery, &private_key_pem, &key_id, &settings, job).await;
+                let res = self
+                    .process_one(
+                        &delivery,
+                        &private_key_pem,
+                        &key_id,
+                        &settings,
+                        job,
+                        &ui_events,
+                    )
+                    .await;
                 if let Err(e) = res {
                     warn!("delivery job error: {e:#}");
                 }
@@ -279,114 +350,121 @@ impl DeliveryQueue {
         key_id: &str,
         settings: &QueueSettings,
         job: Job,
+        ui_events: &broadcast::Sender<UiEvent>,
     ) -> Result<()> {
         let effective_key_id = job.key_id.as_deref().unwrap_or(key_id);
 
-        let (inbox_url, p2p_peer_id, p2p_peer_addrs, public_key_pem) = if job.target.contains("/inbox") {
-            (job.target.clone(), None, Vec::new(), None)
-        } else {
-            let info = match delivery
-                .resolve_actor_info_signed(private_key_pem, effective_key_id, &job.target)
-                .await
-            {
-                Ok(v) => v,
-                Err(_) => delivery.resolve_actor_info(&job.target).await?,
-            };
-            (info.inbox, info.p2p_peer_id, info.p2p_peer_addrs, info.public_key_pem)
+        let (inbox_url, _p2p_peer_id, _p2p_peer_addrs, _public_key_pem) =
+            if job.target.contains("/inbox") {
+                (job.target.clone(), None, Vec::new(), None)
+            } else {
+                let info = delivery
+                    .resolve_actor_info_signed(private_key_pem, effective_key_id, &job.target)
+                    .await;
+                let info = if info.is_ok() {
+                    info
+                } else {
+                    delivery.resolve_actor_info(&job.target).await
+                };
+                match info {
+                    Ok(v) => (v.inbox, v.p2p_peer_id, v.p2p_peer_addrs, v.public_key_pem),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404")
+                            || err_str.contains("410")
+                            || err_str.contains("429")
+                            || err_str.contains("peer deleted")
+                        {
+                            self.mark_dead(&job.id, "peer deleted or unreachable")
+                                .await?;
+                            return Ok(());
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
         };
 
         let attempt_no: u32 = job.attempt.saturating_add(1);
 
-        if let Some(peer_id) = p2p_peer_id.as_deref() {
-            if !p2p_peer_addrs.is_empty() {
-                let _ = delivery.p2p_add_peer_addrs(peer_id, p2p_peer_addrs.clone()).await;
-            }
-            if delivery
-                .deliver_json_p2p(
-                    peer_id,
-                    private_key_pem,
-                    effective_key_id,
-                    &inbox_url,
-                    public_key_pem.as_deref(),
-                    &job.activity_json,
-                )
-                .await
-                .is_ok()
-            {
-                self.mark_awaiting_receipt(&job.id, attempt_no, next_receipt_backoff(attempt_no), "p2p sent").await?;
-                return Ok(());
-            }
+        self.deliver_via_relay(
+            &job,
+            private_key_pem,
+            effective_key_id,
+            &inbox_url,
+            &job.activity_json,
+            attempt_no,
+            None,
+            delivery,
+            settings,
+            &ui_events,
+        )
+        .await?;
+        Ok(())
+    }
 
-            // libp2p direct failed: try WebRTC ICE/TURN (zero-setup NAT traversal) if enabled.
-            if delivery
-                .deliver_json_webrtc(&job.target, peer_id, private_key_pem, effective_key_id, &inbox_url, &job.activity_json)
-                .await
-                .is_ok()
-            {
-                self.mark_awaiting_receipt(&job.id, attempt_no, next_receipt_backoff(attempt_no), "webrtc sent").await?;
-                return Ok(());
-            }
-
-            // P2P direct failed: try store-and-forward mailbox (infra nodes).
-            if let Ok(signed_req) = build_signed_post_relay_http_request(
-                format!("job-{}", job.id),
-                private_key_pem,
-                effective_key_id,
-                &inbox_url,
-                &job.activity_json,
-            ) {
-                let signed_req = if let Some(pem) = public_key_pem.as_deref() {
-                    encrypt_relay_http_request_body(pem, signed_req.clone()).unwrap_or(signed_req)
-                } else {
-                    signed_req
-                };
-                if delivery
-                    .store_in_mailboxes(peer_id, signed_req, settings.p2p_cache_ttl_secs)
-                    .await
-                    .is_ok()
-                {
-                    let delay = next_receipt_backoff(attempt_no).max(Duration::from_secs(60));
-                    self.mark_awaiting_receipt(&job.id, attempt_no, delay, "mailboxed").await?;
-                    return Ok(());
-                }
-            }
-
-            if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
-                let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                self.reschedule(&job.id, attempt_no, delay, "p2p-only: no relay fallback").await?;
-                return Ok(());
-            }
-
-            if attempt_no == 1 && settings.p2p_relay_fallback_secs > 0 {
-                let delay = Duration::from_secs(settings.p2p_relay_fallback_secs);
-                self.reschedule(&job.id, attempt_no, delay, "p2p-first: relay fallback delayed").await?;
-                return Ok(());
-            }
-        }
-
-        if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
-            self.mark_dead(&job.id, "p2p-only: missing peer id").await?;
-            return Ok(());
+    async fn deliver_via_relay(
+        &self,
+        job: &Job,
+        private_key_pem: &str,
+        key_id: &str,
+        inbox_url: &str,
+        body: &[u8],
+        attempt_no: u32,
+        relay_reason: Option<String>,
+        delivery: &Delivery,
+        settings: &QueueSettings,
+        ui_events: &broadcast::Sender<UiEvent>,
+    ) -> Result<()> {
+        if let Some(reason) = relay_reason {
+            let summary = reason
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .replace('\n', " ");
+            let label = if summary.is_empty() {
+                "relay_fallback".to_string()
+            } else {
+                summary.chars().take(140).collect()
+            };
+            let detail = format!("relay_fallback: {label}");
+            let _ = ui_events.send(UiEvent::new(
+                "delivery",
+                Some(detail),
+                job.activity_id.clone(),
+            ));
+            tracing::info!(
+                "relay_fallback job_id={} target={} activity_id={:?} reason={}",
+                job.id,
+                job.target,
+                job.activity_id,
+                label
+            );
         }
 
         match delivery
-            .deliver_json(private_key_pem, effective_key_id, &inbox_url, &job.activity_json)
+            .deliver_json(private_key_pem, key_id, inbox_url, body)
             .await
         {
             Ok(()) => {
                 self.mark_delivered(&job.id).await?;
-                Ok(())
             }
             Err(e) => {
                 if attempt_no >= settings.max_attempts {
                     self.mark_dead(&job.id, &format!("{e:#}")).await?;
                     return Ok(());
                 }
-                let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                self.reschedule(&job.id, attempt_no, delay, &format!("{e:#}")).await?;
-                Ok(())
+                let delay = next_backoff(
+                    attempt_no,
+                    settings.base_backoff_secs,
+                    settings.max_backoff_secs,
+                );
+                self.reschedule(&job.id, attempt_no, delay, &format!("{e:#}"))
+                    .await?;
             }
         }
+        Ok(())
     }
 
     async fn mark_delivered(&self, id: &str) -> Result<()> {
@@ -398,25 +476,6 @@ impl DeliveryQueue {
                 conn.execute(
                     "UPDATE delivery_jobs SET status = 1, last_error = NULL WHERE id = ?1",
                     params![id],
-                )?;
-                Ok(())
-            }
-        })
-        .await??;
-        Ok(())
-    }
-
-    async fn mark_awaiting_receipt(&self, id: &str, attempt: u32, delay: Duration, note: &str) -> Result<()> {
-        let next = now_ms().saturating_add(delay.as_millis() as i64);
-        tokio::task::spawn_blocking({
-            let db_path = self.db_path.clone();
-            let id = id.to_string();
-            let note = note.to_string();
-            move || -> Result<()> {
-                let conn = Connection::open(db_path)?;
-                conn.execute(
-                    "UPDATE delivery_jobs SET status = 3, attempt = ?2, next_attempt_at_ms = ?3, last_error = ?4 WHERE id = ?1",
-                    params![id, attempt, next, note],
                 )?;
                 Ok(())
             }
@@ -462,7 +521,11 @@ impl DeliveryQueue {
         Ok(())
     }
 
-    pub async fn mark_delivered_by_receipt(&self, activity_id: &str, from_actor: &str) -> Result<u64> {
+    pub async fn mark_delivered_by_receipt(
+        &self,
+        activity_id: &str,
+        from_actor: &str,
+    ) -> Result<u64> {
         let activity_id = activity_id.trim().to_string();
         let from_actor = from_actor.trim().to_string();
         if activity_id.is_empty() || from_actor.is_empty() {
@@ -545,8 +608,14 @@ impl DeliveryQueue {
                         let _ = self.mark_dead(&j.id, &format!("{e:#}")).await;
                         continue;
                     }
-                    let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                    let _ = self.reschedule(&j.id, attempt_no, delay, &format!("{e:#}")).await;
+                    let delay = next_backoff(
+                        attempt_no,
+                        settings.base_backoff_secs,
+                        settings.max_backoff_secs,
+                    );
+                    let _ = self
+                        .reschedule(&j.id, attempt_no, delay, &format!("{e:#}"))
+                        .await;
                 }
                 Ok(())
             }
@@ -569,7 +638,18 @@ async fn resolve_actor_cached(
         .await
     {
         Ok(v) => v,
-        Err(_) => delivery.resolve_actor_info(actor_url).await?,
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("404")
+                || err_str.contains("410")
+                || err_str.contains("429")
+                || err_str.contains("peer deleted")
+            {
+                return Err(e);
+            } else {
+                delivery.resolve_actor_info(actor_url).await?
+            }
+        }
     };
     cache.insert(actor_url.to_string(), info.clone());
     Ok(info)
@@ -622,7 +702,10 @@ fn init_db(path: &Path) -> Result<()> {
     )?;
     // Migrate existing dbs.
     let _ = conn.execute("ALTER TABLE delivery_jobs ADD COLUMN key_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE delivery_jobs ADD COLUMN activity_id TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE delivery_jobs ADD COLUMN activity_id TEXT NULL",
+        [],
+    );
     Ok(())
 }
 
@@ -653,11 +736,6 @@ fn next_backoff(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
     Duration::from_secs(secs) + Duration::from_millis(jitter_ms)
 }
 
-fn next_receipt_backoff(attempt: u32) -> Duration {
-    // Receipts are best-effort: retry slowly to avoid spamming when peers are offline for days.
-    next_backoff(attempt, 30, 6 * 3600)
-}
-
 pub(crate) fn activity_id_from_bytes(bytes: &[u8]) -> Option<String> {
     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
         if let Some(id) = v.get("id").and_then(|v| v.as_str()) {
@@ -673,5 +751,8 @@ pub(crate) fn activity_id_from_bytes(bytes: &[u8]) -> Option<String> {
     use sha2::Digest as _;
     let mut h = sha2::Sha256::new();
     h.update(bytes);
-    Some(format!("urn:fedi3:activity:sha256:{}", hex::encode(h.finalize())))
+    Some(format!(
+        "urn:fedi3:activity:sha256:{}",
+        hex::encode(h.finalize())
+    ))
 }

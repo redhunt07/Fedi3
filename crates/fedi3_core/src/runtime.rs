@@ -7,14 +7,14 @@ use crate::ap::{handle_request, ApConfig, ApState, GlobalIngestPolicy, InboxRate
 use crate::delivery::Delivery;
 use crate::delivery_queue::{DeliveryQueue, PostDeliveryMode, QueueSettings};
 use crate::http_retry::send_with_retry;
-use crate::http_sig::{KeyResolver, sign_request_rsa_sha256};
+use crate::http_sig::{sign_request_rsa_sha256, KeyResolver};
 use crate::keys::{default_data_dir, did_from_public_key_pem, load_or_generate_identity};
+use crate::nat::UpnpController;
 use crate::net_metrics::NetMetrics;
-use crate::social_db::SocialDb;
 use crate::object_fetch::ObjectFetchWorker;
+use crate::social_db::SocialDb;
 use anyhow::{Context, Result};
 use axum::{routing::any, Router};
-use tower_http::trace::TraceLayer;
 use http::{HeaderMap, HeaderValue, Method as HttpMethod, Uri};
 use std::{
     net::SocketAddr,
@@ -25,8 +25,10 @@ use std::{
     thread,
     time::Duration,
 };
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex as TokioMutex};
+use tower_http::trace::TraceLayer;
 use tracing::{error, info};
+use urlencoding::encode;
 
 static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -76,6 +78,14 @@ pub struct CoreStartConfig {
     pub blocked_domains: Option<Vec<String>>,
     #[serde(default)]
     pub blocked_actors: Option<Vec<String>>,
+    #[serde(default)]
+    pub upnp_port_start: Option<u16>,
+    #[serde(default)]
+    pub upnp_port_end: Option<u16>,
+    #[serde(default)]
+    pub upnp_lease_secs: Option<u32>,
+    #[serde(default)]
+    pub upnp_timeout_secs: Option<u64>,
     /// Add an external legacy account as alias (useful when migrating from a legacy instance to this Fedi3 account).
     /// Example: `https://mastodon.example/@alice` actor URL.
     #[serde(default)]
@@ -98,10 +108,13 @@ pub struct CoreStartConfig {
     /// When true, inbound Follow requests require manual approval (a.k.a. "locked account").
     #[serde(default)]
     pub manually_approves_followers: Option<bool>,
-            /// Optional list of ActivityPub relay actor URLs to follow (Misskey/Mastodon-style relay),
-            /// to populate the federated timeline without manually following every remote account.
-            #[serde(default)]
-            pub ap_relays: Option<Vec<String>>,
+    /// Optional list of ActivityPub relay actor URLs to follow (Misskey/Mastodon-style relay),
+    /// to populate the federated timeline without manually following every remote account.
+    #[serde(default)]
+    pub ap_relays: Option<Vec<String>>,
+    /// Optional list of actor handles/URLs to follow once (bootstrap social/federated timelines).
+    #[serde(default)]
+    pub bootstrap_follow_actors: Option<Vec<String>>,
     /// HTTP client timeout for outbound requests (seconds).
     #[serde(default)]
     pub http_timeout_secs: Option<u64>,
@@ -151,11 +164,16 @@ impl Default for CoreStartConfig {
             profile_fields: None,
             manually_approves_followers: None,
             ap_relays: None,
+            bootstrap_follow_actors: None,
             http_timeout_secs: None,
             max_body_bytes: None,
             post_delivery_mode: None,
             p2p_relay_fallback_secs: None,
             p2p_cache_ttl_secs: None,
+            upnp_port_start: None,
+            upnp_port_end: None,
+            upnp_lease_secs: None,
+            upnp_timeout_secs: None,
         }
     }
 }
@@ -193,7 +211,10 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
 pub fn stop(handle: u64) -> Result<()> {
     let running = {
         let mut reg = REGISTRY.lock().unwrap();
-        let idx = reg.iter().position(|(h, _)| *h == handle).context("invalid handle")?;
+        let idx = reg
+            .iter()
+            .position(|(h, _)| *h == handle)
+            .context("invalid handle")?;
         let (_, mut running) = reg.swap_remove(idx);
         let _ = running.shutdown_tx.send(true);
         // Join in background to avoid blocking the UI thread.
@@ -325,37 +346,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             storage_cfg.media_max_local_cache_bytes = media_cfg.max_local_cache_bytes;
         }
 
-        let p2p_cfg = cfg.p2p.clone().unwrap_or_default();
-        let p2p_keypair = if p2p_cfg.enable {
-            Some(crate::p2p::load_or_generate_keypair(&data_dir)?)
-        } else {
-            None
-        };
-        let p2p_peer_id = p2p_keypair.as_ref().map(crate::p2p::peer_id_string);
-        let p2p_peer_addrs = if p2p_cfg.enable {
-            let mut out = p2p_cfg.announce.clone().unwrap_or_default();
-            if let Some(peer_id) = p2p_peer_id.clone() {
-                if let Some(relays) = p2p_cfg.relay_reserve.as_ref() {
-                    for r in relays {
-                        let r = r.trim();
-                        if r.is_empty() {
-                            continue;
-                        }
-                        // Publish a dialable relayed address for this peer:
-                        // <relay-addr>/p2p-circuit/p2p/<self>
-                        out.push(format!("{r}/p2p-circuit/p2p/{peer_id}"));
-                    }
-                }
-            }
-            out
-        } else {
-            Vec::new()
-        };
-
-        let default_p2p_cache_ttl_secs = QueueSettings::default().p2p_cache_ttl_secs;
-        let p2p_cache_ttl_secs = cfg
-            .p2p_cache_ttl_secs
-            .unwrap_or(default_p2p_cache_ttl_secs);
+        let p2p_cache_ttl_secs = QueueSettings::default().p2p_cache_ttl_secs;
 
         let ap_cfg = ApConfig {
             username: cfg.username.clone(),
@@ -365,8 +356,8 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             relay_token: cfg.relay_token.clone(),
             public_key_pem: identity.public_key_pem.clone(),
             also_known_as: Vec::new(),
-            p2p_peer_id: p2p_peer_id.clone(),
-            p2p_peer_addrs,
+            p2p_peer_id: None,
+            p2p_peer_addrs: Vec::new(),
             display_name: cfg.display_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             summary: cfg.summary.clone().map(|s| s.trim().to_string()),
             icon_url: cfg.icon_url.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
@@ -429,10 +420,21 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 queue_settings.post_delivery_mode = parsed;
             }
         }
-        if let Some(secs) = cfg.p2p_relay_fallback_secs {
-            queue_settings.p2p_relay_fallback_secs = secs;
-        }
         queue_settings.p2p_cache_ttl_secs = p2p_cache_ttl_secs;
+
+        let upnp_range = match (cfg.upnp_port_start, cfg.upnp_port_end) {
+            (Some(start), Some(end)) if start > 0 && start <= end => Some(start..=end),
+            _ => None,
+        };
+        let upnp_lease_secs = cfg.upnp_lease_secs.unwrap_or(3600);
+        let upnp_timeout_secs = cfg.upnp_timeout_secs.unwrap_or(10);
+        let upnp_description = format!("{} UPnP", cfg.username);
+        let upnp_controller = UpnpController::new(
+            upnp_range,
+            upnp_lease_secs,
+            upnp_description,
+            Duration::from_secs(upnp_timeout_secs),
+        );
 
         let state = ApState {
             cfg: {
@@ -474,10 +476,10 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             media_backend: Arc::from(media_backend),
             net: net.clone(),
             ui_events,
+            upnp: Arc::new(TokioMutex::new(upnp_controller)),
             internal_token,
             global_ingest,
             post_delivery_mode: queue_settings.post_delivery_mode,
-            p2p_relay_fallback: Duration::from_secs(queue_settings.p2p_relay_fallback_secs),
             inbox_limits: InboxRateLimits {
                 max_reqs_per_min: 120,
                 max_bytes_per_min: 2 * 1024 * 1024,
@@ -487,7 +489,6 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             inbox_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         };
 
-        net.set_p2p_enabled(p2p_cfg.enable);
         // Seed relay registry and start relay discovery sync.
         let _ = state
             .social
@@ -497,15 +498,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 "self",
             );
         crate::relay_sync::start_relay_sync_worker(state.clone(), shutdown_rx.clone());
-
-        if p2p_cfg.enable {
-            if let Some(relays) = p2p_cfg.relay_reserve.clone() {
-                state
-                    .delivery
-                    .set_mailbox_targets_from_relay_reserve(relays)
-                    .await;
-            }
-        }
+        crate::ap::start_chat_retry_worker(state.clone(), shutdown_rx.clone());
 
         crate::legacy_sync::start_legacy_sync_worker(
             state.clone(),
@@ -534,6 +527,12 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                     .flatten()
                     .and_then(|s| s.parse::<i64>().ok())
                     .unwrap_or(0);
+                let last_ok_ms = social
+                    .get_local_meta("legacy_sync_last_ok_ms")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
 
                 // Default: at most once every 30 minutes per device.
                 if now_ms.saturating_sub(last_run_ms) < 30 * 60 * 1000 {
@@ -543,7 +542,9 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 let _ = social.set_local_meta("legacy_sync_last_run_ms", &now_ms.to_string());
 
                 // Best-effort: larger limits for startup burst.
-                match crate::legacy_sync::run_legacy_sync_now(&st, 10, 400).await {
+                let include_fedi3 =
+                    last_ok_ms == 0 || now_ms.saturating_sub(last_ok_ms) > 7 * 24 * 60 * 60 * 1000;
+                match crate::legacy_sync::run_legacy_sync_now(&st, 10, 400, include_fedi3).await {
                     Ok(_) => {
                         let _ = social.set_local_meta("legacy_sync_last_ok_ms", &now_ms.to_string());
                     }
@@ -582,6 +583,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             state.private_key_pem.clone(),
             key_id_for_queue,
             queue_settings,
+            state.ui_events.clone(),
         );
 
         // Optional ActivityPub relay subscriptions (Misskey-style):
@@ -603,6 +605,54 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                         }
                     }
                 });
+            }
+        }
+
+        // Optional bootstrap follows (idempotent): used to prefill social/federated timelines.
+        {
+            let mut bootstrap = cfg
+                .bootstrap_follow_actors
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
+            if bootstrap.is_empty() {
+                if cfg.username.trim().eq_ignore_ascii_case("announce") {
+                    bootstrap = vec![
+                        "@redhunt07@www.foxyhole.io".to_string(),
+                        "@engineering@newsmast.community".to_string(),
+                        "@mullvadnet@mastodon.online".to_string(),
+                        "@omgubuntu@floss.social".to_string(),
+                        "@tassoman@misskey.social".to_string(),
+                        "@informapirata@poliverso.org".to_string(),
+                        "@lealternative@mastodon.uno".to_string(),
+                        "@fsf@hostux.social".to_string(),
+                        "@informapirata@mastodon.uno".to_string(),
+                    ];
+                } else {
+                    bootstrap = vec![format!("{public_base_url_norm}/users/announce")];
+                }
+            }
+            bootstrap.sort();
+            bootstrap.dedup();
+            if !bootstrap.is_empty() {
+                let list_key = bootstrap.join(",");
+                let prev = state.social.get_local_meta("bootstrap_follow_list").ok().flatten();
+                if prev.as_deref() != Some(list_key.as_str()) {
+                    let _ = state.social.set_local_meta("bootstrap_follow_list", &list_key);
+                    let st = state.clone();
+                    tokio::spawn(async move {
+                        for raw in bootstrap {
+                            if let Some(actor_url) = resolve_actor_input_http(&st, &raw).await {
+                                if let Err(e) = ensure_follow_actor(&st, &actor_url).await {
+                                    error!("bootstrap follow failed ({actor_url}): {e:#}");
+                                }
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -751,61 +801,6 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             crate::tunnel::run_tunnel_with_shutdown(&user, &relay_ws, &relay_token, router2, shutdown_for_tunnel, net_for_tunnel).await
         });
 
-        if let Some(kp) = p2p_keypair {
-            let p2p_cfg_for_sync = p2p_cfg.clone();
-            let p2p_cfg_for_device = p2p_cfg.clone();
-            let state_for_p2p = state.clone();
-            let router3 = Router::new().fallback(any(move |req| {
-                let st = state_for_p2p.clone();
-                async move { handle_request(&st, req).await }
-            }))
-            .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
-            .layer(TraceLayer::new_for_http());
-            if let Some(handle) =
-                crate::p2p::start_p2p(
-                    p2p_cfg,
-                    kp,
-                    did.clone(),
-                    new_actor.clone(),
-                    state.internal_token.clone(),
-                    state.private_key_pem.clone(),
-                    state.social.clone(),
-                    net.clone(),
-                    router3,
-                    shutdown_rx.clone(),
-                )?
-            {
-                state.delivery.set_p2p(Some(handle)).await;
-                crate::p2p_sync::start_p2p_sync_worker(state.clone(), p2p_cfg_for_sync, shutdown_rx.clone());
-                crate::device_sync::start_device_sync_worker(state.clone(), p2p_cfg_for_device, shutdown_rx.clone());
-            }
-        }
-
-        // WebRTC (ICE/TURN) fallback for “zero-setup” NAT traversal.
-        if let Some(peer_id) = state.cfg.p2p_peer_id.clone() {
-            let p2p_cfg_for_webrtc = cfg.p2p.clone().unwrap_or_default();
-            let state_for_webrtc = state.clone();
-            let router_webrtc = Router::new().fallback(any(move |req| {
-                let st = state_for_webrtc.clone();
-                async move { handle_request(&st, req).await }
-            }))
-            .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
-            .layer(TraceLayer::new_for_http());
-            if let Ok(Some(w)) = crate::webrtc_p2p::start_webrtc(
-                p2p_cfg_for_webrtc,
-                peer_id,
-                public_base_url.trim_end_matches('/').to_string(),
-                state.private_key_pem.clone(),
-                key_id.clone(),
-                router_webrtc,
-                state.http.clone(),
-                shutdown_rx.clone(),
-                net.clone(),
-            ) {
-                state.delivery.set_webrtc(Some(w)).await;
-            }
-        }
-
         // Wait for shutdown, then stop.
         loop {
             if *shutdown_rx.borrow() {
@@ -823,7 +818,12 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
     })
 }
 
-async fn send_move_to_followers(state: &ApState, old_base: &str, old_actor: &str, new_actor: &str) -> Result<()> {
+async fn send_move_to_followers(
+    state: &ApState,
+    old_base: &str,
+    old_actor: &str,
+    new_actor: &str,
+) -> Result<()> {
     let move_id = state.social.new_activity_id(old_actor);
     let followers_collection = format!("{old_actor}/followers");
     let activity = serde_json::json!({
@@ -842,7 +842,11 @@ async fn send_move_to_followers(state: &ApState, old_base: &str, old_actor: &str
         let _ = state.social.store_outbox(id, bytes.clone());
     }
 
-    let old_key_id = format!("{}/users/{}#main-key", old_base.trim_end_matches('/'), state.cfg.username);
+    let old_key_id = format!(
+        "{}/users/{}#main-key",
+        old_base.trim_end_matches('/'),
+        state.cfg.username
+    );
 
     let mut cursor: Option<i64> = None;
     let mut all: Vec<String> = Vec::new();
@@ -896,8 +900,51 @@ async fn ensure_follow_actor(state: &ApState, target_actor: &str) -> Result<()> 
     let _ = state
         .social
         .set_following(target_actor, crate::social_db::FollowingStatus::Pending);
-    let _pending = state.queue.enqueue_activity(bytes, vec![target_actor.to_string()]).await?;
+    let _pending = state
+        .queue
+        .enqueue_activity(bytes, vec![target_actor.to_string()])
+        .await?;
     Ok(())
+}
+
+async fn resolve_actor_input_http(state: &ApState, input: &str) -> Option<String> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Some(raw.to_string());
+    }
+    let handle = raw.trim_start_matches('@');
+    let mut parts = handle.split('@');
+    let user = parts.next()?.trim();
+    let domain = parts.next()?.trim();
+    if user.is_empty() || domain.is_empty() {
+        return None;
+    }
+    let resource = format!("acct:{user}@{domain}");
+    let url = format!("https://{domain}/.well-known/webfinger?resource={}", encode(&resource));
+    let resp = state.http.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let links = v.get("links")?.as_array()?;
+    for link in links {
+        let rel = link.get("rel").and_then(|v| v.as_str()).unwrap_or("");
+        if rel != "self" {
+            continue;
+        }
+        let href = link.get("href").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if href.is_empty() {
+            continue;
+        }
+        let t = link.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if t.contains("application/activity+json") || t.contains("application/ld+json") || t.is_empty() {
+            return Some(href.to_string());
+        }
+    }
+    None
 }
 
 fn infer_http_base_from_relay_ws(relay_ws: &str) -> Result<String> {
@@ -939,11 +986,20 @@ async fn post_signed_move_notice(
     relay_base: &str,
     body: Vec<u8>,
 ) -> Result<()> {
-    let url = format!("{}/_fedi3/relay/move_notice", relay_base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/relay/move_notice",
+        relay_base.trim_end_matches('/')
+    );
     let uri: Uri = url.parse().context("parse move_notice uri")?;
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(http::header::ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        http::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
 
     sign_request_rsa_sha256(
         private_key_pem,

@@ -109,17 +109,6 @@ CREATE TABLE IF NOT EXISTS move_notice_fanout (
   PRIMARY KEY(notice_id, relay_url)
 );
 
-CREATE TABLE IF NOT EXISTS webrtc_signals (
-  signal_id TEXT PRIMARY KEY,
-  to_peer_id TEXT NOT NULL,
-  from_actor TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  created_at_ms BIGINT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_webrtc_to_created ON webrtc_signals(to_peer_id, created_at_ms DESC);
-
 CREATE TABLE IF NOT EXISTS media_items (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
@@ -130,6 +119,26 @@ CREATE TABLE IF NOT EXISTS media_items (
   created_at_ms BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_media_user_created ON media_items(username, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS user_backups (
+  username TEXT PRIMARY KEY,
+  storage_key TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  updated_at_ms BIGINT NOT NULL,
+  meta_json TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_backups_updated ON user_backups(updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS user_backups_history (
+  storage_key TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  meta_json TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_backups_hist_user_created ON user_backups_history(username, created_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS relay_notes (
   note_id TEXT PRIMARY KEY,
@@ -241,6 +250,34 @@ ALTER TABLE relay_notes
   ) STORED;
 ALTER TABLE relay_note_tags
   ADD COLUMN IF NOT EXISTS tag_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(tag, ''))) STORED;
+
+CREATE TABLE IF NOT EXISTS relay_media (
+  media_url TEXT PRIMARY KEY,
+  media_type TEXT NULL,
+  name TEXT NULL,
+  width BIGINT NULL,
+  height BIGINT NULL,
+  blurhash TEXT NULL,
+  created_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_media_created ON relay_media(created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_actors (
+  actor_url TEXT PRIMARY KEY,
+  username TEXT NULL,
+  actor_json TEXT NOT NULL,
+  updated_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_actors_updated ON relay_actors(updated_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_actors_username_lower ON relay_actors (lower(username));
+CREATE INDEX IF NOT EXISTS idx_relay_actors_url_lower ON relay_actors (lower(actor_url));
+
+CREATE TABLE IF NOT EXISTS relay_reputation (
+  relay_url TEXT PRIMARY KEY,
+  score INTEGER NOT NULL,
+  updated_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_reputation_updated ON relay_reputation(updated_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS relay_outbox_index (
   username TEXT PRIMARY KEY,

@@ -10,8 +10,10 @@ use serde_json::json;
 #[tokio::main]
 async fn main() -> Result<()> {
     let user = std::env::var("FEDI3_USER").unwrap_or_else(|_| "alice".to_string());
-    let base_url = std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
-    let target = std::env::var("FEDI3_TARGET").context("missing FEDI3_TARGET (actor url or inbox url)")?;
+    let base_url =
+        std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+    let target =
+        std::env::var("FEDI3_TARGET").context("missing FEDI3_TARGET (actor url or inbox url)")?;
     let content = std::env::var("FEDI3_CONTENT").unwrap_or_else(|_| "Hello from Fedi3".to_string());
 
     let base = base_url.trim_end_matches('/');

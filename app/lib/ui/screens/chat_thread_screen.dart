@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mime/mime.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -25,6 +26,7 @@ import '../utils/open_url.dart';
 import '../utils/media_url.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/inline_media_tile.dart';
+import '../widgets/status_avatar.dart';
 import '../screens/media_viewer_screen.dart';
 import '../widgets/emoji_picker.dart';
 import 'package:http/http.dart' as http;
@@ -35,11 +37,15 @@ class ChatThreadScreen extends StatefulWidget {
     required this.appState,
     required this.threadId,
     required this.title,
+    this.dmActor,
+    this.isArchived = false,
   });
 
   final AppState appState;
   final String threadId;
   final String title;
+  final String? dmActor;
+  final bool isArchived;
 
   @override
   State<ChatThreadScreen> createState() => _ChatThreadScreenState();
@@ -51,12 +57,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   String? _next;
   List<ChatMessageItem> _messages = const [];
   late String _title;
+  ActorProfile? _dmProfile;
+  late bool _archived;
   final TextEditingController _composerCtrl = TextEditingController();
+  final FocusNode _composerFocus = FocusNode();
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
   Timer? _loadRetry;
   Timer? _typingDebounce;
+  Timer? _timeTicker;
   final List<_PickedMedia> _media = [];
   bool _sending = false;
   Map<String, _StatusSummary> _statusMap = const {};
@@ -67,11 +77,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   CoreConfig? _streamConfig;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
+  final Map<String, ActorProfile?> _actorCache = {};
 
   @override
   void initState() {
     super.initState();
     _title = widget.title;
+    _archived = widget.isArchived;
+    _resolveDmTitle();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadMessages(reset: true));
     _markSeen();
     _markThreadSeen();
@@ -95,6 +108,23 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       _startStream();
     }
     _composerCtrl.addListener(_onComposerChanged);
+    _timeTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _resolveDmTitle() async {
+    final actor = widget.dmActor?.trim() ?? '';
+    if (actor.isEmpty) return;
+    final profile = await ActorRepository.instance.getActor(actor);
+    if (!mounted) return;
+    final name = profile?.displayName.trim();
+    if (name != null && name.isNotEmpty) {
+      setState(() => _title = name);
+    }
+    if (profile != null) {
+      setState(() => _dmProfile = profile);
+    }
   }
 
   @override
@@ -102,6 +132,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.title != oldWidget.title) {
       _title = widget.title;
+    }
+    if (widget.dmActor != oldWidget.dmActor) {
+      _resolveDmTitle();
+    }
+    if (widget.isArchived != oldWidget.isArchived) {
+      _archived = widget.isArchived;
     }
   }
 
@@ -112,7 +148,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _streamRetry?.cancel();
     _loadRetry?.cancel();
     _typingDebounce?.cancel();
+    _timeTicker?.cancel();
     _composerCtrl.dispose();
+    _composerFocus.dispose();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
   }
@@ -326,6 +364,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
   }
 
+  void _insertComposerNewline() {
+    final text = _composerCtrl.text;
+    final selection = _composerCtrl.selection;
+    final start = selection.start < 0 ? text.length : selection.start;
+    final end = selection.end < 0 ? text.length : selection.end;
+    final next = text.replaceRange(start, end, '\n');
+    _composerCtrl.text = next;
+    _composerCtrl.selection = TextSelection.collapsed(offset: start + 1);
+  }
+
   Future<void> _loadReactions(List<String> messageIds) async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
@@ -424,7 +472,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       );
       _replyTo = null;
       _media.clear();
-      await _loadMessages(reset: true);
+      unawaited(_loadMessages(reset: true));
     } catch (e) {
       if (mounted) {
         setState(() => _error = e.toString());
@@ -439,7 +487,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       final files = await openFiles();
       for (final f in files) {
         final bytes = await f.readAsBytes();
-        final name = f.name.isNotEmpty ? f.name : 'file';
+        final name = f.name.isNotEmpty ? f.name : context.l10n.composeFileFallback;
         _media.add(_PickedMedia(name: name, bytes: bytes));
       }
       if (mounted) setState(() {});
@@ -762,11 +810,187 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     await _loadMessages(reset: true);
   }
 
+  Future<void> _showNonOwnerOptions() async {
+    debugPrint('[DEBUG] _showNonOwnerOptions: Mostro opzioni per non-owner');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.chatDeleteThread),
+        content: Text(context.l10n.chatDeleteThreadHint),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('leave'),
+            child: Text(context.l10n.chatLeaveThreadOption),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('archive'),
+            child: Text(context.l10n.chatArchiveThreadOption),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(context.l10n.cancel),
+          ),
+        ],
+      ),
+    );
+
+    if (result == 'leave') {
+      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha scelto di abbandonare la chat');
+      await _leaveChat();
+    } else if (result == 'archive') {
+      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha scelto di archiviare la chat');
+      await _archiveChat();
+    } else {
+      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha annullato');
+    }
+  }
+
+  Future<void> _leaveChat() async {
+    debugPrint('[DEBUG] _leaveChat: Abbandono chat...');
+    final cfg = widget.appState.config;
+    if (cfg == null) {
+      return;
+    }
+    try {
+      await CoreApi(config: cfg).leaveChatThread(threadId: widget.threadId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.chatLeaveThreadSuccess)),
+        );
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.chatLeaveThreadFailed)),
+        );
+      }
+    }
+  }
+
+  Future<void> _archiveChat({bool archived = true}) async {
+    debugPrint('[DEBUG] _archiveChat: Archivio chat...');
+    final cfg = widget.appState.config;
+    if (cfg == null) {
+      return;
+    }
+    try {
+      await CoreApi(config: cfg).archiveChatThread(
+        threadId: widget.threadId,
+        archived: archived,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              archived
+                  ? context.l10n.chatArchiveThreadSuccess
+                  : context.l10n.chatUnarchiveThreadSuccess,
+            ),
+          ),
+        );
+        setState(() => _archived = archived);
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              archived
+                  ? context.l10n.chatArchiveThreadFailed
+                  : context.l10n.chatUnarchiveThreadFailed,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteChat() async {
+    debugPrint('[DEBUG] _deleteChat: Avvio cancellazione chat');
+    final cfg = widget.appState.config;
+    debugPrint('[DEBUG] _deleteChat: config = ${cfg != null ? 'presente' : 'null'}');
+    if (cfg == null) {
+      debugPrint('[DEBUG] _deleteChat: Configurazione null, esco');
+      return;
+    }
+
+    debugPrint('[DEBUG] _deleteChat: threadId = ${widget.threadId}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.chatDeleteThread),
+        content: Text(context.l10n.chatDeleteThreadHint),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(context.l10n.cancel)),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(context.l10n.chatDeleteThread),
+          ),
+        ],
+      ),
+    );
+    debugPrint('[DEBUG] _deleteChat: Dialog result = $ok');
+    if (ok != true) {
+      debugPrint('[DEBUG] _deleteChat: Cancellazione annullata dall\'utente');
+      return;
+    }
+
+    debugPrint('[DEBUG] _deleteChat: Chiamo CoreApi.deleteChatThread...');
+    try {
+      await CoreApi(config: cfg).deleteChatThread(threadId: widget.threadId);
+      debugPrint('[DEBUG] _deleteChat: deleteChatThread completato con successo');
+    } catch (e, stackTrace) {
+      debugPrint('[DEBUG] _deleteChat: ERRORE in deleteChatThread: $e');
+      debugPrint('[DEBUG] _deleteChat: StackTrace: $stackTrace');
+
+      // Controlla se l'errore è "not owner" (403)
+      final errorMessage = e.toString();
+      if (errorMessage.contains('403') && errorMessage.contains('not owner')) {
+        debugPrint('[DEBUG] _deleteChat: Utente non è owner, propongo alternative');
+        if (mounted) {
+          await _showNonOwnerOptions();
+        }
+        return;
+      }
+
+      // Per altri errori, mostra il messaggio di errore normale
+      if (mounted) {
+        setState(() => _error = e.toString());
+      }
+      return;
+    }
+
+    debugPrint('[DEBUG] _deleteChat: Controllo se mounted = $mounted');
+    if (mounted) {
+      debugPrint('[DEBUG] _deleteChat: Navigo indietro');
+      Navigator.of(context).pop();
+    } else {
+      debugPrint('[DEBUG] _deleteChat: Widget non più mounted, skip navigazione');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_title),
+        title: Row(
+          children: [
+            if (widget.dmActor != null && widget.dmActor!.trim().isNotEmpty)
+              _dmHeaderAvatar()
+            else
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: const Icon(Icons.groups, size: 16),
+              ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: context.l10n.chatRefresh,
@@ -779,11 +1003,27 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 _openRenameDialog();
               } else if (value == 'members') {
                 _openMembersDialog();
+              } else if (value == 'delete') {
+                _deleteChat();
+              } else if (value == 'leave') {
+                _leaveChat();
+              } else if (value == 'archive') {
+                _archiveChat(archived: true);
+              } else if (value == 'unarchive') {
+                _archiveChat(archived: false);
               }
             },
             itemBuilder: (context) => [
               PopupMenuItem(value: 'members', child: Text(context.l10n.chatMembers)),
               PopupMenuItem(value: 'rename', child: Text(context.l10n.chatRename)),
+              PopupMenuItem(value: 'leave', child: Text(context.l10n.chatLeaveThreadOption)),
+              PopupMenuItem(
+                value: _archived ? 'unarchive' : 'archive',
+                child: Text(_archived
+                    ? context.l10n.chatUnarchiveThreadOption
+                    : context.l10n.chatArchiveThreadOption),
+              ),
+              PopupMenuItem(value: 'delete', child: Text(context.l10n.chatDeleteThread)),
             ],
           ),
         ],
@@ -864,6 +1104,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         final replyMsg = (replyId != null && replyId.isNotEmpty) ? _findMessageById(replyId) : null;
         final when = DateTime.fromMillisecondsSinceEpoch(message.createdAtMs);
         final status = isSelf ? _statusMap[message.messageId] : null;
+        final canDelete = isSelf && (status == null || status.seen == 0);
         final bubbleColor = isSelf
             ? Theme.of(context).colorScheme.primaryContainer
             : Theme.of(context).colorScheme.surfaceContainerHighest;
@@ -874,10 +1115,28 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           child: Column(
             crossAxisAlignment: align,
             children: [
-              GestureDetector(
-                onLongPress: () async {
-                  await showModalBottomSheet<void>(
-                    context: context,
+              _buildSenderHeader(message.senderActor, isSelf),
+              Dismissible(
+                key: ValueKey('reply-${message.messageId}'),
+                direction: DismissDirection.startToEnd,
+                confirmDismiss: (_) async {
+                  if (!mounted) return false;
+                  setState(() => _replyTo = message);
+                  return false;
+                },
+                background: Container(
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.only(left: 16),
+                  child: const Icon(Icons.reply, size: 20),
+                ),
+                child: GestureDetector(
+                  onDoubleTap: () {
+                    if (!mounted) return;
+                    setState(() => _replyTo = message);
+                  },
+                  onLongPress: () async {
+                    await showModalBottomSheet<void>(
+                      context: context,
                     builder: (context) => SafeArea(
                       child: Wrap(
                         children: [
@@ -906,7 +1165,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 await _editMessage(message);
                               },
                             ),
-                          if (isSelf)
+                          if (canDelete)
                             ListTile(
                               leading: const Icon(Icons.delete),
                               title: Text(context.l10n.chatDelete),
@@ -920,54 +1179,55 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     ),
                   );
                 },
-                child: Container(
-                  decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: align,
-                    children: [
-                      if (replyId != null && replyId.isNotEmpty)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 6),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            replyMsg == null ? context.l10n.chatReplyUnknown : _replyPreview(replyMsg),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ),
-                      Text(text),
-                      if (attachments.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        _buildAttachments(attachments),
-                      ],
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            formatTimeAgo(context, when),
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                          if (status != null) ...[
-                            const SizedBox(width: 6),
-                            Tooltip(
-                              message: status.tooltip(context),
-                              child: Icon(
-                                status.icon,
-                                size: 14,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                              ),
+                  child: Container(
+                    decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: align,
+                      children: [
+                        if (replyId != null && replyId.isNotEmpty)
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          ],
+                            child: Text(
+                              replyMsg == null ? context.l10n.chatReplyUnknown : _replyPreview(replyMsg),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                          ),
+                        Text(text),
+                        if (attachments.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          _buildAttachments(attachments),
                         ],
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              formatTimeAgo(context, when),
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                            if (status != null) ...[
+                              const SizedBox(width: 6),
+                              Tooltip(
+                                message: status.tooltip(context),
+                                child: Icon(
+                                  status.icon,
+                                  size: 14,
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -977,6 +1237,78 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         );
       },
     );
+  }
+
+  Widget _buildSenderHeader(String actorId, bool isSelf) {
+    final cached = _actorCache[actorId];
+    if (cached != null) {
+      return _senderHeaderFromProfile(actorId, cached, isSelf);
+    }
+    return FutureBuilder<ActorProfile?>(
+      future: ActorRepository.instance.getActor(actorId),
+      builder: (context, snapshot) {
+        final profile = snapshot.data;
+        if (snapshot.connectionState == ConnectionState.done) {
+          _actorCache[actorId] = profile;
+        }
+        return _senderHeaderFromProfile(actorId, profile, isSelf);
+      },
+    );
+  }
+
+  Widget _senderHeaderFromProfile(String actorId, ActorProfile? profile, bool isSelf) {
+    final name = profile?.displayName.trim().isNotEmpty == true
+        ? profile!.displayName.trim()
+        : _actorFallbackName(actorId, isSelf);
+    final icon = profile?.iconUrl.trim() ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          StatusAvatar(
+            imageUrl: icon,
+            size: 20,
+            showStatus: true,
+            statusKey: profile?.statusKey ?? _actorStatusKey(actorId),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            name,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _actorFallbackName(String actorId, bool isSelf) {
+    if (isSelf) {
+      final name = widget.appState.config?.username.trim();
+      if (name != null && name.isNotEmpty) return name;
+      return context.l10n.chatSenderMe;
+    }
+    final uri = Uri.tryParse(actorId.trim());
+    if (uri == null) return actorId;
+    final segs = uri.pathSegments;
+    if (segs.length >= 2 && segs.first == 'users') {
+      return segs[1];
+    }
+    return segs.isNotEmpty ? segs.last : actorId;
+  }
+
+  String _actorStatusKey(String actorId) {
+    final uri = Uri.tryParse(actorId.trim());
+    if (uri == null) return '';
+    final relayBase = widget.appState.config?.publicBaseUrl.trim() ?? '';
+    final relayUri = Uri.tryParse(relayBase);
+    if (relayUri == null || relayUri.host.isEmpty) return '';
+    if (uri.host.toLowerCase() != relayUri.host.toLowerCase()) return '';
+    final segs = uri.pathSegments;
+    if (segs.length >= 2 && segs.first == 'users') {
+      return segs[1].toLowerCase();
+    }
+    return '';
   }
 
   Widget _buildReactionRow(ChatMessageItem message, bool isSelf) {
@@ -1089,15 +1421,31 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 icon: const Icon(Icons.gif_box),
               ),
               Expanded(
-                child: TextField(
-                  controller: _composerCtrl,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: InputDecoration(
-                    hintText: context.l10n.chatMessageHint,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                child: Focus(
+                  focusNode: _composerFocus,
+                  onKeyEvent: (node, event) {
+                    if (event is! KeyDownEvent) {
+                      return KeyEventResult.ignored;
+                    }
+                    if (event.logicalKey == LogicalKeyboardKey.enter) {
+                      if (HardwareKeyboard.instance.isControlPressed) {
+                        _insertComposerNewline();
+                        return KeyEventResult.handled;
+                      }
+                      _sendMessage();
+                      return KeyEventResult.handled;
+                    }
+                    return KeyEventResult.ignored;
+                  },
+                  child: TextField(
+                    controller: _composerCtrl,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      hintText: context.l10n.chatMessageHint,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
                   ),
-                  onSubmitted: (_) => _sendMessage(),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1122,7 +1470,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (payload.op == 'message' || payload.op == 'edit') {
       final text = payload.text?.trim() ?? '';
       if (text.isNotEmpty) return text;
-      if ((payload.attachments?.isNotEmpty ?? false)) return '';
+      if ((payload.attachments?.isNotEmpty ?? false)) {
+        return context.l10n.chatReplyAttachment;
+      }
       return context.l10n.chatMessageEmpty;
     }
     return payload.text ?? context.l10n.chatMessageEmpty;
@@ -1220,6 +1570,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           attachments: items,
         ),
       ),
+    );
+  }
+
+  Widget _dmHeaderAvatar() {
+    final icon = _dmProfile?.iconUrl.trim() ?? '';
+    return StatusAvatar(
+      imageUrl: icon,
+      size: 32,
+      showStatus: true,
+      statusKey: _dmProfile?.statusKey,
     );
   }
 }

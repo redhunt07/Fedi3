@@ -47,10 +47,7 @@ impl MailboxStore {
         let msg_id = msg_id.to_string();
         let req_json = serde_json::to_vec(req).context("serialize req")?;
         let size_bytes: u64 = req_json.len().try_into().unwrap_or(u64::MAX);
-        let ttl_secs = ttl_secs
-            .max(60)
-            .min(self.max_ttl_secs)
-            .min(30 * 24 * 3600);
+        let ttl_secs = ttl_secs.max(60).min(self.max_ttl_secs).min(30 * 24 * 3600);
         let max_per_peer = self.max_per_peer;
         let max_bytes_per_peer = self.max_bytes_per_peer;
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -135,7 +132,10 @@ impl MailboxStore {
         let out = tokio::task::spawn_blocking(move || -> Result<Vec<MailboxMessage>> {
             let conn = Connection::open(db_path)?;
             let now = now_ms();
-            let _ = conn.execute("DELETE FROM mailbox_messages WHERE expires_at_ms <= ?1", params![now]);
+            let _ = conn.execute(
+                "DELETE FROM mailbox_messages WHERE expires_at_ms <= ?1",
+                params![now],
+            );
 
             let mut stmt = conn.prepare(
                 r#"
@@ -151,7 +151,8 @@ impl MailboxStore {
             while let Some(row) = rows.next()? {
                 let id: String = row.get(0)?;
                 let req_json: Vec<u8> = row.get(1)?;
-                let req: RelayHttpRequest = serde_json::from_slice(&req_json).context("parse req_json")?;
+                let req: RelayHttpRequest =
+                    serde_json::from_slice(&req_json).context("parse req_json")?;
                 out.push(MailboxMessage { id, req });
             }
             Ok(out)
@@ -209,8 +210,18 @@ fn init_db(path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_mailbox_exp ON mailbox_messages(expires_at_ms);
         "#,
     )?;
-    ensure_column(&conn, "mailbox_messages", "from_peer_id", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(&conn, "mailbox_messages", "size_bytes", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &conn,
+        "mailbox_messages",
+        "from_peer_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "mailbox_messages",
+        "size_bytes",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     Ok(())
 }
 
@@ -223,7 +234,10 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
             return Ok(());
         }
     }
-    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+        [],
+    )?;
     Ok(())
 }
 
