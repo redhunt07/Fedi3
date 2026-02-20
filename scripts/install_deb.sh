@@ -40,11 +40,18 @@ install_packages() {
     libgtk-3-dev libblkid-dev liblzma-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    libwebkit2gtk-4.1-dev \
     libsecret-1-dev \
     libnotify-dev \
     libmpv-dev libmpv2 \
     ca-certificates
+
+  if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+    sudo_cmd apt-get install -y libwebkit2gtk-4.1-dev
+  elif apt-cache show libwebkit2gtk-4.0-dev >/dev/null 2>&1; then
+    sudo_cmd apt-get install -y libwebkit2gtk-4.0-dev
+  else
+    echo "Warning: libwebkit2gtk dev package not found; webview build may fail."
+  fi
 }
 
 install_rust() {
