@@ -43,6 +43,7 @@ install_packages() {
     libwebkit2gtk-4.1-dev \
     libsecret-1-dev \
     libnotify-dev \
+    libmpv-dev libmpv2 \
     ca-certificates
 }
 
