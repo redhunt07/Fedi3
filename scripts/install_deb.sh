@@ -38,6 +38,8 @@ install_packages() {
     git curl unzip xz-utils zip python3 \
     clang cmake ninja-build pkg-config \
     libgtk-3-dev libblkid-dev liblzma-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     ca-certificates
 }
 
