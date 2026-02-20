@@ -35,7 +35,7 @@ ensure_debian() {
 install_packages() {
   sudo_cmd apt-get update
   sudo_cmd apt-get install -y \
-    git curl unzip xz-utils zip \
+    git curl unzip xz-utils zip python3 \
     clang cmake ninja-build pkg-config \
     libgtk-3-dev libblkid-dev liblzma-dev \
     ca-certificates
@@ -54,12 +54,51 @@ install_rust() {
 
 install_flutter() {
   if [[ -x "${FLUTTER_DIR}/bin/flutter" ]]; then
-    return
+    if flutter_has_modern_dart; then
+      return
+    fi
+    sudo_cmd rm -rf "$FLUTTER_DIR"
   fi
   sudo_cmd mkdir -p "$FLUTTER_DIR"
-  curl -L "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.5-stable.tar.xz" -o /tmp/flutter.tar.xz
+  local flutter_url
+  flutter_url="$(latest_flutter_stable_url)"
+  curl -L "$flutter_url" -o /tmp/flutter.tar.xz
   sudo_cmd tar -xJf /tmp/flutter.tar.xz -C /opt
   rm -f /tmp/flutter.tar.xz
+}
+
+latest_flutter_stable_url() {
+  python3 - <<'PY'
+import json
+import urllib.request
+
+data = json.load(urllib.request.urlopen(
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json"
+))
+base = data["base_url"].rstrip("/")
+stable_hash = data["current_release"]["stable"]
+release = next(r for r in data["releases"] if r["hash"] == stable_hash)
+print(f"{base}/{release['archive']}")
+PY
+}
+
+flutter_has_modern_dart() {
+  local dart_ver
+  dart_ver="$("${FLUTTER_DIR}/bin/flutter" --version --machine | python3 - <<'PY'
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("dartSdkVersion","0.0.0"))
+PY
+)"
+  python3 - <<PY
+import re, sys
+def parse(v):
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", v or "0.0.0")
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
+sys.exit(0 if parse("${dart_ver}") >= (3, 9, 0) else 1)
+PY
 }
 
 clone_or_update_repo() {
