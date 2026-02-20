@@ -74,12 +74,35 @@ clone_or_update_repo() {
 }
 
 build_core() {
-  pushd "$REPO_DIR" >/dev/null
-  if [[ -f ./scripts/build_core.sh ]]; then
-    chmod +x ./scripts/build_core.sh
+  local cargo_cmd=""
+  if require_cmd cargo; then
+    cargo_cmd="cargo"
+  elif [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+    cargo_cmd="$HOME/.cargo/bin/cargo"
+  else
+    echo "Missing command: cargo"
+    exit 1
   fi
-  bash ./scripts/build_core.sh release
-  popd >/dev/null
+
+  local core_dir="${REPO_DIR}/crates/fedi3_core"
+  local app_dir="${REPO_DIR}/app"
+  local so_path="${REPO_DIR}/target/release/libfedi3_core.so"
+
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --release)
+  if [[ ! -f "$so_path" ]]; then
+    echo "Build completata, ma .so non trovata in: $so_path"
+    exit 1
+  fi
+
+  cp -f "$so_path" "${app_dir}/libfedi3_core.so"
+  for dir in \
+    "${app_dir}/build/linux/x64/debug/bundle/lib" \
+    "${app_dir}/build/linux/x64/release/bundle/lib" \
+    "${app_dir}/build/linux/x64/profile/bundle/lib"; do
+    if [[ -d "$dir" ]]; then
+      cp -f "$so_path" "${dir}/libfedi3_core.so"
+    fi
+  done
 }
 
 build_flutter() {
