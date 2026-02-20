@@ -40,6 +40,7 @@ install_packages() {
     libgtk-3-dev libblkid-dev liblzma-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    libwebkit2gtk-4.1-dev \
     ca-certificates
 }
 
