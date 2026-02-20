@@ -16,6 +16,48 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+## Installazione client Linux (Debian/Ubuntu)
+
+Install (build + setup):
+
+```
+curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash
+```
+
+Update-only (senza reinstallare dipendenze):
+
+```
+curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash -s -- --update-only
+```
+
+## Installazione client Linux (Arch/derivate)
+
+Dipendenze:
+
+```
+sudo pacman -S --needed git curl unzip xz zip clang cmake ninja pkgconf gtk3
+```
+
+Flutter SDK (opzionale, se non installato):
+
+```
+sudo pacman -S --needed flutter
+```
+
+Build + install:
+
+```
+sudo mkdir -p /opt/fedi3
+sudo git clone https://github.com/redhunt07/Fedi3.git /opt/fedi3/src
+cd /opt/fedi3/src
+./scripts/build_core.sh release
+cd app
+flutter pub get
+flutter build linux --release
+sudo rm -rf /opt/fedi3/app
+sudo cp -r build/linux/x64/release/bundle /opt/fedi3/app
+```
+
 ## Docs
 
 - `docs/getting_started.md`
