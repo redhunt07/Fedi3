@@ -41,6 +41,7 @@ install_packages() {
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     libwebkit2gtk-4.1-dev \
+    libsecret-1-dev \
     ca-certificates
 }
 
