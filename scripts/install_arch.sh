@@ -34,13 +34,28 @@ ensure_arch() {
 }
 
 install_packages() {
-  sudo_cmd pacman -Sy --noconfirm --needed \
-    base-devel git curl unzip xz zip python \
-    clang cmake ninja pkgconf \
-    gtk3 webkit2gtk \
-    gstreamer gst-plugins-base gst-plugins-good \
-    libsecret libnotify \
+  local packages=(
+    base-devel git curl unzip xz zip python
+    clang cmake ninja pkgconf
+    gtk3 webkit2gtk
+    gstreamer gst-plugins-base gst-plugins-good
+    libsecret libnotify
     mpv
+  )
+
+  local missing=()
+  for pkg in "${packages[@]}"; do
+    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    echo "All Arch dependencies already installed."
+    return
+  fi
+
+  sudo_cmd pacman -Sy --noconfirm --needed "${missing[@]}"
 }
 
 install_rust() {
