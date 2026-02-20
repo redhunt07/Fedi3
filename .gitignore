@@ -24,3 +24,9 @@ Thumbs.db
 .env
 .env.*
 backups/
+dist/
+*.AppImage
+app/fedi3_core.dll
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
