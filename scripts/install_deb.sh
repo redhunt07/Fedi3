@@ -109,10 +109,16 @@ EOF
 }
 
 main() {
+  local mode="full"
+  if [[ "${1:-}" == "--update-only" ]]; then
+    mode="update"
+  fi
   ensure_debian
-  install_packages
-  install_rust
-  install_flutter
+  if [[ "$mode" == "full" ]]; then
+    install_packages
+    install_rust
+    install_flutter
+  fi
   clone_or_update_repo
   build_core
   build_flutter
