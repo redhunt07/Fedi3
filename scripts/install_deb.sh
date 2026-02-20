@@ -73,7 +73,7 @@ clone_or_update_repo() {
 
 build_core() {
   pushd "$REPO_DIR" >/dev/null
-  ./scripts/build_core.sh release
+  bash ./scripts/build_core.sh release
   popd >/dev/null
 }
 
