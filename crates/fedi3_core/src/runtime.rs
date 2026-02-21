@@ -525,7 +525,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
 
         let upnp_range = match (cfg.upnp_port_start, cfg.upnp_port_end) {
             (Some(start), Some(end)) if start > 0 && start <= end => Some(start..=end),
-            _ => None,
+            _ => Some(40_000..=40_100),
         };
         let upnp_lease_secs = cfg.upnp_lease_secs.unwrap_or(3600);
         let upnp_timeout_secs = cfg.upnp_timeout_secs.unwrap_or(10);
