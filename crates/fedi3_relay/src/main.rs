@@ -3255,11 +3255,14 @@ async fn cached_user_response(
 
     if path == format!("/users/{user}") {
         if let Ok(Some(actor_json)) = db.get_actor_cache(user) {
+            let online_status = online_status_for_user(state, user).await;
+            let patched =
+                patch_actor_with_online_status(&actor_json, online_status).unwrap_or(actor_json);
             return Some(
                 (
                     StatusCode::OK,
                     [("Content-Type", "application/activity+json; charset=utf-8")],
-                    actor_json,
+                    patched,
                 )
                     .into_response(),
             );
@@ -8800,20 +8803,7 @@ async fn user_show_response(
     let online_status = if state.tunnels.read().await.contains_key(&username) {
         "online"
     } else {
-        let last_seen = {
-            let seen = state.presence_last_seen.lock().await;
-            seen.get(&username).copied().unwrap_or(0)
-        };
-        if last_seen > 0 {
-            let age_ms = now_ms().saturating_sub(last_seen);
-            if age_ms >= 60_000 && age_ms <= 7 * 24 * 60 * 60 * 1000 {
-                "active"
-            } else {
-                "offline"
-            }
-        } else {
-            "offline"
-        }
+        online_status_for_user(state, &username).await
     };
     let host = relay_host_name(&state.cfg).unwrap_or_default();
 
@@ -8911,7 +8901,12 @@ async fn user_show_response(
         "followedMessage": null
     });
 
-    axum::Json(out).into_response()
+    let mut resp = axum::Json(out).into_response();
+    resp.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    resp
 }
 
 #[derive(Debug, serde::Serialize)]
