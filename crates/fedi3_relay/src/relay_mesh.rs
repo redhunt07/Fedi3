@@ -838,7 +838,7 @@ async fn verify_mesh_request(
     let pk_b64 = if let Some(pk_b64) = pk_b64 {
         pk_b64
     } else if let Some(pk_b64) = req.sign_pubkey_b64.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        let db = state.db.lock().await;
+        let mut db = state.db.lock().await;
         let _ = db.upsert_relay(relay_url, None, None, Some(pk_b64.to_string()));
         pk_b64.to_string()
     } else {

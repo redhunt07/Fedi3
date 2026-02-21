@@ -8679,7 +8679,10 @@ async fn user_show_response(
 
     let mut actor_id = actor_value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if actor_id.is_empty() {
-        if let Some(actor_url) = actor_cache.as_ref().and_then(|c| c.actor_url.clone()) {
+        if let Some(cached_actor_id) = actor_cache.as_ref().and_then(|c| c.actor_id.clone()) {
+            actor_id = cached_actor_id;
+        } else if let Some(actor_url) = actor_cache.as_ref().and_then(|c| c.actor_url.clone())
+        {
             actor_id = actor_url;
         } else {
             actor_id = format!("{}/users/{username}", relay_self_base(&state.cfg));
