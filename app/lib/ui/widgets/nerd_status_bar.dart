@@ -58,6 +58,7 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     if (!widget.appState.isRunning) {
       setState(() {
         _net = null;
+        _p2p = null;
       });
       return;
     }
@@ -65,14 +66,52 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     setState(() => _loading = true);
     final api = CoreApi(config: cfg);
     try {
-      final net = await api.fetchNetMetrics();
-      final p2p = await api.fetchP2pDebug();
+      Map<String, dynamic>? net;
+      Map<String, dynamic>? p2p;
+      try {
+        net = await api.fetchNetMetrics();
+      } catch (_) {
+        net = null;
+      }
+      try {
+        p2p = await api.fetchP2pDebug();
+      } catch (_) {
+        p2p = null;
+      }
+      if (net == null && p2p == null) {
+        if (!mounted) return;
+        if (_net == null) {
+          setState(() {
+            _net = {
+              'ts_ms': DateTime.now().millisecondsSinceEpoch,
+              'relay': const <String, dynamic>{},
+            };
+            _p2p = null;
+            _p2pEnabled = false;
+            _p2pActive = 0;
+            _p2pConnected = 0;
+          });
+        }
+        return;
+      }
+
+      if (net == null) {
+        if (!mounted) return;
+        setState(() {
+          _p2p = p2p;
+          _p2pEnabled = false;
+          _p2pActive = 0;
+          _p2pConnected = 0;
+        });
+        return;
+      }
+
       final relay = (net['relay'] is Map) ? (net['relay'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
       final ts = (net['ts_ms'] is num) ? (net['ts_ms'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
 
       final relayRx = (relay['rx_bytes'] is num) ? (relay['rx_bytes'] as num).toInt() : 0;
       final relayTx = (relay['tx_bytes'] is num) ? (relay['tx_bytes'] as num).toInt() : 0;
-      final p2pMap = (p2p['p2p'] is Map) ? (p2p['p2p'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+      final p2pMap = (p2p?['p2p'] is Map) ? (p2p!['p2p'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
 
       var dtMs = ts - _lastTsMs;
       if (_lastTsMs == 0 || dtMs <= 0) dtMs = 2000;
@@ -102,6 +141,10 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
             'ts_ms': DateTime.now().millisecondsSinceEpoch,
             'relay': const <String, dynamic>{},
           };
+          _p2p = null;
+          _p2pEnabled = false;
+          _p2pActive = 0;
+          _p2pConnected = 0;
         });
       }
     } finally {
