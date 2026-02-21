@@ -610,6 +610,9 @@
   "statusMailboxTraffic": "M ↑/↓",
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
+  "statusOnline": "Online",
+  "statusActiveRecent": "Attivo di recente",
+  "statusOffline": "Offline",
   "statusConnectedShort": "on",
   "statusDisconnectedShort": "off",
   "statusNoPeersShort": "0/0",
@@ -790,6 +793,18 @@
   "uiEmojiPickerPresetLarge": "Grande",
   "uiEmojiPickerPreviewLabel": "Anteprima",
   "uiNotificationsTitle": "Notifiche",
+  "uiNotificationsPresetLabel": "Preset",
+  "uiNotificationsPresetDirect": "Solo interazioni dirette",
+  "uiNotificationsPresetChat": "Solo chat",
+  "uiNotificationsPresetAll": "Tutte le notifiche",
+  "uiNotificationsMute24h": "Silenzia 24h",
+  "uiNotificationsUnmute": "Riattiva",
+  "uiNotificationsMutedUntil": "Silenzioso fino a {when}",
+  "@uiNotificationsMutedUntil": {
+    "placeholders": {
+      "when": {}
+    }
+  },
   "uiNotificationsChat": "Messaggi chat",
   "uiNotificationsDirect": "Interazioni dirette"
 }

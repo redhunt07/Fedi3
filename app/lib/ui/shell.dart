@@ -127,7 +127,7 @@ class _ShellState extends State<Shell> {
         if (!onChatTab) {
           widget.appState.incrementUnreadChats();
           _showChatSnack();
-          if (widget.appState.prefs.notifyChat) {
+          if (widget.appState.prefs.notifyChat && !_notificationsMuted()) {
             NotificationService.showChatNotification(
               title: context.l10n.chatTitle,
               body: context.l10n.chatNewMessageBody,
@@ -163,7 +163,7 @@ class _ShellState extends State<Shell> {
         final onNotifTab = _index == 3;
         if (!onNotifTab) {
           widget.appState.incrementUnreadNotifications();
-          if (widget.appState.prefs.notifyDirect) {
+          if (widget.appState.prefs.notifyDirect && !_notificationsMuted()) {
             NotificationService.showGeneralNotification(
               title: context.l10n.notificationsTitle,
               body: context.l10n.notificationsNewActivity,
@@ -240,6 +240,12 @@ class _ShellState extends State<Shell> {
     final ty = ev.activityType?.trim() ?? '';
     if (ty.isEmpty) return false;
     return _directNotifTypes.contains(ty);
+  }
+
+  bool _notificationsMuted() {
+    final until = widget.appState.prefs.notifyMutedUntilMs;
+    if (until <= 0) return false;
+    return DateTime.now().millisecondsSinceEpoch < until;
   }
 
   @override

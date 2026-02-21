@@ -44,6 +44,8 @@ class UiSettingsScreen extends StatelessWidget {
                     children: [
                       Text(context.l10n.uiNotificationsTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
+                      _NotificationPresetRow(appState: appState),
+                      const SizedBox(height: 10),
                       SwitchListTile(
                         title: Text(context.l10n.uiNotificationsChat),
                         value: prefs.notifyChat,
@@ -357,5 +359,70 @@ class UiSettingsScreen extends StatelessWidget {
     );
     if (value == null) return;
     await appState.savePrefs(prefs.copyWith(accent: value));
+  }
+}
+
+class _NotificationPresetRow extends StatelessWidget {
+  const _NotificationPresetRow({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = appState.prefs;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final muted = prefs.notifyMutedUntilMs > now;
+    final mutedUntil = muted ? _formatUntil(prefs.notifyMutedUntilMs) : '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          context.l10n.uiNotificationsPresetLabel,
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            OutlinedButton(
+              onPressed: () => appState.savePrefs(prefs.copyWith(notifyChat: false, notifyDirect: true)),
+              child: Text(context.l10n.uiNotificationsPresetDirect),
+            ),
+            OutlinedButton(
+              onPressed: () => appState.savePrefs(prefs.copyWith(notifyChat: true, notifyDirect: false)),
+              child: Text(context.l10n.uiNotificationsPresetChat),
+            ),
+            OutlinedButton(
+              onPressed: () => appState.savePrefs(prefs.copyWith(notifyChat: true, notifyDirect: true)),
+              child: Text(context.l10n.uiNotificationsPresetAll),
+            ),
+            FilledButton(
+              onPressed: () {
+                final until = muted ? 0 : DateTime.now().add(const Duration(hours: 24)).millisecondsSinceEpoch;
+                appState.savePrefs(prefs.copyWith(notifyMutedUntilMs: until));
+              },
+              child: Text(muted ? context.l10n.uiNotificationsUnmute : context.l10n.uiNotificationsMute24h),
+            ),
+          ],
+        ),
+        if (muted)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              context.l10n.uiNotificationsMutedUntil(mutedUntil),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+            ),
+          ),
+      ],
+    );
+  }
+
+  static String _two(int v) => v.toString().padLeft(2, '0');
+
+  static String _formatUntil(int ms) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+    return '${dt.year}-${_two(dt.month)}-${_two(dt.day)} ${_two(dt.hour)}:${_two(dt.minute)}';
   }
 }

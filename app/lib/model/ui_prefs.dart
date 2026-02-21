@@ -43,6 +43,7 @@ class UiPrefs {
     required this.clientMonitoringEnabled,
     required this.notifyChat,
     required this.notifyDirect,
+    required this.notifyMutedUntilMs,
     required this.relayAdminToken,
     required this.useTor,
     required this.proxyHost,
@@ -75,6 +76,7 @@ class UiPrefs {
   final bool clientMonitoringEnabled;
   final bool notifyChat;
   final bool notifyDirect;
+  final int notifyMutedUntilMs;
   final String relayAdminToken;
   final bool useTor;
   final String? proxyHost;
@@ -107,6 +109,7 @@ class UiPrefs {
         clientMonitoringEnabled: false,
         notifyChat: true,
         notifyDirect: true,
+        notifyMutedUntilMs: 0,
         relayAdminToken: '',
         useTor: false,
         proxyHost: null,
@@ -140,6 +143,7 @@ class UiPrefs {
     bool? clientMonitoringEnabled,
     bool? notifyChat,
     bool? notifyDirect,
+    int? notifyMutedUntilMs,
     String? relayAdminToken,
     bool? useTor,
     String? proxyHost,
@@ -172,6 +176,7 @@ class UiPrefs {
       clientMonitoringEnabled: clientMonitoringEnabled ?? this.clientMonitoringEnabled,
       notifyChat: notifyChat ?? this.notifyChat,
       notifyDirect: notifyDirect ?? this.notifyDirect,
+      notifyMutedUntilMs: notifyMutedUntilMs ?? this.notifyMutedUntilMs,
       relayAdminToken: relayAdminToken ?? this.relayAdminToken,
       useTor: useTor ?? this.useTor,
       proxyHost: proxyHost ?? this.proxyHost,
@@ -206,6 +211,7 @@ class UiPrefs {
         'clientMonitoringEnabled': clientMonitoringEnabled,
         'notifyChat': notifyChat,
         'notifyDirect': notifyDirect,
+        'notifyMutedUntilMs': notifyMutedUntilMs,
         'relayAdminToken': relayAdminToken,
         'useTor': useTor,
         'proxyHost': proxyHost,
@@ -247,6 +253,7 @@ class UiPrefs {
     final accent = (raw['accent'] is num) ? (raw['accent'] as num).toInt() : UiPrefs.defaults().accent;
     final scale = (raw['textScale'] is num) ? (raw['textScale'] as num).toDouble() : UiPrefs.defaults().textScale;
     final timeoutMs = (raw['translationTimeoutMs'] is num) ? (raw['translationTimeoutMs'] as num).toInt() : UiPrefs.defaults().translationTimeoutMs;
+    final mutedUntilMs = (raw['notifyMutedUntilMs'] is num) ? (raw['notifyMutedUntilMs'] as num).toInt() : UiPrefs.defaults().notifyMutedUntilMs;
     final seenRaw = raw['chatThreadSeenMs'];
     final seenMap = <String, int>{};
     if (seenRaw is Map) {
@@ -292,6 +299,7 @@ class UiPrefs {
       clientMonitoringEnabled: raw['clientMonitoringEnabled'] == true,
       notifyChat: raw['notifyChat'] == null ? UiPrefs.defaults().notifyChat : raw['notifyChat'] == true,
       notifyDirect: raw['notifyDirect'] == null ? UiPrefs.defaults().notifyDirect : raw['notifyDirect'] == true,
+      notifyMutedUntilMs: mutedUntilMs,
       relayAdminToken: (raw['relayAdminToken'] as String? ?? '').trim(),
       useTor: raw['useTor'] == true,
       proxyHost: (raw['proxyHost'] as String? ?? '').trim(),

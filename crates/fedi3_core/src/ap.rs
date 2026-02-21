@@ -2558,6 +2558,18 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
         std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
+            if let Some(obj) = v.as_object_mut() {
+                let created_value = serde_json::Value::Number(it.created_at_ms.into());
+                obj.entry("created_at_ms".to_string())
+                    .or_insert(created_value.clone());
+                if let Some(inner) = obj.get_mut("object") {
+                    if let Some(inner_obj) = inner.as_object_mut() {
+                        inner_obj
+                            .entry("created_at_ms".to_string())
+                            .or_insert(created_value);
+                    }
+                }
+            }
             hydrate_activity(state, &mut v, &mut cache);
             items.push(v);
         }
@@ -2599,6 +2611,18 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
         std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
+            if let Some(obj) = v.as_object_mut() {
+                let created_value = serde_json::Value::Number(it.created_at_ms.into());
+                obj.entry("created_at_ms".to_string())
+                    .or_insert(created_value.clone());
+                if let Some(inner) = obj.get_mut("object") {
+                    if let Some(inner_obj) = inner.as_object_mut() {
+                        inner_obj
+                            .entry("created_at_ms".to_string())
+                            .or_insert(created_value);
+                    }
+                }
+            }
             hydrate_activity(state, &mut v, &mut cache);
             items.push(v);
         }
@@ -2639,6 +2663,18 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
         std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
+            if let Some(obj) = v.as_object_mut() {
+                let created_value = serde_json::Value::Number(it.created_at_ms.into());
+                obj.entry("created_at_ms".to_string())
+                    .or_insert(created_value.clone());
+                if let Some(inner) = obj.get_mut("object") {
+                    if let Some(inner_obj) = inner.as_object_mut() {
+                        inner_obj
+                            .entry("created_at_ms".to_string())
+                            .or_insert(created_value);
+                    }
+                }
+            }
             hydrate_activity(state, &mut v, &mut cache);
             items.push(v);
         }
@@ -2679,6 +2715,18 @@ async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body>
         std::collections::HashMap::new();
     for it in page.items {
         if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
+            if let Some(obj) = v.as_object_mut() {
+                let created_value = serde_json::Value::Number(it.created_at_ms.into());
+                obj.entry("created_at_ms".to_string())
+                    .or_insert(created_value.clone());
+                if let Some(inner) = obj.get_mut("object") {
+                    if let Some(inner_obj) = inner.as_object_mut() {
+                        inner_obj
+                            .entry("created_at_ms".to_string())
+                            .or_insert(created_value);
+                    }
+                }
+            }
             hydrate_activity(state, &mut v, &mut cache);
             items.push(v);
         }

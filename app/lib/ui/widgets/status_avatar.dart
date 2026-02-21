@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n_ext.dart';
 import '../../state/peer_presence_store.dart';
 
 class StatusAvatar extends StatelessWidget {
@@ -29,13 +30,22 @@ class StatusAvatar extends StatelessWidget {
     return ValueListenableBuilder<Map<String, bool>>(
       valueListenable: PeerPresenceStore.instance.onlineByUsername,
       builder: (context, map, _) {
+        final hasKey = map.containsKey(key);
         final online = map[key] == true;
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            avatar,
-            _StatusDot(size: size, online: online),
-          ],
+        final statusText = online
+            ? context.l10n.statusOnline
+            : hasKey
+                ? context.l10n.statusOffline
+                : context.l10n.statusActiveRecent;
+        return Tooltip(
+          message: statusText,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              avatar,
+              _StatusDot(size: size, online: online),
+            ],
+          ),
         );
       },
     );

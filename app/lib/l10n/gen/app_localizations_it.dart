@@ -1405,6 +1405,15 @@ class AppLocalizationsIt extends AppLocalizations {
   String get statusUnknownShort => '?';
 
   @override
+  String get statusOnline => 'Online';
+
+  @override
+  String get statusActiveRecent => 'Attivo di recente';
+
+  @override
+  String get statusOffline => 'Offline';
+
+  @override
   String get statusConnectedShort => 'on';
 
   @override
@@ -1826,6 +1835,29 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get uiNotificationsTitle => 'Notifiche';
+
+  @override
+  String get uiNotificationsPresetLabel => 'Preset';
+
+  @override
+  String get uiNotificationsPresetDirect => 'Solo interazioni dirette';
+
+  @override
+  String get uiNotificationsPresetChat => 'Solo chat';
+
+  @override
+  String get uiNotificationsPresetAll => 'Tutte le notifiche';
+
+  @override
+  String get uiNotificationsMute24h => 'Silenzia 24h';
+
+  @override
+  String get uiNotificationsUnmute => 'Riattiva';
+
+  @override
+  String uiNotificationsMutedUntil(String when) {
+    return 'Silenzioso fino a $when';
+  }
 
   @override
   String get uiNotificationsChat => 'Messaggi chat';

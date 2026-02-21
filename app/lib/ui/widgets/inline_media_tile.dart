@@ -35,6 +35,7 @@ class InlineMediaTile extends StatefulWidget {
 class _InlineMediaTileState extends State<InlineMediaTile> {
   bool _precached = false;
   bool _showPlayer = false;
+  int _retryToken = 0;
 
   @override
   void didChangeDependencies() {
@@ -76,20 +77,49 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
           onTap: widget.onOpen,
           child: Image.network(
             url,
+            key: ValueKey('$url-${widget.cacheWidth}-$_retryToken'),
             fit: BoxFit.cover,
             cacheWidth: widget.cacheWidth,
             filterQuality: FilterQuality.low,
             loadingBuilder: (context, child, progress) {
               if (progress == null) return child;
+              final total = progress.expectedTotalBytes;
+              final loaded = progress.cumulativeBytesLoaded;
+              final value = total == null || total == 0 ? null : loaded / total;
+              final pct = total == null || total == 0 ? '' : ' ${(value! * 100).round()}%';
               return Container(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 alignment: Alignment.center,
-                child: const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2)),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(strokeWidth: 2, value: value),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('Loading$pct', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12)),
+                  ],
+                ),
               );
             },
             errorBuilder: (_, __, ___) => Container(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Icon(Icons.broken_image_outlined),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.broken_image_outlined),
+                  const SizedBox(height: 6),
+                  Text('Media unavailable', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12)),
+                  const SizedBox(height: 6),
+                  TextButton(
+                    onPressed: () => setState(() => _retryToken++),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

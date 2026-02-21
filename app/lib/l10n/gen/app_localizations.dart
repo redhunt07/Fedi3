@@ -2606,6 +2606,24 @@ abstract class AppLocalizations {
   /// **'?'**
   String get statusUnknownShort;
 
+  /// No description provided for @statusOnline.
+  ///
+  /// In en, this message translates to:
+  /// **'Online'**
+  String get statusOnline;
+
+  /// No description provided for @statusActiveRecent.
+  ///
+  /// In en, this message translates to:
+  /// **'Active recently'**
+  String get statusActiveRecent;
+
+  /// No description provided for @statusOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline'**
+  String get statusOffline;
+
   /// No description provided for @statusConnectedShort.
   ///
   /// In en, this message translates to:
@@ -3403,6 +3421,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Notifications'**
   String get uiNotificationsTitle;
+
+  /// No description provided for @uiNotificationsPresetLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Presets'**
+  String get uiNotificationsPresetLabel;
+
+  /// No description provided for @uiNotificationsPresetDirect.
+  ///
+  /// In en, this message translates to:
+  /// **'Only direct interactions'**
+  String get uiNotificationsPresetDirect;
+
+  /// No description provided for @uiNotificationsPresetChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Only chat'**
+  String get uiNotificationsPresetChat;
+
+  /// No description provided for @uiNotificationsPresetAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All notifications'**
+  String get uiNotificationsPresetAll;
+
+  /// No description provided for @uiNotificationsMute24h.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute 24h'**
+  String get uiNotificationsMute24h;
+
+  /// No description provided for @uiNotificationsUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get uiNotificationsUnmute;
+
+  /// No description provided for @uiNotificationsMutedUntil.
+  ///
+  /// In en, this message translates to:
+  /// **'Muted until {when}'**
+  String uiNotificationsMutedUntil(String when);
 
   /// No description provided for @uiNotificationsChat.
   ///
