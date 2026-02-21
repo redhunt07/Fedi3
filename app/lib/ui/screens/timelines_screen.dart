@@ -598,6 +598,14 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       return '';
     }
 
+    int readCreatedMs(Map<String, dynamic>? source) {
+      if (source == null) return 0;
+      final raw = source['created_at_ms'];
+      if (raw is num) return raw.toInt();
+      if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+      return 0;
+    }
+
     var time = readTime(activity);
     if (time.isEmpty) {
       final obj = activity['object'];
@@ -610,7 +618,21 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       }
     }
     final parsed = time.isEmpty ? null : DateTime.tryParse(time);
-    return parsed?.millisecondsSinceEpoch ?? 0;
+    if (parsed != null) {
+      return parsed.millisecondsSinceEpoch;
+    }
+    var created = readCreatedMs(activity);
+    if (created == 0) {
+      final obj = activity['object'];
+      if (obj is Map) {
+        final map = obj.cast<String, dynamic>();
+        created = readCreatedMs(map);
+        if (created == 0 && map['object'] is Map) {
+          created = readCreatedMs((map['object'] as Map).cast<String, dynamic>());
+        }
+      }
+    }
+    return created;
   }
 
   void _sortActivities(List<Map<String, dynamic>> items) {
