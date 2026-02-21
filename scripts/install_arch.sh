@@ -37,11 +37,16 @@ install_packages() {
   local packages=(
     base-devel git curl unzip xz zip python
     clang cmake ninja pkgconf
-    gtk3 webkit2gtk
+    gtk3
     gstreamer gst-plugins-base gst-plugins-good
     libsecret libnotify
     mpv
   )
+  local webkit_pkg="webkit2gtk"
+  if pacman -Si webkit2gtk-4.1 >/dev/null 2>&1; then
+    webkit_pkg="webkit2gtk-4.1"
+  fi
+  packages+=("$webkit_pkg")
 
   local missing=()
   for pkg in "${packages[@]}"; do
