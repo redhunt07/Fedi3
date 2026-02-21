@@ -1,6 +1,10 @@
 # Client Updates (Windows + Linux)
 
-The desktop client checks GitHub Releases (latest) and installs updates automatically.
+The desktop client checks GitHub Releases (latest).
+
+- Windows: auto-install supported (zip asset).
+- Linux: auto-install works only for AppImage builds. Source installs show a
+  manual update command based on the distro (Debian/Ubuntu or Arch).
 
 ## Release assets
 

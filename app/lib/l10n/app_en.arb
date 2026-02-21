@@ -450,6 +450,14 @@
   "updateChangelog": "Changelog",
   "updateDismiss": "Dismiss",
   "updateOpenRelease": "Opening release page",
+  "updateManual": "Manual update",
+  "@updateManual": {},
+  "updateManualBody": "Run this command in a terminal:\\n{command}",
+  "@updateManualBody": {
+    "placeholders": {
+      "command": { "type": "String" }
+    }
+  },
 
   "securityTitle": "Security",
   "securityHint": "Tokens and internal endpoints",

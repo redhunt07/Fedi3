@@ -1032,6 +1032,14 @@ class AppLocalizationsIt extends AppLocalizations {
   String get updateOpenRelease => 'Apro la pagina release';
 
   @override
+  String get updateManual => 'Aggiornamento manuale';
+
+  @override
+  String updateManualBody(String command) {
+    return 'Esegui questo comando nel terminale:\n$command';
+  }
+
+  @override
   String get securityTitle => 'Sicurezza';
 
   @override

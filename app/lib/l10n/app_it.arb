@@ -452,6 +452,14 @@
   "updateChangelog": "Changelog",
   "updateDismiss": "Chiudi",
   "updateOpenRelease": "Apro la pagina release",
+  "updateManual": "Aggiornamento manuale",
+  "@updateManual": {},
+  "updateManualBody": "Esegui questo comando nel terminale:\\n{command}",
+  "@updateManualBody": {
+    "placeholders": {
+      "command": { "type": "String" }
+    }
+  },
 
   "securityTitle": "Sicurezza",
   "securityHint": "Token e endpoint interni",

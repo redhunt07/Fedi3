@@ -21,6 +21,8 @@ class UpdateInfo {
     required this.assetUrl,
     required this.checksum,
     required this.releasePage,
+    this.canAutoInstall = true,
+    this.manualCommand = '',
   });
 
   final String version;
@@ -28,6 +30,8 @@ class UpdateInfo {
   final String assetUrl;
   final String checksum;
   final String releasePage;
+  final bool canAutoInstall;
+  final String manualCommand;
 }
 
 class UpdateService {
@@ -74,6 +78,9 @@ class UpdateService {
   Future<void> downloadAndInstall() async {
     final info = available.value;
     if (info == null) return;
+    if (!info.canAutoInstall) {
+      throw StateError('manual update required');
+    }
     final tmp = await getTemporaryDirectory();
     final targetPath = _currentExecutablePath();
     if (targetPath == null) {
@@ -117,6 +124,18 @@ class UpdateService {
     if (!_isNewer(latestVersion, current)) return null;
     final assets = (raw['assets'] as List?) ?? const [];
     final releasePage = (raw['html_url'] as String?)?.trim() ?? '';
+    if (Platform.isLinux && !_isAppImage()) {
+      final manualCommand = await _linuxManualCommand();
+      return UpdateInfo(
+        version: latestVersion,
+        assetName: '',
+        assetUrl: '',
+        checksum: '',
+        releasePage: releasePage,
+        canAutoInstall: false,
+        manualCommand: manualCommand,
+      );
+    }
     final asset = _pickAsset(assets);
     if (asset == null) return null;
     final checksums = _findChecksumAsset(assets);
@@ -256,6 +275,41 @@ class UpdateService {
     } catch (_) {
       return null;
     }
+  }
+
+  bool _isAppImage() {
+    if (!Platform.isLinux) return false;
+    final appImage = Platform.environment['APPIMAGE']?.trim();
+    return appImage != null && appImage.isNotEmpty && File(appImage).existsSync();
+  }
+
+  Future<String> _linuxManualCommand() async {
+    const debCmd =
+        'curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash -s -- --update-only';
+    const archCmd =
+        'curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash -s -- --update-only';
+    try {
+      final osRelease = await File('/etc/os-release').readAsString();
+      final id = _readOsReleaseValue(osRelease, 'ID');
+      final like = _readOsReleaseValue(osRelease, 'ID_LIKE');
+      final tags = '${id.toLowerCase()} ${like.toLowerCase()}';
+      if (tags.contains('arch')) {
+        return archCmd;
+      }
+      if (tags.contains('debian') || tags.contains('ubuntu')) {
+        return debCmd;
+      }
+    } catch (_) {
+      // Fall through to generic output.
+    }
+    return 'Debian/Ubuntu:\n$debCmd\n\nArch:\n$archCmd';
+  }
+
+  String _readOsReleaseValue(String content, String key) {
+    final pattern = RegExp('^$key=(.*)\$', multiLine: true);
+    final match = pattern.firstMatch(content);
+    if (match == null) return '';
+    return match.group(1)?.replaceAll('"', '').trim() ?? '';
   }
 
   Future<void> _installWindows(String downloadPath, String targetPath, String version) async {

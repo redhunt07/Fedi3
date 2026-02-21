@@ -41,8 +41,10 @@ class _UpdateBannerState extends State<UpdateBanner> {
               child: Text(l10n.updateChangelog),
             ),
             FilledButton(
-              onPressed: _busy ? null : () => _apply(info),
-              child: Text(_busy ? l10n.updateDownloading : l10n.updateInstall),
+              onPressed: _busy ? null : () => _applyOrShowManual(info),
+              child: Text(_busy
+                  ? l10n.updateDownloading
+                  : (info.canAutoInstall ? l10n.updateInstall : l10n.updateManual)),
             ),
           ],
         );
@@ -50,7 +52,11 @@ class _UpdateBannerState extends State<UpdateBanner> {
     );
   }
 
-  Future<void> _apply(UpdateInfo info) async {
+  Future<void> _applyOrShowManual(UpdateInfo info) async {
+    if (!info.canAutoInstall) {
+      await _showManual(info);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -69,6 +75,28 @@ class _UpdateBannerState extends State<UpdateBanner> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Future<void> _showManual(UpdateInfo info) async {
+    if (info.manualCommand.trim().isEmpty) {
+      _openRelease(info.releasePage);
+      return;
+    }
+    if (!mounted) return;
+    final l10n = context.l10n;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.updateManual),
+        content: SelectableText(l10n.updateManualBody(info.manualCommand)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.updateDismiss),
+          ),
+        ],
+      ),
+    );
   }
 
   void _openRelease(String url) {
