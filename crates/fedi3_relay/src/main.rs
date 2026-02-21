@@ -21,11 +21,12 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use deadpool::managed::QueueMode;
 use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use futures_util::{stream, SinkExt, StreamExt};
-use http::{header, Request};
+use http::{header, Request, Uri};
 use httpdate::parse_http_date;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
@@ -285,6 +286,14 @@ struct UserBackupItem {
     meta_json: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ActorCacheMeta {
+    actor_json: String,
+    updated_at_ms: i64,
+    actor_id: Option<String>,
+    actor_url: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct WebrtcSignal {
     id: String,
@@ -309,6 +318,7 @@ struct AppState {
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
     relay_mesh_peer_id: Arc<RwLock<Option<String>>>,
     presence_tx: broadcast::Sender<PresenceEvent>,
+    presence_last_seen: Arc<Mutex<HashMap<String, i64>>>,
     github_issues: Option<Arc<GithubIssueReporter>>,
     telemetry_dedupe: Arc<Mutex<HashMap<String, i64>>>,
     webrtc_signals: Arc<Mutex<HashMap<String, Vec<WebrtcSignal>>>>,
@@ -1378,6 +1388,7 @@ async fn main() {
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
         relay_mesh_peer_id: Arc::new(RwLock::new(None)),
         presence_tx: broadcast::channel(256).0,
+        presence_last_seen: Arc::new(Mutex::new(HashMap::new())),
         github_issues: spawn_github_issues(&cfg, http.clone()),
         telemetry_dedupe: Arc::new(Mutex::new(HashMap::new())),
         webrtc_signals: Arc::new(Mutex::new(HashMap::new())),
@@ -1564,6 +1575,7 @@ async fn main() {
         .route("/_fedi3/relay/move_notice", post(relay_move_notice_post))
         .route("/_fedi3/backup", get(relay_backup_meta).put(relay_backup_put))
         .route("/_fedi3/backup/blob", get(relay_backup_blob))
+        .route("/api/users/show", post(api_user_show).get(api_user_show_get))
         .route("/users/:user/media", post(media_upload))
         .route("/users/:user/media/:id", get(media_get))
         .route("/users/:user", any(forward_user_root))
@@ -3744,6 +3756,44 @@ fn relay_self_base(cfg: &RelayConfig) -> String {
         ip.to_string()
     };
     format!("http://{}:{}", host, cfg.bind.port())
+}
+
+fn relay_host_name(cfg: &RelayConfig) -> Option<String> {
+    let base = relay_self_base(cfg);
+    let uri: Uri = base.parse().ok()?;
+    uri.host().map(|h| h.to_string())
+}
+
+fn host_matches_relay(state: &AppState, host: Option<&str>) -> bool {
+    let host = host.unwrap_or("").trim();
+    if host.is_empty() {
+        return true;
+    }
+    let host_norm = normalize_host(host.to_string());
+    if let Some(base) = relay_host_name(&state.cfg) {
+        if normalize_host(base) == host_norm {
+            return true;
+        }
+    }
+    if let Some(base_domain) = state.cfg.base_domain.as_deref() {
+        if normalize_host(base_domain.to_string()) == host_norm {
+            return true;
+        }
+    }
+    false
+}
+
+fn rfc3339_from_ms(ms: i64) -> Option<String> {
+    if ms <= 0 {
+        return None;
+    }
+    let dt = Utc.timestamp_millis_opt(ms).single()?;
+    Some(dt.to_rfc3339())
+}
+
+fn collection_total_items(json: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    v.get("totalItems").and_then(|v| v.as_u64())
 }
 
 fn user_base_url(cfg: &RelayConfig, user: &str) -> String {
@@ -5948,6 +5998,41 @@ impl Db {
                     &[&username],
                 )?;
                 Ok(row.map(|r| r.get(0)))
+            }
+        }
+    }
+
+    fn get_actor_cache_with_meta(&self, username: &str) -> Result<Option<ActorCacheMeta>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.query_row(
+                    "SELECT actor_json, updated_at_ms, actor_id, actor_url FROM user_cache WHERE username=?1",
+                    params![username],
+                    |r| {
+                        Ok(ActorCacheMeta {
+                            actor_json: r.get(0)?,
+                            updated_at_ms: r.get(1)?,
+                            actor_id: r.get(2)?,
+                            actor_url: r.get(3)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT actor_json, updated_at_ms, actor_id, actor_url FROM user_cache WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(row.map(|r| ActorCacheMeta {
+                    actor_json: r.get(0),
+                    updated_at_ms: r.get(1),
+                    actor_id: r.get(2),
+                    actor_url: r.get(3),
+                }))
             }
         }
     }
@@ -8342,6 +8427,22 @@ struct RelayBackupMeta {
     meta_json: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct ApiUserShowRequest {
+    #[serde(alias = "userId", alias = "user_id")]
+    user_id: Option<String>,
+    username: Option<String>,
+    host: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ApiUserShowQuery {
+    #[serde(alias = "userId", alias = "user_id")]
+    user_id: Option<String>,
+    username: Option<String>,
+    host: Option<String>,
+}
+
 async fn relay_backup_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -8516,6 +8617,264 @@ async fn relay_backup_blob(
         HeaderValue::from_static("no-store"),
     );
     resp
+}
+
+async fn api_user_show(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let input: ApiUserShowRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    user_show_response(&state, input.username, input.host, input.user_id).await
+}
+
+async fn api_user_show_get(
+    State(state): State<AppState>,
+    Query(q): Query<ApiUserShowQuery>,
+) -> impl IntoResponse {
+    user_show_response(&state, q.username, q.host, q.user_id).await
+}
+
+async fn user_show_response(
+    state: &AppState,
+    username: Option<String>,
+    host: Option<String>,
+    user_id: Option<String>,
+) -> Response {
+    if user_id.is_some() && username.is_none() {
+        return (StatusCode::BAD_REQUEST, "userId unsupported").into_response();
+    }
+    let username = username.unwrap_or_default().trim().to_string();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+
+    if !host_matches_relay(state, host.as_deref()) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+
+    let db = state.db.lock().await;
+    if !db.user_exists(&username).unwrap_or(false) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let enabled = db.is_user_enabled(&username).unwrap_or(false);
+    let user_created_ms = db.get_user(&username).ok().flatten().map(|v| v.0);
+
+    let actor_cache = db.get_actor_cache_with_meta(&username).ok().flatten();
+    let followers_json = db.get_collection_cache(&username, "followers").ok().flatten();
+    let following_json = db.get_collection_cache(&username, "following").ok().flatten();
+    let outbox_json = db.get_collection_cache(&username, "outbox").ok().flatten();
+    drop(db);
+
+    let actor_value = actor_cache
+        .as_ref()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c.actor_json).ok())
+        .unwrap_or_else(|| {
+            let base = user_base_template(&state.cfg);
+            actor_stub_json(&username, &base)
+        });
+
+    let mut actor_id = actor_value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if actor_id.is_empty() {
+        if let Some(actor_url) = actor_cache.as_ref().and_then(|c| c.actor_url.clone()) {
+            actor_id = actor_url;
+        } else {
+            actor_id = format!("{}/users/{username}", relay_self_base(&state.cfg));
+        }
+    }
+    let preferred_username = actor_value
+        .get("preferredUsername")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&username);
+    let name = actor_value.get("name").and_then(|v| v.as_str()).unwrap_or(preferred_username);
+    let summary = actor_value.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let is_bot = actor_value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|t| matches!(t, "Service" | "Application"))
+        .unwrap_or(false);
+    let is_locked = actor_value
+        .get("manuallyApprovesFollowers")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let moved_to = actor_value.get("movedTo").and_then(|v| v.as_str());
+    let also_known_as = actor_value
+        .get("alsoKnownAs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let avatar_url = actor_value
+        .get("icon")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                return Some(s);
+            }
+            v.get("url")
+                .or_else(|| v.get("href"))
+                .and_then(|u| u.as_str())
+        })
+        .unwrap_or("");
+    let banner_url = actor_value
+        .get("image")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                return Some(s);
+            }
+            v.get("url")
+                .or_else(|| v.get("href"))
+                .and_then(|u| u.as_str())
+        })
+        .unwrap_or("");
+
+    let fields = actor_value
+        .get("attachment")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let value = item.get("value")?.as_str()?.to_string();
+                    Some(serde_json::json!({ "name": name, "value": value }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let followers_count = followers_json
+        .as_deref()
+        .and_then(collection_total_items)
+        .unwrap_or(0);
+    let following_count = following_json
+        .as_deref()
+        .and_then(collection_total_items)
+        .unwrap_or(0);
+    let notes_count = outbox_json
+        .as_deref()
+        .and_then(collection_total_items)
+        .unwrap_or(0);
+
+    let online_status = if state.tunnels.read().await.contains_key(&username) {
+        "online"
+    } else {
+        let last_seen = {
+            let seen = state.presence_last_seen.lock().await;
+            seen.get(&username).copied().unwrap_or(0)
+        };
+        if last_seen > 0 {
+            let age_ms = now_ms().saturating_sub(last_seen);
+            if age_ms >= 60_000 && age_ms <= 7 * 24 * 60 * 60 * 1000 {
+                "active"
+            } else {
+                "offline"
+            }
+        } else {
+            "offline"
+        }
+    };
+    let host = relay_host_name(&state.cfg).unwrap_or_default();
+
+    let created_at = actor_value
+        .get("published")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| user_created_ms.and_then(rfc3339_from_ms))
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+    let updated_at = actor_cache
+        .as_ref()
+        .and_then(|c| rfc3339_from_ms(c.updated_at_ms));
+
+    let instance = serde_json::json!({
+        "name": null,
+        "softwareName": "fedi3-relay",
+        "softwareVersion": env!("CARGO_PKG_VERSION"),
+        "iconUrl": null,
+        "faviconUrl": null,
+        "themeColor": null,
+        "isSilenced": false
+    });
+
+    let out = serde_json::json!({
+        "id": meili_doc_id(&actor_id),
+        "name": name,
+        "username": preferred_username,
+        "host": if host.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(host) },
+        "avatarUrl": if avatar_url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(avatar_url.to_string()) },
+        "avatarBlurhash": null,
+        "description": summary,
+        "listenbrainz": null,
+        "listenbrainzBadgeEnabled": false,
+        "createdAt": created_at,
+        "avatarDecorations": [],
+        "isBot": is_bot,
+        "isCat": false,
+        "noindex": false,
+        "enableRss": false,
+        "mandatoryCW": null,
+        "rejectQuotes": false,
+        "attributionDomains": [],
+        "isSilenced": false,
+        "speakAsCat": false,
+        "approved": enabled,
+        "instance": instance,
+        "followersCount": followers_count,
+        "followingCount": following_count,
+        "notesCount": notes_count,
+        "emojis": {},
+        "onlineStatus": online_status,
+        "url": actor_id,
+        "uri": actor_id,
+        "movedTo": moved_to,
+        "alsoKnownAs": also_known_as,
+        "updatedAt": updated_at,
+        "lastFetchedAt": updated_at,
+        "bannerUrl": if banner_url.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(banner_url.to_string()) },
+        "bannerBlurhash": null,
+        "backgroundUrl": null,
+        "backgroundBlurhash": null,
+        "isLocked": is_locked,
+        "isSuspended": !enabled,
+        "location": null,
+        "birthday": null,
+        "lang": null,
+        "fields": fields,
+        "verifiedLinks": [],
+        "pinnedNoteIds": [],
+        "pinnedNotes": [],
+        "pinnedPageId": null,
+        "pinnedPage": null,
+        "publicReactions": false,
+        "followersVisibility": "public",
+        "followingVisibility": "public",
+        "chatScope": "mutual",
+        "canChat": true,
+        "roles": [],
+        "memo": null,
+        "moderationNote": "",
+        "twoFactorEnabled": false,
+        "usePasswordLessLogin": false,
+        "securityKeys": false,
+        "isFollowing": false,
+        "isFollowed": false,
+        "hasPendingFollowRequestFromYou": false,
+        "hasPendingFollowRequestToYou": false,
+        "isBlocking": false,
+        "isBlocked": false,
+        "isMuted": false,
+        "isRenoteMuted": false,
+        "notify": "none",
+        "withReplies": true,
+        "followedMessage": null
+    });
+
+    axum::Json(out).into_response()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -8964,6 +9323,10 @@ async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
 }
 
 fn emit_presence_update(state: &AppState, username: &str, actor_url: &str, online: bool) {
+    {
+        let mut seen = state.presence_last_seen.blocking_lock();
+        seen.insert(username.to_string(), now_ms());
+    }
     let item = PresenceItem {
         username: username.to_string(),
         actor_url: actor_url.to_string(),
