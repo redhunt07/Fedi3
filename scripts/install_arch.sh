@@ -42,11 +42,6 @@ install_packages() {
     libsecret libnotify
     mpv
   )
-  local webkit_pkg="webkit2gtk"
-  if pacman -Si webkit2gtk-4.1 >/dev/null 2>&1; then
-    webkit_pkg="webkit2gtk-4.1"
-  fi
-  packages+=("$webkit_pkg")
 
   local missing=()
   for pkg in "${packages[@]}"; do
@@ -61,6 +56,38 @@ install_packages() {
   fi
 
   sudo_cmd pacman -Sy --noconfirm --needed "${missing[@]}"
+}
+
+ensure_webkit2gtk_41() {
+  if pkgconf --exists webkit2gtk-4.1; then
+    return
+  fi
+
+  if pacman -Si webkit2gtk-4.1 >/dev/null 2>&1; then
+    sudo_cmd pacman -Sy --noconfirm --needed webkit2gtk-4.1
+  elif pacman -Si webkit2gtk >/dev/null 2>&1; then
+    sudo_cmd pacman -Sy --noconfirm --needed webkit2gtk
+  fi
+
+  if pkgconf --exists webkit2gtk-4.1; then
+    return
+  fi
+
+  if require_cmd yay; then
+    yay -S --noconfirm --needed webkit2gtk-4.1
+  elif require_cmd paru; then
+    paru -S --noconfirm --needed webkit2gtk-4.1
+  fi
+
+  if pkgconf --exists webkit2gtk-4.1; then
+    return
+  fi
+
+  echo "Missing webkit2gtk-4.1 (pkg-config)."
+  echo "Try: sudo pacman -Syu webkit2gtk-4.1"
+  echo "Then verify: pkgconf --exists webkit2gtk-4.1 && echo OK"
+  echo "If not available, install a package that provides webkit2gtk-4.1 (extra repo or AUR)."
+  exit 1
 }
 
 install_rust() {
@@ -209,6 +236,7 @@ main() {
     install_flutter
   fi
   clone_or_update_repo
+  ensure_webkit2gtk_41
   build_core
   build_flutter
   install_app
