@@ -184,6 +184,8 @@
   "noteLoadingThread": "Loading…",
   "noteShowReplies": "Show replies",
   "noteHideReplies": "Hide replies",
+  "noteShowPreview": "Show preview",
+  "noteHidePreview": "Hide preview",
   "noteLoadingReplies": "Loading replies…",
   "noteReactionLoading": "Loading reactions…",
   "noteReactionAdd": "Add reaction",

@@ -121,6 +121,7 @@ class _NoteCardState extends State<NoteCard> {
   String? _translatedText;
   String? _translationSource;
   String? _translationError;
+  bool _previewVisible = false;
 
   @override
   void initState() {
@@ -137,7 +138,6 @@ class _NoteCardState extends State<NoteCard> {
       final note = widget.item.note;
       EmojiStore.addAll(note.emojis);
       _loadFlags(note.id);
-      _prefetchLinkPreview();
       if (_showThread && note.inReplyTo.trim().isNotEmpty && _threadParents.isEmpty && !_threadLoading) {
         _loadThreadParents(api, note.inReplyTo);
       }
@@ -170,13 +170,13 @@ class _NoteCardState extends State<NoteCard> {
       _translatedText = null;
       _translationSource = null;
       _translationError = null;
+      _previewVisible = false;
       final cfg = widget.appState.config;
       if (cfg != null && widget.appState.isRunning) {
         _loadMyReactions(CoreApi(config: cfg), widget.item.note.id);
       }
       EmojiStore.addAll(widget.item.note.emojis);
       _loadFlags(widget.item.note.id);
-      _prefetchLinkPreview();
     }
   }
 
@@ -488,7 +488,7 @@ class _NoteCardState extends State<NoteCard> {
                   onTap: canAct ? () => _showReactionsPopup(context, api, note.id) : null,
                 ),
               ],
-              if (previewUrl != null) ...[
+              if (previewUrl != null && _previewVisible) ...[
                 const SizedBox(height: 8),
                 LinkPreviewCard(url: previewUrl),
               ],
@@ -626,6 +626,22 @@ class _NoteCardState extends State<NoteCard> {
                               }
                             : null,
                       ),
+                      if (previewUrl != null)
+                        _ActionButton(
+                          tooltip: _previewVisible ? context.l10n.noteHidePreview : context.l10n.noteShowPreview,
+                          icon: Icon(
+                            Icons.link,
+                            size: 18,
+                            color: _previewVisible ? Theme.of(context).colorScheme.primary : null,
+                          ),
+                          onPressed: () {
+                            final next = !_previewVisible;
+                            if (next) {
+                              _prefetchLinkPreview();
+                            }
+                            setState(() => _previewVisible = next);
+                          },
+                        ),
                       _ActionButton(
                         tooltip: _translatedText == null
                             ? context.l10n.noteTranslate

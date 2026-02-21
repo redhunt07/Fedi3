@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../services/link_preview_repository.dart';
 import '../utils/open_url.dart';
+import 'retry_network_image.dart';
 
 class LinkPreviewCard extends StatelessWidget {
   const LinkPreviewCard({super.key, required this.url});
@@ -44,12 +45,10 @@ class LinkPreviewCard extends StatelessWidget {
                 if (img.isNotEmpty)
                   ClipRRect(
                     borderRadius: const BorderRadius.horizontal(left: Radius.circular(14)),
-                    child: Image.network(
-                      img,
+                    child: RetryNetworkImage(
+                      url: img,
                       width: 96,
                       height: 96,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox(width: 96, height: 96),
                     ),
                   ),
                 Expanded(

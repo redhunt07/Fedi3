@@ -185,6 +185,8 @@
   "noteLoadingThread": "Caricamento…",
   "noteShowReplies": "Mostra risposte",
   "noteHideReplies": "Nascondi risposte",
+  "noteShowPreview": "Mostra anteprima",
+  "noteHidePreview": "Nascondi anteprima",
   "noteLoadingReplies": "Caricamento risposte…",
   "noteReactionLoading": "Caricamento reazioni…",
   "noteReactionAdd": "Aggiungi reazione",

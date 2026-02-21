@@ -461,6 +461,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get noteHideReplies => 'Nascondi risposte';
 
   @override
+  String get noteShowPreview => 'Mostra anteprima';
+
+  @override
+  String get noteHidePreview => 'Nascondi anteprima';
+
+  @override
   String get noteLoadingReplies => 'Caricamento risposte…';
 
   @override

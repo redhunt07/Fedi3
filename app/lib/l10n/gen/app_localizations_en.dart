@@ -461,6 +461,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noteHideReplies => 'Hide replies';
 
   @override
+  String get noteShowPreview => 'Show preview';
+
+  @override
+  String get noteHidePreview => 'Hide preview';
+
+  @override
   String get noteLoadingReplies => 'Loading replies…';
 
   @override

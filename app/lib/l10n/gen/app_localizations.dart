@@ -962,6 +962,18 @@ abstract class AppLocalizations {
   /// **'Hide replies'**
   String get noteHideReplies;
 
+  /// No description provided for @noteShowPreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Show preview'**
+  String get noteShowPreview;
+
+  /// No description provided for @noteHidePreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide preview'**
+  String get noteHidePreview;
+
   /// No description provided for @noteLoadingReplies.
   ///
   /// In en, this message translates to:

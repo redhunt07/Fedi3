@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../state/peer_presence_store.dart';
+import 'retry_network_image.dart';
 
 class StatusAvatar extends StatelessWidget {
   const StatusAvatar({
@@ -63,20 +64,16 @@ class StatusAvatar extends StatelessWidget {
     }
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final cacheW = (size * dpr).round();
-    return ClipRRect(
+    return RetryNetworkImage(
+      url: u,
+      width: size,
+      height: size,
+      cacheWidth: cacheW,
       borderRadius: BorderRadius.circular(size / 2),
-      child: Image.network(
-        u,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        cacheWidth: cacheW,
-        filterQuality: FilterQuality.low,
-        errorBuilder: (_, __, ___) => CircleAvatar(
-          radius: size / 2,
-          backgroundColor: bg,
-          child: Icon(Icons.person, size: (size * 0.55).clamp(16, 28)),
-        ),
+      placeholder: CircleAvatar(
+        radius: size / 2,
+        backgroundColor: bg,
+        child: Icon(Icons.person, size: (size * 0.55).clamp(16, 28)),
       ),
     );
   }
