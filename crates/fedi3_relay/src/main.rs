@@ -3206,6 +3206,89 @@ async fn forward_user_rest(
     forward_to_user(state, user, method, &path, query, headers, body).await
 }
 
+async fn cached_user_response(
+    state: &AppState,
+    user: &str,
+    path: &str,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    if path != format!("/users/{user}") && !is_cached_collection_path(user, path) {
+        return None;
+    }
+
+    let db = state.db.lock().await;
+    if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(user) {
+        if path == format!("/users/{user}") {
+            if wants_activity_json(headers) {
+                // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
+                if let Ok(Some(actor_json)) = db.get_actor_cache(user) {
+                    if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to) {
+                        return Some(
+                            (
+                                StatusCode::OK,
+                                [("Content-Type", "application/activity+json; charset=utf-8")],
+                                patched,
+                            )
+                                .into_response(),
+                        );
+                    }
+                }
+                let stub = moved_actor_stub_json(&state.cfg, headers, user, &moved_to);
+                return Some(
+                    (
+                        StatusCode::OK,
+                        [("Content-Type", "application/activity+json; charset=utf-8")],
+                        stub,
+                    )
+                        .into_response(),
+                );
+            }
+            return Some((StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "")
+                .into_response());
+        }
+
+        // For collections, redirect to the new actor URL + same suffix.
+        let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
+        let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
+        return Some((StatusCode::PERMANENT_REDIRECT, [("Location", location)], "").into_response());
+    }
+
+    if path == format!("/users/{user}") {
+        if let Ok(Some(actor_json)) = db.get_actor_cache(user) {
+            return Some(
+                (
+                    StatusCode::OK,
+                    [("Content-Type", "application/activity+json; charset=utf-8")],
+                    actor_json,
+                )
+                    .into_response(),
+            );
+        }
+    } else if let Some(kind) = collection_kind_from_path(user, path) {
+        if let Ok(Some(json)) = db.get_collection_cache(user, kind) {
+            return Some(
+                (
+                    StatusCode::OK,
+                    [("Content-Type", "application/activity+json; charset=utf-8")],
+                    json,
+                )
+                    .into_response(),
+            );
+        }
+        let stub = collection_stub_json(user, kind, headers);
+        return Some(
+            (
+                StatusCode::OK,
+                [("Content-Type", "application/activity+json; charset=utf-8")],
+                stub,
+            )
+                .into_response(),
+        );
+    }
+
+    Some((StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response())
+}
+
 async fn forward_to_user(
     state: AppState,
     user: String,
@@ -3225,74 +3308,12 @@ async fn forward_to_user(
         }
     }
 
-    // If the user is offline, still serve cached profile/collections to improve
-    // legacy compatibility (profile/key discovery + collection fetches).
-    if method == Method::GET
-        && (path == format!("/users/{user}") || is_cached_collection_path(&user, path))
-    {
+    if method == Method::GET {
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
-            let db = state.db.lock().await;
-            if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(&user) {
-                if path == format!("/users/{user}") {
-                    if wants_activity_json(&headers) {
-                        // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
-                        if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
-                            if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to)
-                            {
-                                return (
-                                    StatusCode::OK,
-                                    [("Content-Type", "application/activity+json; charset=utf-8")],
-                                    patched,
-                                )
-                                    .into_response();
-                            }
-                        }
-                        let stub = moved_actor_stub_json(&state.cfg, &headers, &user, &moved_to);
-                        return (
-                            StatusCode::OK,
-                            [("Content-Type", "application/activity+json; charset=utf-8")],
-                            stub,
-                        )
-                            .into_response();
-                    }
-                    return (StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "")
-                        .into_response();
-                }
-
-                // For collections, redirect to the new actor URL + same suffix.
-                let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
-                let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
-                return (StatusCode::PERMANENT_REDIRECT, [("Location", location)], "")
-                    .into_response();
+            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
+                return resp;
             }
-            if path == format!("/users/{user}") {
-                if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
-                    return (
-                        StatusCode::OK,
-                        [("Content-Type", "application/activity+json; charset=utf-8")],
-                        actor_json,
-                    )
-                        .into_response();
-                }
-            } else if let Some(kind) = collection_kind_from_path(&user, path) {
-                if let Ok(Some(json)) = db.get_collection_cache(&user, kind) {
-                    return (
-                        StatusCode::OK,
-                        [("Content-Type", "application/activity+json; charset=utf-8")],
-                        json,
-                    )
-                        .into_response();
-                }
-                let stub = collection_stub_json(&user, kind, &headers);
-                return (
-                    StatusCode::OK,
-                    [("Content-Type", "application/activity+json; charset=utf-8")],
-                    stub,
-                )
-                    .into_response();
-            }
-            return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
         }
     }
 
@@ -3301,9 +3322,12 @@ async fn forward_to_user(
         return (StatusCode::TOO_MANY_REQUESTS, "user inflight limit").into_response();
     };
 
-    let tunnels = state.tunnels.read().await;
-    let Some(tunnel) = tunnels.get(&user) else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
+    let tunnel = {
+        let tunnels = state.tunnels.read().await;
+        let Some(tunnel) = tunnels.get(&user) else {
+            return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
+        };
+        tunnel.clone()
     };
 
     let headers_vec = headers_to_vec(&headers);
@@ -3324,7 +3348,16 @@ async fn forward_to_user(
     };
 
     if tunnel.tx.send(msg).await.is_err() {
-        return (StatusCode::BAD_GATEWAY, "tunnel send failed").into_response();
+        {
+            let mut tunnels = state.tunnels.write().await;
+            tunnels.remove(&user);
+        }
+        if method == Method::GET {
+            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
+                return resp;
+            }
+        }
+        return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
     }
 
     let Ok(resp) =
