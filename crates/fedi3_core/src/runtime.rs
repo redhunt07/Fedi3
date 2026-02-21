@@ -346,7 +346,10 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             storage_cfg.media_max_local_cache_bytes = media_cfg.max_local_cache_bytes;
         }
 
-        let p2p_cache_ttl_secs = QueueSettings::default().p2p_cache_ttl_secs;
+        let p2p_cache_ttl_secs = cfg
+            .p2p_cache_ttl_secs
+            .unwrap_or(QueueSettings::default().p2p_cache_ttl_secs)
+            .clamp(60, 90 * 24 * 3600);
 
         let ap_cfg = ApConfig {
             username: cfg.username.clone(),
@@ -419,6 +422,9 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             if let Some(parsed) = PostDeliveryMode::from_str(mode) {
                 queue_settings.post_delivery_mode = parsed;
             }
+        }
+        if let Some(fallback_secs) = cfg.p2p_relay_fallback_secs {
+            queue_settings.p2p_relay_fallback_secs = fallback_secs.clamp(0, 600);
         }
         queue_settings.p2p_cache_ttl_secs = p2p_cache_ttl_secs;
 

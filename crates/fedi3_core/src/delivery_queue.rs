@@ -214,7 +214,7 @@ impl DeliveryQueue {
                 }
 
                 // Keep P2P-capable jobs as-is: no sharedInbox concern and may use mailbox fallback.
-                if !job.target.contains("/inbox") {
+                if job.status != 3 && !job.target.contains("/inbox") {
                     match resolve_actor_cached(
                         &delivery,
                         &private_key_pem,
@@ -339,7 +339,7 @@ impl DeliveryQueue {
                 let now = now_ms();
                 let mut stmt = conn.prepare(
                     r#"
-                    SELECT id, attempt, target, activity_json, key_id, activity_id
+                    SELECT id, attempt, status, target, activity_json, key_id, activity_id
                     FROM delivery_jobs
                     WHERE status IN (0, 3) AND next_attempt_at_ms <= ?1
                     ORDER BY next_attempt_at_ms ASC
@@ -352,10 +352,11 @@ impl DeliveryQueue {
                     out.push(Job {
                         id: row.get(0)?,
                         attempt: row.get(1)?,
-                        target: row.get(2)?,
-                        activity_json: row.get(3)?,
-                        key_id: row.get(4)?,
-                        activity_id: row.get(5)?,
+                        status: row.get(2)?,
+                        target: row.get(3)?,
+                        activity_json: row.get(4)?,
+                        key_id: row.get(5)?,
+                        activity_id: row.get(6)?,
                     });
                 }
                 Ok(out)
@@ -375,7 +376,7 @@ impl DeliveryQueue {
     ) -> Result<()> {
         let effective_key_id = job.key_id.as_deref().unwrap_or(key_id);
 
-        let (inbox_url, _p2p_peer_id, _p2p_peer_addrs, _public_key_pem) =
+        let (inbox_url, p2p_peer_id, p2p_peer_addrs, public_key_pem) =
             if job.target.contains("/inbox") {
                 (job.target.clone(), None, Vec::new(), None)
             } else {
@@ -407,6 +408,97 @@ impl DeliveryQueue {
         };
 
         let attempt_no: u32 = job.attempt.saturating_add(1);
+
+        if job.status != 3 {
+            if let Some(peer_id) = p2p_peer_id.as_deref() {
+                if !p2p_peer_addrs.is_empty() {
+                    let _ = delivery.p2p_add_peer_addrs(peer_id, p2p_peer_addrs).await;
+                }
+                let peer_actor_url = if job.target.contains("/inbox") {
+                    None
+                } else {
+                    Some(job.target.clone())
+                };
+
+                let mut p2p_ok = false;
+                if let Some(actor_url) = peer_actor_url.as_deref() {
+                    if delivery
+                        .deliver_json_webrtc(
+                            actor_url,
+                            peer_id,
+                            private_key_pem,
+                            effective_key_id,
+                            &inbox_url,
+                            &job.activity_json,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        p2p_ok = true;
+                    }
+                }
+                if !p2p_ok {
+                    if delivery
+                        .deliver_json_p2p(
+                            peer_id,
+                            private_key_pem,
+                            effective_key_id,
+                            &inbox_url,
+                            public_key_pem.as_deref(),
+                            &job.activity_json,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        p2p_ok = true;
+                    }
+                }
+
+                if p2p_ok {
+                    self.mark_delivered(&job.id).await?;
+                    return Ok(());
+                }
+
+                if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
+                    if attempt_no >= settings.max_attempts {
+                        self.mark_dead(&job.id, "p2p delivery failed").await?;
+                        return Ok(());
+                    }
+                    let delay = next_backoff(
+                        attempt_no,
+                        settings.base_backoff_secs,
+                        settings.max_backoff_secs,
+                    );
+                    self.reschedule(&job.id, attempt_no, delay, "p2p delivery failed")
+                        .await?;
+                    return Ok(());
+                }
+
+                if settings.p2p_relay_fallback_secs > 0 {
+                    self.schedule_relay_fallback(
+                        &job.id,
+                        attempt_no,
+                        settings.p2p_relay_fallback_secs,
+                        "p2p delivery failed",
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            } else if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
+                if attempt_no >= settings.max_attempts {
+                    self.mark_dead(&job.id, "p2p required: peer missing").await?;
+                    return Ok(());
+                }
+                let delay = next_backoff(
+                    attempt_no,
+                    settings.base_backoff_secs,
+                    settings.max_backoff_secs,
+                );
+                self.reschedule(&job.id, attempt_no, delay, "p2p required: peer missing")
+                    .await?;
+                return Ok(());
+            }
+        }
 
         self.deliver_via_relay(
             &job,
@@ -708,6 +800,31 @@ impl DeliveryQueue {
 
         Ok(())
     }
+
+    async fn schedule_relay_fallback(
+        &self,
+        id: &str,
+        attempt: u32,
+        delay_secs: u64,
+        err: &str,
+    ) -> Result<()> {
+        let next = now_ms().saturating_add((delay_secs as i64) * 1000);
+        tokio::task::spawn_blocking({
+            let db_path = self.db_path.clone();
+            let id = id.to_string();
+            let err = err.to_string();
+            move || -> Result<()> {
+                let conn = Connection::open(db_path)?;
+                conn.execute(
+                    "UPDATE delivery_jobs SET status = 3, attempt = ?2, next_attempt_at_ms = ?3, last_error = ?4 WHERE id = ?1",
+                    params![id, attempt, next, err],
+                )?;
+                Ok(())
+            }
+        })
+        .await??;
+        Ok(())
+    }
 }
     }
 }
@@ -755,6 +872,7 @@ fn short_body_hash(bytes: &[u8]) -> String {
 struct Job {
     id: String,
     attempt: u32,
+    status: u32,
     target: String,
     activity_json: Vec<u8>,
     key_id: Option<String>,
