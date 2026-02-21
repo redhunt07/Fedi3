@@ -31,6 +31,10 @@ pub struct QueueSettings {
     pub post_delivery_mode: PostDeliveryMode,
     pub p2p_relay_fallback_secs: u64,
     pub p2p_cache_ttl_secs: u64,
+    pub cleanup_interval_secs: u64,
+    pub delivered_ttl_secs: u64,
+    pub dead_ttl_secs: u64,
+    pub max_history_rows: u64,
 }
 
 impl Default for QueueSettings {
@@ -42,6 +46,10 @@ impl Default for QueueSettings {
             post_delivery_mode: PostDeliveryMode::P2pRelay,
             p2p_relay_fallback_secs: 5,
             p2p_cache_ttl_secs: 7 * 24 * 3600,
+            cleanup_interval_secs: 600,
+            delivered_ttl_secs: 14 * 24 * 3600,
+            dead_ttl_secs: 30 * 24 * 3600,
+            max_history_rows: 100_000,
         }
     }
 }
@@ -167,9 +175,22 @@ impl DeliveryQueue {
         info!("delivery queue db: {}", self.db_path.display());
 
         let tick = Duration::from_secs(2);
+        let mut last_cleanup_ms: i64 = 0;
         loop {
             if *shutdown.borrow() {
                 break;
+            }
+
+            if settings.cleanup_interval_secs > 0 {
+                let now = now_ms();
+                if now.saturating_sub(last_cleanup_ms)
+                    >= (settings.cleanup_interval_secs as i64) * 1000
+                {
+                    if let Err(e) = self.cleanup_history(&settings).await {
+                        warn!("delivery cleanup failed: {e:#}");
+                    }
+                    last_cleanup_ms = now;
+                }
             }
 
             let jobs = self.fetch_due_jobs(40).await?;
@@ -617,9 +638,77 @@ impl DeliveryQueue {
                         .reschedule(&j.id, attempt_no, delay, &format!("{e:#}"))
                         .await;
                 }
+        Ok(())
+    }
+
+    async fn cleanup_history(&self, settings: &QueueSettings) -> Result<()> {
+        if settings.delivered_ttl_secs == 0
+            && settings.dead_ttl_secs == 0
+            && settings.max_history_rows == 0
+        {
+            return Ok(());
+        }
+
+        let cutoff_delivered = if settings.delivered_ttl_secs > 0 {
+            Some(now_ms().saturating_sub(settings.delivered_ttl_secs as i64 * 1000))
+        } else {
+            None
+        };
+        let cutoff_dead = if settings.dead_ttl_secs > 0 {
+            Some(now_ms().saturating_sub(settings.dead_ttl_secs as i64 * 1000))
+        } else {
+            None
+        };
+        let max_rows = settings.max_history_rows;
+
+        tokio::task::spawn_blocking({
+            let db_path = self.db_path.clone();
+            move || -> Result<()> {
+                let conn = Connection::open(db_path)?;
+                if let Some(cutoff) = cutoff_delivered {
+                    let _ = conn.execute(
+                        "DELETE FROM delivery_jobs WHERE status = 1 AND created_at_ms < ?1",
+                        params![cutoff],
+                    )?;
+                }
+                if let Some(cutoff) = cutoff_dead {
+                    let _ = conn.execute(
+                        "DELETE FROM delivery_jobs WHERE status = 2 AND created_at_ms < ?1",
+                        params![cutoff],
+                    )?;
+                }
+
+                if max_rows > 0 {
+                    let total: u64 = conn.query_row(
+                        "SELECT COUNT(*) FROM delivery_jobs WHERE status IN (1,2)",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    if total > max_rows {
+                        let to_delete = total.saturating_sub(max_rows);
+                        let _ = conn.execute(
+                            r#"
+                            DELETE FROM delivery_jobs
+                            WHERE id IN (
+                              SELECT id FROM delivery_jobs
+                              WHERE status IN (1,2)
+                              ORDER BY created_at_ms ASC
+                              LIMIT ?1
+                            )
+                            "#,
+                            params![to_delete],
+                        )?;
+                    }
+                }
+
                 Ok(())
             }
-        }
+        })
+        .await??;
+
+        Ok(())
+    }
+}
     }
 }
 

@@ -207,6 +207,8 @@ impl request_response::Codec for RelayMeshCodec {
     }
 }
 
+const MAX_SYNC_BYTES: usize = 2 * 1024 * 1024;
+
 async fn read_len_prefixed_json<T, V>(io: &mut T) -> std::io::Result<V>
 where
     T: futures_util::AsyncRead + Unpin + Send,
@@ -216,6 +218,12 @@ where
     let mut len_buf = [0u8; 4];
     io.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > MAX_SYNC_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("sync payload too large: {len}"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
     serde_json::from_slice(&buf)
