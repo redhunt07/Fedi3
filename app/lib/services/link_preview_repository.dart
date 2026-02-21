@@ -81,7 +81,8 @@ class LinkPreviewRepository {
         uri,
         headers: const {
           'Accept': 'text/html,application/xhtml+xml',
-          'User-Agent': 'Fedi3/0.1 (+https://fedi3)',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',
         },
       );
     } catch (_) {
@@ -98,18 +99,41 @@ class LinkPreviewRepository {
     final clipped = bytes.length > max ? bytes.sublist(0, max) : bytes;
     final html = _decodeBestEffort(clipped);
 
-    final title = _firstMeta(html, property: 'og:title') ?? _titleTag(html) ?? '';
-    final description = _firstMeta(html, property: 'og:description') ?? _firstMeta(html, name: 'description') ?? '';
-    final imageUrl = _firstMeta(html, property: 'og:image') ?? '';
+    final title = _firstMeta(html, property: 'og:title') ??
+        _firstMeta(html, name: 'twitter:title') ??
+        _titleTag(html) ??
+        '';
+    final description = _firstMeta(html, property: 'og:description') ??
+        _firstMeta(html, name: 'twitter:description') ??
+        _firstMeta(html, name: 'description') ??
+        '';
+    final imageUrl = _firstMeta(html, property: 'og:image') ??
+        _firstMeta(html, property: 'og:image:secure_url') ??
+        _firstMeta(html, name: 'twitter:image') ??
+        _firstLinkRel(html, rel: const ['apple-touch-icon', 'icon', 'shortcut icon']) ??
+        '';
     final siteName = _firstMeta(html, property: 'og:site_name') ?? '';
 
-    if (title.isEmpty && description.isEmpty && imageUrl.isEmpty) return null;
+    final resolvedTitle = _decodeHtmlEntities(title).trim();
+    final resolvedDesc = _decodeHtmlEntities(description).trim();
+    final resolvedSite = _decodeHtmlEntities(siteName).trim();
+    final resolvedImage = _resolveMaybeRelative(uri, imageUrl.trim());
+
+    if (resolvedTitle.isEmpty && resolvedDesc.isEmpty && resolvedImage.isEmpty) {
+      return LinkPreview(
+        url: url,
+        title: uri.host,
+        description: '',
+        imageUrl: '',
+        siteName: uri.host,
+      );
+    }
     return LinkPreview(
       url: url,
-      title: _decodeHtmlEntities(title).trim(),
-      description: _decodeHtmlEntities(description).trim(),
-      imageUrl: imageUrl.trim(),
-      siteName: _decodeHtmlEntities(siteName).trim(),
+      title: resolvedTitle.isNotEmpty ? resolvedTitle : uri.host,
+      description: resolvedDesc,
+      imageUrl: resolvedImage,
+      siteName: resolvedSite.isNotEmpty ? resolvedSite : uri.host,
     );
   }
 
@@ -225,6 +249,34 @@ class LinkPreviewRepository {
     if (tag == null) return null;
     final cm = RegExp("content=[\"']([^\"']{1,600})[\"']", caseSensitive: false).firstMatch(tag);
     return cm?.group(1);
+  }
+
+  static String? _firstLinkRel(String html, {required List<String> rel}) {
+    for (final r in rel) {
+      final re = RegExp(
+        '(<link[^>]+rel=["\']${RegExp.escape(r)}["\'][^>]+>)',
+        caseSensitive: false,
+      );
+      final tag = re.firstMatch(html)?.group(1);
+      if (tag == null) continue;
+      final href = RegExp('href=["\']([^"\']+)["\']', caseSensitive: false)
+          .firstMatch(tag)
+          ?.group(1);
+      if (href != null && href.trim().isNotEmpty) return href.trim();
+    }
+    return null;
+  }
+
+  static String _resolveMaybeRelative(Uri base, String input) {
+    final raw = input.trim();
+    if (raw.isEmpty) return '';
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return raw;
+    if (uri.hasScheme) return uri.toString();
+    if (raw.startsWith('//')) {
+      return Uri.parse('${base.scheme}:$raw').toString();
+    }
+    return base.resolve(raw).toString();
   }
 
   static String _decodeHtmlEntities(String s) {

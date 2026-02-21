@@ -1564,13 +1564,13 @@ class _NoteCardState extends State<NoteCard> {
   }
 
   String? _extractFirstLinkPreviewUrl(String html, List<NoteAttachment> attachments) {
-    final h = html.trim();
+    final h = _decodeHtmlEntities(html.trim());
     if (h.isEmpty) return null;
 
     final attachmentUrls = attachments.map((a) => a.url.trim()).where((s) => s.isNotEmpty).toSet();
 
     String? pick(String candidate) {
-      final u = candidate.trim();
+      final u = _trimUrlPunct(candidate.trim());
       if (!(u.startsWith('http://') || u.startsWith('https://'))) return null;
       final uri = Uri.tryParse(u);
       if (uri == null || uri.host.isEmpty) return null;
@@ -1598,6 +1598,26 @@ class _NoteCardState extends State<NoteCard> {
       if (p != null) return p;
     }
     return null;
+  }
+
+  String _decodeHtmlEntities(String s) {
+    return s
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&#39;', "'")
+        .replaceAll('&#039;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>');
+  }
+
+  String _trimUrlPunct(String url) {
+    var out = url;
+    const trailing = '.,;:!?)"]}';
+    while (out.isNotEmpty && trailing.contains(out[out.length - 1])) {
+      out = out.substring(0, out.length - 1);
+    }
+    return out;
   }
 }
 
