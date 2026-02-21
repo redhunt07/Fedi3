@@ -900,7 +900,8 @@ class AppLocalizationsIt extends AppLocalizations {
       'Inserisci gli URL legacy (uno per riga). Verranno pubblicati in alsoKnownAs.';
 
   @override
-  String get migrationAliasesPlaceholder => 'https://istanza.legacy/users/tuo_nome';
+  String get migrationAliasesPlaceholder =>
+      'https://istanza.legacy/users/tuo_nome';
 
   @override
   String get migrationSaveAliases => 'Salva alias';
