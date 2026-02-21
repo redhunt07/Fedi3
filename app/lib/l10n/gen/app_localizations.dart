@@ -3462,7 +3462,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Muted until {when}'**
-  String uiNotificationsMutedUntil(String when);
+  String uiNotificationsMutedUntil(Object when);
 
   /// No description provided for @uiNotificationsChat.
   ///

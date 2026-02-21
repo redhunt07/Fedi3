@@ -1844,7 +1844,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uiNotificationsUnmute => 'Unmute';
 
   @override
-  String uiNotificationsMutedUntil(String when) {
+  String uiNotificationsMutedUntil(Object when) {
     return 'Muted until $when';
   }
 
