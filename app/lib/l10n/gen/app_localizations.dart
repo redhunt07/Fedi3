@@ -2248,41 +2248,49 @@ abstract class AppLocalizations {
 
   /// No description provided for @p2pSectionTitle.
   ///
+  /// In en, this message translates to:
   /// **'P2P delivery'**
   String get p2pSectionTitle;
 
   /// No description provided for @p2pDeliveryModeLabel.
   ///
+  /// In en, this message translates to:
   /// **'Delivery mode'**
   String get p2pDeliveryModeLabel;
 
   /// No description provided for @p2pDeliveryModeRelay.
   ///
+  /// In en, this message translates to:
   /// **'P2P first, fallback to relay'**
   String get p2pDeliveryModeRelay;
 
   /// No description provided for @p2pDeliveryModeP2POnly.
   ///
+  /// In en, this message translates to:
   /// **'P2P only (no relay)'**
   String get p2pDeliveryModeP2POnly;
 
   /// No description provided for @p2pRelayFallbackLabel.
   ///
+  /// In en, this message translates to:
   /// **'Relay fallback delay (seconds)'**
   String get p2pRelayFallbackLabel;
 
   /// No description provided for @p2pRelayFallbackHint.
   ///
+  /// In en, this message translates to:
   /// **'Wait before using relay (default: 5)'**
   String get p2pRelayFallbackHint;
 
   /// No description provided for @p2pCacheTtlLabel.
   ///
+  /// In en, this message translates to:
   /// **'Mailbox cache TTL (seconds)'**
   String get p2pCacheTtlLabel;
 
   /// No description provided for @p2pCacheTtlHint.
   ///
+  /// In en, this message translates to:
   /// **'Store-and-forward TTL (default: 604800)'**
   String get p2pCacheTtlHint;
 

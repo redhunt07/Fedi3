@@ -1228,7 +1228,8 @@ class AppLocalizationsIt extends AppLocalizations {
   String get p2pRelayFallbackLabel => 'Ritardo fallback relay (secondi)';
 
   @override
-  String get p2pRelayFallbackHint => 'Attendi prima di usare il relay (default: 5)';
+  String get p2pRelayFallbackHint =>
+      'Attendi prima di usare il relay (default: 5)';
 
   @override
   String get p2pCacheTtlLabel => 'TTL cache mailbox (secondi)';
