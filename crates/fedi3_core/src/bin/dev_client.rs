@@ -97,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
             "dev-client".to_string(),
             Duration::from_secs(5),
         ))),
+        p2p_cfg: fedi3_core::p2p::P2pConfig::default(),
         internal_token: random_token(),
         global_ingest: GlobalIngestPolicy {
             max_items_per_actor_per_min: 20,
