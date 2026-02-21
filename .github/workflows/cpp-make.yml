@@ -1,0 +1,47 @@
+name: C/C++ (Make)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  make:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup build tools (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            make
+
+      - name: Setup build tools (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential make
+
+      - name: Setup build tools (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          xcode-select --install || true
+
+      - name: Build with make
+        if: ${{ hashFiles('Makefile') != '' }}
+        shell: bash
+        run: |
+          make
+
+      - name: No Makefile found
+        if: ${{ hashFiles('Makefile') == '' }}
+        run: echo "No Makefile found at repo root; skipping."
