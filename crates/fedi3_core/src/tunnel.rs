@@ -54,7 +54,8 @@ pub async fn run_tunnel_with_shutdown(
     metrics: std::sync::Arc<NetMetrics>,
 ) -> anyhow::Result<()> {
     let token = urlencoding::encode(relay_token);
-    let url = format!("{relay_ws_url}/tunnel/{user}?token={token}");
+    let base = normalize_relay_ws_url(relay_ws_url);
+    let url = format!("{base}/tunnel/{user}?token={token}");
     info!(%url, "connecting tunnel");
 
     let (ws, _) = match tokio_tungstenite::connect_async(url).await {
@@ -133,6 +134,17 @@ pub async fn run_tunnel_with_shutdown(
 
     metrics.set_relay_connected(false);
     Ok(())
+}
+
+fn normalize_relay_ws_url(relay_ws_url: &str) -> String {
+    let trimmed = relay_ws_url.trim().trim_end_matches('/');
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 // moved to relay_bridge.rs
