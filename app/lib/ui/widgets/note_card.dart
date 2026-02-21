@@ -24,6 +24,7 @@ import '../screens/note_detail_screen.dart';
 import '../screens/media_viewer_screen.dart';
 import '../utils/time_ago.dart';
 import '../utils/media_url.dart';
+import '../utils/open_url.dart';
 import 'actor_hover_card.dart';
 import 'inline_media_tile.dart';
 import 'link_preview_card.dart';
@@ -374,12 +375,12 @@ class _NoteCardState extends State<NoteCard> {
                     child: _NoteContent(
                       appState: widget.appState,
                       html: content,
-                      onTapUrl: (url) {
+                      onTapUrl: (url) async {
                         if (_looksLikeActorUrl(url)) {
                           _openProfile(context, url);
                           return true;
                         }
-                        return false;
+                        return openUrlExternal(url);
                       },
                     ),
                   )
@@ -387,12 +388,12 @@ class _NoteCardState extends State<NoteCard> {
                   _NoteContent(
                     appState: widget.appState,
                     html: content,
-                    onTapUrl: (url) {
+                    onTapUrl: (url) async {
                       if (_looksLikeActorUrl(url)) {
                         _openProfile(context, url);
                         return true;
                       }
-                      return false;
+                      return openUrlExternal(url);
                     },
                   )
                 else if (widget.showRawFallback)
@@ -2014,8 +2015,9 @@ class _NoteContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final allowAsync = !Platform.isLinux;
+    final content = _linkifyPlainUrls(html);
     return HtmlWidget(
-      html,
+      content,
       buildAsync: allowAsync,
       enableCaching: allowAsync,
       onTapUrl: onTapUrl,
@@ -2034,6 +2036,30 @@ class _NoteContent extends StatelessWidget {
         );
       },
     );
+  }
+
+  String _linkifyPlainUrls(String input) {
+    final text = input.trim();
+    if (text.isEmpty) return input;
+    if (text.contains('<a ')) return input;
+    final urlRe = RegExp(r'((?:https?://|www\.)[^\s<>"\]]+)', caseSensitive: false);
+    return text.replaceAllMapped(urlRe, (m) {
+      var raw = m.group(1) ?? '';
+      if (raw.isEmpty) return m[0] ?? '';
+      final trimmed = _trimUrlPunct(raw);
+      final trailing = raw.substring(trimmed.length);
+      final href = trimmed.startsWith('http') ? trimmed : 'https://$trimmed';
+      return '<a href="$href">$trimmed</a>$trailing';
+    });
+  }
+
+  String _trimUrlPunct(String url) {
+    var out = url;
+    const trailing = '.,;:!?)"]}';
+    while (out.isNotEmpty && trailing.contains(out[out.length - 1])) {
+      out = out.substring(0, out.length - 1);
+    }
+    return out;
   }
 }
 
