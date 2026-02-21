@@ -90,6 +90,19 @@ class CoreConfig {
 
   Uri get localBaseUri => Uri.parse('http://$bind');
 
+  static String normalizeRelayWs(String relayWs, {required String publicBaseUrl}) {
+    var s = relayWs.trim().replaceAll(RegExp(r'/+$'), '');
+    if (s.startsWith('https://')) return 'wss://${s.substring('https://'.length)}';
+    if (s.startsWith('http://')) return 'ws://${s.substring('http://'.length)}';
+    if (s.startsWith('ws://')) {
+      final pb = publicBaseUrl.trim();
+      if (pb.startsWith('https://')) {
+        return 'wss://${s.substring('ws://'.length)}';
+      }
+    }
+    return s;
+  }
+
   static CoreConfig fromJson(Map<String, dynamic> json) {
     return CoreConfig(
       username: (json['username'] as String? ?? '').trim(),

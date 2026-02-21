@@ -117,22 +117,10 @@ class AppState extends ChangeNotifier {
     try {
       var effective = cfg;
 
-      String normalizeRelayWs(String v) {
-        var s = v.trim().replaceAll(RegExp(r'/+$'), '');
-        if (s.startsWith('https://')) return 'wss://${s.substring('https://'.length)}';
-        if (s.startsWith('http://')) return 'ws://${s.substring('http://'.length)}';
-        if (s.startsWith('ws://')) {
-          final pb = effective.publicBaseUrl.trim();
-          if (pb.startsWith('https://')) {
-            return 'wss://${s.substring('ws://'.length)}';
-          }
-        }
-        return s;
-      }
-
-        final normalizedRelayWs = normalizeRelayWs(effective.relayWs);
-        if (normalizedRelayWs != effective.relayWs.trim()) {
-          effective = CoreConfig(
+      final normalizedRelayWs =
+          CoreConfig.normalizeRelayWs(effective.relayWs, publicBaseUrl: effective.publicBaseUrl);
+      if (normalizedRelayWs != effective.relayWs.trim()) {
+        effective = CoreConfig(
             username: effective.username,
             domain: effective.domain,
             publicBaseUrl: effective.publicBaseUrl,
@@ -162,8 +150,8 @@ class AppState extends ChangeNotifier {
             p2pRelayFallbackSecs: effective.p2pRelayFallbackSecs,
             p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
           );
-          await saveConfig(effective);
-        }
+        await saveConfig(effective);
+      }
 
       if (!(effective.relayWs.startsWith('ws://') || effective.relayWs.startsWith('wss://'))) {
         throw StateError('Relay WS must start with ws:// or wss:// (got: ${effective.relayWs})');

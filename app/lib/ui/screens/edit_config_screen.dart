@@ -313,11 +313,16 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     }
     final fallbackSecs = int.tryParse(_p2pFallbackSecs.text.trim());
     final cacheSecs = int.tryParse(_p2pCacheTtlSecs.text.trim());
+    final publicBaseUrl = _publicBaseUrl.text.trim();
+    final relayWs = CoreConfig.normalizeRelayWs(
+      _relayWs.text,
+      publicBaseUrl: publicBaseUrl,
+    );
     final cfg = CoreConfig(
       username: _username.text.trim(),
       domain: _domain.text.trim(),
-      publicBaseUrl: _publicBaseUrl.text.trim(),
-      relayWs: _relayWs.text.trim(),
+      publicBaseUrl: publicBaseUrl,
+      relayWs: relayWs,
       relayToken: relayToken,
       bind: _bind.text.trim(),
       internalToken: _internalToken.text.trim(),

@@ -309,11 +309,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       else if (announceHandle.isNotEmpty)
         announceHandle,
     ];
+    final publicBaseUrl = _publicBaseUrl.text.trim();
+    final relayWs = CoreConfig.normalizeRelayWs(
+      _relayWs.text,
+      publicBaseUrl: publicBaseUrl,
+    );
     return CoreConfig(
       username: username,
       domain: domain,
-      publicBaseUrl: _publicBaseUrl.text.trim(),
-      relayWs: _relayWs.text.trim(),
+      publicBaseUrl: publicBaseUrl,
+      relayWs: relayWs,
       relayToken: _relayToken.text.trim(),
       bind: _bind.text.trim(),
       internalToken: _internalToken.text.trim(),
