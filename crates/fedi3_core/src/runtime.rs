@@ -578,6 +578,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             net: net.clone(),
             ui_events,
             upnp: Arc::new(TokioMutex::new(upnp_controller)),
+            p2p_cfg: p2p_cfg.clone(),
             internal_token,
             global_ingest,
             post_delivery_mode: queue_settings.post_delivery_mode,

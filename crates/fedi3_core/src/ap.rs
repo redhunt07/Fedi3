@@ -98,6 +98,7 @@ pub struct ApState {
     pub net: Arc<NetMetrics>,
     pub ui_events: broadcast::Sender<UiEvent>,
     pub upnp: Arc<Mutex<UpnpController>>,
+    pub p2p_cfg: crate::p2p::P2pConfig,
     /// Token (best-effort) to prevent exposure of internal endpoints if the embedded server is reachable.
     pub internal_token: String,
     pub global_ingest: GlobalIngestPolicy,
@@ -337,6 +338,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/social/status") => social_follow_status_get(state, req).await,
         ("GET", "/_fedi3/net/metrics") => net_metrics_get(state, req).await,
         ("GET", "/_fedi3/net/metrics.prom") => net_metrics_prom(state, req).await,
+        ("GET", "/_fedi3/p2p/debug") => p2p_debug_get(state, req).await,
         ("GET", "/_fedi3/backup/export") => backup_export(state, req).await,
         ("POST", "/_fedi3/backup/import") => backup_import(state, req).await,
         ("GET", "/_fedi3/health") => core_health(state, req).await,
@@ -1552,6 +1554,84 @@ async fn net_metrics_get(state: &ApState, req: Request<Body>) -> Response<Body> 
             ("Cache-Control", "no-store"),
         ],
         snapshot.to_string(),
+    )
+        .into_response()
+}
+
+async fn p2p_debug_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let parts = req.into_parts().0;
+    if !is_internal(state, &parts.headers) {
+        return simple(StatusCode::UNAUTHORIZED, "internal token required");
+    }
+    let net = state.net.snapshot_json();
+    let p2p = serde_json::json!({
+        "enabled": state.net.p2p_enabled.load(Ordering::Relaxed),
+        "connected_peers": state.net.p2p_connected_peers.load(Ordering::Relaxed),
+        "active_peers": state.net.p2p_active_peers.load(Ordering::Relaxed),
+        "rx_bytes": state.net.p2p_rx_bytes.load(Ordering::Relaxed),
+        "tx_bytes": state.net.p2p_tx_bytes.load(Ordering::Relaxed),
+        "rtt_ms": state.net.p2p_rtt_ema_ms.load(Ordering::Relaxed),
+    });
+    let mailbox = serde_json::json!({
+        "active_peers": state.net.mailbox_active_peers.load(Ordering::Relaxed),
+        "rx_bytes": state.net.mailbox_rx_bytes.load(Ordering::Relaxed),
+        "tx_bytes": state.net.mailbox_tx_bytes.load(Ordering::Relaxed),
+        "rtt_ms": state.net.mailbox_rtt_ema_ms.load(Ordering::Relaxed),
+    });
+    let webrtc = serde_json::json!({
+        "sessions": state.net.webrtc_sessions.load(Ordering::Relaxed),
+        "active_peers": state.net.webrtc_active_peers.load(Ordering::Relaxed),
+        "rx_bytes": state.net.webrtc_rx_bytes.load(Ordering::Relaxed),
+        "tx_bytes": state.net.webrtc_tx_bytes.load(Ordering::Relaxed),
+    });
+    let cfg = &state.p2p_cfg;
+    let config = serde_json::json!({
+        "enable": cfg.enable,
+        "listen": cfg.listen,
+        "bootstrap": cfg.bootstrap,
+        "announce": cfg.announce,
+        "relay_reserve": cfg.relay_reserve,
+        "mailbox_poll_secs": cfg.mailbox_poll_secs,
+        "gossip_enable": cfg.gossip_enable,
+        "discovery_enable": cfg.discovery_enable,
+        "sync_enable": cfg.sync_enable,
+        "sync_poll_secs": cfg.sync_poll_secs,
+        "sync_batch_limit": cfg.sync_batch_limit,
+        "prefer_relay_addrs": cfg.prefer_relay_addrs,
+        "force_relay_only": cfg.force_relay_only,
+        "auto_force_relay_only": cfg.auto_force_relay_only,
+        "device_sync_enable": cfg.device_sync_enable,
+        "device_sync_poll_secs": cfg.device_sync_poll_secs,
+        "ipv4_only": cfg.ipv4_only,
+        "webrtc_enable": cfg.webrtc_enable,
+        "webrtc_poll_secs": cfg.webrtc_poll_secs,
+        "webrtc_ice_urls": cfg.webrtc_ice_urls,
+        "webrtc_ice_username": cfg.webrtc_ice_username,
+        "webrtc_ice_credential": cfg.webrtc_ice_credential,
+        "webrtc_connect_timeout_secs": cfg.webrtc_connect_timeout_secs,
+        "webrtc_idle_ttl_secs": cfg.webrtc_idle_ttl_secs,
+    });
+    let resp = serde_json::json!({
+        "ts_ms": now_ms(),
+        "self": {
+            "peer_id": state.cfg.p2p_peer_id,
+            "peer_addrs": state.cfg.p2p_peer_addrs,
+            "public_base_url": state.cfg.public_base_url,
+            "relay_base_url": state.cfg.relay_base_url,
+        },
+        "config": config,
+        "net": net,
+        "p2p": p2p,
+        "mailbox": mailbox,
+        "webrtc": webrtc,
+    });
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
+        resp.to_string(),
     )
         .into_response()
 }
