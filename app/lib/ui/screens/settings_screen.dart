@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../state/app_state.dart';
+import '../utils/error_humanizer.dart';
 import 'backup_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
@@ -65,7 +66,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
-                    widget.appState.lastError!,
+                    humanizeError(context, widget.appState.lastError!),
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),

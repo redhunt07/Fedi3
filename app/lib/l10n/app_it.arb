@@ -670,6 +670,26 @@
   "onboardingInternalToken": "Internal token (UI ↔ core)",
   "onboardingSave": "Salva e apri app",
   "onboardingRelayTokenTooShort": "Relay token troppo corto (min 16 caratteri).",
+  "relayVerifyAction": "Verifica relay",
+  "relayVerifyRunning": "Verifica relay in corso...",
+  "relayVerifyOk": "Relay verificato. Token valido.",
+  "relayVerifyOkDisabled": "Relay verificato, ma l'account e' disabilitato.",
+  "relayVerifyAdminRequired": "Questo relay richiede approvazione admin per registrare nuovi utenti.",
+  "relayVerifyTokenInvalid": "Relay token non valido per questo username.",
+  "relayVerifyTokenShort": "Relay token deve essere lungo almeno 16 caratteri.",
+  "relayVerifyMissingBase": "Manca l'URL del relay. Inserisci l'URL pubblico o WS.",
+  "relayVerifyInvalidUsername": "Username mancante o non valido.",
+  "relayVerifyFailed": "Verifica relay fallita: {reason}",
+  "@relayVerifyFailed": {
+    "placeholders": {
+      "reason": { "type": "String" }
+    }
+  },
+  "errorCoreLibraryMissing": "Libreria core mancante. Reinstalla l'app o rilancia l'installer.",
+  "errorRelayTokenTooShort": "Relay token mancante o troppo corto (min 16 caratteri).",
+  "errorRelayWsInvalid": "Relay WebSocket deve iniziare con ws:// o wss://.",
+  "errorRelayRegistrationDisabled": "Il relay richiede approvazione admin per registrare nuovi utenti.",
+  "errorRelayUnreachable": "Relay non raggiungibile. Controlla URL o rete.",
 
   "editAccountTitle": "Modifica account",
   "editAccountSave": "Salva",

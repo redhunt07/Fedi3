@@ -2798,6 +2798,96 @@ abstract class AppLocalizations {
   /// **'Relay token too short (min 16 characters).'**
   String get onboardingRelayTokenTooShort;
 
+  /// No description provided for @relayVerifyAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify relay'**
+  String get relayVerifyAction;
+
+  /// No description provided for @relayVerifyRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Verifying relay...'**
+  String get relayVerifyRunning;
+
+  /// No description provided for @relayVerifyOk.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay verified. Token is valid.'**
+  String get relayVerifyOk;
+
+  /// No description provided for @relayVerifyOkDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay verified, but the account is disabled.'**
+  String get relayVerifyOkDisabled;
+
+  /// No description provided for @relayVerifyAdminRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'This relay requires admin approval to register new users.'**
+  String get relayVerifyAdminRequired;
+
+  /// No description provided for @relayVerifyTokenInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay token is invalid for this username.'**
+  String get relayVerifyTokenInvalid;
+
+  /// No description provided for @relayVerifyTokenShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay token must be at least 16 characters.'**
+  String get relayVerifyTokenShort;
+
+  /// No description provided for @relayVerifyMissingBase.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay URL is missing. Enter the relay public URL or WS URL.'**
+  String get relayVerifyMissingBase;
+
+  /// No description provided for @relayVerifyInvalidUsername.
+  ///
+  /// In en, this message translates to:
+  /// **'Username is missing or invalid.'**
+  String get relayVerifyInvalidUsername;
+
+  /// No description provided for @relayVerifyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay verification failed: {reason}'**
+  String relayVerifyFailed(String reason);
+
+  /// No description provided for @errorCoreLibraryMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Core library missing. Reinstall the app or rerun the installer.'**
+  String get errorCoreLibraryMissing;
+
+  /// No description provided for @errorRelayTokenTooShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay token is missing or too short (min 16 chars).'**
+  String get errorRelayTokenTooShort;
+
+  /// No description provided for @errorRelayWsInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay WebSocket URL must start with ws:// or wss://.'**
+  String get errorRelayWsInvalid;
+
+  /// No description provided for @errorRelayRegistrationDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay requires admin approval to register new users.'**
+  String get errorRelayRegistrationDisabled;
+
+  /// No description provided for @errorRelayUnreachable.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay is unreachable. Check the URL or your network.'**
+  String get errorRelayUnreachable;
+
   /// No description provided for @editAccountTitle.
   ///
   /// In en, this message translates to:

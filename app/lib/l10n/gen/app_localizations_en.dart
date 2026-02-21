@@ -1506,6 +1506,63 @@ class AppLocalizationsEn extends AppLocalizations {
       'Relay token too short (min 16 characters).';
 
   @override
+  String get relayVerifyAction => 'Verify relay';
+
+  @override
+  String get relayVerifyRunning => 'Verifying relay...';
+
+  @override
+  String get relayVerifyOk => 'Relay verified. Token is valid.';
+
+  @override
+  String get relayVerifyOkDisabled =>
+      'Relay verified, but the account is disabled.';
+
+  @override
+  String get relayVerifyAdminRequired =>
+      'This relay requires admin approval to register new users.';
+
+  @override
+  String get relayVerifyTokenInvalid =>
+      'Relay token is invalid for this username.';
+
+  @override
+  String get relayVerifyTokenShort =>
+      'Relay token must be at least 16 characters.';
+
+  @override
+  String get relayVerifyMissingBase =>
+      'Relay URL is missing. Enter the relay public URL or WS URL.';
+
+  @override
+  String get relayVerifyInvalidUsername => 'Username is missing or invalid.';
+
+  @override
+  String relayVerifyFailed(String reason) {
+    return 'Relay verification failed: $reason';
+  }
+
+  @override
+  String get errorCoreLibraryMissing =>
+      'Core library missing. Reinstall the app or rerun the installer.';
+
+  @override
+  String get errorRelayTokenTooShort =>
+      'Relay token is missing or too short (min 16 chars).';
+
+  @override
+  String get errorRelayWsInvalid =>
+      'Relay WebSocket URL must start with ws:// or wss://.';
+
+  @override
+  String get errorRelayRegistrationDisabled =>
+      'Relay requires admin approval to register new users.';
+
+  @override
+  String get errorRelayUnreachable =>
+      'Relay is unreachable. Check the URL or your network.';
+
+  @override
   String get editAccountTitle => 'Edit account';
 
   @override

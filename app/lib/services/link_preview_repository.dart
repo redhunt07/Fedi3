@@ -37,8 +37,10 @@ class LinkPreviewRepository {
 
   final LinkedHashMap<String, LinkPreview> _cache = LinkedHashMap();
   final LinkedHashMap<String, Future<LinkPreview?>> _inflight = LinkedHashMap();
+  final LinkedHashMap<String, int> _failUntil = LinkedHashMap();
 
   int maxCacheEntries = 256;
+  int failTtlMs = 10 * 60 * 1000;
 
   Future<LinkPreview?> get(String url) async {
     final u = url.trim();
@@ -50,6 +52,11 @@ class LinkPreviewRepository {
       _cache[u] = cached;
       return cached;
     }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final failUntil = _failUntil[u];
+    if (failUntil != null && failUntil > now) {
+      return null;
+    }
 
     final existing = _inflight[u];
     if (existing != null) return existing;
@@ -58,7 +65,15 @@ class LinkPreviewRepository {
     _inflight[u] = fut;
     try {
       final p = await fut;
-      if (p != null) _remember(u, p);
+      if (p != null) {
+        _remember(u, p);
+        _failUntil.remove(u);
+      } else {
+        _failUntil[u] = DateTime.now().millisecondsSinceEpoch + failTtlMs;
+        while (_failUntil.length > maxCacheEntries) {
+          _failUntil.remove(_failUntil.keys.first);
+        }
+      }
       return p;
     } finally {
       _inflight.remove(u);

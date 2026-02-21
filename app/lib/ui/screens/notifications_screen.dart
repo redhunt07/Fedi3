@@ -16,6 +16,7 @@ import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
+import '../utils/error_humanizer.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
@@ -242,7 +243,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         ),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
-                          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                          Text(
+                            humanizeError(context, _error!),
+                            style: TextStyle(color: Theme.of(context).colorScheme.error),
+                          ),
                         ],
                       ],
                     ),

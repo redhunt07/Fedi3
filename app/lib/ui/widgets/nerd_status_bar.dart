@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../state/app_state.dart';
+import '../screens/networking_settings_screen.dart';
 
 class NerdStatusBar extends StatefulWidget {
   const NerdStatusBar({super.key, required this.appState});
@@ -25,6 +26,7 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
   bool _loading = false;
 
   Map<String, dynamic>? _net;
+  Map<String, dynamic>? _p2p;
 
   int _lastTsMs = 0;
   int _lastRelayRx = 0;
@@ -32,6 +34,9 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
 
   double _relayDownBps = 0;
   double _relayUpBps = 0;
+  int _p2pConnected = 0;
+  int _p2pActive = 0;
+  bool _p2pEnabled = false;
 
   @override
   void initState() {
@@ -61,11 +66,13 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     final api = CoreApi(config: cfg);
     try {
       final net = await api.fetchNetMetrics();
+      final p2p = await api.fetchP2pDebug();
       final relay = (net['relay'] is Map) ? (net['relay'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
       final ts = (net['ts_ms'] is num) ? (net['ts_ms'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
 
       final relayRx = (relay['rx_bytes'] is num) ? (relay['rx_bytes'] as num).toInt() : 0;
       final relayTx = (relay['tx_bytes'] is num) ? (relay['tx_bytes'] as num).toInt() : 0;
+      final p2pMap = (p2p['p2p'] is Map) ? (p2p['p2p'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
 
       var dtMs = ts - _lastTsMs;
       if (_lastTsMs == 0 || dtMs <= 0) dtMs = 2000;
@@ -77,11 +84,15 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
       if (!mounted) return;
       setState(() {
         _net = net;
+        _p2p = p2p;
         _lastTsMs = ts;
         _lastRelayRx = relayRx;
         _lastRelayTx = relayTx;
         _relayDownBps = relayDown.toDouble();
         _relayUpBps = relayUp.toDouble();
+        _p2pConnected = (p2pMap['connected_peers'] is num) ? (p2pMap['connected_peers'] as num).toInt() : 0;
+        _p2pActive = (p2pMap['active_peers'] is num) ? (p2pMap['active_peers'] as num).toInt() : 0;
+        _p2pEnabled = p2pMap['enabled'] == true;
       });
     } catch (_) {
       if (!mounted) return;
@@ -123,9 +134,20 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  Tooltip(
-                    message: context.l10n.statusRelay,
-                    child: _chip(icon: Icons.cloud, color: relayColor, text: _relayLabel()),
+                  InkWell(
+                    onTap: () => _openNetworking(context),
+                    child: Tooltip(
+                      message: context.l10n.statusRelay,
+                      child: _chip(icon: Icons.cloud, color: relayColor, text: _relayLabel()),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  InkWell(
+                    onTap: () => _openNetworking(context),
+                    child: Tooltip(
+                      message: 'P2P',
+                      child: _chip(icon: Icons.hub, color: _p2pColor(), text: _p2pLabel()),
+                    ),
                   ),
                   const SizedBox(width: 10),
                   _mono('${context.l10n.statusRelayRtt}: ${relayRtt > 0 ? '${relayRtt}ms' : '-'}', fg),
@@ -146,6 +168,27 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     final relay = (_net!['relay'] as Map).cast<String, dynamic>();
     final online = relay['connected'] == true;
     return online ? context.l10n.statusConnectedShort : context.l10n.statusDisconnectedShort;
+  }
+
+  String _p2pLabel() {
+    if (!widget.appState.isRunning) return context.l10n.statusCoreStoppedShort;
+    if (_p2p == null) return context.l10n.statusUnknownShort;
+    if (!_p2pEnabled) return context.l10n.statusDisconnectedShort;
+    if (_p2pConnected == 0 && _p2pActive == 0) return context.l10n.statusNoPeersShort;
+    return '${_p2pActive.clamp(0, 999)}/${_p2pConnected.clamp(0, 999)}';
+  }
+
+  Color _p2pColor() {
+    if (!widget.appState.isRunning) return Colors.grey;
+    if (!_p2pEnabled) return Colors.orangeAccent;
+    if (_p2pActive > 0) return Colors.greenAccent;
+    return Colors.redAccent;
+  }
+
+  void _openNetworking(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => NetworkingSettingsScreen(appState: widget.appState)),
+    );
   }
 
   Widget _chip({required IconData icon, required Color color, required String text}) {

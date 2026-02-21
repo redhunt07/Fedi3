@@ -12,6 +12,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/backup_codec.dart';
 import '../../services/cloud_backup_service.dart';
+import '../../services/relay_verify.dart';
 import '../../state/app_state.dart';
 
 enum OnboardingMode { loginExisting, createNew }
@@ -37,6 +38,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _customRelay = false;
   bool _importing = false;
   bool _discovering = false;
+  bool _verifying = false;
+  RelayVerifyResult? _verifyResult;
   final List<_RelayOption> _relayOptions = [];
   _RelayOption? _selectedRelay;
 
@@ -119,6 +122,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ),
           _field(context.l10n.onboardingRelayToken, _relayToken),
+          _relayVerifyRow(context),
           _field(context.l10n.onboardingBind, _bind),
           _field(context.l10n.onboardingInternalToken, _internalToken),
           const SizedBox(height: 12),
@@ -187,6 +191,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             context.l10n.onboardingRelayListHint,
             style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _relayVerifyRow(BuildContext context) {
+    final result = _verifyResult;
+    final msg = result == null ? null : _relayVerifyMessage(context, result);
+    final color = (result == null || result.status == RelayVerifyStatus.ok)
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).colorScheme.error;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          OutlinedButton.icon(
+            onPressed: _verifying ? null : _verifyRelay,
+            icon: _verifying
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.verified),
+            label: Text(_verifying ? context.l10n.relayVerifyRunning : context.l10n.relayVerifyAction),
+          ),
+          if (msg != null) ...[
+            const SizedBox(height: 6),
+            Text(msg, style: TextStyle(color: color)),
+          ],
         ],
       ),
     );
@@ -358,6 +389,49 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await widget.appState.startCore();
     if (!mounted) return;
     Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
+  String _relayVerifyMessage(BuildContext context, RelayVerifyResult result) {
+    switch (result.status) {
+      case RelayVerifyStatus.ok:
+        final enabled = result.me?['enabled'];
+        if (enabled is bool && !enabled) {
+          return context.l10n.relayVerifyOkDisabled;
+        }
+        return context.l10n.relayVerifyOk;
+      case RelayVerifyStatus.tokenTooShort:
+        return context.l10n.relayVerifyTokenShort;
+      case RelayVerifyStatus.invalidUsername:
+        return context.l10n.relayVerifyInvalidUsername;
+      case RelayVerifyStatus.missingBaseUrl:
+        return context.l10n.relayVerifyMissingBase;
+      case RelayVerifyStatus.adminRequired:
+        return context.l10n.relayVerifyAdminRequired;
+      case RelayVerifyStatus.tokenInvalid:
+        return context.l10n.relayVerifyTokenInvalid;
+      case RelayVerifyStatus.unreachable:
+        return context.l10n.errorRelayUnreachable;
+      case RelayVerifyStatus.badResponse:
+        return context.l10n.relayVerifyFailed(result.detail ?? 'unknown');
+    }
+  }
+
+  Future<void> _verifyRelay() async {
+    setState(() {
+      _verifying = true;
+      _verifyResult = null;
+    });
+    final result = await verifyRelay(
+      username: _username.text,
+      relayToken: _relayToken.text,
+      publicBaseUrl: _publicBaseUrl.text,
+      relayWs: _relayWs.text,
+    );
+    if (!mounted) return;
+    setState(() {
+      _verifying = false;
+      _verifyResult = result;
+    });
   }
 
   Future<void> _importBackupFile() async {

@@ -1176,6 +1176,15 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> fetchP2pDebug() async {
+    final uri = _internal('/_fedi3/p2p/debug');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('p2p debug failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   Future<void> refreshProfile() async {
     final uri = _internal('/_fedi3/profile/refresh');
     final resp = await http.post(uri, headers: _internalHeaders);

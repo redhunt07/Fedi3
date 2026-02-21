@@ -16,6 +16,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../services/object_repository.dart';
+import '../../services/link_preview_repository.dart';
 import '../../services/translation_service.dart';
 import '../../state/app_state.dart';
 import '../screens/profile_screen.dart';
@@ -62,6 +63,7 @@ class NoteCard extends StatefulWidget {
 class _NoteCardState extends State<NoteCard> {
   ActorProfile? _noteActor;
   ActorProfile? _boostActor;
+  String? _lastPreviewUrl;
   bool _showRaw = false;
   bool _replying = false;
   final TextEditingController _replyCtrl = TextEditingController();
@@ -135,6 +137,7 @@ class _NoteCardState extends State<NoteCard> {
       final note = widget.item.note;
       EmojiStore.addAll(note.emojis);
       _loadFlags(note.id);
+      _prefetchLinkPreview();
       if (_showThread && note.inReplyTo.trim().isNotEmpty && _threadParents.isEmpty && !_threadLoading) {
         _loadThreadParents(api, note.inReplyTo);
       }
@@ -173,6 +176,7 @@ class _NoteCardState extends State<NoteCard> {
       }
       EmojiStore.addAll(widget.item.note.emojis);
       _loadFlags(widget.item.note.id);
+      _prefetchLinkPreview();
     }
   }
 
@@ -187,11 +191,13 @@ class _NoteCardState extends State<NoteCard> {
     if (noteActor.isNotEmpty) {
       final p = await ActorRepository.instance.getActor(noteActor);
       if (mounted) setState(() => _noteActor = p);
+      _precacheAvatar(p?.iconUrl ?? '');
     }
     final booster = widget.item.boostedBy.trim();
     if (booster.isNotEmpty && booster != noteActor) {
       final p = await ActorRepository.instance.getActor(booster);
       if (mounted) setState(() => _boostActor = p);
+      _precacheAvatar(p?.iconUrl ?? '');
     }
   }
 
@@ -756,6 +762,26 @@ class _NoteCardState extends State<NoteCard> {
         ),
       ),
     );
+  }
+
+  void _precacheAvatar(String url) {
+    final u = url.trim();
+    if (u.isEmpty || !mounted) return;
+    precacheImage(NetworkImage(u), context);
+  }
+
+  void _prefetchLinkPreview() {
+    final note = _overrideNote ?? widget.item.note;
+    final url = _extractFirstLinkPreviewUrl(note.contentHtml, note.attachments);
+    final u = url?.trim() ?? '';
+    if (u.isEmpty || u == _lastPreviewUrl) return;
+    _lastPreviewUrl = u;
+    LinkPreviewRepository.instance.get(u).then((preview) {
+      if (!mounted || preview == null) return;
+      final img = preview.imageUrl.trim();
+      if (img.isEmpty) return;
+      precacheImage(NetworkImage(img), context);
+    });
   }
 
   Future<void> _toggleTranslate(BuildContext context, String html) async {
