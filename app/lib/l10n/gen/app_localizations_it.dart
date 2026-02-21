@@ -1036,7 +1036,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String updateManualBody(String command) {
-    return 'Esegui questo comando nel terminale:\n$command';
+    return 'Esegui questo comando nel terminale:\\n$command';
   }
 
   @override

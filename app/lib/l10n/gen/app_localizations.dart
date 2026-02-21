@@ -1925,7 +1925,7 @@ abstract class AppLocalizations {
   /// No description provided for @updateManualBody.
   ///
   /// In en, this message translates to:
-  /// **'Run this command in a terminal:\n{command}'**
+  /// **'Run this command in a terminal:\\n{command}'**
   String updateManualBody(String command);
 
   /// No description provided for @securityTitle.
