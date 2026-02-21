@@ -459,6 +459,25 @@ impl DeliveryQueue {
                     return Ok(());
                 }
 
+                if settings.p2p_cache_ttl_secs > 0 {
+                    if let Ok(req) = crate::delivery::build_signed_post_relay_http_request(
+                        format!("mbx-{}", job.id),
+                        private_key_pem,
+                        effective_key_id,
+                        &inbox_url,
+                        &job.activity_json,
+                    ) {
+                        if delivery
+                            .store_in_mailboxes(peer_id, req, settings.p2p_cache_ttl_secs)
+                            .await
+                            .is_ok()
+                        {
+                            self.mark_delivered(&job.id).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+
                 if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
                     if attempt_no >= settings.max_attempts {
                         self.mark_dead(&job.id, "p2p delivery failed").await?;
