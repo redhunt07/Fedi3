@@ -24,6 +24,7 @@ import '../../state/app_state.dart';
 import '../utils/time_ago.dart';
 import '../utils/open_url.dart';
 import '../utils/media_url.dart';
+import '../widgets/core_not_running_card.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/inline_media_tile.dart';
 import '../widgets/status_avatar.dart';
@@ -973,6 +974,34 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.appState.isRunning) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Row(
+            children: [
+              if (widget.dmActor != null && widget.dmActor!.trim().isNotEmpty)
+                _dmHeaderAvatar()
+              else
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Icon(Icons.groups, size: 16),
+                ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+        ),
+        body: CoreNotRunningCard(
+          appState: widget.appState,
+          hint: context.l10n.chatEmpty,
+          onStarted: () => _loadMessages(reset: true),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Row(

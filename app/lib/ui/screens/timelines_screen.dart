@@ -13,6 +13,7 @@ import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/inline_composer.dart';
+import '../widgets/core_not_running_card.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
@@ -57,6 +58,33 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
         final isWide = MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
         final useColumns = isWide && widget.appState.prefs.desktopUseColumns;
         final showInlineComposer = !isWide;
+
+        if (!widget.appState.isRunning) {
+          return Scaffold(
+            appBar: AppBar(
+              title: Text(context.l10n.timelineTitle),
+              actions: [
+                IconButton(
+                  tooltip: context.l10n.coreStart,
+                  onPressed: () async {
+                    await widget.appState.startCore();
+                  },
+                  icon: const Icon(Icons.play_circle_outline),
+                ),
+              ],
+            ),
+            body: CoreNotRunningCard(
+              appState: widget.appState,
+              hint: context.l10n.timelineRefreshHint,
+              onStarted: () {
+                if (!mounted) return;
+                for (final k in _listKeys) {
+                  k.currentState?.refreshFromStream();
+                }
+              },
+            ),
+          );
+        }
 
         return Scaffold(
           appBar: AppBar(
