@@ -39,6 +39,66 @@ struct RunningCore {
     join: Option<thread::JoinHandle<()>>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RelayP2pInfraResponse {
+    peer_id: Option<String>,
+    multiaddrs: Vec<String>,
+}
+
+async fn maybe_seed_p2p_from_relay(
+    cfg: &CoreStartConfig,
+    http: &reqwest::Client,
+    p2p_cfg: &mut P2pConfig,
+) {
+    if !p2p_cfg.enable {
+        return;
+    }
+    let needs_relay = p2p_cfg
+        .relay_reserve
+        .as_ref()
+        .map(|v| v.is_empty())
+        .unwrap_or(true);
+    let needs_bootstrap = p2p_cfg
+        .bootstrap
+        .as_ref()
+        .map(|v| v.is_empty())
+        .unwrap_or(true);
+    if !needs_relay && !needs_bootstrap {
+        return;
+    }
+    let Ok(base) = infer_http_base_from_relay_ws(&cfg.relay_ws) else {
+        return;
+    };
+    let url = format!("{}/_fedi3/relay/p2p_infra", base.trim_end_matches('/'));
+    let resp = match http.get(url).send().await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(info) = resp.json::<RelayP2pInfraResponse>().await else {
+        return;
+    };
+    let mut addrs = info
+        .multiaddrs
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if addrs.is_empty() {
+        return;
+    }
+    addrs.sort();
+    addrs.dedup();
+    if needs_relay {
+        p2p_cfg.relay_reserve = Some(addrs.clone());
+    }
+    if needs_bootstrap {
+        p2p_cfg.bootstrap = Some(addrs);
+    }
+}
+
 static REGISTRY: Mutex<Vec<(u64, RunningCore)>> = Mutex::new(Vec::new());
 
 fn now_ms() -> i64 {
@@ -255,6 +315,10 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         let did = did_from_public_key_pem(&identity.public_key_pem);
         let net = Arc::new(NetMetrics::new());
         let mut p2p_cfg: P2pConfig = cfg.p2p.clone().unwrap_or_default();
+        if cfg.p2p.is_none() {
+            // Enable P2P by default for client cores to populate the social timeline.
+            p2p_cfg.enable = true;
+        }
         let p2p_keypair = if p2p_cfg.enable {
             Some(p2p::load_or_generate_keypair(&data_dir)?)
         } else {
@@ -262,6 +326,18 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         };
         let p2p_peer_id = p2p_keypair.as_ref().map(p2p::peer_id_string);
         let mut p2p_peer_addrs = Vec::new();
+
+        let db_path = data_dir.join("fedi3.db");
+        let queue = Arc::new(DeliveryQueue::open(&db_path)?);
+        let social = Arc::new(SocialDb::open(&db_path)?);
+        let http_timeout_secs = cfg.http_timeout_secs.unwrap_or(30).clamp(5, 120);
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(http_timeout_secs))
+            .build()
+            .context("build http client")?;
+
+        maybe_seed_p2p_from_relay(&cfg, &http, &mut p2p_cfg).await;
+
         if p2p_cfg.enable {
             if let Some(list) = p2p_cfg.announce.as_ref() {
                 p2p_peer_addrs = list
@@ -280,15 +356,6 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 }
             }
         }
-
-        let db_path = data_dir.join("fedi3.db");
-        let queue = Arc::new(DeliveryQueue::open(&db_path)?);
-        let social = Arc::new(SocialDb::open(&db_path)?);
-        let http_timeout_secs = cfg.http_timeout_secs.unwrap_or(30).clamp(5, 120);
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(http_timeout_secs))
-            .build()
-            .context("build http client")?;
 
         // Load persisted legacy aliases (used for migrations from legacy instances).
         let legacy_aliases_persisted: Vec<String> = match social.get_local_meta("legacy_aliases_json") {
@@ -530,28 +597,27 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
 
         if p2p_cfg.enable {
             if let Some(keypair) = p2p_keypair.clone() {
+                if let Some(relay_reserve) = p2p_cfg.relay_reserve.clone() {
+                    state
+                        .delivery
+                        .set_mailbox_targets_from_relay_reserve(relay_reserve)
+                        .await;
+                }
 
-            if let Some(relay_reserve) = p2p_cfg.relay_reserve.clone() {
-                state
-                    .delivery
-                    .set_mailbox_targets_from_relay_reserve(relay_reserve)
-                    .await;
-            }
+                let p2p_handler_state = state.clone();
+                let p2p_handler = Router::new()
+                    .fallback(any(move |req| {
+                        let st = p2p_handler_state.clone();
+                        async move { handle_request(&st, req).await }
+                    }))
+                    .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                    .layer(TraceLayer::new_for_http());
 
-            let p2p_handler_state = state.clone();
-            let p2p_handler = Router::new()
-                .fallback(any(move |req| {
-                    let st = p2p_handler_state.clone();
-                    async move { handle_request(&st, req).await }
-                }))
-                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
-                .layer(TraceLayer::new_for_http());
-
-            let self_actor_url = format!(
-                "{}/users/{}",
-                public_base_url_norm.trim_end_matches('/'),
-                cfg.username
-            );
+                let self_actor_url = format!(
+                    "{}/users/{}",
+                    public_base_url_norm.trim_end_matches('/'),
+                    cfg.username
+                );
                 let p2p_handle = p2p::start_p2p(
                     p2p_cfg.clone(),
                     keypair,
