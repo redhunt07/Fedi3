@@ -1616,6 +1616,138 @@ abstract class AppLocalizations {
   /// **'Reset app (clear config)'**
   String get settingsResetApp;
 
+  /// No description provided for @migrationTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Migration'**
+  String get migrationTitle;
+
+  /// No description provided for @migrationHintShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Account move (legacy + relay)'**
+  String get migrationHintShort;
+
+  /// No description provided for @migrationHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Use this screen to check migration readiness and set legacy aliases for account moves.'**
+  String get migrationHint;
+
+  /// No description provided for @migrationCoreNotRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Core not running. Start the core to check migration status.'**
+  String get migrationCoreNotRunning;
+
+  /// No description provided for @migrationStatusTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Migration status'**
+  String get migrationStatusTitle;
+
+  /// No description provided for @migrationStatusEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No data loaded yet.'**
+  String get migrationStatusEmpty;
+
+  /// No description provided for @migrationStatusReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Status loaded'**
+  String get migrationStatusReady;
+
+  /// No description provided for @migrationRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get migrationRefresh;
+
+  /// No description provided for @migrationAliasesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy aliases (alsoKnownAs)'**
+  String get migrationAliasesTitle;
+
+  /// No description provided for @migrationAliasesHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Add legacy actor URLs (one per line). These are published as alsoKnownAs.'**
+  String get migrationAliasesHint;
+
+  /// No description provided for @migrationAliasesPlaceholder.
+  ///
+  /// In en, this message translates to:
+  /// **'https://legacy.instance/users/you'**
+  String get migrationAliasesPlaceholder;
+
+  /// No description provided for @migrationSaveAliases.
+  ///
+  /// In en, this message translates to:
+  /// **'Save aliases'**
+  String get migrationSaveAliases;
+
+  /// No description provided for @migrationRestartNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart required after saving.'**
+  String get migrationRestartNote;
+
+  /// No description provided for @migrationSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Aliases saved.'**
+  String get migrationSaved;
+
+  /// No description provided for @migrationSavedRestart.
+  ///
+  /// In en, this message translates to:
+  /// **'Aliases saved. Restart the core.'**
+  String get migrationSavedRestart;
+
+  /// No description provided for @migrationActor.
+  ///
+  /// In en, this message translates to:
+  /// **'Actor'**
+  String get migrationActor;
+
+  /// No description provided for @migrationBaseUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Public base URL'**
+  String get migrationBaseUrl;
+
+  /// No description provided for @migrationFollowers.
+  ///
+  /// In en, this message translates to:
+  /// **'Followers'**
+  String get migrationFollowers;
+
+  /// No description provided for @migrationLegacyFollowers.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy followers'**
+  String get migrationLegacyFollowers;
+
+  /// No description provided for @migrationHasPreviousAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'Has previous actor alias'**
+  String get migrationHasPreviousAlias;
+
+  /// No description provided for @migrationNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Note'**
+  String get migrationNote;
+
+  /// No description provided for @migrationLegacyGuides.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy migration notes'**
+  String get migrationLegacyGuides;
+
   /// No description provided for @profileEditTitle.
   ///
   /// In en, this message translates to:

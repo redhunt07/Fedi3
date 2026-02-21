@@ -866,6 +866,75 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsResetApp => 'Reset app (clear config)';
 
   @override
+  String get migrationTitle => 'Migration';
+
+  @override
+  String get migrationHintShort => 'Account move (legacy + relay)';
+
+  @override
+  String get migrationHint =>
+      'Use this screen to check migration readiness and set legacy aliases for account moves.';
+
+  @override
+  String get migrationCoreNotRunning =>
+      'Core not running. Start the core to check migration status.';
+
+  @override
+  String get migrationStatusTitle => 'Migration status';
+
+  @override
+  String get migrationStatusEmpty => 'No data loaded yet.';
+
+  @override
+  String get migrationStatusReady => 'Status loaded';
+
+  @override
+  String get migrationRefresh => 'Refresh';
+
+  @override
+  String get migrationAliasesTitle => 'Legacy aliases (alsoKnownAs)';
+
+  @override
+  String get migrationAliasesHint =>
+      'Add legacy actor URLs (one per line). These are published as alsoKnownAs.';
+
+  @override
+  String get migrationAliasesPlaceholder => 'https://legacy.instance/users/you';
+
+  @override
+  String get migrationSaveAliases => 'Save aliases';
+
+  @override
+  String get migrationRestartNote => 'Restart required after saving.';
+
+  @override
+  String get migrationSaved => 'Aliases saved.';
+
+  @override
+  String get migrationSavedRestart => 'Aliases saved. Restart the core.';
+
+  @override
+  String get migrationActor => 'Actor';
+
+  @override
+  String get migrationBaseUrl => 'Public base URL';
+
+  @override
+  String get migrationFollowers => 'Followers';
+
+  @override
+  String get migrationLegacyFollowers => 'Legacy followers';
+
+  @override
+  String get migrationHasPreviousAlias => 'Has previous actor alias';
+
+  @override
+  String get migrationNote => 'Note';
+
+  @override
+  String get migrationLegacyGuides => 'Legacy migration notes';
+
+  @override
   String get profileEditTitle => 'Profile';
 
   @override

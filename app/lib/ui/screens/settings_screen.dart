@@ -10,6 +10,7 @@ import '../../state/app_state.dart';
 import 'backup_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
+import 'migration_screen.dart';
 import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
 import 'privacy_settings_screen.dart';
@@ -198,6 +199,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => EditConfigScreen(appState: widget.appState),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              Card(
+                child: ListTile(
+                  title: Text(context.l10n.migrationTitle),
+                  subtitle: Text(context.l10n.migrationHintShort),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => MigrationScreen(appState: widget.appState),
                       ),
                     );
                   },

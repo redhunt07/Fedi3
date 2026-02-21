@@ -656,6 +656,31 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> fetchMigrationStatus() async {
+    final uri = _internal('/_fedi3/migration/status');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('migration status failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> setLegacyAliases(List<String> aliases) async {
+    final uri = _internal('/_fedi3/migration/legacy_aliases');
+    final payload = {
+      'aliases': aliases,
+    };
+    final resp = await http.post(
+      uri,
+      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('migration aliases failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   Future<void> react({
     required String objectId,
     required String objectActor,

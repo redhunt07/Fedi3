@@ -867,6 +867,75 @@ class AppLocalizationsIt extends AppLocalizations {
   String get settingsResetApp => 'Reset app (cancella config)';
 
   @override
+  String get migrationTitle => 'Migrazione';
+
+  @override
+  String get migrationHintShort => 'Spostamento account (legacy + relay)';
+
+  @override
+  String get migrationHint =>
+      'Usa questa schermata per verificare la migrazione e impostare gli alias legacy.';
+
+  @override
+  String get migrationCoreNotRunning =>
+      'Core non avviato. Avvia il core per verificare lo status.';
+
+  @override
+  String get migrationStatusTitle => 'Stato migrazione';
+
+  @override
+  String get migrationStatusEmpty => 'Nessun dato caricato.';
+
+  @override
+  String get migrationStatusReady => 'Stato caricato';
+
+  @override
+  String get migrationRefresh => 'Aggiorna';
+
+  @override
+  String get migrationAliasesTitle => 'Alias legacy (alsoKnownAs)';
+
+  @override
+  String get migrationAliasesHint =>
+      'Inserisci gli URL legacy (uno per riga). Verranno pubblicati in alsoKnownAs.';
+
+  @override
+  String get migrationAliasesPlaceholder => 'https://istanza.legacy/users/tuo_nome';
+
+  @override
+  String get migrationSaveAliases => 'Salva alias';
+
+  @override
+  String get migrationRestartNote => 'Riavvio richiesto dopo il salvataggio.';
+
+  @override
+  String get migrationSaved => 'Alias salvati.';
+
+  @override
+  String get migrationSavedRestart => 'Alias salvati. Riavvia il core.';
+
+  @override
+  String get migrationActor => 'Actor';
+
+  @override
+  String get migrationBaseUrl => 'Public base URL';
+
+  @override
+  String get migrationFollowers => 'Follower';
+
+  @override
+  String get migrationLegacyFollowers => 'Follower legacy';
+
+  @override
+  String get migrationHasPreviousAlias => 'Ha alias precedente';
+
+  @override
+  String get migrationNote => 'Nota';
+
+  @override
+  String get migrationLegacyGuides => 'Note migrazione legacy';
+
+  @override
   String get profileEditTitle => 'Profilo';
 
   @override
