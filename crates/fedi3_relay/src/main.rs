@@ -3518,6 +3518,52 @@ fn patch_actor_with_moved_to(actor_json: &str, moved_to_actor: &str) -> Option<S
     serde_json::to_string(&v).ok()
 }
 
+async fn online_status_for_user(state: &AppState, username: &str) -> &'static str {
+    if state.tunnels.read().await.contains_key(username) {
+        return "online";
+    }
+    let last_seen = {
+        let seen = state.presence_last_seen.lock().await;
+        seen.get(username).copied().unwrap_or(0)
+    };
+    if last_seen > 0 {
+        let age_ms = now_ms().saturating_sub(last_seen);
+        if age_ms >= 60_000 && age_ms <= 7 * 24 * 60 * 60 * 1000 {
+            return "active";
+        }
+    }
+    "offline"
+}
+
+fn patch_actor_with_online_status(actor_json: &str, online_status: &str) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(actor_json).ok()?;
+    if !v.is_object() {
+        return None;
+    }
+    v["onlineStatus"] = serde_json::Value::String(online_status.to_string());
+
+    let misskey_ctx = serde_json::Value::String("https://misskey-hub.net/ns#v1".to_string());
+    if let Some(ctx) = v.get_mut("@context") {
+        match ctx {
+            serde_json::Value::Array(arr) => {
+                if !arr.iter().any(|v| v == &misskey_ctx) {
+                    arr.push(misskey_ctx);
+                }
+            }
+            serde_json::Value::String(existing) => {
+                if existing != "https://misskey-hub.net/ns#v1" {
+                    *ctx = serde_json::Value::Array(vec![
+                        serde_json::Value::String(existing.clone()),
+                        misskey_ctx,
+                    ]);
+                }
+            }
+            _ => {}
+        }
+    }
+    serde_json::to_string(&v).ok()
+}
+
 async fn shared_inbox(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -8800,11 +8846,7 @@ async fn user_show_response(
         .and_then(collection_total_items)
         .unwrap_or(0);
 
-    let online_status = if state.tunnels.read().await.contains_key(&username) {
-        "online"
-    } else {
-        online_status_for_user(state, &username).await
-    };
+    let online_status = online_status_for_user(state, &username).await;
     let host = relay_host_name(&state.cfg).unwrap_or_default();
 
     let created_at = actor_value
