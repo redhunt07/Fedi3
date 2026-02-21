@@ -2321,7 +2321,7 @@ async fn handle_tunnel(
         let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
         let db = state.db.lock().await;
         let _ = db.upsert_peer_directory(&stub_peer_id, &user, &actor_url);
-        emit_presence_update(&state, &user, &actor_url, true);
+        emit_presence_update(&state, &user, &actor_url, true).await;
     }
 
     // Fetch peer hello (best-effort) and store it for directory/telemetry.
@@ -2358,7 +2358,7 @@ async fn handle_tunnel(
                 .write()
                 .await
                 .insert(hello_user.clone(), hello);
-            emit_presence_update(&hello_state, &hello_user, &actor_url, true);
+            emit_presence_update(&hello_state, &hello_user, &actor_url, true).await;
         }
     });
 
@@ -2432,7 +2432,7 @@ async fn handle_tunnel(
     state.tunnels.write().await.remove(&user);
     state.peer_hello.write().await.remove(&user);
     let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
-    emit_presence_update(&state, &user, &actor_url, false);
+    emit_presence_update(&state, &user, &actor_url, false).await;
     info!(%user, "tunnel disconnected");
 }
 
@@ -9359,9 +9359,14 @@ async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
         .collect()
 }
 
-fn emit_presence_update(state: &AppState, username: &str, actor_url: &str, online: bool) {
+async fn emit_presence_update(
+    state: &AppState,
+    username: &str,
+    actor_url: &str,
+    online: bool,
+) {
     {
-        let mut seen = state.presence_last_seen.blocking_lock();
+        let mut seen = state.presence_last_seen.lock().await;
         seen.insert(username.to_string(), now_ms());
     }
     let item = PresenceItem {
