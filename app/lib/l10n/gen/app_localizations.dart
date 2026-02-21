@@ -2246,6 +2246,46 @@ abstract class AppLocalizations {
   /// **'Some changes require restarting the core.'**
   String get networkingHint;
 
+  /// No description provided for @p2pSectionTitle.
+  ///
+  /// **'P2P delivery'**
+  String get p2pSectionTitle;
+
+  /// No description provided for @p2pDeliveryModeLabel.
+  ///
+  /// **'Delivery mode'**
+  String get p2pDeliveryModeLabel;
+
+  /// No description provided for @p2pDeliveryModeRelay.
+  ///
+  /// **'P2P first, fallback to relay'**
+  String get p2pDeliveryModeRelay;
+
+  /// No description provided for @p2pDeliveryModeP2POnly.
+  ///
+  /// **'P2P only (no relay)'**
+  String get p2pDeliveryModeP2POnly;
+
+  /// No description provided for @p2pRelayFallbackLabel.
+  ///
+  /// **'Relay fallback delay (seconds)'**
+  String get p2pRelayFallbackLabel;
+
+  /// No description provided for @p2pRelayFallbackHint.
+  ///
+  /// **'Wait before using relay (default: 5)'**
+  String get p2pRelayFallbackHint;
+
+  /// No description provided for @p2pCacheTtlLabel.
+  ///
+  /// **'Mailbox cache TTL (seconds)'**
+  String get p2pCacheTtlLabel;
+
+  /// No description provided for @p2pCacheTtlHint.
+  ///
+  /// **'Store-and-forward TTL (default: 604800)'**
+  String get p2pCacheTtlHint;
+
   /// No description provided for @backupTitle.
   ///
   /// In en, this message translates to:

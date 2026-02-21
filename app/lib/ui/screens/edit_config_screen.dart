@@ -28,6 +28,9 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
   late final TextEditingController _relayToken;
   late final TextEditingController _bind;
   late final TextEditingController _internalToken;
+  late final TextEditingController _p2pFallbackSecs;
+  late final TextEditingController _p2pCacheTtlSecs;
+  String _p2pMode = 'p2p_relay';
   bool _customRelay = false;
   bool _discovering = false;
   final List<_RelayOption> _relayOptions = [];
@@ -48,6 +51,13 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayToken = TextEditingController(text: cfg.relayToken);
     _bind = TextEditingController(text: cfg.bind);
     _internalToken = TextEditingController(text: cfg.internalToken);
+    _p2pFallbackSecs =
+        TextEditingController(text: cfg.p2pRelayFallbackSecs?.toString() ?? '');
+    _p2pCacheTtlSecs =
+        TextEditingController(text: cfg.p2pCacheTtlSecs?.toString() ?? '');
+    _p2pMode = (cfg.postDeliveryMode?.trim().isNotEmpty ?? false)
+        ? cfg.postDeliveryMode!.trim()
+        : 'p2p_relay';
     _seedRelayOptions(cfg.publicBaseUrl);
   }
 
@@ -60,6 +70,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayToken.dispose();
     _bind.dispose();
     _internalToken.dispose();
+    _p2pFallbackSecs.dispose();
+    _p2pCacheTtlSecs.dispose();
     super.dispose();
   }
 
@@ -109,18 +121,54 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
             onPressed: () => setState(() => _internalToken.text = CoreConfig.randomToken()),
             child: Text(context.l10n.editAccountRegenerateInternal),
           ),
+          const SizedBox(height: 20),
+          Text(context.l10n.p2pSectionTitle, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            value: _p2pMode,
+            items: [
+              DropdownMenuItem(
+                value: 'p2p_relay',
+                child: Text(context.l10n.p2pDeliveryModeRelay),
+              ),
+              DropdownMenuItem(
+                value: 'p2p_only',
+                child: Text(context.l10n.p2pDeliveryModeP2POnly),
+              ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _p2pMode = value);
+            },
+            decoration: InputDecoration(labelText: context.l10n.p2pDeliveryModeLabel),
+          ),
+          _field(
+            context.l10n.p2pRelayFallbackLabel,
+            _p2pFallbackSecs,
+            hint: context.l10n.p2pRelayFallbackHint,
+          ),
+          _field(
+            context.l10n.p2pCacheTtlLabel,
+            _p2pCacheTtlSecs,
+            hint: context.l10n.p2pCacheTtlHint,
+          ),
         ],
       ),
     );
   }
 
-  Widget _field(String label, TextEditingController controller, {int maxLines = 1}) {
+  Widget _field(
+    String label,
+    TextEditingController controller, {
+    int maxLines = 1,
+    String? hint,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: controller,
         maxLines: maxLines,
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(labelText: label, hintText: hint),
       ),
     );
   }
@@ -263,6 +311,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       );
       return;
     }
+    final fallbackSecs = int.tryParse(_p2pFallbackSecs.text.trim());
+    final cacheSecs = int.tryParse(_p2pCacheTtlSecs.text.trim());
     final cfg = CoreConfig(
       username: _username.text.trim(),
       domain: _domain.text.trim(),
@@ -287,6 +337,9 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       previousRelayToken: widget.appState.config?.previousRelayToken,
       upnpPortRangeStart: null,
       upnpPortRangeEnd: null,
+      postDeliveryMode: _p2pMode.trim(),
+      p2pRelayFallbackSecs: fallbackSecs,
+      p2pCacheTtlSecs: cacheSecs,
     );
 
     await widget.appState.stopCore();

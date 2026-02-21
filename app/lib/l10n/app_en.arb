@@ -534,6 +534,15 @@
   "networkingEditAccount": "Edit account/networking",
   "networkingHint": "Some changes require restarting the core.",
 
+  "p2pSectionTitle": "P2P delivery",
+  "p2pDeliveryModeLabel": "Delivery mode",
+  "p2pDeliveryModeRelay": "P2P first, fallback to relay",
+  "p2pDeliveryModeP2POnly": "P2P only (no relay)",
+  "p2pRelayFallbackLabel": "Relay fallback delay (seconds)",
+  "p2pRelayFallbackHint": "Wait before using relay (default: 5)",
+  "p2pCacheTtlLabel": "Mailbox cache TTL (seconds)",
+  "p2pCacheTtlHint": "Store-and-forward TTL (default: 604800)",
+
   "backupTitle": "Backup",
   "backupHint": "Export/import your Fedi3 profile and settings",
   "backupExportTitle": "Export",

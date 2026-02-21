@@ -326,12 +326,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       imageUrl: '',
       imageMediaType: '',
       profileFields: const [],
-      manuallyApprovesFollowers: false,
-      blockedDomains: const [],
-      blockedActors: const [],
-      upnpPortRangeStart: null,
-      upnpPortRangeEnd: null,
-    );
+        manuallyApprovesFollowers: false,
+        blockedDomains: const [],
+        blockedActors: const [],
+        upnpPortRangeStart: null,
+        upnpPortRangeEnd: null,
+        upnpLeaseSecs: null,
+        upnpTimeoutSecs: null,
+        postDeliveryMode: null,
+        p2pRelayFallbackSecs: null,
+        p2pCacheTtlSecs: null,
+      );
   }
 
   Future<void> _save() async {

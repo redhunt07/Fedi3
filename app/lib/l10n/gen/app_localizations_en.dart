@@ -1208,6 +1208,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get networkingHint => 'Some changes require restarting the core.';
 
   @override
+  String get p2pSectionTitle => 'P2P delivery';
+
+  @override
+  String get p2pDeliveryModeLabel => 'Delivery mode';
+
+  @override
+  String get p2pDeliveryModeRelay => 'P2P first, fallback to relay';
+
+  @override
+  String get p2pDeliveryModeP2POnly => 'P2P only (no relay)';
+
+  @override
+  String get p2pRelayFallbackLabel => 'Relay fallback delay (seconds)';
+
+  @override
+  String get p2pRelayFallbackHint => 'Wait before using relay (default: 5)';
+
+  @override
+  String get p2pCacheTtlLabel => 'Mailbox cache TTL (seconds)';
+
+  @override
+  String get p2pCacheTtlHint => 'Store-and-forward TTL (default: 604800)';
+
+  @override
   String get backupTitle => 'Backup';
 
   @override

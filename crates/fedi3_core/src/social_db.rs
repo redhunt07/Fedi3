@@ -2378,6 +2378,71 @@ impl SocialDb {
         Ok((items, latest))
     }
 
+    pub fn list_media_since(
+        &self,
+        since_ms: i64,
+        limit: u32,
+    ) -> Result<(Vec<MediaItem>, i64)> {
+        let conn = Connection::open(&self.path)?;
+        let limit = limit.min(500).max(1) as i64;
+        let mut stmt = conn.prepare(
+            "SELECT id, url, media_type, size, created_at_ms, local_name, actor_id, last_access_ms, width, height, blurhash
+             FROM media_items
+             WHERE created_at_ms > ?1
+             ORDER BY created_at_ms ASC
+             LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![since_ms, limit])?;
+        let mut items = Vec::new();
+        let mut latest: i64 = since_ms;
+        while let Some(row) = rows.next()? {
+            let created_at_ms: i64 = row.get(4)?;
+            if created_at_ms > latest {
+                latest = created_at_ms;
+            }
+            items.push(MediaItem {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                media_type: row.get(2)?,
+                size: row.get(3)?,
+                created_at_ms,
+                local_name: row.get(5)?,
+                actor_id: row.get(6)?,
+                last_access_ms: row.get(7)?,
+                width: row.get(8)?,
+                height: row.get(9)?,
+                blurhash: row.get(10)?,
+            });
+        }
+        Ok((items, latest))
+    }
+
+    pub fn list_object_ids_since(
+        &self,
+        since_ms: i64,
+        limit: u32,
+    ) -> Result<(Vec<(String, i64, Option<String>)>, i64)> {
+        let conn = Connection::open(&self.path)?;
+        let limit = limit.min(500).max(1) as i64;
+        let mut stmt = conn.prepare(
+            "SELECT object_id, updated_at_ms, actor_id FROM objects
+             WHERE updated_at_ms > ?1 AND deleted=0
+             ORDER BY updated_at_ms ASC
+             LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![since_ms, limit])?;
+        let mut items = Vec::new();
+        let mut latest: i64 = since_ms;
+        while let Some(row) = rows.next()? {
+            let updated_at_ms: i64 = row.get(1)?;
+            if updated_at_ms > latest {
+                latest = updated_at_ms;
+            }
+            items.push((row.get(0)?, updated_at_ms, row.get(2)?));
+        }
+        Ok((items, latest))
+    }
+
     pub fn get_p2p_sync_since(&self, actor_id: &str) -> Result<i64> {
         let conn = Connection::open(&self.path)?;
         let v: Option<i64> = conn

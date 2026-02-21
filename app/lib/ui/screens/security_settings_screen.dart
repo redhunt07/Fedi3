@@ -134,12 +134,15 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         blockedDomains: c.blockedDomains,
         blockedActors: c.blockedActors,
         previousPublicBaseUrl: c.previousPublicBaseUrl,
-        previousRelayToken: c.previousRelayToken,
-        upnpPortRangeStart: c.upnpPortRangeStart,
-        upnpPortRangeEnd: c.upnpPortRangeEnd,
-        upnpLeaseSecs: c.upnpLeaseSecs,
-        upnpTimeoutSecs: c.upnpTimeoutSecs,
-      );
+      previousRelayToken: c.previousRelayToken,
+      upnpPortRangeStart: c.upnpPortRangeStart,
+      upnpPortRangeEnd: c.upnpPortRangeEnd,
+      upnpLeaseSecs: c.upnpLeaseSecs,
+      upnpTimeoutSecs: c.upnpTimeoutSecs,
+      postDeliveryMode: c.postDeliveryMode,
+      p2pRelayFallbackSecs: c.p2pRelayFallbackSecs,
+      p2pCacheTtlSecs: c.p2pCacheTtlSecs,
+    );
       await widget.appState.stopCore();
       await widget.appState.saveConfig(updated);
       await widget.appState.startCore();

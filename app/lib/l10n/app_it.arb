@@ -536,6 +536,15 @@
   "networkingEditAccount": "Modifica account/networking",
   "networkingHint": "Alcune modifiche richiedono il riavvio del core.",
 
+  "p2pSectionTitle": "Consegna P2P",
+  "p2pDeliveryModeLabel": "Modalita consegna",
+  "p2pDeliveryModeRelay": "P2P prima, fallback al relay",
+  "p2pDeliveryModeP2POnly": "Solo P2P (no relay)",
+  "p2pRelayFallbackLabel": "Ritardo fallback relay (secondi)",
+  "p2pRelayFallbackHint": "Attendi prima di usare il relay (default: 5)",
+  "p2pCacheTtlLabel": "TTL cache mailbox (secondi)",
+  "p2pCacheTtlHint": "TTL store-and-forward (default: 604800)",
+
   "backupTitle": "Backup",
   "backupHint": "Esporta/importa profilo e impostazioni Fedi3",
   "backupExportTitle": "Esporta",

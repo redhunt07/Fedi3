@@ -356,6 +356,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       upnpPortRangeEnd: c.upnpPortRangeEnd,
       upnpLeaseSecs: c.upnpLeaseSecs,
       upnpTimeoutSecs: c.upnpTimeoutSecs,
+      postDeliveryMode: c.postDeliveryMode,
+      p2pRelayFallbackSecs: c.p2pRelayFallbackSecs,
+      p2pCacheTtlSecs: c.p2pCacheTtlSecs,
     );
   }
 

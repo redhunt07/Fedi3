@@ -126,6 +126,9 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
         upnpPortRangeEnd: c.upnpPortRangeEnd,
         upnpLeaseSecs: c.upnpLeaseSecs,
         upnpTimeoutSecs: c.upnpTimeoutSecs,
+        postDeliveryMode: c.postDeliveryMode,
+        p2pRelayFallbackSecs: c.p2pRelayFallbackSecs,
+        p2pCacheTtlSecs: c.p2pCacheTtlSecs,
       );
       await widget.appState.stopCore();
       await widget.appState.saveConfig(updated);

@@ -158,6 +158,9 @@ class AppState extends ChangeNotifier {
             upnpPortRangeEnd: effective.upnpPortRangeEnd,
             upnpLeaseSecs: effective.upnpLeaseSecs,
             upnpTimeoutSecs: effective.upnpTimeoutSecs,
+            postDeliveryMode: effective.postDeliveryMode,
+            p2pRelayFallbackSecs: effective.p2pRelayFallbackSecs,
+            p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
           );
           await saveConfig(effective);
         }
@@ -187,13 +190,16 @@ class AppState extends ChangeNotifier {
           profileFields: effective.profileFields,
           manuallyApprovesFollowers: effective.manuallyApprovesFollowers,
           blockedDomains: effective.blockedDomains,
-          blockedActors: effective.blockedActors,
+            blockedActors: effective.blockedActors,
             previousPublicBaseUrl: effective.previousPublicBaseUrl,
             previousRelayToken: prev.isEmpty ? effective.previousRelayToken : prev,
             upnpPortRangeStart: effective.upnpPortRangeStart,
             upnpPortRangeEnd: effective.upnpPortRangeEnd,
             upnpLeaseSecs: effective.upnpLeaseSecs,
             upnpTimeoutSecs: effective.upnpTimeoutSecs,
+            postDeliveryMode: effective.postDeliveryMode,
+            p2pRelayFallbackSecs: effective.p2pRelayFallbackSecs,
+            p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
           );
         await saveConfig(effective);
       }
@@ -218,13 +224,16 @@ class AppState extends ChangeNotifier {
           manuallyApprovesFollowers: effective.manuallyApprovesFollowers,
           blockedDomains: effective.blockedDomains,
           blockedActors: effective.blockedActors,
-            previousPublicBaseUrl: effective.previousPublicBaseUrl,
-            previousRelayToken: effective.previousRelayToken,
-            upnpPortRangeStart: effective.upnpPortRangeStart,
-            upnpPortRangeEnd: effective.upnpPortRangeEnd,
-            upnpLeaseSecs: effective.upnpLeaseSecs,
-            upnpTimeoutSecs: effective.upnpTimeoutSecs,
-          );
+          previousPublicBaseUrl: effective.previousPublicBaseUrl,
+          previousRelayToken: effective.previousRelayToken,
+          upnpPortRangeStart: effective.upnpPortRangeStart,
+          upnpPortRangeEnd: effective.upnpPortRangeEnd,
+          upnpLeaseSecs: effective.upnpLeaseSecs,
+          upnpTimeoutSecs: effective.upnpTimeoutSecs,
+          postDeliveryMode: effective.postDeliveryMode,
+          p2pRelayFallbackSecs: effective.p2pRelayFallbackSecs,
+          p2pCacheTtlSecs: effective.p2pCacheTtlSecs,
+        );
         await saveConfig(effective);
       }
 

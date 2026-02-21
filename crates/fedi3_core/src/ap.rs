@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use fedi3_protocol::RelayHttpRequest;
 use http::{HeaderMap, Method, Uri};
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+use urlencoding::encode;
 
 use crate::chat;
 use crate::delivery::{extract_recipients, is_public_activity, Delivery};
@@ -265,6 +267,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         }
         ("GET", "/.fedi3/media") => media_p2p_get(state, req).await,
         ("HEAD", "/.fedi3/media") => media_p2p_get(state, req).await,
+        ("GET", "/.fedi3/object") => object_p2p_get(state, req).await,
         // Endpoint interno per la UI: fetch di un oggetto già in cache/DB.
         // Esempio: `GET /_fedi3/object?url=<urlencoded>`
         ("GET", "/_fedi3/object") => object_get(state, req).await,
@@ -340,6 +343,8 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/stream") => ui_stream_get(state, req).await,
         // P2P sync endpoints (peer-to-peer, public-only).
         ("GET", "/.fedi3/sync/outbox") => p2p_sync_outbox(state, req).await,
+        ("GET", "/.fedi3/sync/media") => p2p_sync_media(state, req).await,
+        ("GET", "/.fedi3/sync/objects") => p2p_sync_objects(state, req).await,
         ("POST", "/.fedi3/sync/activities") => p2p_sync_activities(state, req).await,
         // Delivery receipts (peer-to-peer, requires HTTP Signature).
         ("POST", "/.fedi3/receipt") => receipt_post(state, req).await,
@@ -1104,21 +1109,12 @@ async fn fetch_and_cache_media(
     Ok(Some((bytes, mime)))
 }
 
-async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let _ = state;
-    let _ = req;
-    return simple(StatusCode::GONE, "p2p disabled");
-}
+const MAX_P2P_MEDIA_BYTES: i64 = 2 * 1024 * 1024;
 
-async fn fetch_media_from_peer(
-    _state: &ApState,
-    _item: &crate::social_db::MediaItem,
-) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
-    Ok(None)
-}
-
-/*
 async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
     let query = req.uri().query().unwrap_or("");
     let media_id = query
         .split('&')
@@ -1143,7 +1139,75 @@ async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     simple(StatusCode::NOT_FOUND, "not found")
 }
 
-*/
+async fn fetch_media_from_peer(
+    state: &ApState,
+    item: &crate::social_db::MediaItem,
+) -> Result<Option<(Vec<u8>, String)>, anyhow::Error> {
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    if item.size > MAX_P2P_MEDIA_BYTES {
+        return Ok(None);
+    }
+
+    let actor_url = item
+        .actor_id
+        .clone()
+        .or_else(|| guess_actor_from_object_url(&item.url));
+    let Some(actor_url) = actor_url else {
+        return Ok(None);
+    };
+    let info = match state.delivery.resolve_actor_info(&actor_url).await {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some(peer_id) = info.p2p_peer_id else {
+        return Ok(None);
+    };
+    if !info.p2p_peer_addrs.is_empty() {
+        let _ = state
+            .delivery
+            .p2p_add_peer_addrs(&peer_id, info.p2p_peer_addrs)
+            .await;
+    }
+
+    let query = format!("id={}", url_encode(&item.id));
+    let req = RelayHttpRequest {
+        id: format!("p2p-media-{}", now_ms()),
+        method: "GET".to_string(),
+        path: "/.fedi3/media".to_string(),
+        query,
+        headers: vec![("accept".to_string(), "application/octet-stream".to_string())],
+        body_b64: String::new(),
+    };
+
+    let resp = match state
+        .delivery
+        .webrtc_request(&actor_url, &peer_id, req.clone())
+        .await
+    {
+        Ok(r) => Ok(r),
+        Err(_) => state.delivery.p2p_request(&peer_id, req).await,
+    };
+    let resp = match resp {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+    if !(200..300).contains(&resp.status) && resp.status != 206 {
+        return Ok(None);
+    }
+    let bytes = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let mime = resp
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .and_then(|(_, v)| if v.trim().is_empty() { None } else { Some(v.clone()) })
+        .unwrap_or_else(|| item.media_type.clone());
+    Ok(Some((bytes, mime)))
+}
 
 async fn object_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     let query = req.uri().query().unwrap_or("");
@@ -1167,6 +1231,37 @@ async fn object_get(state: &ApState, req: Request<Body>) -> Response<Body> {
                 bytes,
             )
                 .into_response()
+        }
+        Ok(None) => simple(StatusCode::NOT_FOUND, "not found"),
+        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
+}
+
+async fn object_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
+    let query = req.uri().query().unwrap_or("");
+    let object_url = query
+        .split('&')
+        .find(|p| p.starts_with("url="))
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| url_decode(v))
+        .unwrap_or_default();
+
+    if object_url.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing url");
+    }
+
+    match state.social.get_object_json(&object_url) {
+        Ok(Some(bytes)) => {
+            let mut resp = Response::new(Body::from(bytes));
+            *resp.status_mut() = StatusCode::OK;
+            resp.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/activity+json"),
+            );
+            resp
         }
         Ok(None) => simple(StatusCode::NOT_FOUND, "not found"),
         Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
@@ -2038,15 +2133,166 @@ fn require_internal(
 }
 
 async fn p2p_sync_outbox(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let _ = state;
-    let _ = req;
-    simple(StatusCode::GONE, "p2p disabled")
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
+    let query = req.uri().query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find(|p| p.starts_with("limit="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .unwrap_or(200)
+        .min(500);
+    let since = query
+        .split('&')
+        .find(|p| p.starts_with("since="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let (items, next) = match state.social.list_outbox_since_with_ts(since, limit) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+
+    let mut out = Vec::<serde_json::Value>::new();
+    for (bytes, _ts) in items {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if is_public_activity(&v) {
+                out.push(v);
+            }
+        }
+    }
+    axum::Json(serde_json::json!({
+        "items": out,
+        "next": if next > since { Some(next) } else { None },
+    }))
+    .into_response()
+}
+
+async fn p2p_sync_media(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
+    let query = req.uri().query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find(|p| p.starts_with("limit="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .unwrap_or(200)
+        .min(500);
+    let since = query
+        .split('&')
+        .find(|p| p.starts_with("since="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let (items, next) = match state.social.list_media_since(since, limit) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let resp_items = items
+        .into_iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "url": m.url,
+                "media_type": m.media_type,
+                "size": m.size,
+                "created_at_ms": m.created_at_ms,
+                "actor_id": m.actor_id,
+                "width": m.width,
+                "height": m.height,
+                "blurhash": m.blurhash,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    axum::Json(serde_json::json!({
+        "items": resp_items,
+        "next": if next > since { Some(next) } else { None },
+    }))
+    .into_response()
+}
+
+async fn p2p_sync_objects(state: &ApState, req: Request<Body>) -> Response<Body> {
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
+    let query = req.uri().query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find(|p| p.starts_with("limit="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .unwrap_or(200)
+        .min(500);
+    let since = query
+        .split('&')
+        .find(|p| p.starts_with("since="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let (items, next) = match state.social.list_object_ids_since(since, limit) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let resp_items = items
+        .into_iter()
+        .map(|(object_id, updated_at_ms, actor_id)| {
+            serde_json::json!({
+                "object_id": object_id,
+                "updated_at_ms": updated_at_ms,
+                "actor_id": actor_id,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    axum::Json(serde_json::json!({
+        "items": resp_items,
+        "next": if next > since { Some(next) } else { None },
+    }))
+    .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct P2pSyncRequest {
+    clock: std::collections::HashMap<String, i64>,
+    limit: u32,
 }
 
 async fn p2p_sync_activities(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let _ = state;
-    let _ = req;
-    simple(StatusCode::GONE, "p2p disabled")
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return simple(StatusCode::GONE, "p2p disabled");
+    }
+    let bytes = match axum::body::to_bytes(req.into_body(), 256 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "bad body"),
+    };
+    let req: P2pSyncRequest = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "bad json"),
+    };
+    let limit = req.limit.min(200).max(1);
+    let items = match state.social.list_p2p_activities_since(&req.clock, limit) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let mut out = Vec::<serde_json::Value>::new();
+    for (actor_id, lamport, activity_json, _created_at_ms) in items {
+        if let Ok(activity) = serde_json::from_slice::<serde_json::Value>(&activity_json) {
+            out.push(serde_json::json!({
+                "actor_id": actor_id,
+                "lamport": lamport,
+                "activity": activity,
+            }));
+        }
+    }
+    axum::Json(serde_json::json!({ "items": out })).into_response()
 }
 
 fn fedi3_did(state: &ApState) -> Option<String> {
@@ -7715,9 +7961,60 @@ async fn fetch_object_from_peer(
     state: &ApState,
     object_url: &str,
 ) -> anyhow::Result<(bool, Option<Vec<u8>>)> {
-    let _ = state;
-    let _ = object_url;
-    Ok((false, None))
+    if !state.net.p2p_enabled.load(Ordering::Relaxed) {
+        return Ok((false, None));
+    }
+    let actor_url = match guess_actor_from_object_url(object_url) {
+        Some(v) => v,
+        None => return Ok((false, None)),
+    };
+    let info = match state.delivery.resolve_actor_info(&actor_url).await {
+        Ok(v) => v,
+        Err(_) => return Ok((false, None)),
+    };
+    let Some(peer_id) = info.p2p_peer_id else {
+        return Ok((false, None));
+    };
+    if !info.p2p_peer_addrs.is_empty() {
+        let _ = state
+            .delivery
+            .p2p_add_peer_addrs(&peer_id, info.p2p_peer_addrs)
+            .await;
+    }
+
+    let query = format!("url={}", url_encode(object_url));
+    let req = RelayHttpRequest {
+        id: format!("p2p-obj-{}", now_ms()),
+        method: "GET".to_string(),
+        path: "/.fedi3/object".to_string(),
+        query,
+        headers: vec![(
+            "accept".to_string(),
+            "application/activity+json".to_string(),
+        )],
+        body_b64: String::new(),
+    };
+
+    let resp = match state
+        .delivery
+        .webrtc_request(&actor_url, &peer_id, req.clone())
+        .await
+    {
+        Ok(r) => Ok(r),
+        Err(_) => state.delivery.p2p_request(&peer_id, req).await,
+    };
+    let resp = match resp {
+        Ok(r) => r,
+        Err(_) => return Ok((true, None)),
+    };
+    if !(200..300).contains(&resp.status) {
+        return Ok((true, None));
+    }
+    let bytes = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
+    if bytes.is_empty() {
+        return Ok((true, None));
+    }
+    Ok((true, Some(bytes)))
 }
 
 pub(crate) async fn fetch_and_store_object(
@@ -8330,6 +8627,33 @@ fn url_decode(s: &str) -> String {
         }
     }
     out
+}
+
+fn url_encode(s: &str) -> String {
+    encode(s).to_string()
+}
+
+fn guess_actor_from_object_url(object_url: &str) -> Option<String> {
+    let uri: Uri = object_url.parse().ok()?;
+    let scheme = uri.scheme_str()?;
+    let auth = uri.authority()?.as_str();
+    let base = format!("{scheme}://{auth}");
+    let path = uri.path();
+    if let Some(rest) = path.strip_prefix("/users/") {
+        let user = rest.split('/').next()?.trim();
+        if user.is_empty() {
+            return None;
+        }
+        return Some(format!("{base}/users/{user}"));
+    }
+    if let Some(rest) = path.strip_prefix("/@") {
+        let user = rest.split('/').next()?.trim();
+        if user.is_empty() {
+            return None;
+        }
+        return Some(format!("{base}/@{user}"));
+    }
+    None
 }
 
 fn from_hex(c: u8) -> Option<u8> {

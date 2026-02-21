@@ -1213,6 +1213,30 @@ class AppLocalizationsIt extends AppLocalizations {
       'Alcune modifiche richiedono il riavvio del core.';
 
   @override
+  String get p2pSectionTitle => 'Consegna P2P';
+
+  @override
+  String get p2pDeliveryModeLabel => 'Modalita consegna';
+
+  @override
+  String get p2pDeliveryModeRelay => 'P2P prima, fallback al relay';
+
+  @override
+  String get p2pDeliveryModeP2POnly => 'Solo P2P (no relay)';
+
+  @override
+  String get p2pRelayFallbackLabel => 'Ritardo fallback relay (secondi)';
+
+  @override
+  String get p2pRelayFallbackHint => 'Attendi prima di usare il relay (default: 5)';
+
+  @override
+  String get p2pCacheTtlLabel => 'TTL cache mailbox (secondi)';
+
+  @override
+  String get p2pCacheTtlHint => 'TTL store-and-forward (default: 604800)';
+
+  @override
   String get backupTitle => 'Backup';
 
   @override

@@ -35,6 +35,10 @@ struct RelayMeshSyncRequest {
     since: Option<i64>,
     cursor: Option<i64>,
     limit: u32,
+    relay_url: Option<String>,
+    created_at_ms: Option<i64>,
+    sign_pubkey_b64: Option<String>,
+    signature_b64: Option<String>,
 }
 
 #[derive(Clone)]
@@ -397,6 +401,19 @@ async fn handle_sync_request(
     cfg: &RelayMeshConfig,
     req: RelayMeshSyncRequest,
 ) -> RelaySyncBundle {
+    if let Err(e) = verify_mesh_request(state, cfg, &req).await {
+        let relay_url = req
+            .relay_url
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        if !relay_url.is_empty() {
+            update_reputation(state, relay_url, -2, cfg.reputation_ttl_ms).await;
+        }
+        warn!(relay_url = %relay_url, "relay mesh request rejected: {e:#}");
+        return build_empty_bundle(state).await;
+    }
+
     let limit = req.limit.min(cfg.sync_limit).max(1);
     let db = state.db.lock().await;
     let note_page = db
@@ -468,21 +485,7 @@ async fn handle_sync_request(
         .min()
         .map(|v| v.to_string());
 
-    let relay_url = state
-        .cfg
-        .public_url
-        .as_deref()
-        .map(|v| v.trim_end_matches('/').to_string())
-        .unwrap_or_default();
-    let mut bundle = RelaySyncBundle {
-        relay_url,
-        created_at_ms: now_ms(),
-        notes,
-        media,
-        actors,
-        next,
-        signature_b64: None,
-    };
+    let mut bundle = build_sync_bundle(state, notes, media, actors, next).await;
     if !bundle.relay_url.is_empty() {
         if let Ok((_, sk_b64)) = db.load_or_create_signing_keypair_b64() {
             if let Ok(sig) = sign_bundle_b64(&bundle, &sk_b64) {
@@ -593,10 +596,12 @@ async fn handle_sync_response(
     }
 
     if let Some(next) = response.next.and_then(|v| v.parse::<i64>().ok()) {
-        let req = RelayMeshSyncRequest {
-            since: None,
-            cursor: Some(next),
-            limit: cfg.sync_limit,
+        let req = match build_signed_mesh_request(state, None, Some(next), cfg.sync_limit).await {
+            Ok(v) => v,
+            Err(_) => {
+                inflight_relays.remove(&pend.relay_url);
+                return;
+            }
         };
         let req_id = swarm.behaviour_mut().rr.send_request(&pend.peer_id, req);
         pending.insert(
@@ -666,10 +671,9 @@ async fn queue_sync_requests(
             swarm.add_peer_address(peer_id, addr.clone());
             let _ = swarm.dial(addr);
         }
-        let req = RelayMeshSyncRequest {
-            since,
-            cursor: None,
-            limit,
+        let req = match build_signed_mesh_request(state, since, None, limit).await {
+            Ok(v) => v,
+            Err(_) => continue,
         };
         let req_id = swarm.behaviour_mut().rr.send_request(&peer_id, req);
         info!(
@@ -724,6 +728,172 @@ fn relay_peer_id_from_telemetry(telemetry_json: &str) -> Option<PeerId> {
         return None;
     }
     peer_id.parse::<PeerId>().ok()
+}
+
+async fn build_sync_bundle(
+    state: &AppState,
+    notes: Vec<RelaySyncNoteItem>,
+    media: Vec<RelaySyncMediaItem>,
+    actors: Vec<RelaySyncActorItem>,
+    next: Option<String>,
+) -> RelaySyncBundle {
+    let relay_url = state
+        .cfg
+        .public_url
+        .as_deref()
+        .map(|v| v.trim_end_matches('/').to_string())
+        .unwrap_or_default();
+    RelaySyncBundle {
+        relay_url,
+        created_at_ms: now_ms(),
+        notes,
+        media,
+        actors,
+        next,
+        signature_b64: None,
+    }
+}
+
+async fn build_empty_bundle(state: &AppState) -> RelaySyncBundle {
+    let mut bundle = build_sync_bundle(state, Vec::new(), Vec::new(), Vec::new(), None).await;
+    if !bundle.relay_url.is_empty() {
+        let db = state.db.lock().await;
+        if let Ok((_, sk_b64)) = db.load_or_create_signing_keypair_b64() {
+            if let Ok(sig) = sign_bundle_b64(&bundle, &sk_b64) {
+                bundle.signature_b64 = Some(sig);
+            }
+        }
+    }
+    bundle
+}
+
+async fn build_signed_mesh_request(
+    state: &AppState,
+    since: Option<i64>,
+    cursor: Option<i64>,
+    limit: u32,
+) -> Result<RelayMeshSyncRequest> {
+    let self_relay_url = state
+        .cfg
+        .public_url
+        .as_deref()
+        .map(|v| v.trim_end_matches('/').to_string())
+        .unwrap_or_default();
+    if self_relay_url.is_empty() {
+        return Err(anyhow::anyhow!("missing public_url"));
+    }
+    let (self_pk_b64, self_sk_b64) = {
+        let db = state.db.lock().await;
+        db.load_or_create_signing_keypair_b64()?
+    };
+    let mut req = RelayMeshSyncRequest {
+        since,
+        cursor,
+        limit,
+        relay_url: Some(self_relay_url),
+        created_at_ms: Some(now_ms()),
+        sign_pubkey_b64: Some(self_pk_b64),
+        signature_b64: None,
+    };
+    let sig = sign_mesh_request_b64(&req, &self_sk_b64)?;
+    req.signature_b64 = Some(sig);
+    Ok(req)
+}
+
+async fn verify_mesh_request(
+    state: &AppState,
+    cfg: &RelayMeshConfig,
+    req: &RelayMeshSyncRequest,
+) -> Result<()> {
+    let relay_url = req
+        .relay_url
+        .as_deref()
+        .unwrap_or("")
+        .trim_end_matches('/');
+    if relay_url.is_empty() {
+        return Err(anyhow::anyhow!("missing relay_url"));
+    }
+    let created_at_ms = req.created_at_ms.unwrap_or(0);
+    if created_at_ms <= 0 {
+        return Err(anyhow::anyhow!("missing created_at_ms"));
+    }
+    let now = now_ms();
+    if (created_at_ms - now).abs() > 24 * 3600 * 1000 {
+        return Err(anyhow::anyhow!("request timestamp out of range"));
+    }
+    let sig_b64 = req
+        .signature_b64
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing signature"))?
+        .trim();
+    if sig_b64.is_empty() {
+        return Err(anyhow::anyhow!("missing signature"));
+    }
+
+    let pk_b64 = {
+        let db = state.db.lock().await;
+        db.get_relay_pubkey_b64(relay_url).ok().flatten()
+    };
+
+    let pk_b64 = if let Some(pk_b64) = pk_b64 {
+        pk_b64
+    } else if let Some(pk_b64) = req.sign_pubkey_b64.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        let db = state.db.lock().await;
+        let _ = db.upsert_relay(relay_url, None, None, Some(pk_b64.to_string()));
+        pk_b64.to_string()
+    } else {
+        return Err(anyhow::anyhow!("missing sign_pubkey_b64"));
+    };
+
+    verify_mesh_request_signature(req, &pk_b64)?;
+    update_reputation(state, relay_url, 1, cfg.reputation_ttl_ms).await;
+    Ok(())
+}
+
+fn mesh_request_bytes_for_signing(req: &RelayMeshSyncRequest) -> Result<Vec<u8>> {
+    let mut clone = req.clone();
+    clone.signature_b64 = None;
+    Ok(serde_json::to_vec(&clone)?)
+}
+
+fn sign_mesh_request_b64(req: &RelayMeshSyncRequest, sk_b64: &str) -> Result<String> {
+    let sk_bytes = B64.decode(sk_b64.as_bytes())?;
+    if sk_bytes.len() != 32 {
+        return Err(anyhow::anyhow!("bad signing key length"));
+    }
+    let mut sk = [0u8; 32];
+    sk.copy_from_slice(&sk_bytes);
+    let signing = ed25519_dalek::SigningKey::from_bytes(&sk);
+    let bytes = mesh_request_bytes_for_signing(req)?;
+    let sig: ed25519_dalek::Signature = signing.sign(&bytes);
+    Ok(B64.encode(sig.to_bytes()))
+}
+
+fn verify_mesh_request_signature(req: &RelayMeshSyncRequest, pk_b64: &str) -> Result<()> {
+    let pk_bytes = B64.decode(pk_b64.as_bytes())?;
+    if pk_bytes.len() != 32 {
+        return Err(anyhow::anyhow!("bad pubkey length"));
+    }
+    let mut pk = [0u8; 32];
+    pk.copy_from_slice(&pk_bytes);
+    let verifying = ed25519_dalek::VerifyingKey::from_bytes(&pk)?;
+
+    let sig_b64 = req
+        .signature_b64
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing signature"))?
+        .trim();
+    let sig_bytes = B64.decode(sig_b64.as_bytes())?;
+    if sig_bytes.len() != 64 {
+        return Err(anyhow::anyhow!("bad signature length"));
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+
+    let bytes = mesh_request_bytes_for_signing(req)?;
+    verifying.verify(&bytes, &sig)?;
+    Ok(())
 }
 
 fn bundle_bytes_for_signing(bundle: &RelaySyncBundle) -> Result<Vec<u8>> {

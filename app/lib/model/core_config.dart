@@ -46,6 +46,9 @@ class CoreConfig {
     this.upnpPortRangeEnd,
     this.upnpLeaseSecs,
     this.upnpTimeoutSecs,
+    this.postDeliveryMode,
+    this.p2pRelayFallbackSecs,
+    this.p2pCacheTtlSecs,
     this.useTor = false,
     this.proxyHost,
     this.proxyPort,
@@ -77,6 +80,9 @@ class CoreConfig {
   final int? upnpPortRangeEnd;
   final int? upnpLeaseSecs;
   final int? upnpTimeoutSecs;
+  final String? postDeliveryMode;
+  final int? p2pRelayFallbackSecs;
+  final int? p2pCacheTtlSecs;
   final bool useTor;
   final String? proxyHost;
   final int? proxyPort;
@@ -131,6 +137,9 @@ class CoreConfig {
       upnpPortRangeEnd: (json['upnpPortRangeEnd'] as num?)?.toInt(),
       upnpLeaseSecs: (json['upnpLeaseSecs'] as num?)?.toInt(),
       upnpTimeoutSecs: (json['upnpTimeoutSecs'] as num?)?.toInt(),
+      postDeliveryMode: (json['postDeliveryMode'] as String?)?.trim(),
+      p2pRelayFallbackSecs: (json['p2pRelayFallbackSecs'] as num?)?.toInt(),
+      p2pCacheTtlSecs: (json['p2pCacheTtlSecs'] as num?)?.toInt(),
       useTor: (json['useTor'] as bool?) ?? false,
       proxyHost: (json['proxyHost'] as String?)?.trim(),
       proxyPort: (json['proxyPort'] as num?)?.toInt(),
@@ -164,6 +173,9 @@ class CoreConfig {
         'upnpPortRangeEnd': upnpPortRangeEnd,
         'upnpLeaseSecs': upnpLeaseSecs,
         'upnpTimeoutSecs': upnpTimeoutSecs,
+        'postDeliveryMode': postDeliveryMode,
+        'p2pRelayFallbackSecs': p2pRelayFallbackSecs,
+        'p2pCacheTtlSecs': p2pCacheTtlSecs,
         'useTor': useTor,
         'proxyHost': proxyHost,
         'proxyPort': proxyPort,
@@ -239,6 +251,15 @@ class CoreConfig {
       if (upnpTimeoutSecs != null && upnpTimeoutSecs! > 0) {
         cfg['upnp_timeout_secs'] = upnpTimeoutSecs;
       }
+    }
+    if (postDeliveryMode != null && postDeliveryMode!.trim().isNotEmpty) {
+      cfg['post_delivery_mode'] = postDeliveryMode!.trim();
+    }
+    if (p2pRelayFallbackSecs != null && p2pRelayFallbackSecs! >= 0) {
+      cfg['p2p_relay_fallback_secs'] = p2pRelayFallbackSecs;
+    }
+    if (p2pCacheTtlSecs != null && p2pCacheTtlSecs! > 0) {
+      cfg['p2p_cache_ttl_secs'] = p2pCacheTtlSecs;
     }
     return cfg;
   }

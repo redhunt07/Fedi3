@@ -12,6 +12,7 @@ use crate::keys::{default_data_dir, did_from_public_key_pem, load_or_generate_id
 use crate::nat::UpnpController;
 use crate::net_metrics::NetMetrics;
 use crate::object_fetch::ObjectFetchWorker;
+use crate::p2p::{self, P2pConfig};
 use crate::social_db::SocialDb;
 use anyhow::{Context, Result};
 use axum::{routing::any, Router};
@@ -26,8 +27,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{watch, Mutex as TokioMutex};
+use tower::util::BoxCloneService;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use urlencoding::encode;
 
 static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -252,6 +254,32 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         info!("identity dir: {}", data_dir.display());
         let did = did_from_public_key_pem(&identity.public_key_pem);
         let net = Arc::new(NetMetrics::new());
+        let mut p2p_cfg: P2pConfig = cfg.p2p.clone().unwrap_or_default();
+        let p2p_keypair = if p2p_cfg.enable {
+            Some(p2p::load_or_generate_keypair(&data_dir)?)
+        } else {
+            None
+        };
+        let p2p_peer_id = p2p_keypair.as_ref().map(p2p::peer_id_string);
+        let mut p2p_peer_addrs = Vec::new();
+        if p2p_cfg.enable {
+            if let Some(list) = p2p_cfg.announce.as_ref() {
+                p2p_peer_addrs = list
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            if p2p_peer_addrs.is_empty() {
+                if let Some(list) = p2p_cfg.relay_reserve.as_ref() {
+                    p2p_peer_addrs = list
+                        .iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+        }
 
         let db_path = data_dir.join("fedi3.db");
         let queue = Arc::new(DeliveryQueue::open(&db_path)?);
@@ -359,8 +387,8 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             relay_token: cfg.relay_token.clone(),
             public_key_pem: identity.public_key_pem.clone(),
             also_known_as: Vec::new(),
-            p2p_peer_id: None,
-            p2p_peer_addrs: Vec::new(),
+            p2p_peer_id: p2p_peer_id.clone(),
+            p2p_peer_addrs: p2p_peer_addrs.clone(),
             display_name: cfg.display_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             summary: cfg.summary.clone().map(|s| s.trim().to_string()),
             icon_url: cfg.icon_url.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
@@ -494,6 +522,78 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             },
             inbox_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         };
+
+        let max_body_bytes = cfg
+            .max_body_bytes
+            .unwrap_or(20 * 1024 * 1024)
+            .clamp(1 * 1024 * 1024, 100 * 1024 * 1024);
+
+        if p2p_cfg.enable {
+            if let Some(keypair) = p2p_keypair.clone() {
+
+            if let Some(relay_reserve) = p2p_cfg.relay_reserve.clone() {
+                state
+                    .delivery
+                    .set_mailbox_targets_from_relay_reserve(relay_reserve)
+                    .await;
+            }
+
+            let p2p_handler_state = state.clone();
+            let p2p_handler = Router::new()
+                .fallback(any(move |req| {
+                    let st = p2p_handler_state.clone();
+                    async move { handle_request(&st, req).await }
+                }))
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(TraceLayer::new_for_http());
+
+            let self_actor_url = format!(
+                "{}/users/{}",
+                public_base_url_norm.trim_end_matches('/'),
+                cfg.username
+            );
+                let p2p_handle = p2p::start_p2p(
+                    p2p_cfg.clone(),
+                    keypair,
+                    did.clone(),
+                    self_actor_url,
+                    state.internal_token.clone(),
+                    state.private_key_pem.clone(),
+                    state.social.clone(),
+                    state.net.clone(),
+                    p2p_handler.clone(),
+                    shutdown_rx.clone(),
+                )?;
+                state.delivery.set_p2p(p2p_handle).await;
+
+                let webrtc_handler = Arc::new(TokioMutex::new(BoxCloneService::new(p2p_handler)));
+                let relay_base = state
+                    .cfg
+                    .relay_base_url
+                    .clone()
+                    .unwrap_or_else(|| public_base_url_norm.clone());
+                let webrtc_handle = crate::webrtc_p2p::start_webrtc(
+                    p2p_cfg.clone(),
+                    p2p_peer_id.clone().unwrap_or_default(),
+                    relay_base,
+                    state.private_key_pem.clone(),
+                    key_id.clone(),
+                    webrtc_handler,
+                    state.http.clone(),
+                    shutdown_rx.clone(),
+                    state.net.clone(),
+                )?;
+                state.delivery.set_webrtc(webrtc_handle).await;
+
+                crate::p2p_sync::start_p2p_sync_worker(
+                    state.clone(),
+                    p2p_cfg.clone(),
+                    shutdown_rx.clone(),
+                );
+            } else {
+                warn!("p2p enabled but keypair missing");
+            }
+        }
 
         // Seed relay registry and start relay discovery sync.
         let _ = state
@@ -733,11 +833,6 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 key_id: key_id_for_fetch,
             }),
         );
-
-        let max_body_bytes = cfg
-            .max_body_bytes
-            .unwrap_or(20 * 1024 * 1024)
-            .clamp(1 * 1024 * 1024, 100 * 1024 * 1024);
 
         let state_for_router = state.clone();
         let router = Router::new().fallback(any(move |req| {

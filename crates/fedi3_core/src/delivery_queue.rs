@@ -749,7 +749,9 @@ impl DeliveryQueue {
                         .reschedule(&j.id, attempt_no, delay, &format!("{e:#}"))
                         .await;
                 }
-        Ok(())
+                Ok(())
+            }
+        }
     }
 
     async fn cleanup_history(&self, settings: &QueueSettings) -> Result<()> {
@@ -843,8 +845,6 @@ impl DeliveryQueue {
         })
         .await??;
         Ok(())
-    }
-}
     }
 }
 
