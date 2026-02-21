@@ -1570,7 +1570,10 @@ class _NoteCardState extends State<NoteCard> {
     final attachmentUrls = attachments.map((a) => a.url.trim()).where((s) => s.isNotEmpty).toSet();
 
     String? pick(String candidate) {
-      final u = _trimUrlPunct(candidate.trim());
+      var u = _trimUrlPunct(candidate.trim());
+      if (u.startsWith('www.')) {
+        u = 'https://$u';
+      }
       if (!(u.startsWith('http://') || u.startsWith('https://'))) return null;
       final uri = Uri.tryParse(u);
       if (uri == null || uri.host.isEmpty) return null;
@@ -1592,6 +1595,14 @@ class _NoteCardState extends State<NoteCard> {
     // Fallback: raw URL text in HTML.
     final urlRe = RegExp(r'(https?://[^\\s<>\"\\)\\]]+)', caseSensitive: false);
     for (final m in urlRe.allMatches(h)) {
+      final v = m.group(1);
+      if (v == null) continue;
+      final p = pick(v);
+      if (p != null) return p;
+    }
+    final plain = _plainTextFromHtml(h);
+    final plainRe = RegExp(r'((?:https?://|www\.)[^\s<>"\)\]]+)', caseSensitive: false);
+    for (final m in plainRe.allMatches(plain)) {
       final v = m.group(1);
       if (v == null) continue;
       final p = pick(v);
