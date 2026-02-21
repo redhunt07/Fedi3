@@ -170,10 +170,18 @@ install_app() {
   sudo_cmd rm -rf "$INSTALL_DIR"
   sudo_cmd mkdir -p "$INSTALL_DIR"
   sudo_cmd cp -r "$REPO_DIR/app/build/linux/x64/release/bundle/." "$INSTALL_DIR"
+  sudo_cmd mkdir -p "${INSTALL_DIR}/lib"
   if [[ -f "$REPO_DIR/app/libfedi3_core.so" ]]; then
-    sudo_cmd mkdir -p "${INSTALL_DIR}/lib"
     sudo_cmd cp -f "$REPO_DIR/app/libfedi3_core.so" "${INSTALL_DIR}/lib/libfedi3_core.so"
     sudo_cmd cp -f "$REPO_DIR/app/libfedi3_core.so" "${INSTALL_DIR}/libfedi3_core.so"
+  elif [[ -f "$REPO_DIR/target/release/libfedi3_core.so" ]]; then
+    sudo_cmd cp -f "$REPO_DIR/target/release/libfedi3_core.so" "${INSTALL_DIR}/lib/libfedi3_core.so"
+    sudo_cmd cp -f "$REPO_DIR/target/release/libfedi3_core.so" "${INSTALL_DIR}/libfedi3_core.so"
+  fi
+  if [[ ! -f "${INSTALL_DIR}/libfedi3_core.so" ]]; then
+    echo "Missing libfedi3_core.so in ${INSTALL_DIR}."
+    echo "Re-run install after ensuring build_core succeeds."
+    exit 1
   fi
   sudo_cmd mkdir -p "$(dirname "$ICON_PATH")"
   if [[ -f "$REPO_DIR/app/web/icons/Icon-512.png" ]]; then

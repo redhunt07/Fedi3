@@ -92,6 +92,7 @@ class Note {
     required this.summary,
     required this.sensitive,
     required this.published,
+    this.createdAtMs = 0,
     required this.inReplyTo,
     required this.attachments,
     required this.emojis,
@@ -104,6 +105,7 @@ class Note {
   final String summary;
   final bool sensitive;
   final String published;
+  final int createdAtMs;
   final String inReplyTo;
   final List<NoteAttachment> attachments;
   final List<NoteEmoji> emojis;
@@ -192,6 +194,7 @@ class Note {
     final sensitive = (json['sensitive'] as bool?) ?? summary.isNotEmpty;
     final published = (json['published'] as String?)?.trim() ?? '';
     final inReplyTo = (json['inReplyTo'] as String?)?.trim() ?? '';
+    final createdAtMs = _readCreatedAtMs(json);
     final attachments = NoteAttachment.parseList(json['attachment']);
     final emojis = NoteEmoji.parseList(json['tag']);
     final hashtags = parseHashtags(json['tag']);
@@ -202,12 +205,20 @@ class Note {
       summary: summaryHtml,
       sensitive: sensitive,
       published: published,
+      createdAtMs: createdAtMs,
       inReplyTo: inReplyTo,
       attachments: attachments,
       emojis: emojis,
       hashtags: hashtags,
     );
   }
+}
+
+int _readCreatedAtMs(Map<String, dynamic> json) {
+  final raw = json['created_at_ms'] ?? json['createdAtMs'];
+  if (raw is num) return raw.toInt();
+  if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+  return 0;
 }
 
 String _normalizeHtmlEntities(String input) {

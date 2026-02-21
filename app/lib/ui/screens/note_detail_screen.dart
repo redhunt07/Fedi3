@@ -226,6 +226,12 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     final out = <_ThreadEntry>[];
     if (!_notes.containsKey(rootId)) return out;
     final seen = <String>{};
+    int noteTimestampMs(Note? note) {
+      if (note == null) return 0;
+      final published = DateTime.tryParse(note.published);
+      if (published != null) return published.millisecondsSinceEpoch;
+      return note.createdAtMs;
+    }
     void walk(String id, int depth) {
       if (seen.contains(id)) return;
       seen.add(id);
@@ -236,9 +242,9 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
       final kids = _children[id] ?? const [];
       final sorted = kids.toList()
         ..sort((a, b) {
-          final da = DateTime.tryParse(_notes[a]?.published ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final db = DateTime.tryParse(_notes[b]?.published ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return da.compareTo(db);
+          final ta = noteTimestampMs(_notes[a]);
+          final tb = noteTimestampMs(_notes[b]);
+          return ta.compareTo(tb);
         });
       for (final k in sorted) {
         walk(k, depth + 1);

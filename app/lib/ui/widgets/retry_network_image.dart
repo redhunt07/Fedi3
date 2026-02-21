@@ -57,8 +57,9 @@ class _RetryNetworkImageState extends State<RetryNetworkImage> {
         return _buildPlaceholder(context, isError: false);
       },
     );
-    if (widget.borderRadius == null) return img;
-    return ClipRRect(borderRadius: widget.borderRadius, child: img);
+    final radius = widget.borderRadius;
+    if (radius == null) return img;
+    return ClipRRect(borderRadius: radius, child: img);
   }
 
   Widget _buildPlaceholder(BuildContext context, {required bool isError}) {

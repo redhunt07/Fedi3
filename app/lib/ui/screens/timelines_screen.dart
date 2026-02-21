@@ -745,6 +745,27 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                                   style: const TextStyle(fontWeight: FontWeight.w800),
                                 ),
                               ),
+                              if (pendingCount > 0) ...[
+                                const SizedBox(width: 8),
+                                InkWell(
+                                  onTap: _applyPending,
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.primary.withAlpha(30),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      context.l10n.timelineNewPosts(pendingCount),
+                                      style: TextStyle(
+                                        color: Theme.of(context).colorScheme.primary,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                               const Spacer(),
                               IconButton(
                                 tooltip: context.l10n.timelineFilters,

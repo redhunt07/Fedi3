@@ -78,6 +78,9 @@ class TelemetryService {
     if (!force && !(enabled || monitoringEnabled || kDebugMode)) {
       return;
     }
+    if (!force && enabled && !monitoringEnabled && !_isCriticalType(type)) {
+      return;
+    }
     // Add jitter to timestamp to prevent temporal correlation
     final jitteredTs = DateTime.now().toUtc().add(Duration(milliseconds: Random().nextInt(5000)));
     final event = TelemetryEvent(
@@ -155,13 +158,7 @@ class TelemetryService {
   }
 
   static bool _shouldSendRemote(TelemetryEvent event) {
-    final type = event.type.toLowerCase();
-    if (!(type.contains('warn') ||
-        type.contains('error') ||
-        type.contains('crash') ||
-        type.contains('panic') ||
-        type.contains('exception') ||
-        type.contains('core_dead'))) {
+    if (!_isCriticalType(event.type)) {
       return false;
     }
     final now = DateTime.now().toUtc();
@@ -170,6 +167,15 @@ class TelemetryService {
     }
     _lastRemoteSend = now;
     return true;
+  }
+
+  static bool _isCriticalType(String type) {
+    final t = type.toLowerCase();
+    return t.contains('error') ||
+        t.contains('crash') ||
+        t.contains('panic') ||
+        t.contains('exception') ||
+        t.contains('core_dead');
   }
 
   static String _sanitizeStack(String? stack) {
