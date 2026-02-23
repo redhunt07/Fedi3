@@ -16,7 +16,11 @@ sudo_cmd() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
   else
-    sudo "$@"
+    if [[ "${FEDI3_FORCE_UPDATE:-}" == "1" ]]; then
+      sudo -E "$@"
+    else
+      sudo "$@"
+    fi
   fi
 }
 
