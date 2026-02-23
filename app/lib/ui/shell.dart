@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
+import '../core/core_api.dart';
 import '../services/core_event_stream.dart';
 import '../services/actor_repository.dart';
 import '../services/notification_service.dart';
@@ -38,6 +39,11 @@ class _ShellState extends State<Shell> {
   static const Set<String> _directNotifTypes = {
     'Create',
     'Announce',
+    'Like',
+    'EmojiReact',
+    'Follow',
+    'Accept',
+    'Reject',
   };
   int _index = 0;
   late final List<Widget> _pages;
@@ -154,12 +160,12 @@ class _ShellState extends State<Shell> {
     _notifStream = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'notification' && ev.kind != 'inbox') return;
-      if (!_isDirectInteraction(ev)) return;
       final lastSeen = widget.appState.prefs.lastNotificationsSeenMs;
       if (ev.tsMs <= lastSeen) return;
       _notifDebounce?.cancel();
-      _notifDebounce = Timer(const Duration(milliseconds: 350), () {
+      _notifDebounce = Timer(const Duration(milliseconds: 350), () async {
         if (!mounted) return;
+        if (!await _isDirectInteraction(ev)) return;
         final onNotifTab = _index == 3;
         if (!onNotifTab) {
           widget.appState.incrementUnreadNotifications();
@@ -234,12 +240,35 @@ class _ShellState extends State<Shell> {
     });
   }
 
-  bool _isDirectInteraction(CoreEvent ev) {
-    if (ev.kind != 'inbox') return false;
-    if (!widget.appState.prefs.notifyDirect) return false;
+  Future<bool> _isDirectInteraction(CoreEvent ev) async {
     final ty = ev.activityType?.trim() ?? '';
     if (ty.isEmpty) return false;
-    return _directNotifTypes.contains(ty);
+    if (ev.kind == 'notification') {
+      return _directNotifTypes.contains(ty);
+    }
+    if (ev.kind != 'inbox') return false;
+    if (!widget.appState.prefs.notifyDirect) return false;
+    if (!_directNotifTypes.contains(ty)) return false;
+    final id = ev.activityId?.trim() ?? '';
+    if (id.isEmpty) return false;
+    final cfg = widget.appState.config;
+    if (cfg == null) return false;
+    try {
+      final api = CoreApi(config: cfg);
+      final resp = await api.fetchNotifications(limit: 20);
+      final items = (resp['items'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>());
+      for (final item in items) {
+        final activity = item['activity'];
+        if (activity is! Map) continue;
+        final actId = (activity['id'] as String?)?.trim() ?? '';
+        if (actId == id) return true;
+      }
+    } catch (_) {
+      // best-effort
+    }
+    return false;
   }
 
   bool _notificationsMuted() {

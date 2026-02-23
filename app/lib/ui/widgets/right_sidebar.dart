@@ -641,7 +641,7 @@ String _stripHtml(String html) {
 
 bool _isNoteLikeType(dynamic value) {
   final ty = value is String ? value.trim() : '';
-  return ty == 'Note' || ty == 'Article' || ty == 'Question';
+  return ty == 'Note' || ty == 'Article' || ty == 'Question' || ty == 'Page';
 }
 
 Color _badgeColorFor(BuildContext context, String type) {

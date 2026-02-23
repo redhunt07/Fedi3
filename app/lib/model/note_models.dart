@@ -148,7 +148,7 @@ class Note {
 
   static Note? tryParse(Map<String, dynamic> json) {
     final type = (json['type'] as String?)?.trim() ?? '';
-    if (type != 'Note' && type != 'Article' && type != 'Question') return null;
+    if (type != 'Note' && type != 'Article' && type != 'Question' && type != 'Page') return null;
     final id = (json['id'] as String?)?.trim() ?? '';
     if (id.isEmpty) return null;
     final attributedTo = (json['attributedTo'] as String?)?.trim() ?? '';
@@ -372,5 +372,5 @@ class TimelineItem {
 
 bool _isNoteLikeType(dynamic value) {
   final ty = value is String ? value.trim() : '';
-  return ty == 'Note' || ty == 'Article' || ty == 'Question';
+  return ty == 'Note' || ty == 'Article' || ty == 'Question' || ty == 'Page';
 }

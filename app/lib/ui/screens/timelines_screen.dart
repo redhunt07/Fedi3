@@ -512,6 +512,7 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       final items = (resp['items'] as List<dynamic>? ?? [])
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
+          .where((m) => !_isNoisyActivity(m))
           .toList();
       setState(() {
         for (final it in items) {
@@ -541,6 +542,7 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       final items = (resp['items'] as List<dynamic>? ?? [])
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
+          .where((m) => !_isNoisyActivity(m))
           .toList();
       if (items.isEmpty) return;
 
@@ -668,6 +670,13 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       }
     }
     return created;
+  }
+
+  bool _isNoisyActivity(Map<String, dynamic> activity) {
+    final type = (activity['type'] as String?)?.trim() ?? '';
+    if (type != 'Announce') return false;
+    final obj = activity['object'];
+    return obj is String && obj.trim().isNotEmpty;
   }
 
   void _sortActivities(List<Map<String, dynamic>> items) {

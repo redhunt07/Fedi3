@@ -687,7 +687,7 @@ String _stripHtml(String html) {
 
 bool _isNoteLikeType(dynamic value) {
   final ty = value is String ? value.trim() : '';
-  return ty == 'Note' || ty == 'Article' || ty == 'Question';
+  return ty == 'Note' || ty == 'Article' || ty == 'Question' || ty == 'Page';
 }
 
 String _shortActor(String actor) {
