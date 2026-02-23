@@ -89,12 +89,15 @@ function Install-CoreService {
     Write-Host "Core service binary not found: $serviceBin"
     return
   }
+  $taskName = "Fedi3 Core"
+  try {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+  } catch {}
+  Start-Sleep -Milliseconds 400
   Copy-Item $serviceBin $coreServiceExe -Force
 
   $configBase = if ($env:APPDATA) { $env:APPDATA } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { "." }
   $configPath = Join-Path $configBase "Fedi3\config.json"
-  $taskName = "Fedi3 Core"
-
   $action = New-ScheduledTaskAction -Execute $coreServiceExe -Argument "--config `"$configPath`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
