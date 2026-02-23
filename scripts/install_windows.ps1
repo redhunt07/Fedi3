@@ -93,8 +93,23 @@ function Install-CoreService {
   try {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
   } catch {}
-  Start-Sleep -Milliseconds 400
-  Copy-Item $serviceBin $coreServiceExe -Force
+  try {
+    Get-Process -Name "fedi3_core_service" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  } catch {}
+  Start-Sleep -Milliseconds 800
+  $copied = $false
+  for ($i = 0; $i -lt 3; $i++) {
+    try {
+      Copy-Item $serviceBin $coreServiceExe -Force
+      $copied = $true
+      break
+    } catch {
+      Start-Sleep -Milliseconds 700
+    }
+  }
+  if (-not $copied) {
+    throw "Impossibile aggiornare fedi3_core_service.exe (file in uso). Chiudi l'app e riprova."
+  }
 
   $configBase = if ($env:APPDATA) { $env:APPDATA } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { "." }
   $configPath = Join-Path $configBase "Fedi3\config.json"
