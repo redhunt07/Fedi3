@@ -128,7 +128,19 @@ clone_or_update_repo() {
   sudo_cmd mkdir -p /opt/fedi3
   if [[ -d "$REPO_DIR/.git" ]]; then
     sudo_cmd git -C "$REPO_DIR" fetch --all --prune
-    sudo_cmd git -C "$REPO_DIR" pull --ff-only
+    if ! sudo_cmd git -C "$REPO_DIR" pull --ff-only; then
+      if [[ "${FEDI3_FORCE_UPDATE:-}" == "1" ]]; then
+        sudo_cmd git -C "$REPO_DIR" fetch origin main
+        sudo_cmd git -C "$REPO_DIR" reset --hard origin/main
+      else
+        echo "Errore: branch divergi. Esegui:"
+        echo "  git -C \"$REPO_DIR\" merge --no-ff"
+        echo "  oppure git -C \"$REPO_DIR\" rebase"
+        echo "Se vuoi forzare l'update (perdi modifiche locali), riesegui con:"
+        echo "  FEDI3_FORCE_UPDATE=1 $0 --update-only"
+        exit 1
+      fi
+    fi
   else
     sudo_cmd git clone "$REPO_URL" "$REPO_DIR"
   fi
