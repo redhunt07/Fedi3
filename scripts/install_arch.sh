@@ -173,7 +173,7 @@ clone_or_update_repo() {
         echo "  git -C \"$REPO_DIR\" merge --no-ff"
         echo "  oppure git -C \"$REPO_DIR\" rebase"
         echo "Se vuoi forzare l'update (perdi modifiche locali), riesegui con:"
-        echo "  FEDI3_FORCE_UPDATE=1 $0 --update-only"
+        echo "  FEDI3_FORCE_UPDATE=1 curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash -s -- --update-only"
         exit 1
       fi
     fi
