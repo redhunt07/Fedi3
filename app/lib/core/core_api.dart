@@ -46,6 +46,16 @@ class CoreApi {
     );
   }
 
+  Future<bool> checkHealth() async {
+    final uri = _internal('/_fedi3/health');
+    try {
+      final resp = await http.get(uri, headers: _internalHeaders);
+      return resp.statusCode >= 200 && resp.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<String> _resolveActorInput(String input) async {
     var v = input.trim();
     if (v.isEmpty) throw StateError('missing actor');

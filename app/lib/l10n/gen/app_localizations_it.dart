@@ -846,6 +846,19 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String get settingsCoreServiceActive => 'Servizio core attivo (background)';
+
+  @override
+  String get settingsCoreRunningApp => 'Core attivo (sessione app)';
+
+  @override
+  String get settingsCoreServiceInactive => 'Servizio core non rilevato';
+
+  @override
+  String get settingsCoreServiceHint =>
+      'Il core ora gira come servizio in background. Gestiscilo dai tool di sistema (systemd utente su Linux o Scheduled Task su Windows).';
+
+  @override
   String get settingsCoreStopped => 'Fermo';
 
   @override
@@ -867,7 +880,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get settingsAdvancedDev => 'Avanzate (dev)';
 
   @override
-  String get settingsAdvancedDevHint => 'Start/Stop + status migrazione';
+  String get settingsAdvancedDevHint => 'Stato migrazione + info core';
 
   @override
   String get settingsResetApp => 'Reset app (cancella config)';

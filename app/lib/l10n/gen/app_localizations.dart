@@ -1574,6 +1574,30 @@ abstract class AppLocalizations {
   /// **'Running (handle={handle})'**
   String settingsCoreRunning(int handle);
 
+  /// Shown when the background core service is detected
+  ///
+  /// In en, this message translates to:
+  /// **'Core service running (background)'**
+  String get settingsCoreServiceActive;
+
+  /// Shown when the core is running inside the app process
+  ///
+  /// In en, this message translates to:
+  /// **'Core running (app session)'**
+  String get settingsCoreRunningApp;
+
+  /// Shown when the background core service is not detected
+  ///
+  /// In en, this message translates to:
+  /// **'Core service not detected'**
+  String get settingsCoreServiceInactive;
+
+  /// Hint about managing the background core service
+  ///
+  /// In en, this message translates to:
+  /// **'The core now runs as a background service. Manage it via system tools (systemd user service on Linux or Scheduled Task on Windows).'**
+  String get settingsCoreServiceHint;
+
   /// No description provided for @settingsCoreStopped.
   ///
   /// In en, this message translates to:
@@ -1619,7 +1643,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsAdvancedDevHint.
   ///
   /// In en, this message translates to:
-  /// **'Start/Stop + migration status'**
+  /// **'Migration status + core info'**
   String get settingsAdvancedDevHint;
 
   /// No description provided for @settingsResetApp.

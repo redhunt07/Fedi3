@@ -366,6 +366,22 @@
       "handle": { "type": "int" }
     }
   },
+  "settingsCoreServiceActive": "Core service running (background)",
+  "@settingsCoreServiceActive": {
+    "description": "Shown when the background core service is detected"
+  },
+  "settingsCoreRunningApp": "Core running (app session)",
+  "@settingsCoreRunningApp": {
+    "description": "Shown when the core is running inside the app process"
+  },
+  "settingsCoreServiceInactive": "Core service not detected",
+  "@settingsCoreServiceInactive": {
+    "description": "Shown when the background core service is not detected"
+  },
+  "settingsCoreServiceHint": "The core now runs as a background service. Manage it via system tools (systemd user service on Linux or Scheduled Task on Windows).",
+  "@settingsCoreServiceHint": {
+    "description": "Hint about managing the background core service"
+  },
   "settingsCoreStopped": "Stopped",
   "settingsAccount": "Account",
   "settingsFollowSection": "Follow / Unfollow",
@@ -373,7 +389,7 @@
   "settingsFollow": "Follow",
   "settingsUnfollow": "Unfollow",
   "settingsAdvancedDev": "Advanced (dev)",
-  "settingsAdvancedDevHint": "Start/Stop + migration status",
+  "settingsAdvancedDevHint": "Migration status + core info",
   "settingsResetApp": "Reset app (clear config)",
 
   "migrationTitle": "Migration",

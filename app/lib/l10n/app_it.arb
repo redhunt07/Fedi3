@@ -368,6 +368,22 @@
       "handle": { "type": "int" }
     }
   },
+  "settingsCoreServiceActive": "Servizio core attivo (background)",
+  "@settingsCoreServiceActive": {
+    "description": "Mostrato quando il servizio core in background e' attivo"
+  },
+  "settingsCoreRunningApp": "Core attivo (sessione app)",
+  "@settingsCoreRunningApp": {
+    "description": "Mostrato quando il core gira dentro l'app"
+  },
+  "settingsCoreServiceInactive": "Servizio core non rilevato",
+  "@settingsCoreServiceInactive": {
+    "description": "Mostrato quando il servizio core in background non e' rilevato"
+  },
+  "settingsCoreServiceHint": "Il core ora gira come servizio in background. Gestiscilo dai tool di sistema (systemd utente su Linux o Scheduled Task su Windows).",
+  "@settingsCoreServiceHint": {
+    "description": "Hint per la gestione del servizio core in background"
+  },
   "settingsCoreStopped": "Fermo",
   "settingsAccount": "Account",
   "settingsFollowSection": "Follow / Unfollow",
@@ -375,7 +391,7 @@
   "settingsFollow": "Follow",
   "settingsUnfollow": "Unfollow",
   "settingsAdvancedDev": "Avanzate (dev)",
-  "settingsAdvancedDevHint": "Start/Stop + status migrazione",
+  "settingsAdvancedDevHint": "Stato migrazione + info core",
   "settingsResetApp": "Reset app (cancella config)",
 
   "migrationTitle": "Migrazione",

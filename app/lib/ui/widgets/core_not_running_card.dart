@@ -43,13 +43,7 @@ class CoreNotRunningCard extends StatelessWidget {
                   Text(hint!),
                 ],
                 const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () async {
-                    await appState.startCore();
-                    onStarted?.call();
-                  },
-                  child: Text(context.l10n.coreStart),
-                ),
+                Text(context.l10n.settingsCoreServiceHint),
                 if (error != null && error.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(

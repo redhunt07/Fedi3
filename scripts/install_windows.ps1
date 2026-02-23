@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $repoUrl = "https://github.com/redhunt07/Fedi3.git"
 $repoDir = Join-Path $env:LOCALAPPDATA "Fedi3\src"
 $installDir = Join-Path $env:LOCALAPPDATA "Fedi3\app"
+$coreServiceExe = Join-Path $installDir "fedi3_core_service.exe"
 
 function Test-Command {
   param([string]$Name)
@@ -82,6 +83,26 @@ function Install-App {
   Write-Host "Installed to $installDir"
 }
 
+function Install-CoreService {
+  $serviceBin = Join-Path $repoDir "target\release\fedi3_core_service.exe"
+  if (-not (Test-Path $serviceBin)) {
+    Write-Host "Core service binary not found: $serviceBin"
+    return
+  }
+  Copy-Item $serviceBin $coreServiceExe -Force
+
+  $configBase = if ($env:APPDATA) { $env:APPDATA } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { "." }
+  $configPath = Join-Path $configBase "Fedi3\config.json"
+  $taskName = "Fedi3 Core"
+
+  $action = New-ScheduledTaskAction -Execute $coreServiceExe -Argument "--config `"$configPath`""
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+  Start-ScheduledTask -TaskName $taskName | Out-Null
+  Write-Host "Core service scheduled task installed: $taskName"
+}
+
 function Install-Fedi3 {
   param([switch]$UpdateOnly)
   Ensure-Dependencies
@@ -89,6 +110,7 @@ function Install-Fedi3 {
   Build-Core
   Build-App
   Install-App
+  Install-CoreService
   Write-Host "Done. Launch: $installDir\fedi3.exe"
 }
 

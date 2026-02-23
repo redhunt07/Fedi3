@@ -20,6 +20,16 @@ sudo_cmd() {
   fi
 }
 
+sudo_user_cmd() {
+  local user="$1"
+  shift
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    sudo -u "$user" "$@"
+  else
+    "$@"
+  fi
+}
+
 ensure_debian() {
   if [[ ! -f /etc/os-release ]]; then
     echo "Unsupported OS: missing /etc/os-release"
@@ -201,6 +211,49 @@ EOF
   sudo_cmd chmod 644 "$DESKTOP_FILE"
 }
 
+install_core_service() {
+  local service_bin="${REPO_DIR}/target/release/fedi3_core_service"
+  if [[ ! -f "$service_bin" ]]; then
+    echo "Warning: core service binary not found ($service_bin)."
+    return
+  fi
+
+  sudo_cmd cp -f "$service_bin" "${INSTALL_DIR}/fedi3_core_service"
+  sudo_cmd chmod 755 "${INSTALL_DIR}/fedi3_core_service"
+
+  local target_user="${SUDO_USER:-$USER}"
+  local target_home
+  target_home="$(getent passwd "$target_user" | cut -d: -f6)"
+  if [[ -z "$target_home" ]]; then
+    target_home="$HOME"
+  fi
+
+  local systemd_dir="${target_home}/.config/systemd/user"
+  sudo_cmd mkdir -p "$systemd_dir"
+  sudo_cmd tee "${systemd_dir}/fedi3-core.service" >/dev/null <<EOF
+[Unit]
+Description=Fedi3 Core Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=${INSTALL_DIR}/fedi3_core_service --config %h/.config/fedi3/config.json
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+EOF
+
+  sudo_cmd chown -R "$target_user":"$target_user" "${target_home}/.config/systemd"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_user_cmd "$target_user" systemctl --user daemon-reload || true
+    sudo_user_cmd "$target_user" systemctl --user enable --now fedi3-core.service || true
+  fi
+}
+
 main() {
   local mode="full"
   if [[ "${1:-}" == "--update-only" ]]; then
@@ -216,6 +269,7 @@ main() {
   build_core
   build_flutter
   install_app
+  install_core_service
   echo "Done. Launch from applications menu or run: ${INSTALL_DIR}/fedi3"
 }
 

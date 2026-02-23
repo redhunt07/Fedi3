@@ -8,6 +8,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/core_api.dart';
 import '../core/fedi3_core.dart';
 import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
@@ -25,6 +26,7 @@ class AppState extends ChangeNotifier {
   CoreConfig? _config;
   UiPrefs _prefs;
   int? _coreHandle;
+  bool _externalCore = false;
   String? _lastError;
   int _unreadNotifications = 0;
   int _unreadChats = 0;
@@ -35,12 +37,14 @@ class AppState extends ChangeNotifier {
   UiPrefs get prefs => _prefs;
   int? get coreHandle => _coreHandle;
   bool get isRunning => _coreHandle != null;
+  bool get isExternalCore => _externalCore;
   String? get lastError => _lastError;
   int get unreadNotifications => _unreadNotifications;
   int get unreadChats => _unreadChats;
 
   void markCoreDead([String? error]) {
     _coreHandle = null;
+    _externalCore = false;
     _lastError = error;
     _unreadNotifications = 0;
     _unreadChats = 0;
@@ -112,7 +116,7 @@ class AppState extends ChangeNotifier {
   Future<void> startCore() async {
     final cfg = _config;
     if (cfg == null) return;
-    if (_coreHandle != null) return;
+    if (_coreHandle != null && !_externalCore) return;
     _lastError = null;
     try {
       var effective = cfg;
@@ -225,8 +229,18 @@ class AppState extends ChangeNotifier {
         await saveConfig(effective);
       }
 
+      final api = CoreApi(config: effective);
+      if (await api.checkHealth()) {
+        _coreHandle = 0;
+        _externalCore = true;
+        _scheduleCloudBackup();
+        notifyListeners();
+        return;
+      }
+
       final handle = Fedi3Core.instance.startJson(jsonEncode(effective.toCoreStartJson()));
       _coreHandle = handle;
+      _externalCore = false;
       _scheduleCloudBackup();
     } catch (e) {
       _lastError = e.toString();
@@ -239,9 +253,18 @@ class AppState extends ChangeNotifier {
     final handle = _coreHandle;
     if (handle == null) return;
     _lastError = null;
+    if (_externalCore) {
+      _coreHandle = null;
+      _externalCore = false;
+      _cloudBackupTimer?.cancel();
+      _cloudBackupTimer = null;
+      notifyListeners();
+      return;
+    }
     try {
       Fedi3Core.instance.stop(handle);
       _coreHandle = null;
+      _externalCore = false;
       _cloudBackupTimer?.cancel();
       _cloudBackupTimer = null;
     } catch (e) {

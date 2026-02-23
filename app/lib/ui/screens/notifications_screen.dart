@@ -229,18 +229,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       children: [
                         Text(context.l10n.notificationsCoreNotRunning, style: const TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
-                        FilledButton(
-                          onPressed: () async {
-                            await widget.appState.startCore();
-                            if (!mounted) return;
-                            if (widget.appState.isRunning) {
-                              await _refresh();
-                            } else if (widget.appState.lastError != null) {
-                              setState(() => _error = widget.appState.lastError);
-                            }
-                          },
-                          child: Text(context.l10n.coreStart),
-                        ),
+                        Text(context.l10n.settingsCoreServiceHint),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
                           Text(

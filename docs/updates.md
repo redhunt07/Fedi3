@@ -47,6 +47,27 @@ Windows (manual update, no asset):
 powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
 ```
 
+La script installa anche il core come servizio in background:
+
+- Windows: task schedulata `Fedi3 Core`
+- Linux: systemd user service `fedi3-core.service`
+
+Comandi utili:
+
+Windows (PowerShell):
+
+```
+Get-ScheduledTask -TaskName "Fedi3 Core"
+Start-ScheduledTask -TaskName "Fedi3 Core"
+```
+
+Linux:
+
+```
+systemctl --user status fedi3-core.service
+systemctl --user restart fedi3-core.service
+```
+
 Linux:
 
 ```

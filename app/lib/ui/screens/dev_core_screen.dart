@@ -50,6 +50,8 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           Text(_status),
+          const SizedBox(height: 8),
+          Text(context.l10n.settingsCoreServiceHint),
           const SizedBox(height: 12),
           Card(
             child: ListTile(
@@ -62,14 +64,6 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
             spacing: 10,
             runSpacing: 10,
             children: [
-              FilledButton(
-                onPressed: running ? null : () async => widget.appState.startCore(),
-                child: Text(context.l10n.devCoreStart),
-              ),
-              OutlinedButton(
-                onPressed: running ? () async => widget.appState.stopCore() : null,
-                child: Text(context.l10n.devCoreStop),
-              ),
               OutlinedButton(
                 onPressed: running ? _fetchMigrationStatus : null,
                 child: Text(context.l10n.devCoreFetchMigration),

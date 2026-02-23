@@ -184,11 +184,6 @@ class _ActivityCardState extends State<ActivityCard> {
                     ),
                   ),
                   const Spacer(),
-                  if (!canAct)
-                    Text(
-                      context.l10n.coreStart,
-                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
-                    ),
                 ],
               ),
             ],

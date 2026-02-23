@@ -46,20 +46,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: ListTile(
                   title: Text(context.l10n.settingsCore),
                   subtitle: Text(
-                    widget.appState.isRunning
-                        ? context.l10n.settingsCoreRunning(widget.appState.coreHandle ?? 0)
-                        : context.l10n.settingsCoreStopped,
+                    widget.appState.isExternalCore
+                        ? context.l10n.settingsCoreServiceActive
+                        : (widget.appState.isRunning
+                            ? context.l10n.settingsCoreRunningApp
+                            : context.l10n.settingsCoreServiceInactive),
                   ),
-                  trailing: FilledButton(
-                    onPressed: () async {
-                      if (widget.appState.isRunning) {
-                        await widget.appState.stopCore();
-                      } else {
-                        await widget.appState.startCore();
-                      }
-                    },
-                    child: Text(widget.appState.isRunning ? context.l10n.coreStop : context.l10n.coreStart),
-                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  context.l10n.settingsCoreServiceHint,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
               if (widget.appState.lastError != null)
