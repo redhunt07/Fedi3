@@ -411,10 +411,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
   Timer? _poll;
   Timer? _retry;
   bool _showScrollTop = false;
-  bool _filterMedia = false;
-  bool _filterReplies = false;
-  bool _filterBoosts = false;
-  bool _filterMentions = false;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
 
@@ -516,7 +512,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       final items = (resp['items'] as List<dynamic>? ?? [])
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
-          .where(_isTimelineItem)
           .toList();
       setState(() {
         for (final it in items) {
@@ -546,7 +541,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       final items = (resp['items'] as List<dynamic>? ?? [])
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
-          .where(_isTimelineItem)
           .toList();
       if (items.isEmpty) return;
 
@@ -672,37 +666,11 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     });
   }
 
-  bool _isTimelineItem(Map<String, dynamic> activity) {
-    final type = (activity['type'] as String?)?.trim() ?? '';
-    if (type != 'Create' && type != 'Announce') return false;
-
-    final obj = activity['object'];
-    if (obj is Map) {
-      final m = obj.cast<String, dynamic>();
-      if (type == 'Create') {
-        final inner = m['object'];
-        if (inner is Map) {
-          final n = inner.cast<String, dynamic>();
-          return (n['type'] as String?) == 'Note';
-        }
-        return (m['type'] as String?) == 'Note';
-      }
-      if (type == 'Announce') {
-        if ((m['type'] as String?) == 'Note') return true;
-        final inner = m['object'];
-        if (inner is Map) return (inner['type'] as String?) == 'Note';
-        if (inner is String) return inner.trim().isNotEmpty;
-      }
-    }
-    if (obj is String) return obj.trim().isNotEmpty;
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final filtered = _items.where(_matchesFilters).toList(growable: false);
-    final pendingCount = _pending.where(_matchesFilters).length;
+    final filtered = _items;
+    final pendingCount = _pending.length;
     final panelColor = Theme.of(context).colorScheme.surfaceContainerLow;
     final panelBorder = Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
     final list = RefreshIndicator(
@@ -767,11 +735,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                                 ),
                               ],
                               const Spacer(),
-                              IconButton(
-                                tooltip: context.l10n.timelineFilters,
-                                onPressed: () => _showFilters(context),
-                                icon: const Icon(Icons.filter_alt_outlined),
-                              ),
                               IconButton(
                                 tooltip: context.l10n.timelineRefreshHint,
                                 onPressed: widget.appState.isRunning && !_syncing ? _forceSyncAndRefresh : null,
@@ -947,92 +910,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     );
   }
 
-  bool _matchesFilters(Map<String, dynamic> activity) {
-    if (!_filterMedia && !_filterReplies && !_filterBoosts && !_filterMentions) return true;
-    final type = (activity['type'] as String?)?.trim() ?? '';
-    final obj = activity['object'];
-    Map<String, dynamic>? noteMap;
-    if (obj is Map) {
-      final m = obj.cast<String, dynamic>();
-      if (type == 'Create') {
-        final inner = m['object'];
-        if (inner is Map) noteMap = inner.cast<String, dynamic>();
-        if (noteMap == null && (m['type'] as String?) == 'Note') noteMap = m;
-      } else if (type == 'Announce') {
-        if ((m['type'] as String?) == 'Note') {
-          noteMap = m;
-        } else if (m['object'] is Map) {
-          noteMap = (m['object'] as Map).cast<String, dynamic>();
-        }
-      }
-    }
-    final attachments = noteMap?['attachment'];
-    final hasMedia = attachments is List && attachments.isNotEmpty;
-    final inReplyTo = (noteMap?['inReplyTo'] as String?)?.trim() ?? '';
-    final hasMentions = (noteMap?['tag'] is List)
-        ? (noteMap?['tag'] as List).whereType<Map>().any((m) => m['type'] == 'Mention')
-        : false;
-    final isBoost = type == 'Announce';
-
-    if (_filterMedia && !hasMedia) return false;
-    if (_filterReplies && inReplyTo.isEmpty) return false;
-    if (_filterBoosts && !isBoost) return false;
-    if (_filterMentions && !hasMentions) return false;
-    return true;
-  }
-
-  void _showFilters(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        context.l10n.timelineFilters,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: context.l10n.close,
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-                SwitchListTile(
-                  title: Text(context.l10n.timelineFilterMedia),
-                  value: _filterMedia,
-                  onChanged: (v) => setState(() => _filterMedia = v),
-                ),
-                SwitchListTile(
-                  title: Text(context.l10n.timelineFilterReply),
-                  value: _filterReplies,
-                  onChanged: (v) => setState(() => _filterReplies = v),
-                ),
-                SwitchListTile(
-                  title: Text(context.l10n.timelineFilterBoost),
-                  value: _filterBoosts,
-                  onChanged: (v) => setState(() => _filterBoosts = v),
-                ),
-                SwitchListTile(
-                  title: Text(context.l10n.timelineFilterMention),
-                  value: _filterMentions,
-                  onChanged: (v) => setState(() => _filterMentions = v),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 }
 
 class _TimelineSkeletonCard extends StatelessWidget {
