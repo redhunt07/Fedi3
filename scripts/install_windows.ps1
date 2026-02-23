@@ -94,9 +94,28 @@ function Install-CoreService {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
   } catch {}
   try {
+    schtasks /End /TN $taskName | Out-Null
+  } catch {}
+  try {
     Get-Process -Name "fedi3_core_service" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   } catch {}
   Start-Sleep -Milliseconds 800
+  function Test-FileLocked {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    try {
+      $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+      $fs.Close()
+      return $false
+    } catch {
+      return $true
+    }
+  }
+  $waitMs = 0
+  while (Test-FileLocked $coreServiceExe -and $waitMs -lt 5000) {
+    Start-Sleep -Milliseconds 500
+    $waitMs += 500
+  }
   $copied = $false
   for ($i = 0; $i -lt 3; $i++) {
     try {
