@@ -30,6 +30,10 @@ Update-only (senza reinstallare dipendenze):
 curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash -s -- --update-only
 ```
 
+Note:
+- Richiede privilegi amministratore (usa `sudo`) per installare in `/opt` e scrivere in `/usr/share`.
+- Il core viene installato come servizio user systemd (`fedi3-core.service`).
+
 ## Installazione client Linux (Arch/derivate)
 
 Install (build + setup):
@@ -50,6 +54,28 @@ Dipendenze principali (pacman):
 base-devel git curl unzip xz zip python clang cmake ninja pkgconf gtk3 webkit2gtk
 gstreamer gst-plugins-base gst-plugins-good libsecret libnotify mpv
 ```
+
+Note:
+- Richiede privilegi amministratore (usa `sudo`) per installare in `/opt` e scrivere in `/usr/share`.
+- Il core viene installato come servizio user systemd (`fedi3-core.service`).
+
+## Installazione client Windows
+
+Install (build + setup):
+
+```
+powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3"
+```
+
+Update-only:
+
+```
+powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
+```
+
+Note:
+- Richiede privilegi amministratore per installare le dipendenze via winget/BuildTools.
+- Il core viene installato come Scheduled Task (`Fedi3 Core`).
 
 ## Docs
 
