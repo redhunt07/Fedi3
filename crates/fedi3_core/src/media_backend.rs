@@ -30,7 +30,7 @@ impl Default for MediaConfig {
     fn default() -> Self {
         Self {
             backend: Some("local".to_string()),
-            max_local_cache_bytes: Some(2 * 1024 * 1024 * 1024),
+            max_local_cache_bytes: Some(50 * 1024 * 1024 * 1024),
             webdav_base_url: None,
             webdav_username: None,
             webdav_password: None,

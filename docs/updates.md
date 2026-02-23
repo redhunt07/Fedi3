@@ -2,7 +2,7 @@
 
 The desktop client checks GitHub Releases (latest).
 
-- Windows: auto-install supported (zip asset).
+- Windows: manual update via PowerShell script (builds locally).
 - Linux: auto-install works only for AppImage builds. Source installs show a
   manual update command based on the distro (Debian/Ubuntu or Arch).
 
@@ -10,14 +10,13 @@ The desktop client checks GitHub Releases (latest).
 
 Publish these assets in each release:
 
-- Windows: `Fedi3-windows-x64.zip` (contiene **tutta** la cartella `Release`, non solo `Fedi3.exe`)
+- Windows: no asset required (manual update script builds locally)
 - Linux: `Fedi3-linux-x86_64.AppImage`
 - Checksums: `checksums.txt` (SHA256 per asset)
 
 `checksums.txt` format (one per line):
 
 ```
-<sha256>  Fedi3-windows-x64.zip
 <sha256>  Fedi3-linux-x86_64.AppImage
 ```
 
@@ -42,10 +41,10 @@ Usa lo stesso `X.Y.Z` del tag release. `N` e' il build number.
 
 ### Script completo (consigliato)
 
-Windows:
+Windows (manual update, no asset):
 
 ```
-scripts\release_full_windows.ps1 -Bump patch
+powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
 ```
 
 Linux:
@@ -62,11 +61,7 @@ Lo script fa:
 
 Se vuoi evitare il bump:
 
-Windows:
-
-```
-scripts\release_full_windows.ps1 -NoBump
-```
+Windows: non serve (aggiornamento manuale).
 
 Linux:
 
@@ -74,17 +69,15 @@ Linux:
 NO_BUMP=1 ./scripts/release_full_linux.sh patch
 ```
 
-### 2) Build Windows (Release + zip)
+### 2) Build Windows (local install)
 
 Esempio (Windows PowerShell):
 
 ```
-flutter clean
+scripts\build_core.ps1 -Profile release
+cd app
 flutter pub get
 flutter build windows --release
-
-mkdir dist
-Compress-Archive -Path build\\windows\\x64\\runner\\Release\\* -DestinationPath dist\\Fedi3-windows-x64.zip -Force
 ```
 
 ### 3) Build Linux (AppImage)
@@ -105,29 +98,16 @@ flutter build linux --release
 Linux:
 
 ```
-sha256sum Fedi3-windows-x64.zip Fedi3-linux-x86_64.AppImage > checksums.txt
+sha256sum Fedi3-linux-x86_64.AppImage > checksums.txt
 ```
 
-Windows (PowerShell):
-
-```
-CertUtil -hashfile Fedi3-windows-x64.zip SHA256
-CertUtil -hashfile Fedi3-linux-x86_64.AppImage SHA256
-```
-
-Poi crea `checksums.txt` manualmente:
-
-```
-<sha256_zip>  Fedi3-windows-x64.zip
-<sha256_appimage>  Fedi3-linux-x86_64.AppImage
-```
+Windows: non serve checksum (aggiornamento manuale).
 
 ### 5) Crea release su GitHub
 
 - Tag: `vX.Y.Z`
 - Titolo: `vX.Y.Z`
 - Carica asset:
-  - `Fedi3-windows-x64.zip`
   - `Fedi3-linux-x86_64.AppImage`
   - `checksums.txt`
 

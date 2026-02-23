@@ -124,6 +124,18 @@ class UpdateService {
     if (!_isNewer(latestVersion, current)) return null;
     final assets = (raw['assets'] as List?) ?? const [];
     final releasePage = (raw['html_url'] as String?)?.trim() ?? '';
+    if (Platform.isWindows) {
+      final manualCommand = _windowsManualCommand();
+      return UpdateInfo(
+        version: latestVersion,
+        assetName: '',
+        assetUrl: '',
+        checksum: '',
+        releasePage: releasePage,
+        canAutoInstall: false,
+        manualCommand: manualCommand,
+      );
+    }
     if (Platform.isLinux && !_isAppImage()) {
       final manualCommand = await _linuxManualCommand();
       return UpdateInfo(
@@ -303,6 +315,10 @@ class UpdateService {
       // Fall through to generic output.
     }
     return 'Debian/Ubuntu:\n$debCmd\n\nArch:\n$archCmd';
+  }
+
+  String _windowsManualCommand() {
+    return 'powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"';
   }
 
   String _readOsReleaseValue(String content, String key) {
