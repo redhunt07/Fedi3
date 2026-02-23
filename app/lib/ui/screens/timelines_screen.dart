@@ -520,7 +520,7 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
           if (id.isNotEmpty) _knownIds.add(id);
           _items.add(it);
         }
-        _cursor = (resp['next'] as String?)?.trim();
+        _cursor = _readCursor(resp['next']);
         _sortActivities(_items);
       });
     } catch (e) {
@@ -608,6 +608,19 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     final id = activity['id'];
     if (id is String) return id.trim();
     return '';
+  }
+
+  String? _readCursor(dynamic value) {
+    if (value == null) return null;
+    if (value is num) {
+      if (value <= 0) return null;
+      return value.toInt().toString();
+    }
+    final s = value.toString().trim();
+    if (s.isEmpty) return null;
+    final asNum = int.tryParse(s);
+    if (asNum != null && asNum <= 0) return null;
+    return s;
   }
 
   int _activityTimestampMs(Map<String, dynamic> activity) {

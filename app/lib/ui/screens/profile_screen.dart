@@ -34,6 +34,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _error;
   bool _loading = false;
   List<Map<String, dynamic>> _outbox = const [];
+  String? _outboxNext;
+  bool _outboxLoadingMore = false;
   List<Map<String, dynamic>> _featured = const [];
   String _followingStatus = 'none';
   bool _followBusy = false;
@@ -89,9 +91,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final items = await ActorRepository.instance.fetchOutbox(p!.outbox, limit: 20);
+        final page = await ActorRepository.instance.fetchOutboxPage(p!.outbox, limit: 20);
         if (!mounted) return;
-        setState(() => _outbox = items.where(_isProfileActivity).toList());
+        setState(() {
+          _outbox = page.items.where(_isProfileActivity).toList();
+          _outboxNext = page.next;
+        });
       }
       if (p?.featured.isNotEmpty ?? false) {
         final items = await ActorRepository.instance.fetchCollectionItems(p!.featured, limit: 6);
@@ -184,9 +189,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() {});
       if (active.outbox.isNotEmpty) {
-        final items = await ActorRepository.instance.fetchOutbox(active.outbox, limit: 20);
+        final page = await ActorRepository.instance.fetchOutboxPage(active.outbox, limit: 20);
         if (!mounted) return;
-        setState(() => _outbox = items.where(_isProfileActivity).toList());
+        setState(() {
+          _outbox = page.items.where(_isProfileActivity).toList();
+          _outboxNext = page.next;
+        });
       }
       final featuredUrl = active.featured;
       if (featuredUrl.isNotEmpty) {
@@ -325,10 +333,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 8),
             for (final a in _outbox)
               TimelineActivityCard(appState: widget.appState, activity: a),
+            const SizedBox(height: 8),
+            Center(
+              child: _outboxLoadingMore
+                  ? const CircularProgressIndicator()
+                  : OutlinedButton(
+                      onPressed: _outboxNext == null ? null : _loadMoreOutbox,
+                      child: Text(_outboxNext == null ? context.l10n.listEnd : context.l10n.listLoadMore),
+                    ),
+            ),
           ],
         ],
       ),
     );
+  }
+
+  Future<void> _loadMoreOutbox() async {
+    if (_outboxLoadingMore) return;
+    final p = _profile;
+    final next = _outboxNext;
+    if (p == null || next == null || next.trim().isEmpty) return;
+    setState(() => _outboxLoadingMore = true);
+    try {
+      final page = await ActorRepository.instance.fetchOutboxPage(p.outbox, pageUrl: next, limit: 20);
+      if (!mounted) return;
+      setState(() {
+        _outbox.addAll(page.items.where(_isProfileActivity));
+        _outboxNext = page.next;
+      });
+    } catch (_) {
+      // best-effort
+    } finally {
+      if (mounted) setState(() => _outboxLoadingMore = false);
+    }
   }
 
   Future<void> _toggleFollow(CoreApi api) async {
