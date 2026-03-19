@@ -61,6 +61,15 @@ scripts/relay_smoke_test.sh https://relay.fedi3.com <ADMIN_TOKEN>
 - `/_fedi3/relay/stats` deve includere `relay_p2p_peer_id`
 - log relay: "relay mesh enabled" + "relay mesh sync applied"
 
+## 5c) Legacy sync endpoints (client offline/cold-start)
+
+- Delta sync: `GET /_fedi3/relay/legacy/sync?since=<checkpoint_ms>&limit=200`
+- Bootstrap snapshot: `GET /_fedi3/relay/legacy/bootstrap?limit=3000&gzip=true`
+
+Questi endpoint servono per armonizzare la compatibilita' ActivityPub legacy
+senza toccare la componente P2P: il relay prepara i dati, il client applica
+delta/snapshot quando torna online o si apre su un nuovo device.
+
 ## 6) Note
 
 In produzione:

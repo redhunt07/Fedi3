@@ -34,3 +34,4 @@ tokio-postgres = "0.7"
 deadpool-postgres = "0.12"
 deadpool = "0.10"
 libp2p = { version = "0.53", features = ["macros", "tokio", "tcp", "dns", "noise", "yamux", "identify", "ping", "request-response", "quic", "kad", "relay", "websocket"] }
+flate2 = "1"

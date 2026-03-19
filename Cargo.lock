@@ -1484,6 +1484,7 @@ dependencies = [
  "deadpool-postgres",
  "ed25519-dalek",
  "fedi3_protocol",
+ "flate2",
  "futures-util",
  "http 1.4.0",
  "httpdate",

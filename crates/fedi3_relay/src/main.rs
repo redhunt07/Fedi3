@@ -26,6 +26,7 @@ use chrono::{TimeZone, Utc};
 use deadpool::managed::QueueMode;
 use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
+use flate2::{write::GzEncoder, Compression};
 use futures_util::{stream, SinkExt, StreamExt};
 use http::{header, Request, Uri};
 use httpdate::parse_http_date;
@@ -35,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
 use std::future::Future;
+use std::io::Write;
 use std::net::IpAddr;
 use std::sync::OnceLock;
 use std::{
@@ -962,6 +964,14 @@ struct RelaySyncNotesQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct RelayLegacyQuery {
+    limit: Option<u32>,
+    since: Option<i64>,
+    cursor: Option<i64>,
+    gzip: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RegisterRequest {
     username: String,
     token: String,
@@ -1559,6 +1569,8 @@ async fn main() {
         .route("/_fedi3/relay/search/hashtags", get(relay_search_hashtags))
         .route("/_fedi3/relay/search/coverage", get(relay_search_coverage))
         .route("/_fedi3/relay/sync/notes", get(relay_sync_notes))
+        .route("/_fedi3/relay/legacy/sync", get(relay_legacy_sync))
+        .route("/_fedi3/relay/legacy/bootstrap", get(relay_legacy_bootstrap))
         .route("/_fedi3/relay/reindex", post(relay_reindex))
         .route("/_fedi3/relay/telemetry", post(relay_telemetry_post))
         .route(
@@ -9127,6 +9139,158 @@ async fn relay_sync_notes(
         next: page.next,
     })
     .into_response()
+}
+
+fn json_or_gzip_response(
+    value: &serde_json::Value,
+    gzip: bool,
+    filename: Option<&str>,
+) -> Response {
+    if !gzip {
+        return axum::Json(value.clone()).into_response();
+    }
+    let raw = match serde_json::to_vec(value) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("serialize error: {e}"),
+            )
+                .into_response()
+        }
+    };
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    if let Err(e) = enc.write_all(&raw) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("gzip write error: {e}"),
+        )
+            .into_response();
+    }
+    let compressed: Vec<u8> = match enc.finish() {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("gzip finish error: {e}"),
+            )
+                .into_response()
+        }
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::CONTENT_ENCODING,
+        HeaderValue::from_static("gzip"),
+    );
+    if let Some(name) = filename {
+        let disp = format!("attachment; filename=\"{name}\"");
+        if let Ok(v) = HeaderValue::from_str(&disp) {
+            headers.insert(header::CONTENT_DISPOSITION, v);
+        }
+    }
+    (headers, Body::from(compressed)).into_response()
+}
+
+async fn relay_legacy_sync(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(q): Query<RelayLegacyQuery>,
+) -> impl IntoResponse {
+    if !state
+        .limiter
+        .check(
+            peer_ip(&peer),
+            "relay_legacy_sync",
+            state.cfg.rate_limit_forward_per_min,
+        )
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    let db = state.db.lock().await;
+    let page = match db.list_relay_notes_sync(limit, q.since, q.cursor) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    };
+    let items = page
+        .items
+        .into_iter()
+        .filter_map(|(note_json, created_at_ms)| {
+            serde_json::from_str::<serde_json::Value>(&note_json)
+                .ok()
+                .map(|note| serde_json::json!({"note": note, "created_at_ms": created_at_ms}))
+        })
+        .collect::<Vec<_>>();
+    let checkpoint_ms = items
+        .first()
+        .and_then(|v| v.get("created_at_ms"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(now_ms);
+    let body = serde_json::json!({
+        "mode": "delta",
+        "relay_url": state.cfg.base_domain,
+        "generated_at_ms": now_ms(),
+        "checkpoint_ms": checkpoint_ms,
+        "items": items,
+        "next": page.next,
+    });
+    json_or_gzip_response(&body, q.gzip.unwrap_or(false), None)
+}
+
+async fn relay_legacy_bootstrap(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(q): Query<RelayLegacyQuery>,
+) -> impl IntoResponse {
+    if !state
+        .limiter
+        .check(
+            peer_ip(&peer),
+            "relay_legacy_bootstrap",
+            state.cfg.rate_limit_forward_per_min,
+        )
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let limit = q.limit.unwrap_or(3000).clamp(100, 10000);
+    let db = state.db.lock().await;
+    let page = match db.list_relay_notes_sync(limit, None, q.cursor) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    };
+    let items = page
+        .items
+        .into_iter()
+        .filter_map(|(note_json, created_at_ms)| {
+            serde_json::from_str::<serde_json::Value>(&note_json)
+                .ok()
+                .map(|note| serde_json::json!({"note": note, "created_at_ms": created_at_ms}))
+        })
+        .collect::<Vec<_>>();
+    let checkpoint_ms = items
+        .first()
+        .and_then(|v| v.get("created_at_ms"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(now_ms);
+    let body = serde_json::json!({
+        "mode": "bootstrap",
+        "relay_url": state.cfg.base_domain,
+        "generated_at_ms": now_ms(),
+        "checkpoint_ms": checkpoint_ms,
+        "items": items,
+        "next": page.next,
+    });
+    json_or_gzip_response(
+        &body,
+        q.gzip.unwrap_or(true),
+        Some("fedi3-legacy-bootstrap.json.gz"),
+    )
 }
 
 async fn relay_search_users(
