@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   disabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users (lower(username));
 
 CREATE TABLE IF NOT EXISTS user_cache (
   username TEXT PRIMARY KEY,

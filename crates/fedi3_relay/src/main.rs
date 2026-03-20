@@ -2460,6 +2460,9 @@ async fn tunnel_ws(
     Query(q): Query<TunnelQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
     ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, q.token, socket))
 }
 
@@ -4867,6 +4870,7 @@ impl Db {
               disabled INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(lower(username));
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(lower(username));
             CREATE TABLE IF NOT EXISTS user_cache (
               username TEXT PRIMARY KEY,
               actor_json TEXT NOT NULL,
@@ -5149,6 +5153,17 @@ impl Db {
                     [],
                 );
                 let _ = conn.execute(
+                    "DELETE FROM users
+                     WHERE rowid NOT IN (
+                       SELECT MIN(rowid) FROM users GROUP BY lower(username)
+                     )",
+                    [],
+                );
+                let _ = conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(lower(username))",
+                    [],
+                );
+                let _ = conn.execute(
                     "UPDATE relay_notes SET ingested_at_ms=created_at_ms WHERE ingested_at_ms=0",
                     [],
                 );
@@ -5183,6 +5198,13 @@ impl Db {
                     match self.open_pg_conn() {
                         Ok(mut conn) => {
                             conn.batch_execute(include_str!("../sql/postgres_schema.sql"))?;
+                            conn.batch_execute(
+                                "DELETE FROM users a
+                                   USING users b
+                                  WHERE lower(a.username) = lower(b.username)
+                                    AND a.ctid > b.ctid;
+                                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(lower(username));",
+                            )?;
                             conn.batch_execute(
                                 "ALTER TABLE relay_notes ADD COLUMN IF NOT EXISTS ingested_at_ms BIGINT NOT NULL DEFAULT 0;
                                  UPDATE relay_notes SET ingested_at_ms=created_at_ms WHERE ingested_at_ms=0;
@@ -5786,7 +5808,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let exists: Option<String> = conn
                     .query_row(
-                        "SELECT username FROM users WHERE username = ?1",
+                        "SELECT username FROM users WHERE lower(username) = lower(?1)",
                         params![username],
                         |r| r.get(0),
                     )
@@ -5803,7 +5825,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let exists = conn.query_opt(
-                    "SELECT username FROM users WHERE username = $1",
+                    "SELECT username FROM users WHERE lower(username) = lower($1)",
                     &[&username],
                 )?;
                 if exists.is_some() {
@@ -5824,7 +5846,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "UPDATE users SET token_sha256=?2 WHERE username=?1",
+                    "UPDATE users SET token_sha256=?2 WHERE lower(username)=lower(?1)",
                     params![username, hash],
                 )?;
                 Ok(())
@@ -5832,7 +5854,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "UPDATE users SET token_sha256=$2 WHERE username=$1",
+                    "UPDATE users SET token_sha256=$2 WHERE lower(username)=lower($1)",
                     &[&username, &hash],
                 )?;
                 Ok(())
@@ -5846,7 +5868,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let row: Option<(String, i64)> = conn
                     .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
+                        "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower(?1)",
                         params![username],
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
@@ -5864,7 +5886,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
+                    "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower($1)",
                     &[&username],
                 )?;
                 match row {
@@ -5888,7 +5910,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let exists: Option<String> = conn
                     .query_row(
-                        "SELECT username FROM users WHERE username = ?1",
+                        "SELECT username FROM users WHERE lower(username) = lower(?1)",
                         params![username],
                         |r| r.get(0),
                     )
@@ -5898,7 +5920,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let exists = conn.query_opt(
-                    "SELECT username FROM users WHERE username = $1",
+                    "SELECT username FROM users WHERE lower(username) = lower($1)",
                     &[&username],
                 )?;
                 Ok(exists.is_some())
@@ -5948,7 +5970,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let row: Option<(String, i64)> = conn
                     .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
+                        "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower(?1)",
                         params![username],
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
@@ -5982,7 +6004,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
+                    "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower($1)",
                     &[&username],
                 )?;
                 match row {
@@ -6022,7 +6044,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let row: Option<(String, i64)> = conn
                     .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
+                        "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower(?1)",
                         params![username],
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
@@ -6038,7 +6060,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
+                    "SELECT token_sha256, disabled FROM users WHERE lower(username) = lower($1)",
                     &[&username],
                 )?;
                 let Some(r) = row else { return Ok(false) };
@@ -6299,7 +6321,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "UPDATE users SET disabled=?2 WHERE username=?1",
+                    "UPDATE users SET disabled=?2 WHERE lower(username)=lower(?1)",
                     params![username, if disabled { 1 } else { 0 }],
                 )?;
                 Ok(())
@@ -6307,7 +6329,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "UPDATE users SET disabled=$2 WHERE username=$1",
+                    "UPDATE users SET disabled=$2 WHERE lower(username)=lower($1)",
                     &[&username, &disabled],
                 )?;
                 Ok(())
@@ -6321,7 +6343,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "UPDATE users SET token_sha256=?2 WHERE username=?1",
+                    "UPDATE users SET token_sha256=?2 WHERE lower(username)=lower(?1)",
                     params![username, hash],
                 )?;
                 Ok(())
@@ -6329,7 +6351,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "UPDATE users SET token_sha256=$2 WHERE username=$1",
+                    "UPDATE users SET token_sha256=$2 WHERE lower(username)=lower($1)",
                     &[&username, &hash],
                 )?;
                 Ok(())
@@ -6342,7 +6364,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.query_row(
-                    "SELECT created_at_ms, disabled FROM users WHERE username=?1",
+                    "SELECT created_at_ms, disabled FROM users WHERE lower(username)=lower(?1)",
                     params![username],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -6352,7 +6374,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_opt(
-                    "SELECT created_at_ms, disabled FROM users WHERE username=$1",
+                    "SELECT created_at_ms, disabled FROM users WHERE lower(username)=lower($1)",
                     &[&username],
                 )?;
                 Ok(row.map(|r| {
@@ -6396,7 +6418,7 @@ impl Db {
                     params![username],
                 )?;
                 let changed =
-                    conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
+                    conn.execute("DELETE FROM users WHERE lower(username)=lower(?1)", params![username])?;
                 Ok(changed > 0)
             }
             DbDriver::Postgres => {
@@ -6418,7 +6440,7 @@ impl Db {
                 let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
                 let _ =
                     conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
-                let changed = conn.execute("DELETE FROM users WHERE username=$1", &[&username])?;
+                let changed = conn.execute("DELETE FROM users WHERE lower(username)=lower($1)", &[&username])?;
                 Ok(changed > 0)
             }
         }
@@ -6430,7 +6452,7 @@ impl Db {
                 let conn = self.open_sqlite_conn()?;
                 let row: Option<i64> = conn
                     .query_row(
-                        "SELECT disabled FROM users WHERE username=?1",
+                        "SELECT disabled FROM users WHERE lower(username)=lower(?1)",
                         params![username],
                         |r| r.get(0),
                     )
@@ -6440,7 +6462,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row =
-                    conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
+                    conn.query_opt("SELECT disabled FROM users WHERE lower(username)=lower($1)", &[&username])?;
                 Ok(row.map(|r| !r.get::<_, bool>(0)).unwrap_or(false))
             }
         }
