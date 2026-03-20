@@ -60,6 +60,26 @@ const LEGACY_RETRY_ATTEMPTS: u32 = 4;
 const LEGACY_RETRY_BASE_MS: u64 = 250;
 const LEGACY_RETRY_MAX_MS: u64 = 4_000;
 
+fn relay_note_seen_key(note_id: &str) -> String {
+    format!("urn:fedi3:note-seen:{}", note_id.trim())
+}
+
+fn extract_create_note_id(activity: &Value) -> Option<String> {
+    if activity.get("type").and_then(|v| v.as_str()) != Some("Create") {
+        return None;
+    }
+    let object = activity.get("object")?;
+    if let Some(id) = object.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(id.to_string());
+    }
+    object
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 pub fn start_legacy_sync_worker(
     state: ap::ApState,
     delivery: Arc<Delivery>,
@@ -297,6 +317,21 @@ async fn poll_actor_outbox(
             }
             if !activity.is_object() {
                 continue;
+            }
+            if let Some(note_id) = extract_create_note_id(&activity) {
+                let note_key = relay_note_seen_key(&note_id);
+                match social.mark_inbox_seen(&note_key) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        dup_streak += 1;
+                        if dup_streak >= 25 {
+                            next_page = None;
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(_) => continue,
+                }
             }
             let dedup_id = ap::activity_dedup_id_public(&activity);
             match social.mark_inbox_seen(&dedup_id) {
@@ -609,6 +644,10 @@ async fn ingest_relay_note_as_activity(
     if actor.is_empty() {
         return Ok(false);
     }
+    let note_seen_key = relay_note_seen_key(&note_id);
+    if !social.mark_inbox_seen(&note_seen_key).unwrap_or(false) {
+        return Ok(false);
+    }
     let relay_seen_ms = if created_at_ms > 0 {
         created_at_ms
     } else {
@@ -635,7 +674,7 @@ async fn ingest_relay_note_as_activity(
     // Keep activity published aligned to relay-seen time for stable recency ordering.
     // Original note published timestamp is preserved inside `note` and used by UI labels.
     let published = relay_seen_published;
-    let activity_id = format!("{note_id}#fedi3-relay-sync:{relay_seen_ms}");
+    let activity_id = format!("{note_id}#fedi3-relay-sync");
     if !social.mark_inbox_seen(&activity_id).unwrap_or(false) {
         return Ok(false);
     }

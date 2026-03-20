@@ -10216,10 +10216,11 @@ fn actor_matches_feed(
             }
         }
         // Social is the compatibility timeline and must not go empty when following
-        // cache is unavailable. In that case, fallback to federated superset.
+        // cache is unavailable. In that case, fallback to local actors only
+        // to avoid flooding with unrelated federated content.
         LegacyFeedKind::Social => {
             if following_empty {
-                true
+                is_local
             } else {
                 following.contains(actor) || is_local
             }
