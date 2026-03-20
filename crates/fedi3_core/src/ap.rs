@@ -15,6 +15,7 @@ use http::{HeaderMap, Method, Uri};
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
@@ -43,6 +44,8 @@ use tokio::time::sleep;
 use tracing::warn;
 
 const CHAT_BUNDLE_CACHE_TTL_MS: i64 = 15 * 60 * 1000;
+const CHAT_BUNDLE_FETCH_BACKOFF_BASE_MS: i64 = 5_000;
+const CHAT_BUNDLE_FETCH_BACKOFF_MAX_MS: i64 = 10 * 60 * 1000;
 const CHAT_RETRY_INTERVAL_SECS: u64 = 20;
 const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
@@ -4871,19 +4874,73 @@ async fn fetch_chat_bundle(
     actor_url: &str,
 ) -> anyhow::Result<Option<chat::ChatBundle>> {
     let actor_url = actor_url.trim_end_matches('/').to_string();
+    if chat_bundle_fetch_backoff_active(state, &actor_url) {
+        return Ok(None);
+    }
     if let Ok(Some(cached)) = state.social.get_chat_bundle(&actor_url) {
         if let Ok(bundle) = serde_json::from_str::<chat::ChatBundle>(&cached) {
             return Ok(Some(bundle));
         }
     }
     if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+        clear_chat_bundle_fetch_backoff(state, &actor_url);
         return Ok(bundle);
     }
     sleep(Duration::from_millis(150)).await;
     if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+        clear_chat_bundle_fetch_backoff(state, &actor_url);
         return Ok(bundle);
     }
+    bump_chat_bundle_fetch_backoff(state, &actor_url);
     Ok(None)
+}
+
+fn chat_bundle_backoff_key(actor_url: &str, suffix: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    actor_url.hash(&mut hasher);
+    let actor_hash = hasher.finish();
+    format!("chat_bundle_fetch_{suffix}_{actor_hash:x}")
+}
+
+fn chat_bundle_fetch_backoff_active(state: &ApState, actor_url: &str) -> bool {
+    let now = now_ms();
+    let key = chat_bundle_backoff_key(actor_url, "until");
+    let until = state
+        .social
+        .get_local_meta(&key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    until > now
+}
+
+fn clear_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
+    let key_until = chat_bundle_backoff_key(actor_url, "until");
+    let key_count = chat_bundle_backoff_key(actor_url, "count");
+    let _ = state.social.set_local_meta(&key_until, "0");
+    let _ = state.social.set_local_meta(&key_count, "0");
+}
+
+fn bump_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
+    let now = now_ms();
+    let key_count = chat_bundle_backoff_key(actor_url, "count");
+    let current_count = state
+        .social
+        .get_local_meta(&key_count)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    let next_count = current_count.saturating_add(1).min(16);
+    let exp = CHAT_BUNDLE_FETCH_BACKOFF_BASE_MS
+        .saturating_mul(1_i64 << next_count.saturating_sub(1))
+        .min(CHAT_BUNDLE_FETCH_BACKOFF_MAX_MS);
+    let jitter = (now % 1000).abs();
+    let until = now.saturating_add(exp.saturating_add(jitter));
+    let key_until = chat_bundle_backoff_key(actor_url, "until");
+    let _ = state.social.set_local_meta(&key_count, &next_count.to_string());
+    let _ = state.social.set_local_meta(&key_until, &until.to_string());
 }
 
 async fn fetch_chat_bundle_http(
