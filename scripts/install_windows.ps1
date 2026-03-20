@@ -134,7 +134,9 @@ function Install-CoreService {
   $configPath = Join-Path $configBase "Fedi3\config.json"
   $action = New-ScheduledTaskAction -Execute $coreServiceExe -Argument "--config `"$configPath`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
-  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
+  # S4U can run without password but often has restricted network access.
+  # InteractiveToken keeps user context/network available when user is logged in.
+  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType InteractiveToken -RunLevel Limited
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
   Start-ScheduledTask -TaskName $taskName | Out-Null
   Write-Host "Core service scheduled task installed: $taskName"
