@@ -403,10 +403,11 @@ Map<String, dynamic>? _normalizeRelaySyncNoteTimestamps(
   if (!relaySync) return noteJson;
 
   final out = Map<String, dynamic>.from(noteJson);
+  final notePublished = (out['published'] as String?)?.trim() ?? '';
   final activityPublished = (activity['published'] as String?)?.trim() ?? '';
-  if (activityPublished.isNotEmpty) {
+  if (notePublished.isEmpty && activityPublished.isNotEmpty) {
     out['published'] = activityPublished;
-  } else {
+  } else if (notePublished.isEmpty) {
     final rawMs = activity['created_at_ms'] ?? activity['createdAtMs'];
     int? ms;
     if (rawMs is num) ms = rawMs.toInt();
