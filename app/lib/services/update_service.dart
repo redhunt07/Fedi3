@@ -118,12 +118,18 @@ class UpdateService {
     }
     final relaunchPath = _currentExecutablePath();
     if (Platform.isWindows) {
-      await _launchWindowsElevated(command, relaunchPath);
-      exit(0);
+      final started = await _launchWindowsElevated(command, relaunchPath);
+      if (started) {
+        exit(0);
+      }
+      throw StateError('update launch cancelled or failed');
     }
     if (Platform.isLinux) {
-      await _launchLinuxTerminal(command, relaunchPath);
-      exit(0);
+      final started = await _launchLinuxTerminal(command, relaunchPath);
+      if (started) {
+        exit(0);
+      }
+      throw StateError('update terminal not available');
     }
     throw StateError('manual update launch not supported on this platform');
   }
@@ -353,7 +359,7 @@ class UpdateService {
     return '';
   }
 
-  Future<void> _launchWindowsElevated(
+  Future<bool> _launchWindowsElevated(
       String command, String? relaunchPath) async {
     final wrapped = StringBuffer()
       ..writeln(r'$ErrorActionPreference = "Stop"')
@@ -368,23 +374,19 @@ class UpdateService {
     wrapped.writeln(r'exit $exitCode');
     final encoded = base64.encode(_utf16LeBytes(wrapped.toString()));
     final argList =
-        '-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
-    await Process.start(
+        '-NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
+    final launcher = await Process.run(
       'powershell',
       [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Start-Process',
-        'PowerShell',
-        '-Verb',
-        'RunAs',
-        '-ArgumentList',
+        r"$ErrorActionPreference='Stop'; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args[0] -PassThru | Out-Null",
         argList,
       ],
-      mode: ProcessStartMode.detached,
     );
+    return launcher.exitCode == 0;
   }
 
   Uint8List _utf16LeBytes(String value) {
@@ -398,7 +400,7 @@ class UpdateService {
     return bytes;
   }
 
-  Future<void> _launchLinuxTerminal(
+  Future<bool> _launchLinuxTerminal(
       String command, String? relaunchPath) async {
     final wrapped = _wrapLinuxCommand(command, relaunchPath);
     final candidates = <Map<String, dynamic>>[
@@ -447,9 +449,9 @@ class UpdateService {
         (c['args'] as List).cast<String>(),
         mode: ProcessStartMode.detached,
       );
-      return;
+      return true;
     }
-    throw StateError('no terminal available for manual update');
+    return false;
   }
 
   String _wrapLinuxCommand(String command, String? relaunchPath) {
