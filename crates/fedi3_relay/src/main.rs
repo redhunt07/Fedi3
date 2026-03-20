@@ -3643,6 +3643,56 @@ async fn forward_user_rest(
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
+
+    // ActivityPub interop: remote servers deliver direct-to-actor inbox
+    // (`/users/<user>/inbox`) even when the local client is offline.
+    // Accept and spool instead of returning 503 to avoid remote queue failures.
+    if method == Method::POST && rest == "inbox" {
+        let (exists, enabled) = {
+            let db = state.db.lock().await;
+            (
+                db.user_exists(&user).unwrap_or(false),
+                db.is_user_enabled(&user).unwrap_or(false),
+            )
+        };
+        if !exists {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        }
+        if enabled {
+            let is_online = { state.tunnels.read().await.contains_key(&user) };
+            if is_online {
+                // Preserve prior behavior for online users, but route to canonical
+                // local inbox path used by the core.
+                return forward_to_user(
+                    state,
+                    user,
+                    Method::POST,
+                    "/inbox",
+                    String::new(),
+                    headers,
+                    body,
+                )
+                .await;
+            }
+
+            let headers_vec = headers_to_vec(&headers);
+            let body_b64 = B64.encode(&body);
+            let db = state.db.lock().await;
+            let _ = db.enqueue_spool(
+                &state.cfg,
+                &user,
+                "POST",
+                "/inbox",
+                "",
+                &headers_vec,
+                &body_b64,
+                body.len() as i64,
+            );
+            return (StatusCode::ACCEPTED, "accepted").into_response();
+        }
+        return (StatusCode::ACCEPTED, "accepted (user disabled)").into_response();
+    }
+
     // Allow internal UI/core endpoints to be accessed via the relay when the client
     // chooses to talk "through" the relay (e.g. UI-only device). We rewrite:
     //   /users/<user>/_fedi3/...  ->  /_fedi3/...
