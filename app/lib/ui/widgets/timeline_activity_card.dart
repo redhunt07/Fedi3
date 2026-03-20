@@ -8,7 +8,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
-import '../../l10n/l10n_ext.dart';
 import '../../model/note_models.dart';
 import '../../state/app_state.dart';
 import 'note_card.dart';
@@ -79,61 +78,26 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
     final item = TimelineItem.tryFromActivity(a);
 
     if (item == null) {
-      final type = (a['type'] as String?)?.trim() ?? '';
-      final actor = (a['actor'] as String?)?.trim() ?? '';
-      final obj = a['object'];
-      final objType = (obj is Map) ? (obj['type'] as String?)?.trim() ?? '' : '';
-      var objId = '';
-      if (obj is String) {
-        objId = obj.trim();
-      } else if (obj is Map) {
-        objId = (obj['id'] as String?)?.trim() ?? (obj['url'] as String?)?.trim() ?? '';
+      if (_hydrating) {
+        return const Padding(
+          padding: EdgeInsets.all(12),
+          child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+        );
       }
-      return Card(
-        margin: EdgeInsets.zero,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              if (_hydrating) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-              if (_hydrating) const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      type.isNotEmpty ? type : context.l10n.activityUnsupported,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    if (objType.isNotEmpty) Text(objType, style: const TextStyle(fontSize: 12)),
-                    if (actor.isNotEmpty) Text(actor, style: const TextStyle(fontSize: 12)),
-                    if (objId.isNotEmpty) Text(objId, style: const TextStyle(fontSize: 12)),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        onPressed: () {
-                          final raw = const JsonEncoder.withIndent('  ').convert(a);
-                          showDialog<void>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: Text(context.l10n.activityViewRaw),
-                              content: SizedBox(
-                                width: 520,
-                                child: SingleChildScrollView(child: SelectableText(raw)),
-                              ),
-                            ),
-                          );
-                        },
-                        child: Text(context.l10n.activityViewRaw),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+      assert(() {
+        final compact = {
+          'type': a['type'],
+          'id': a['id'],
+          'actor': a['actor'],
+        };
+        debugPrint(
+            'timeline drop unsupported activity: ${const JsonEncoder().convert(compact)}');
+        return true;
+      }());
+      return const SizedBox.shrink();
     }
 
     return RepaintBoundary(

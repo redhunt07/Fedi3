@@ -405,7 +405,7 @@ impl DeliveryQueue {
                         }
                     }
                 }
-        };
+            };
 
         let attempt_no: u32 = job.attempt.saturating_add(1);
 
@@ -505,7 +505,8 @@ impl DeliveryQueue {
                 }
             } else if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
                 if attempt_no >= settings.max_attempts {
-                    self.mark_dead(&job.id, "p2p required: peer missing").await?;
+                    self.mark_dead(&job.id, "p2p required: peer missing")
+                        .await?;
                     return Ok(());
                 }
                 let delay = next_backoff(

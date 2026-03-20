@@ -16,9 +16,13 @@ use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
+use std::sync::OnceLock;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::Mutex;
 use urlencoding::encode;
 
@@ -296,6 +300,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         }
         // UI timelines (internal).
         ("GET", "/_fedi3/timeline/home") => timeline_home(state, req).await,
+        ("GET", "/_fedi3/timeline/local") => timeline_local(state, req).await,
         ("GET", "/_fedi3/timeline/unified") => timeline_unified(state, req).await,
         ("GET", "/_fedi3/timeline/federated") => timeline_federated(state, req).await,
         ("GET", "/_fedi3/timeline/dht") => global_timeline(state, req).await,
@@ -449,13 +454,13 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
             .unwrap_or(0);
         if now_ms.saturating_sub(last_reset_ms) >= cooldown_ms {
             reset_legacy_sync_checkpoints(state);
-            let _ = state.social.set_local_meta(
-                "relay_legacy_last_recovery_reset_ms",
-                &now_ms.to_string(),
-            );
+            let _ = state
+                .social
+                .set_local_meta("relay_legacy_last_recovery_reset_ms", &now_ms.to_string());
             did_reset = true;
         } else {
-            cooldown_remaining_ms = cooldown_ms.saturating_sub(now_ms.saturating_sub(last_reset_ms));
+            cooldown_remaining_ms =
+                cooldown_ms.saturating_sub(now_ms.saturating_sub(last_reset_ms));
         }
     }
 
@@ -477,7 +482,9 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
 }
 
 fn reset_legacy_sync_checkpoints(state: &ApState) {
-    let _ = state.social.set_local_meta("relay_legacy_bootstrap_done", "0");
+    let _ = state
+        .social
+        .set_local_meta("relay_legacy_bootstrap_done", "0");
     let _ = state
         .social
         .set_local_meta("relay_legacy_sync_phase", "bootstrap_download");
@@ -1882,6 +1889,33 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
         "fedi3_core_chat_bundle_skipped_backoff {}\n",
         net.chat_bundle_skipped_backoff.load(Ordering::Relaxed)
     ));
+    out.push_str("# TYPE fedi3_core_timeline_filtered_non_note_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_timeline_filtered_non_note_total {}\n",
+        net.timeline_filtered_non_note_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_timeline_dedup_dropped_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_timeline_dedup_dropped_total {}\n",
+        net.timeline_dedup_dropped_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_timeline_local_items_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_timeline_local_items_total {}\n",
+        net.timeline_local_items_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_search_result_type_mismatch_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_search_result_type_mismatch_total {}\n",
+        net.search_result_type_mismatch_total
+            .load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_chat_group_membership_conflict_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_chat_group_membership_conflict_total {}\n",
+        net.chat_group_membership_conflict_total
+            .load(Ordering::Relaxed)
+    ));
     out.push_str("# TYPE fedi3_core_auth_failures counter\n");
     out.push_str(&format!(
         "fedi3_core_auth_failures {}\n",
@@ -2813,12 +2847,7 @@ async fn device_inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
     .into_response()
 }
 
-async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> {
-    let (parts, _body) = req.into_parts();
-    if let Err(resp) = require_internal(state, &parts.headers) {
-        return resp;
-    }
-    let query = parts.uri.query().unwrap_or("");
+fn parse_timeline_query(query: &str) -> (u32, Option<i64>) {
     let limit = query
         .split('&')
         .find(|p| p.starts_with("limit="))
@@ -2831,38 +2860,235 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
         .find(|p| p.starts_with("cursor="))
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
+    (limit, cursor)
+}
 
+fn is_note_like_type_name(ty: &str) -> bool {
+    matches!(ty, "Note" | "Article" | "Question" | "Page")
+}
+
+fn activity_note_like(activity: &serde_json::Value) -> bool {
+    let ty = activity
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if is_note_like_type_name(ty) {
+        return true;
+    }
+    if !matches!(ty, "Create" | "Announce" | "Update") {
+        return false;
+    }
+    let object = activity.get("object");
+    let Some(object) = object else {
+        return false;
+    };
+    if let Some(obj_ty) = object.get("type").and_then(|v| v.as_str()) {
+        return is_note_like_type_name(obj_ty);
+    }
+    object
+        .get("object")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str())
+        .map(is_note_like_type_name)
+        .unwrap_or(false)
+}
+
+fn activity_object_id(activity: &serde_json::Value) -> Option<String> {
+    let object = activity.get("object")?;
+    if let Some(s) = object.as_str() {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(id) = object.get("id").and_then(|v| v.as_str()) {
+        let trimmed = id.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(id) = object
+        .get("object")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+    {
+        let trimmed = id.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn activity_actor_id(activity: &serde_json::Value) -> Option<String> {
+    let actor = activity
+        .get("actor")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let actor = actor.trim();
+    if !actor.is_empty() {
+        return Some(actor.to_string());
+    }
+    activity
+        .get("object")
+        .and_then(|v| v.get("attributedTo"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn is_local_actor(actor_id: &str, domain: &str) -> bool {
+    let actor = actor_id.trim().to_ascii_lowercase();
+    let domain = domain.trim().to_ascii_lowercase();
+    if actor.is_empty() || domain.is_empty() {
+        return false;
+    }
+    actor.contains(&format!("://{domain}/")) || actor.contains(&format!("@{domain}"))
+}
+
+fn parse_rfc3339_ms(v: &str) -> Option<i64> {
+    time::OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|dt| dt.unix_timestamp_nanos() / 1_000_000)
+        .and_then(|ms| i64::try_from(ms).ok())
+}
+
+fn activity_created_ms(activity: &serde_json::Value) -> i64 {
+    let read_ms = |v: &serde_json::Value| -> i64 {
+        v.get("created_at_ms")
+            .and_then(|n| n.as_i64().or_else(|| n.as_u64().map(|x| x as i64)))
+            .unwrap_or(0)
+    };
+    let mut out = read_ms(activity);
+    if out > 0 {
+        return out;
+    }
+    if let Some(obj) = activity.get("object") {
+        out = read_ms(obj);
+        if out > 0 {
+            return out;
+        }
+        if let Some(inner) = obj.get("object") {
+            out = read_ms(inner);
+        }
+    }
+    out
+}
+
+fn activity_time_ms(activity: &serde_json::Value) -> i64 {
+    let read_time = |v: &serde_json::Value| -> Option<i64> {
+        v.get("published")
+            .and_then(|s| s.as_str())
+            .and_then(parse_rfc3339_ms)
+            .or_else(|| {
+                v.get("updated")
+                    .and_then(|s| s.as_str())
+                    .and_then(parse_rfc3339_ms)
+            })
+    };
+    read_time(activity)
+        .or_else(|| activity.get("object").and_then(read_time))
+        .or_else(|| {
+            activity
+                .get("object")
+                .and_then(|v| v.get("object"))
+                .and_then(read_time)
+        })
+        .unwrap_or_else(|| activity_created_ms(activity))
+}
+
+fn timeline_items_from_page(
+    state: &ApState,
+    page: crate::social_db::CollectionPage<crate::social_db::GlobalFeedItem>,
+    local_only: bool,
+) -> (Vec<serde_json::Value>, Option<String>, u64) {
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    let mut seen_activity = std::collections::HashSet::<String>::new();
+    let mut seen_object = std::collections::HashSet::<String>::new();
+    let mut scored = Vec::<(i64, String, serde_json::Value)>::new();
+    let domain = state.cfg.domain.clone();
+
+    for it in page.items {
+        let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) else {
+            continue;
+        };
+        if let Some(obj) = v.as_object_mut() {
+            let created_value = serde_json::Value::Number(it.created_at_ms.into());
+            obj.entry("created_at_ms".to_string())
+                .or_insert(created_value.clone());
+            if let Some(inner) = obj.get_mut("object") {
+                if let Some(inner_obj) = inner.as_object_mut() {
+                    inner_obj
+                        .entry("created_at_ms".to_string())
+                        .or_insert(created_value);
+                }
+            }
+        }
+        hydrate_activity(state, &mut v, &mut cache);
+        if is_tombstone_activity(&v) {
+            continue;
+        }
+        if !activity_note_like(&v) {
+            state.net.timeline_filtered_non_note();
+            continue;
+        }
+        if local_only && !is_public_activity(&v) {
+            continue;
+        }
+        if local_only {
+            let actor_id = activity_actor_id(&v).unwrap_or_default();
+            if !is_local_actor(&actor_id, &domain) {
+                continue;
+            }
+            state.net.timeline_local_item_seen();
+        }
+
+        let activity_id = v
+            .get("id")
+            .and_then(|id| id.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !activity_id.is_empty() && !seen_activity.insert(activity_id.clone()) {
+            state.net.timeline_dedup_dropped();
+            continue;
+        }
+        let object_id = activity_object_id(&v).unwrap_or_default();
+        if !object_id.is_empty() && !seen_object.insert(object_id.clone()) {
+            state.net.timeline_dedup_dropped();
+            continue;
+        }
+
+        let ts = activity_time_ms(&v);
+        let tie = if !object_id.is_empty() {
+            object_id
+        } else if !activity_id.is_empty() {
+            activity_id
+        } else {
+            format!("_{}", it.created_at_ms)
+        };
+        scored.push((ts, tie, v));
+    }
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let items = scored.into_iter().map(|(_, _, v)| v).collect::<Vec<_>>();
+    (items, page.next, page.total)
+}
+
+async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let (limit, cursor) = parse_timeline_query(parts.uri.query().unwrap_or(""));
     let page = match state.social.list_global_feed(limit, cursor) {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            if let Some(obj) = v.as_object_mut() {
-                let created_value = serde_json::Value::Number(it.created_at_ms.into());
-                obj.entry("created_at_ms".to_string())
-                    .or_insert(created_value.clone());
-                if let Some(inner) = obj.get_mut("object") {
-                    if let Some(inner_obj) = inner.as_object_mut() {
-                        inner_obj
-                            .entry("created_at_ms".to_string())
-                            .or_insert(created_value);
-                    }
-                }
-            }
-            hydrate_activity(state, &mut v, &mut cache);
-            if is_tombstone_activity(&v) {
-                continue;
-            }
-            items.push(v);
-        }
-    }
-    let next = page.next;
+    let (items, next, total) = timeline_items_from_page(state, page, false);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
       "next": next,
     }))
@@ -2874,52 +3100,16 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
     }
-    let query = parts.uri.query().unwrap_or("");
-    let limit = query
-        .split('&')
-        .find(|p| p.starts_with("limit="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<u32>().ok())
-        .unwrap_or(50)
-        .min(200);
-    let cursor = query
-        .split('&')
-        .find(|p| p.starts_with("cursor="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<i64>().ok());
-
+    let (limit, cursor) = parse_timeline_query(parts.uri.query().unwrap_or(""));
     let page = match state.social.list_federated_feed(limit, cursor) {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            if let Some(obj) = v.as_object_mut() {
-                let created_value = serde_json::Value::Number(it.created_at_ms.into());
-                obj.entry("created_at_ms".to_string())
-                    .or_insert(created_value.clone());
-                if let Some(inner) = obj.get_mut("object") {
-                    if let Some(inner_obj) = inner.as_object_mut() {
-                        inner_obj
-                            .entry("created_at_ms".to_string())
-                            .or_insert(created_value);
-                    }
-                }
-            }
-            hydrate_activity(state, &mut v, &mut cache);
-            if is_tombstone_activity(&v) {
-                continue;
-            }
-            items.push(v);
-        }
-    }
+    let (items, next, total) = timeline_items_from_page(state, page, false);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
     }))
     .into_response()
 }
@@ -2929,52 +3119,38 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
     }
-    let query = parts.uri.query().unwrap_or("");
-    let limit = query
-        .split('&')
-        .find(|p| p.starts_with("limit="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<u32>().ok())
-        .unwrap_or(50)
-        .min(200);
-    let cursor = query
-        .split('&')
-        .find(|p| p.starts_with("cursor="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<i64>().ok());
-
+    let (limit, cursor) = parse_timeline_query(parts.uri.query().unwrap_or(""));
     let page = match state.social.list_home_feed(limit, cursor) {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            if let Some(obj) = v.as_object_mut() {
-                let created_value = serde_json::Value::Number(it.created_at_ms.into());
-                obj.entry("created_at_ms".to_string())
-                    .or_insert(created_value.clone());
-                if let Some(inner) = obj.get_mut("object") {
-                    if let Some(inner_obj) = inner.as_object_mut() {
-                        inner_obj
-                            .entry("created_at_ms".to_string())
-                            .or_insert(created_value);
-                    }
-                }
-            }
-            hydrate_activity(state, &mut v, &mut cache);
-            if is_tombstone_activity(&v) {
-                continue;
-            }
-            items.push(v);
-        }
-    }
+    let (items, next, total) = timeline_items_from_page(state, page, false);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
+    }))
+    .into_response()
+}
+
+async fn timeline_local(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let (limit, cursor) = parse_timeline_query(parts.uri.query().unwrap_or(""));
+    let page = match state
+        .social
+        .list_local_feed(&state.cfg.domain, limit, cursor)
+    {
+        Ok(p) => p,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let (items, next, total) = timeline_items_from_page(state, page, true);
+    axum::Json(serde_json::json!({
+      "total": total,
+      "items": items,
+      "next": next,
     }))
     .into_response()
 }
@@ -2984,52 +3160,16 @@ async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body>
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
     }
-    let query = parts.uri.query().unwrap_or("");
-    let limit = query
-        .split('&')
-        .find(|p| p.starts_with("limit="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<u32>().ok())
-        .unwrap_or(50)
-        .min(200);
-    let cursor = query
-        .split('&')
-        .find(|p| p.starts_with("cursor="))
-        .and_then(|p| p.split_once('='))
-        .and_then(|(_, v)| v.parse::<i64>().ok());
-
+    let (limit, cursor) = parse_timeline_query(parts.uri.query().unwrap_or(""));
     let page = match state.social.list_unified_feed(limit, cursor) {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            if let Some(obj) = v.as_object_mut() {
-                let created_value = serde_json::Value::Number(it.created_at_ms.into());
-                obj.entry("created_at_ms".to_string())
-                    .or_insert(created_value.clone());
-                if let Some(inner) = obj.get_mut("object") {
-                    if let Some(inner_obj) = inner.as_object_mut() {
-                        inner_obj
-                            .entry("created_at_ms".to_string())
-                            .or_insert(created_value);
-                    }
-                }
-            }
-            hydrate_activity(state, &mut v, &mut cache);
-            if is_tombstone_activity(&v) {
-                continue;
-            }
-            items.push(v);
-        }
-    }
+    let (items, next, total) = timeline_items_from_page(state, page, false);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
     }))
     .into_response()
 }
@@ -3224,7 +3364,12 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
             else {
                 continue;
             };
-            if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
+            let note_ty = note_value
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            if !is_note_like_type_name(note_ty) {
+                state.net.search_result_type_mismatch();
                 continue;
             }
             let Some(activity) = activity_from_note(&note_value) else {
@@ -3257,7 +3402,12 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
                     next = relay_page.next.clone();
                 }
                 for note_value in relay_page.items {
-                    if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
+                    let note_ty = note_value
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
+                    if !is_note_like_type_name(note_ty) {
+                        state.net.search_result_type_mismatch();
                         continue;
                     }
                     let Some(activity) = activity_from_note(&note_value) else {
@@ -3349,6 +3499,7 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
                 continue;
             };
             if !is_actor_value(&v) {
+                state.net.search_result_type_mismatch();
                 continue;
             }
             set_search_source(&mut v, "local");
@@ -3377,6 +3528,7 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
                 }
                 for mut v in relay_page.items {
                     if !is_actor_value(&v) {
+                        state.net.search_result_type_mismatch();
                         continue;
                     }
                     set_search_source(&mut v, "relay");
@@ -3437,16 +3589,24 @@ async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> 
     let source = normalize_search_source(&source);
     let consistency = normalize_search_consistency(&consistency);
     let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut display_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    let mut add_tag_count = |name: String, count: u64| {
+        let cleaned = name.trim().trim_start_matches('#').to_string();
+        if cleaned.is_empty() {
+            return;
+        }
+        let key = cleaned.to_ascii_lowercase();
+        display_names.entry(key.clone()).or_insert(cleaned);
+        let entry = counts.entry(key).or_default();
+        *entry = entry.saturating_add(count);
+    };
 
     if source != "relay" {
         if let Ok(rows) = state.social.search_hashtags(&q, limit) {
             for (name, count) in rows {
-                let cleaned = name.trim().trim_start_matches('#').to_string();
-                if cleaned.is_empty() {
-                    continue;
-                }
-                let entry = counts.entry(cleaned).or_default();
-                *entry = entry.saturating_add(count);
+                add_tag_count(name, count);
             }
         }
     }
@@ -3460,12 +3620,7 @@ async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> 
         if relay_ready {
             if let Ok(Some(rows)) = relay_search_hashtags(state, &q, limit).await {
                 for (name, count) in rows {
-                    let cleaned = name.trim().trim_start_matches('#').to_string();
-                    if cleaned.is_empty() {
-                        continue;
-                    }
-                    let entry = counts.entry(cleaned).or_default();
-                    *entry = entry.saturating_add(count);
+                    add_tag_count(name, count);
                 }
             }
         }
@@ -3473,7 +3628,10 @@ async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> 
 
     let mut items: Vec<serde_json::Value> = counts
         .into_iter()
-        .map(|(name, count)| serde_json::json!({"name": name, "count": count}))
+        .map(|(key, count)| {
+            let name = display_names.remove(&key).unwrap_or(key);
+            serde_json::json!({"name": name, "count": count})
+        })
         .collect();
     items.sort_by(|a, b| {
         b.get("count")
@@ -4953,7 +5111,9 @@ fn bump_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
     let jitter = (now % 15_000).abs();
     let until = now.saturating_add(exp.saturating_add(jitter));
     let key_until = chat_bundle_backoff_key(actor_url, "until");
-    let _ = state.social.set_local_meta(&key_count, &next_count.to_string());
+    let _ = state
+        .social
+        .set_local_meta(&key_count, &next_count.to_string());
     if next_count >= CHAT_BUNDLE_FETCH_FAILURE_THRESHOLD {
         let _ = state.social.set_local_meta(&key_state, "open");
         let _ = state.social.set_local_meta(&key_until, &until.to_string());

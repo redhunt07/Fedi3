@@ -418,19 +418,13 @@ async fn send_signal(
         Ok(_) => {
             info!(
                 "webrtc signal sent relay={} to_peer_id={} session_id={} kind={}",
-                remote_relay_base,
-                to_peer_id,
-                session_id,
-                kind
+                remote_relay_base, to_peer_id, session_id, kind
             );
         }
         Err(e) => {
             warn!(
                 "webrtc signal send failed relay={} to_peer_id={} session_id={} kind={} err={e:#}",
-                remote_relay_base,
-                to_peer_id,
-                session_id,
-                kind
+                remote_relay_base, to_peer_id, session_id, kind
             );
             return Err(e);
         }
@@ -517,9 +511,7 @@ fn map_ice_url_ipv4(url: &str) -> Option<String> {
         }
         return Some(out);
     }
-    let port = port_opt
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3478);
+    let port = port_opt.and_then(|p| p.parse::<u16>().ok()).unwrap_or(3478);
     let mut addrs = (host, port).to_socket_addrs().ok()?;
     let v4 = addrs.find(|a| a.is_ipv4())?.ip();
     let std::net::IpAddr::V4(v4) = v4 else {
@@ -842,55 +834,55 @@ where
                                     let sessions_for_dc = sessions_for_dc.clone();
                                     let session_id_for_dc = session_id_for_dc.clone();
                                     async move {
-                                    let dc2 = dc.clone();
-                                    let assembler =
-                                        Arc::new(tokio::sync::Mutex::new(Assembler::default()));
-                                    let handler3 = handler2.clone();
-                                    let cfg3 = cfg2.clone();
-                                    let metrics3 = metrics2.clone();
-                                    let remote_peer_id3 = remote_peer_id_in.clone();
-                                    let sessions4 = sessions_for_dc.clone();
-                                    let session_id4 = session_id_for_dc.clone();
-                                    dc.on_message(Box::new(move |m: DataChannelMessage| {
-                                        let dc2 = dc2.clone();
-                                        let assembler = assembler.clone();
-                                        let handler3 = handler3.clone();
-                                        let cfg3 = cfg3.clone();
-                                        let metrics3 = metrics3.clone();
-                                        let remote_peer_id3 = remote_peer_id3.clone();
-                                        let sessions4 = sessions4.clone();
-                                        let session_id4 = session_id4.clone();
-                                        Box::pin(async move {
-                                            let frame_bytes = m.data;
-                                            metrics3.webrtc_rx_add(frame_bytes.len() as u64);
-                                            metrics3.webrtc_peer_seen(&remote_peer_id3);
-                                            {
-                                                let mut guard = sessions4.lock().await;
-                                                if let Some(s) = guard.get_mut(&session_id4) {
-                                                    s.last_used_ms = now_ms();
+                                        let dc2 = dc.clone();
+                                        let assembler =
+                                            Arc::new(tokio::sync::Mutex::new(Assembler::default()));
+                                        let handler3 = handler2.clone();
+                                        let cfg3 = cfg2.clone();
+                                        let metrics3 = metrics2.clone();
+                                        let remote_peer_id3 = remote_peer_id_in.clone();
+                                        let sessions4 = sessions_for_dc.clone();
+                                        let session_id4 = session_id_for_dc.clone();
+                                        dc.on_message(Box::new(move |m: DataChannelMessage| {
+                                            let dc2 = dc2.clone();
+                                            let assembler = assembler.clone();
+                                            let handler3 = handler3.clone();
+                                            let cfg3 = cfg3.clone();
+                                            let metrics3 = metrics3.clone();
+                                            let remote_peer_id3 = remote_peer_id3.clone();
+                                            let sessions4 = sessions4.clone();
+                                            let session_id4 = session_id4.clone();
+                                            Box::pin(async move {
+                                                let frame_bytes = m.data;
+                                                metrics3.webrtc_rx_add(frame_bytes.len() as u64);
+                                                metrics3.webrtc_peer_seen(&remote_peer_id3);
+                                                {
+                                                    let mut guard = sessions4.lock().await;
+                                                    if let Some(s) = guard.get_mut(&session_id4) {
+                                                        s.last_used_ms = now_ms();
+                                                    }
                                                 }
-                                            }
-                                            let payload = {
-                                                let mut a = assembler.lock().await;
-                                                a.ingest(&frame_bytes)
-                                            };
-                                            let Some(payload) = payload else { return };
-                                            if let Ok(w) =
-                                                serde_json::from_slice::<WireMsg>(&payload)
-                                            {
-                                                handle_incoming_wire_message(
-                                                    &cfg3,
-                                                    handler3,
-                                                    w,
-                                                    dc2.clone(),
-                                                    metrics3,
-                                                    &remote_peer_id3,
-                                                )
-                                                .await;
-                                            }
-                                        })
-                                    }));
-                                }
+                                                let payload = {
+                                                    let mut a = assembler.lock().await;
+                                                    a.ingest(&frame_bytes)
+                                                };
+                                                let Some(payload) = payload else { return };
+                                                if let Ok(w) =
+                                                    serde_json::from_slice::<WireMsg>(&payload)
+                                                {
+                                                    handle_incoming_wire_message(
+                                                        &cfg3,
+                                                        handler3,
+                                                        w,
+                                                        dc2.clone(),
+                                                        metrics3,
+                                                        &remote_peer_id3,
+                                                    )
+                                                    .await;
+                                                }
+                                            })
+                                        }));
+                                    }
                                 })
                             }));
                         }
@@ -1111,16 +1103,16 @@ where
                     let assembler = Arc::new(tokio::sync::Mutex::new(Assembler::default()));
                     let metrics2 = metrics.clone();
                     let peer_id2 = peer_id.clone();
-                        dc.on_message(Box::new(move |m: DataChannelMessage| {
-                            let sessions2 = sessions2.clone();
-                            let session_id2 = session_id2.clone();
-                            let assembler = assembler.clone();
-                            let metrics2 = metrics2.clone();
-                            let peer_id2 = peer_id2.clone();
-                            Box::pin({
-                                let sessions4 = sessions2.clone();
-                                let session_id4 = session_id2.clone();
-                                async move {
+                    dc.on_message(Box::new(move |m: DataChannelMessage| {
+                        let sessions2 = sessions2.clone();
+                        let session_id2 = session_id2.clone();
+                        let assembler = assembler.clone();
+                        let metrics2 = metrics2.clone();
+                        let peer_id2 = peer_id2.clone();
+                        Box::pin({
+                            let sessions4 = sessions2.clone();
+                            let session_id4 = session_id2.clone();
+                            async move {
                                 let frame_bytes = m.data;
                                 metrics2.webrtc_rx_add(frame_bytes.len() as u64);
                                 metrics2.webrtc_peer_seen(&peer_id2);
@@ -1134,26 +1126,26 @@ where
                                     let mut a = assembler.lock().await;
                                     a.ingest(&frame_bytes)
                                 };
-                            let Some(payload) = payload else { return };
-                            let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else {
-                                return;
-                            };
-                            match w {
-                                WireMsg::Resp { id: _, resp } => {
-                                    let mut guard = sessions2.lock().await;
-                                    if let Some(s) = guard.remove(&session_id2) {
-                                        if let Some(tx) = s.pending_resp {
-                                            let _ = tx.send(Ok(resp));
+                                let Some(payload) = payload else { return };
+                                let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else {
+                                    return;
+                                };
+                                match w {
+                                    WireMsg::Resp { id: _, resp } => {
+                                        let mut guard = sessions2.lock().await;
+                                        if let Some(s) = guard.remove(&session_id2) {
+                                            if let Some(tx) = s.pending_resp {
+                                                let _ = tx.send(Ok(resp));
+                                            }
+                                            let _ = s.pc.close().await;
                                         }
-                                        let _ = s.pc.close().await;
+                                        metrics2.webrtc_sessions_set(guard.len() as u64);
                                     }
-                                    metrics2.webrtc_sessions_set(guard.len() as u64);
+                                    _ => {}
                                 }
-                                _ => {}
                             }
-                            }
-                            })
-                        }));
+                        })
+                    }));
                 }
 
                 // Offer / local description.
@@ -1520,46 +1512,46 @@ async fn reconnect_session(
                 let sessions4 = sessions2.clone();
                 let session_id4 = session_id2.clone();
                 async move {
-                let frame_bytes = m.data;
-                metrics2.webrtc_rx_add(frame_bytes.len() as u64);
-                metrics2.webrtc_peer_seen(&peer_id2);
-                {
-                    let mut guard = sessions4.lock().await;
-                    if let Some(s) = guard.get_mut(&session_id4) {
-                        s.last_used_ms = now_ms();
+                    let frame_bytes = m.data;
+                    metrics2.webrtc_rx_add(frame_bytes.len() as u64);
+                    metrics2.webrtc_peer_seen(&peer_id2);
+                    {
+                        let mut guard = sessions4.lock().await;
+                        if let Some(s) = guard.get_mut(&session_id4) {
+                            s.last_used_ms = now_ms();
+                        }
                     }
-                }
-                let payload = {
-                    let mut a = assembler2.lock().await;
-                    a.ingest(&frame_bytes)
-                };
-                let Some(payload) = payload else { return };
-                let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else {
-                    return;
-                };
-                match w {
-                    WireMsg::Resp { id: _, resp } => {
-                        let mut guard = sessions2.lock().await;
-                        if let Some(s) = guard.get_mut(&session_id2) {
-                            if let Some(tx) = s.pending_resp.take() {
-                                let _ = tx.send(Ok(resp));
+                    let payload = {
+                        let mut a = assembler2.lock().await;
+                        a.ingest(&frame_bytes)
+                    };
+                    let Some(payload) = payload else { return };
+                    let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else {
+                        return;
+                    };
+                    match w {
+                        WireMsg::Resp { id: _, resp } => {
+                            let mut guard = sessions2.lock().await;
+                            if let Some(s) = guard.get_mut(&session_id2) {
+                                if let Some(tx) = s.pending_resp.take() {
+                                    let _ = tx.send(Ok(resp));
+                                }
+                                s.pending_since_ms = None;
                             }
-                            s.pending_since_ms = None;
+                            metrics2.webrtc_sessions_set(guard.len() as u64);
                         }
-                        metrics2.webrtc_sessions_set(guard.len() as u64);
-                    }
-                    WireMsg::Req { id, req } => {
-                        let req = decrypt_relay_http_request_body(&private_key_pem, req);
-                        let mut svc = handler2.lock().await;
-                        let resp = handle_relay_http_request(&mut *svc, req).await;
-                        let out = WireMsg::Resp { id, resp };
-                        if let Ok(bytes) = serde_json::to_vec(&out) {
-                            metrics2.webrtc_tx_add(bytes.len() as u64);
-                            metrics2.webrtc_peer_seen(&peer_id2);
-                            let _ = send_bytes_chunked(&dc2, &bytes).await;
+                        WireMsg::Req { id, req } => {
+                            let req = decrypt_relay_http_request_body(&private_key_pem, req);
+                            let mut svc = handler2.lock().await;
+                            let resp = handle_relay_http_request(&mut *svc, req).await;
+                            let out = WireMsg::Resp { id, resp };
+                            if let Ok(bytes) = serde_json::to_vec(&out) {
+                                metrics2.webrtc_tx_add(bytes.len() as u64);
+                                metrics2.webrtc_peer_seen(&peer_id2);
+                                let _ = send_bytes_chunked(&dc2, &bytes).await;
+                            }
                         }
                     }
-                }
                 }
             })
         }));

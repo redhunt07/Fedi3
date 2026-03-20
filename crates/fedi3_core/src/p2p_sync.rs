@@ -11,8 +11,8 @@ use tokio::sync::watch;
 use tracing::info;
 
 use crate::ap::ApState;
-use crate::p2p::P2pConfig;
 use crate::http_sig::sign_request_rsa_sha256;
+use crate::p2p::P2pConfig;
 
 #[derive(Debug, serde::Serialize)]
 struct P2pSyncRequest {
@@ -195,20 +195,27 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
 
                     let activity_id = activity_dedup_id(&item.activity);
                     let bytes = canonical_json_bytes(&item.activity);
-                    let _ = state
-                        .social
-                        .upsert_p2p_activity(&activity_id, actor, item.lamport, bytes.clone());
+                    let _ = state.social.upsert_p2p_activity(
+                        &activity_id,
+                        actor,
+                        item.lamport,
+                        bytes.clone(),
+                    );
                     if !state.social.mark_inbox_seen(&activity_id).unwrap_or(false) {
                         continue;
                     }
-                    let _ =
-                        state
-                            .social
-                            .store_inbox_activity(&activity_id, Some(actor), ty, bytes.clone());
+                    let _ = state.social.store_inbox_activity(
+                        &activity_id,
+                        Some(actor),
+                        ty,
+                        bytes.clone(),
+                    );
                     if crate::delivery::is_public_activity(&item.activity) {
-                        let _ = state
-                            .social
-                            .insert_federated_feed_item(&activity_id, Some(actor), bytes);
+                        let _ = state.social.insert_federated_feed_item(
+                            &activity_id,
+                            Some(actor),
+                            bytes,
+                        );
                     }
                     let _ = state.social.upsert_actor_meta(actor, true);
                     stored = stored.saturating_add(1);
@@ -410,16 +417,24 @@ async fn sync_objects_manifest(
             if item.updated_at_ms > max_seen {
                 max_seen = item.updated_at_ms;
             }
-            if state.social.get_object_json(&item.object_id).ok().flatten().is_some() {
+            if state
+                .social
+                .get_object_json(&item.object_id)
+                .ok()
+                .flatten()
+                .is_some()
+            {
                 continue;
             }
             if let Ok(Some(bytes)) =
                 fetch_object_from_peer(state, actor_url, peer_id, &item.object_id).await
             {
                 let actor_id = extract_actor_from_object_json(&bytes);
-                let _ = state
-                    .social
-                    .upsert_object_with_actor(&item.object_id, actor_id.as_deref(), bytes);
+                let _ = state.social.upsert_object_with_actor(
+                    &item.object_id,
+                    actor_id.as_deref(),
+                    bytes,
+                );
             }
         }
         if max_seen > since {

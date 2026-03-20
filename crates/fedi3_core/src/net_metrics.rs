@@ -46,6 +46,11 @@ pub struct NetMetrics {
     pub http_timeouts: AtomicU64,
     pub http_errors: AtomicU64,
     pub chat_bundle_skipped_backoff: AtomicU64,
+    pub timeline_filtered_non_note_total: AtomicU64,
+    pub timeline_dedup_dropped_total: AtomicU64,
+    pub timeline_local_items_total: AtomicU64,
+    pub search_result_type_mismatch_total: AtomicU64,
+    pub chat_group_membership_conflict_total: AtomicU64,
 
     p2p_seen: Mutex<HashMap<String, u64>>,
     mailbox_seen: Mutex<HashMap<String, u64>>,
@@ -103,7 +108,8 @@ impl NetMetrics {
         } else {
             (prev.saturating_mul(7).saturating_add(ms)) / 8
         };
-        self.relay_handler_wait_ema_ms.store(next, Ordering::Relaxed);
+        self.relay_handler_wait_ema_ms
+            .store(next, Ordering::Relaxed);
     }
 
     pub fn set_p2p_enabled(&self, v: bool) {
@@ -210,6 +216,31 @@ impl NetMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn timeline_filtered_non_note(&self) {
+        self.timeline_filtered_non_note_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn timeline_dedup_dropped(&self) {
+        self.timeline_dedup_dropped_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn timeline_local_item_seen(&self) {
+        self.timeline_local_items_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn search_result_type_mismatch(&self) {
+        self.search_result_type_mismatch_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn chat_group_membership_conflict(&self) {
+        self.chat_group_membership_conflict_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn prune_seen(&self, window_ms: u64) {
         let cutoff = now_ms().saturating_sub(window_ms);
         {
@@ -261,6 +292,21 @@ impl NetMetrics {
                 "http_errors": self.http_errors.load(Ordering::Relaxed),
                 "chat_bundle_skipped_backoff": self
                     .chat_bundle_skipped_backoff
+                    .load(Ordering::Relaxed),
+                "timeline_filtered_non_note_total": self
+                    .timeline_filtered_non_note_total
+                    .load(Ordering::Relaxed),
+                "timeline_dedup_dropped_total": self
+                    .timeline_dedup_dropped_total
+                    .load(Ordering::Relaxed),
+                "timeline_local_items_total": self
+                    .timeline_local_items_total
+                    .load(Ordering::Relaxed),
+                "search_result_type_mismatch_total": self
+                    .search_result_type_mismatch_total
+                    .load(Ordering::Relaxed),
+                "chat_group_membership_conflict_total": self
+                    .chat_group_membership_conflict_total
                     .load(Ordering::Relaxed),
             },
         })

@@ -1091,7 +1091,10 @@ async fn resolve_actor_input_http(state: &ApState, input: &str) -> Option<String
         return None;
     }
     let resource = format!("acct:{user}@{domain}");
-    let url = format!("https://{domain}/.well-known/webfinger?resource={}", encode(&resource));
+    let url = format!(
+        "https://{domain}/.well-known/webfinger?resource={}",
+        encode(&resource)
+    );
     let resp = state.http.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -1103,12 +1106,19 @@ async fn resolve_actor_input_http(state: &ApState, input: &str) -> Option<String
         if rel != "self" {
             continue;
         }
-        let href = link.get("href").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let href = link
+            .get("href")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if href.is_empty() {
             continue;
         }
         let t = link.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if t.contains("application/activity+json") || t.contains("application/ld+json") || t.is_empty() {
+        if t.contains("application/activity+json")
+            || t.contains("application/ld+json")
+            || t.is_empty()
+        {
             return Some(href.to_string());
         }
     }

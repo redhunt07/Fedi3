@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use crate::ap::ApState;
+use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
+use crate::social_db::{ChatMessage, ChatThread, CollectionPage};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use anyhow::{Context, Result};
@@ -14,9 +17,6 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use crate::ap::ApState;
-use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
-use crate::social_db::{ChatMessage, ChatThread, CollectionPage};
 
 const CHAT_VERSION: u32 = 1;
 const CHAT_PREKEY_TARGET: u32 = 20;

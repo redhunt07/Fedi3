@@ -279,9 +279,18 @@ fn extract_media_from_value(value: &serde_json::Value, out: &mut Vec<RelayMediaI
             }
         }
         serde_json::Value::Object(map) => {
-            let media_type = map.get("mediaType").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let name = map.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let blurhash = map.get("blurhash").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let media_type = map
+                .get("mediaType")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let name = map
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let blurhash = map
+                .get("blurhash")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let width = map.get("width").and_then(|v| v.as_i64());
             let height = map.get("height").and_then(|v| v.as_i64());
             if let Some(url_val) = map.get("url").or_else(|| map.get("href")) {
@@ -325,13 +334,7 @@ fn extract_media_from_value_with_defaults(
         serde_json::Value::Array(arr) => {
             for item in arr {
                 extract_media_from_value_with_defaults(
-                    item,
-                    media_type,
-                    name,
-                    width,
-                    height,
-                    blurhash,
-                    out,
+                    item, media_type, name, width, height, blurhash, out,
                 );
             }
         }
@@ -358,14 +361,9 @@ fn extract_media_from_value_with_defaults(
             let width = map.get("width").and_then(|v| v.as_i64()).or(width);
             let height = map.get("height").and_then(|v| v.as_i64()).or(height);
             if let Some(url) = url {
-                if let Some(idx) = media_index_from_fields(
-                    url,
-                    media_type,
-                    name,
-                    width,
-                    height,
-                    blurhash,
-                ) {
+                if let Some(idx) =
+                    media_index_from_fields(url, media_type, name, width, height, blurhash)
+                {
                     out.push(idx);
                 }
             }
@@ -399,11 +397,7 @@ fn media_index_from_fields(
 
 fn actor_username_from_url(url: &str) -> Option<String> {
     let url = url.trim();
-    let without_scheme = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .trim_end_matches('/');
+    let without_scheme = url.split("://").nth(1).unwrap_or(url).trim_end_matches('/');
     let path = without_scheme.splitn(2, '/').nth(1).unwrap_or("");
     if path.starts_with("@") {
         let name = path.trim_start_matches('@').split('/').next().unwrap_or("");
@@ -422,9 +416,18 @@ fn actor_username_from_url(url: &str) -> Option<String> {
 
 fn actor_stub_json(actor_url: &str, username: Option<&str>) -> String {
     let mut obj = serde_json::Map::new();
-    obj.insert("@context".to_string(), serde_json::json!("https://www.w3.org/ns/activitystreams"));
-    obj.insert("id".to_string(), serde_json::Value::String(actor_url.to_string()));
-    obj.insert("type".to_string(), serde_json::Value::String("Person".to_string()));
+    obj.insert(
+        "@context".to_string(),
+        serde_json::json!("https://www.w3.org/ns/activitystreams"),
+    );
+    obj.insert(
+        "id".to_string(),
+        serde_json::Value::String(actor_url.to_string()),
+    );
+    obj.insert(
+        "type".to_string(),
+        serde_json::Value::String("Person".to_string()),
+    );
     if let Some(u) = username {
         obj.insert(
             "preferredUsername".to_string(),

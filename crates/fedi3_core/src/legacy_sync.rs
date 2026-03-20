@@ -175,10 +175,8 @@ async fn run_once_with_limits(
                 }
             }
             Err(e) => {
-                let _ = social.set_local_meta(
-                    &format!("relay_legacy_last_error_{stream}"),
-                    &e.to_string(),
-                );
+                let _ = social
+                    .set_local_meta(&format!("relay_legacy_last_error_{stream}"), &e.to_string());
                 relay_last_err = e.to_string();
                 debug!("relay legacy sync stream={stream} unavailable: {e:#}");
             }
@@ -496,14 +494,8 @@ async fn sync_from_relay_legacy_stream(
                     latest_checkpoint = cp;
                 }
             }
-            if ingest_relay_note_as_activity(
-                state,
-                social,
-                stream,
-                item.note,
-                item.created_at_ms,
-            )
-            .await?
+            if ingest_relay_note_as_activity(state, social, stream, item.note, item.created_at_ms)
+                .await?
             {
                 total_ingested += 1;
             }
@@ -549,7 +541,10 @@ async fn sync_from_relay_legacy_stream(
 
 fn adaptive_legacy_page_limit(state: &ap::ApState, mode_bootstrap: bool) -> usize {
     let base = if mode_bootstrap { 1000usize } else { 200usize };
-    let rtt = state.net.relay_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let rtt = state
+        .net
+        .relay_rtt_ema_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
     if rtt >= LEGACY_RTT_CRITICAL_MS {
         return (base / 8).max(100);
     }
@@ -563,7 +558,10 @@ fn adaptive_legacy_page_limit(state: &ap::ApState, mode_bootstrap: bool) -> usiz
 }
 
 async fn maybe_delay_legacy_sync_page(state: &ap::ApState) {
-    let rtt = state.net.relay_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let rtt = state
+        .net
+        .relay_rtt_ema_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
     let base_delay = if rtt >= LEGACY_RTT_CRITICAL_MS {
         250u64
     } else if rtt >= LEGACY_RTT_VERY_HIGH_MS {
@@ -581,7 +579,10 @@ async fn maybe_delay_legacy_sync_page(state: &ap::ApState) {
         .unwrap_or_default()
         .as_millis() as u64)
         % 70;
-    sleep(std::time::Duration::from_millis(base_delay.saturating_add(jitter))).await;
+    sleep(std::time::Duration::from_millis(
+        base_delay.saturating_add(jitter),
+    ))
+    .await;
 }
 
 fn retryable_status(status: reqwest::StatusCode) -> bool {
@@ -624,15 +625,23 @@ async fn fetch_relay_page_with_retry(
                         .with_context(|| format!("invalid relay legacy sync payload: {url}"));
                 }
                 if retryable_status(resp.status()) && attempt + 1 < LEGACY_RETRY_ATTEMPTS {
-                    sleep(std::time::Duration::from_millis(retry_delay_ms(stream, attempt))).await;
+                    sleep(std::time::Duration::from_millis(retry_delay_ms(
+                        stream, attempt,
+                    )))
+                    .await;
                     continue;
                 }
                 anyhow::bail!("relay legacy sync status {} for {url}", resp.status());
             }
             Err(e) => {
-                last_err = Some(anyhow::anyhow!(e).context(format!("relay legacy sync request failed: {url}")));
+                last_err = Some(
+                    anyhow::anyhow!(e).context(format!("relay legacy sync request failed: {url}")),
+                );
                 if attempt + 1 < LEGACY_RETRY_ATTEMPTS {
-                    sleep(std::time::Duration::from_millis(retry_delay_ms(stream, attempt))).await;
+                    sleep(std::time::Duration::from_millis(retry_delay_ms(
+                        stream, attempt,
+                    )))
+                    .await;
                     continue;
                 }
             }
@@ -710,7 +719,10 @@ async fn ingest_relay_note_as_activity(
             .ok()
             .and_then(|dt| {
                 dt.checked_add(time::Duration::milliseconds(rem_ms as i64))
-                    .and_then(|x| x.format(&time::format_description::well_known::Rfc3339).ok())
+                    .and_then(|x| {
+                        x.format(&time::format_description::well_known::Rfc3339)
+                            .ok()
+                    })
             })
             .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
     };

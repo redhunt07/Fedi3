@@ -29,7 +29,10 @@ fn default_config_path() -> Result<PathBuf> {
             .join("config.json"));
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Ok(PathBuf::from(home).join(".config").join("fedi3").join("config.json"))
+    Ok(PathBuf::from(home)
+        .join(".config")
+        .join("fedi3")
+        .join("config.json"))
 }
 
 fn hash_text(text: &str) -> u64 {
@@ -120,9 +123,7 @@ fn get_list(map: &Map<String, Value>, keys: &[&str]) -> Option<Vec<String>> {
 }
 
 fn normalize_app_config(raw: Value) -> Result<Value> {
-    let obj = raw
-        .as_object()
-        .context("config must be a JSON object")?;
+    let obj = raw.as_object().context("config must be a JSON object")?;
     let is_core_style = obj.contains_key("relay_ws")
         || obj.contains_key("public_base_url")
         || obj.contains_key("relay_token");
@@ -254,7 +255,8 @@ fn normalize_app_config(raw: Value) -> Result<Value> {
 fn load_config(text: &str) -> Result<CoreStartConfig> {
     let raw: Value = serde_json::from_str(text).context("parse config json")?;
     let normalized = normalize_app_config(raw)?;
-    let cfg: CoreStartConfig = serde_json::from_value(normalized).context("decode CoreStartConfig")?;
+    let cfg: CoreStartConfig =
+        serde_json::from_value(normalized).context("decode CoreStartConfig")?;
     Ok(cfg)
 }
 

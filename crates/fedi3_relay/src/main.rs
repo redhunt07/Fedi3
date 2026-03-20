@@ -3605,10 +3605,7 @@ async fn tunnel_negative_cache_put(state: &AppState, user: &str, path: &str, now
         return;
     };
     let mut cache = state.tunnel_negative_cache.lock().await;
-    cache.insert(
-        key,
-        now.saturating_add(TUNNEL_NEGATIVE_CACHE_TTL_MS.max(1)),
-    );
+    cache.insert(key, now.saturating_add(TUNNEL_NEGATIVE_CACHE_TTL_MS.max(1)));
 }
 
 async fn forward_to_user(
@@ -10405,7 +10402,12 @@ async fn relay_legacy_sync(
         )
         .await
     {
-        legacy_v1_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limited", true)
+        legacy_v1_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "rate limited",
+            true,
+        )
     } else if q.v.unwrap_or(1) != 1 {
         legacy_v1_error(
             StatusCode::BAD_REQUEST,
@@ -10416,17 +10418,17 @@ async fn relay_legacy_sync(
     } else {
         let username = q.username.as_deref().unwrap_or("").trim().to_string();
         if !is_valid_username(&username) {
-            legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_username", "invalid username", false)
+            legacy_v1_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_username",
+                "invalid username",
+                false,
+            )
         } else {
             let feed = match LegacyFeedKind::parse(q.stream.as_deref()) {
                 Ok(v) => v,
                 Err(e) => {
-                    return legacy_v1_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_stream",
-                        e,
-                        false,
-                    )
+                    return legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_stream", e, false)
                 }
             };
             if let Err(resp) = require_user_token(&state, &headers, &username).await {
@@ -10507,7 +10509,12 @@ async fn relay_legacy_bootstrap(
         )
         .await
     {
-        legacy_v1_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limited", true)
+        legacy_v1_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "rate limited",
+            true,
+        )
     } else if q.v.unwrap_or(1) != 1 {
         legacy_v1_error(
             StatusCode::BAD_REQUEST,
@@ -10518,17 +10525,17 @@ async fn relay_legacy_bootstrap(
     } else {
         let username = q.username.as_deref().unwrap_or("").trim().to_string();
         if !is_valid_username(&username) {
-            legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_username", "invalid username", false)
+            legacy_v1_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_username",
+                "invalid username",
+                false,
+            )
         } else {
             let feed = match LegacyFeedKind::parse(q.stream.as_deref()) {
                 Ok(v) => v,
                 Err(e) => {
-                    return legacy_v1_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_stream",
-                        e,
-                        false,
-                    )
+                    return legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_stream", e, false)
                 }
             };
             if let Err(resp) = require_user_token(&state, &headers, &username).await {

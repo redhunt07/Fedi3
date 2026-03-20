@@ -5,6 +5,7 @@
 
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:http/http.dart' as http;
 
@@ -41,6 +42,7 @@ class LinkPreviewRepository {
 
   int maxCacheEntries = 256;
   int failTtlMs = 10 * 60 * 1000;
+  Duration requestTimeout = const Duration(seconds: 5);
 
   Future<LinkPreview?> get(String url) async {
     final u = url.trim();
@@ -99,14 +101,18 @@ class LinkPreviewRepository {
           'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',
         },
-      );
+      ).timeout(requestTimeout);
     } catch (_) {
       return null;
     }
 
-    if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      return null;
+    }
     final ct = (resp.headers['content-type'] ?? '').toLowerCase();
-    if (!ct.contains('text/html') && !ct.contains('application/xhtml+xml')) return null;
+    if (!ct.contains('text/html') && !ct.contains('application/xhtml+xml')) {
+      return null;
+    }
 
     // Avoid keeping huge documents in memory.
     final bytes = resp.bodyBytes;
@@ -125,7 +131,8 @@ class LinkPreviewRepository {
     final imageUrl = _firstMeta(html, property: 'og:image') ??
         _firstMeta(html, property: 'og:image:secure_url') ??
         _firstMeta(html, name: 'twitter:image') ??
-        _firstLinkRel(html, rel: const ['apple-touch-icon', 'icon', 'shortcut icon']) ??
+        _firstLinkRel(html,
+            rel: const ['apple-touch-icon', 'icon', 'shortcut icon']) ??
         '';
     final siteName = _firstMeta(html, property: 'og:site_name') ?? '';
 
@@ -134,7 +141,9 @@ class LinkPreviewRepository {
     final resolvedSite = _decodeHtmlEntities(siteName).trim();
     final resolvedImage = _resolveMaybeRelative(uri, imageUrl.trim());
 
-    if (resolvedTitle.isEmpty && resolvedDesc.isEmpty && resolvedImage.isEmpty) {
+    if (resolvedTitle.isEmpty &&
+        resolvedDesc.isEmpty &&
+        resolvedImage.isEmpty) {
       return LinkPreview(
         url: url,
         title: uri.host,
@@ -163,7 +172,7 @@ class LinkPreviewRepository {
           'Accept': 'application/json, */*',
           'User-Agent': 'Fedi3/0.1 (+https://fedi3)',
         },
-      );
+      ).timeout(requestTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final map = jsonDecode(resp.body);
       if (map is! Map) return null;
@@ -247,7 +256,8 @@ class LinkPreviewRepository {
   }
 
   static String? _titleTag(String html) {
-    final m = RegExp(r'<title[^>]*>([^<]{1,300})</title>', caseSensitive: false).firstMatch(html);
+    final m = RegExp(r'<title[^>]*>([^<]{1,300})</title>', caseSensitive: false)
+        .firstMatch(html);
     return m?.group(1);
   }
 
@@ -262,7 +272,8 @@ class LinkPreviewRepository {
     );
     final tag = re.firstMatch(html)?.group(1);
     if (tag == null) return null;
-    final cm = RegExp("content=[\"']([^\"']{1,600})[\"']", caseSensitive: false).firstMatch(tag);
+    final cm = RegExp("content=[\"']([^\"']{1,600})[\"']", caseSensitive: false)
+        .firstMatch(tag);
     return cm?.group(1);
   }
 

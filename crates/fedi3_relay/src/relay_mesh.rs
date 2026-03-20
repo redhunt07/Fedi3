@@ -295,8 +295,7 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
         kad::Behaviour::new(peer_id, store)
     };
     kad.set_mode(Some(kad::Mode::Client));
-    let rr_cfg = request_response::Config::default()
-        .with_request_timeout(Duration::from_secs(20));
+    let rr_cfg = request_response::Config::default().with_request_timeout(Duration::from_secs(20));
     let rr = request_response::Behaviour::new(
         [(RelayMeshProtocol, request_response::ProtocolSupport::Full)],
         rr_cfg,
@@ -323,7 +322,9 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
     }
 
     for mut addr in cfg.relay_reserve.clone() {
-        let has_peer = addr.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
+        let has_peer = addr
+            .iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
         if !has_peer {
             continue;
         }
@@ -402,11 +403,7 @@ async fn handle_sync_request(
     req: RelayMeshSyncRequest,
 ) -> RelaySyncBundle {
     if let Err(e) = verify_mesh_request(state, cfg, &req).await {
-        let relay_url = req
-            .relay_url
-            .as_deref()
-            .unwrap_or("")
-            .trim_end_matches('/');
+        let relay_url = req.relay_url.as_deref().unwrap_or("").trim_end_matches('/');
         if !relay_url.is_empty() {
             update_reputation(state, relay_url, -2, cfg.reputation_ttl_ms).await;
         }
@@ -429,7 +426,10 @@ async fn handle_sync_request(
         .filter_map(|(note_json, created_at_ms)| {
             serde_json::from_str::<serde_json::Value>(&note_json)
                 .ok()
-                .map(|note| RelaySyncNoteItem { note, created_at_ms })
+                .map(|note| RelaySyncNoteItem {
+                    note,
+                    created_at_ms,
+                })
         })
         .collect::<Vec<_>>();
     let media_page = db
@@ -471,19 +471,28 @@ async fn handle_sync_request(
         .collect::<Vec<_>>();
 
     let mut next_candidates = Vec::new();
-    if let Some(next) = note_page.next.as_deref().and_then(|v| v.parse::<i64>().ok()) {
+    if let Some(next) = note_page
+        .next
+        .as_deref()
+        .and_then(|v| v.parse::<i64>().ok())
+    {
         next_candidates.push(next);
     }
-    if let Some(next) = media_page.next.as_deref().and_then(|v| v.parse::<i64>().ok()) {
+    if let Some(next) = media_page
+        .next
+        .as_deref()
+        .and_then(|v| v.parse::<i64>().ok())
+    {
         next_candidates.push(next);
     }
-    if let Some(next) = actor_page.next.as_deref().and_then(|v| v.parse::<i64>().ok()) {
+    if let Some(next) = actor_page
+        .next
+        .as_deref()
+        .and_then(|v| v.parse::<i64>().ok())
+    {
         next_candidates.push(next);
     }
-    let next = next_candidates
-        .into_iter()
-        .min()
-        .map(|v| v.to_string());
+    let next = next_candidates.into_iter().min().map(|v| v.to_string());
 
     let mut bundle = build_sync_bundle(state, notes, media, actors, next).await;
     if !bundle.relay_url.is_empty() {
@@ -710,7 +719,9 @@ fn peer_circuit_addrs(base: &[Multiaddr], peer_id: &PeerId) -> Vec<Multiaddr> {
     let mut out = Vec::new();
     for addr in base {
         let mut a = addr.clone();
-        let has_peer = a.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
+        let has_peer = a
+            .iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
         if !has_peer {
             continue;
         }
@@ -805,11 +816,7 @@ async fn verify_mesh_request(
     cfg: &RelayMeshConfig,
     req: &RelayMeshSyncRequest,
 ) -> Result<()> {
-    let relay_url = req
-        .relay_url
-        .as_deref()
-        .unwrap_or("")
-        .trim_end_matches('/');
+    let relay_url = req.relay_url.as_deref().unwrap_or("").trim_end_matches('/');
     if relay_url.is_empty() {
         return Err(anyhow::anyhow!("missing relay_url"));
     }
@@ -837,7 +844,12 @@ async fn verify_mesh_request(
 
     let pk_b64 = if let Some(pk_b64) = pk_b64 {
         pk_b64
-    } else if let Some(pk_b64) = req.sign_pubkey_b64.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+    } else if let Some(pk_b64) = req
+        .sign_pubkey_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         let mut db = state.db.lock().await;
         let _ = db.upsert_relay(relay_url, None, None, Some(pk_b64.to_string()));
         pk_b64.to_string()
@@ -958,12 +970,7 @@ async fn reputation_allows(state: &AppState, relay_url: &str, retention_ms: i64)
         .unwrap_or(true)
 }
 
-async fn update_reputation(
-    state: &AppState,
-    relay_url: &str,
-    delta: i32,
-    retention_ms: i64,
-) {
+async fn update_reputation(state: &AppState, relay_url: &str, delta: i32, retention_ms: i64) {
     let now = now_ms();
     let mut rep = state.relay_reputation.lock().await;
     if retention_ms > 0 {

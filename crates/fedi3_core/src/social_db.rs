@@ -6,8 +6,8 @@
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{backup::Backup, params, Connection, OptionalExtension};
-use std::time::Duration;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct SocialDb {
@@ -1122,6 +1122,120 @@ impl SocialDb {
                 "#
                 .to_string(),
                 vec![accepted.into(), limit.into()],
+            )
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(params_vec))?;
+        let mut items = Vec::new();
+        let mut last_created: Option<i64> = None;
+        while let Some(row) = rows.next()? {
+            let activity_id: String = row.get(0)?;
+            let created_at_ms: i64 = row.get(1)?;
+            let actor_id: Option<String> = row.get(2)?;
+            let activity_json: Vec<u8> = row.get(3)?;
+            last_created = Some(created_at_ms);
+            items.push(GlobalFeedItem {
+                activity_id,
+                created_at_ms,
+                actor_id,
+                activity_json,
+            });
+        }
+
+        let next = if items.len() as i64 == limit {
+            last_created.map(|v| v.to_string())
+        } else {
+            None
+        };
+        Ok(CollectionPage { total, items, next })
+    }
+
+    pub fn list_local_feed(
+        &self,
+        domain: &str,
+        limit: u32,
+        cursor_ms: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = Connection::open(&self.path)?;
+        let limit = limit.min(200).max(1) as i64;
+        let actor_like = format!("%://{}/%", domain.trim());
+
+        let total: u64 = conn.query_row(
+            r#"
+            SELECT COUNT(*) FROM (
+              SELECT activity_id AS id, created_at_ms AS ts
+              FROM global_feed
+              WHERE actor_id LIKE ?1
+              UNION ALL
+              SELECT activity_id AS id, created_at_ms AS ts
+              FROM federated_feed
+              WHERE actor_id LIKE ?1
+              UNION ALL
+              SELECT activity_id AS id, created_at_ms AS ts
+              FROM inbox_items
+              WHERE actor_id LIKE ?1
+              UNION ALL
+              SELECT id AS id, created_at_ms AS ts
+              FROM outbox_items
+            )
+            "#,
+            params![actor_like],
+            |r| r.get(0),
+        )?;
+
+        let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
+            (
+                r#"
+                SELECT activity_id, created_at_ms, actor_id, activity_json
+                FROM (
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM global_feed
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM federated_feed
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM inbox_items
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT id AS activity_id, created_at_ms, NULL AS actor_id, activity_json
+                  FROM outbox_items
+                )
+                WHERE created_at_ms < ?2
+                ORDER BY created_at_ms DESC
+                LIMIT ?3
+                "#
+                .to_string(),
+                vec![actor_like.clone().into(), c.into(), limit.into()],
+            )
+        } else {
+            (
+                r#"
+                SELECT activity_id, created_at_ms, actor_id, activity_json
+                FROM (
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM global_feed
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM federated_feed
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT activity_id, created_at_ms, actor_id, activity_json
+                  FROM inbox_items
+                  WHERE actor_id LIKE ?1
+                  UNION ALL
+                  SELECT id AS activity_id, created_at_ms, NULL AS actor_id, activity_json
+                  FROM outbox_items
+                )
+                ORDER BY created_at_ms DESC
+                LIMIT ?2
+                "#
+                .to_string(),
+                vec![actor_like.into(), limit.into()],
             )
         };
 
@@ -2378,11 +2492,7 @@ impl SocialDb {
         Ok((items, latest))
     }
 
-    pub fn list_media_since(
-        &self,
-        since_ms: i64,
-        limit: u32,
-    ) -> Result<(Vec<MediaItem>, i64)> {
+    pub fn list_media_since(&self, since_ms: i64, limit: u32) -> Result<(Vec<MediaItem>, i64)> {
         let conn = Connection::open(&self.path)?;
         let limit = limit.min(500).max(1) as i64;
         let mut stmt = conn.prepare(

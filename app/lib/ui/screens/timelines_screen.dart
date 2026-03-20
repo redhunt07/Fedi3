@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../model/note_models.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/inline_composer.dart';
@@ -286,7 +287,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               key: _listKeys[1],
                               appState: widget.appState,
                               api: api,
-                              kind: 'home',
+                              kind: 'local',
                               headerTitle: context.l10n.timelineTabLocal,
                               headerTooltip: context.l10n.timelineLocalTooltip,
                               constrainWidth: false,
@@ -336,7 +337,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           key: _listKeys[1],
                           appState: widget.appState,
                           api: api,
-                          kind: 'home',
+                          kind: 'local',
                           headerTitle: context.l10n.timelineTabLocal,
                           headerTooltip: context.l10n.timelineLocalTooltip,
                           constrainWidth: true,
@@ -381,7 +382,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       key: _listKeys[1],
                       appState: widget.appState,
                       api: api,
-                      kind: 'home',
+                      kind: 'local',
                       headerTitle: context.l10n.timelineTabLocal,
                       headerTooltip: context.l10n.timelineLocalTooltip,
                       constrainWidth: true,
@@ -428,13 +429,16 @@ class _TimelinesScreenState extends State<TimelinesScreen>
       _streamSub?.cancel();
       _streamSub = null;
     }
-    if (_streamSub != null) return;
+    if (_streamSub != null) {
+      return;
+    }
     _streamConfig = cfg;
     _streamRetry?.cancel();
     _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
-      if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox')
+      if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox') {
         return;
+      }
       final ty = (ev.activityType ?? '').toLowerCase();
       final forceRefresh = ty == 'update' || ty == 'delete' || ty == 'undo';
       _streamDebounce?.cancel();
@@ -596,6 +600,7 @@ class _TimelineListState extends State<_TimelineList>
   String? _error;
   final _items = <Map<String, dynamic>>[];
   final _knownIds = <String>{};
+  final _knownObjectIds = <String>{};
   final _pending = <Map<String, dynamic>>[];
   final _scroll = ScrollController();
   Timer? _poll;
@@ -670,6 +675,7 @@ class _TimelineListState extends State<_TimelineList>
       _items.clear();
       _pending.clear();
       _knownIds.clear();
+      _knownObjectIds.clear();
     });
     await _loadMore();
   }
@@ -719,12 +725,20 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
+          .where(_isRenderableTimelineActivity)
           .toList();
       setState(() {
         for (final it in items) {
           final id = _activityId(it);
-          if (id.isNotEmpty && _knownIds.contains(id)) continue;
+          final objectId = _activityObjectId(it);
+          if (id.isNotEmpty && _knownIds.contains(id)) {
+            continue;
+          }
+          if (objectId != null && _knownObjectIds.contains(objectId)) {
+            continue;
+          }
           if (id.isNotEmpty) _knownIds.add(id);
+          if (objectId != null) _knownObjectIds.add(objectId);
           _items.add(it);
         }
         _cursor = _readCursor(resp['next']);
@@ -749,15 +763,19 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
+          .where(_isRenderableTimelineActivity)
           .toList();
       if (items.isEmpty) return;
 
       final fresh = <Map<String, dynamic>>[];
       for (final it in items) {
         final id = _activityId(it);
-        if (id.isEmpty) continue;
-        if (_knownIds.contains(id)) continue;
-        _knownIds.add(id);
+        final objectId = _activityObjectId(it);
+        if (id.isNotEmpty && _knownIds.contains(id)) continue;
+        if (objectId != null && _knownObjectIds.contains(objectId)) continue;
+        if (id.isEmpty && objectId == null) continue;
+        if (id.isNotEmpty) _knownIds.add(id);
+        if (objectId != null) _knownObjectIds.add(objectId);
         fresh.add(it);
       }
       if (fresh.isEmpty) return;
@@ -884,6 +902,28 @@ class _TimelineListState extends State<_TimelineList>
     if (type != 'Announce') return false;
     final obj = activity['object'];
     return obj is String && obj.trim().isNotEmpty;
+  }
+
+  bool _isRenderableTimelineActivity(Map<String, dynamic> activity) {
+    return TimelineItem.tryFromActivity(activity) != null;
+  }
+
+  String? _activityObjectId(Map<String, dynamic> activity) {
+    final object = activity['object'];
+    if (object is String) {
+      final v = object.trim();
+      return v.isEmpty ? null : v;
+    }
+    if (object is! Map) return null;
+    final map = object.cast<String, dynamic>();
+    final id = (map['id'] as String?)?.trim() ?? '';
+    if (id.isNotEmpty) return id;
+    final inner = map['object'];
+    if (inner is Map) {
+      final iid = (inner['id'] as String?)?.trim() ?? '';
+      if (iid.isNotEmpty) return iid;
+    }
+    return null;
   }
 
   void _sortActivities(List<Map<String, dynamic>> items) {
