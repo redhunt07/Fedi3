@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
 import '../../model/note_models.dart';
+import '../../services/object_repository.dart';
 import '../../state/app_state.dart';
 import 'note_card.dart';
 
@@ -61,9 +62,11 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
       final api = CoreApi(config: widget.appState.config!);
       final cached = await api.fetchCachedObject(url);
       if (!mounted) return;
-      if (cached == null) return;
+      var resolved = cached;
+      resolved ??= await ObjectRepository.instance.fetchObject(url);
+      if (resolved == null) return;
       setState(() {
-        _activity = {...a, 'object': cached};
+        _activity = {...a, 'object': resolved};
       });
     } catch (_) {
       // best-effort

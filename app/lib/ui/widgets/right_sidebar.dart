@@ -146,7 +146,8 @@ class _RightSidebarState extends State<RightSidebar> {
     final user = cfg.username.trim();
     if (base.isEmpty || user.isEmpty) return;
     final actorUrl = '$base/users/$user';
-    final profile = await ActorRepository.instance.getActor(actorUrl);
+    final profile = await ActorRepository.instance.refreshActor(actorUrl) ??
+        await ActorRepository.instance.getActor(actorUrl);
     if (!mounted) return;
     setState(() => _selfProfile = profile);
   }
@@ -162,7 +163,8 @@ class _RightSidebarState extends State<RightSidebar> {
         _ensureDraft(cfg);
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(UiTokens.padCard, UiTokens.padCard, UiTokens.padScreen, UiTokens.padCard),
+          padding: const EdgeInsets.fromLTRB(UiTokens.padCard, UiTokens.padCard,
+              UiTokens.padScreen, UiTokens.padCard),
           children: [
             if (cfg != null) ...[
               Card(
@@ -173,10 +175,14 @@ class _RightSidebarState extends State<RightSidebar> {
                     children: [
                       Row(
                         children: [
-                          Text(context.l10n.composeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text(context.l10n.composeTitle,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w800)),
                           const Spacer(),
                           FilledButton.icon(
-                            onPressed: api == null ? null : () => _openComposerOverlay(context, api),
+                            onPressed: api == null
+                                ? null
+                                : () => _openComposerOverlay(context, api),
                             icon: const Icon(Icons.edit_note),
                             label: Text(context.l10n.composeExpand),
                           ),
@@ -185,18 +191,26 @@ class _RightSidebarState extends State<RightSidebar> {
                       const SizedBox(height: UiTokens.gapSm),
                       Text(
                         context.l10n.composeQuickHint,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(179),
+                            fontSize: 12),
                       ),
                       if (_draft != null) ...[
                         const SizedBox(height: UiTokens.gapSm),
                         Row(
                           children: [
-                            Icon(Icons.description_outlined, size: 16, color: Theme.of(context).colorScheme.primary),
+                            Icon(Icons.description_outlined,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.primary),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 context.l10n.composeDraftSaved,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700),
                               ),
                             ),
                             Tooltip(
@@ -230,9 +244,15 @@ class _RightSidebarState extends State<RightSidebar> {
                   children: [
                     Row(
                       children: [
-                        Text(context.l10n.notificationsTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.notificationsTitle,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const Spacer(),
-                        if (_loading) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                        if (_loading)
+                          const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
                         IconButton(
                           tooltip: context.l10n.timelineRefreshTitle,
                           onPressed: _loading ? null : _refresh,
@@ -242,14 +262,29 @@ class _RightSidebarState extends State<RightSidebar> {
                     ),
                     const SizedBox(height: UiTokens.gapSm),
                     if (!widget.appState.isRunning)
-                      Text(context.l10n.notificationsCoreNotRunning, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12))
+                      Text(context.l10n.notificationsCoreNotRunning,
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(179),
+                              fontSize: 12))
                     else if (_items.isEmpty)
-                      Text(context.l10n.notificationsEmpty, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12))
+                      Text(context.l10n.notificationsEmpty,
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(179),
+                              fontSize: 12))
                     else
                       Column(
                         children: [
                           for (final it in _items.take(8))
-                            _SidebarNotificationRow(appState: widget.appState, item: it, lastSeenMs: lastSeen),
+                            _SidebarNotificationRow(
+                                appState: widget.appState,
+                                item: it,
+                                lastSeenMs: lastSeen),
                         ],
                       ),
                   ],
@@ -260,7 +295,9 @@ class _RightSidebarState extends State<RightSidebar> {
             Card(
               child: ListTile(
                 title: Text(context.l10n.settingsAccount),
-                subtitle: Text(cfg == null ? context.l10n.statusUnknownShort : '${cfg.username}@${cfg.domain}'),
+                subtitle: Text(cfg == null
+                    ? context.l10n.statusUnknownShort
+                    : '${cfg.username}@${cfg.domain}'),
                 leading: StatusAvatar(
                   imageUrl: _selfProfile?.iconUrl ?? '',
                   size: 36,
@@ -274,7 +311,8 @@ class _RightSidebarState extends State<RightSidebar> {
                   if (actorUrl.isEmpty) return;
                   Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: actorUrl),
+                      builder: (_) => ProfileScreen(
+                          appState: widget.appState, actorUrl: actorUrl),
                     ),
                   );
                 },
@@ -302,9 +340,11 @@ class _RightSidebarState extends State<RightSidebar> {
         final maxWidth = size.width < 640 ? size.width - 32 : 620.0;
         final maxHeight = size.height * 0.9;
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
+            constraints:
+                BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(UiTokens.padCard),
               child: Column(
@@ -313,7 +353,9 @@ class _RightSidebarState extends State<RightSidebar> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(context.l10n.composeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        child: Text(context.l10n.composeTitle,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                       ),
                       IconButton(
                         tooltip: context.l10n.cancel,
@@ -352,7 +394,8 @@ class _RightSidebarState extends State<RightSidebar> {
   Future<void> _loadDraft() async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final draft = await DraftStore.read(username: cfg.username, domain: cfg.domain);
+    final draft =
+        await DraftStore.read(username: cfg.username, domain: cfg.domain);
     if (!mounted) return;
     setState(() {
       if (draft == null || draft.text.trim().isEmpty) {
@@ -365,7 +408,8 @@ class _RightSidebarState extends State<RightSidebar> {
 
   void _resumeDraft(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ComposeScreen(appState: widget.appState)),
+      MaterialPageRoute(
+          builder: (_) => ComposeScreen(appState: widget.appState)),
     );
   }
 
@@ -379,14 +423,16 @@ class _RightSidebarState extends State<RightSidebar> {
 }
 
 class _SidebarNotificationRow extends StatefulWidget {
-  const _SidebarNotificationRow({required this.appState, required this.item, required this.lastSeenMs});
+  const _SidebarNotificationRow(
+      {required this.appState, required this.item, required this.lastSeenMs});
 
   final AppState appState;
   final Map<String, dynamic> item;
   final int lastSeenMs;
 
   @override
-  State<_SidebarNotificationRow> createState() => _SidebarNotificationRowState();
+  State<_SidebarNotificationRow> createState() =>
+      _SidebarNotificationRowState();
 }
 
 class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
@@ -408,7 +454,9 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
   }
 
   Future<void> _loadActor() async {
-    final activity = (widget.item['activity'] is Map) ? (widget.item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final activity = (widget.item['activity'] is Map)
+        ? (widget.item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final actorUrl = (activity['actor'] as String?)?.trim() ?? '';
     if (actorUrl.isEmpty || actorUrl == _actorUrl) return;
     _actorUrl = actorUrl;
@@ -417,16 +465,21 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
     setState(() => _actor = profile);
   }
 
-  void _openTarget(BuildContext context, Map<String, dynamic>? noteActivity, String actorUrl) {
+  void _openTarget(BuildContext context, Map<String, dynamic>? noteActivity,
+      String actorUrl) {
     if (noteActivity != null) {
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: widget.appState, activity: noteActivity)),
+        MaterialPageRoute(
+            builder: (_) => NoteDetailScreen(
+                appState: widget.appState, activity: noteActivity)),
       );
       return;
     }
     if (actorUrl.isNotEmpty) {
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: actorUrl)),
+        MaterialPageRoute(
+            builder: (_) =>
+                ProfileScreen(appState: widget.appState, actorUrl: actorUrl)),
       );
     }
   }
@@ -434,14 +487,19 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final ts = (item['ts'] is num) ? (item['ts'] as num).toInt() : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final ts = (item['ts'] is num)
+        ? (item['ts'] as num).toInt()
+        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     final actor = (activity['actor'] as String?)?.trim() ?? '';
     final noteActivity = _extractNoteActivity(activity);
     final canOpen = noteActivity != null || actor.isNotEmpty;
 
-    final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
+    final when =
+        ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
     final isNew = ts > 0 && ts > widget.lastSeenMs;
 
     IconData icon = Icons.notifications;
@@ -478,7 +536,9 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
                 width: 8,
                 height: 8,
                 margin: const EdgeInsets.only(top: 12),
-                decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary, borderRadius: BorderRadius.circular(99)),
+                decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary,
+                    borderRadius: BorderRadius.circular(99)),
               )
             else
               const SizedBox(width: 8),
@@ -500,9 +560,13 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
                     decoration: BoxDecoration(
                       color: _badgeColorFor(context, type),
                       shape: BoxShape.circle,
-                      border: Border.all(color: Theme.of(context).colorScheme.surface, width: 2),
+                      border: Border.all(
+                          color: Theme.of(context).colorScheme.surface,
+                          width: 2),
                     ),
-                    child: Icon(icon, size: 10, color: Theme.of(context).colorScheme.onPrimary),
+                    child: Icon(icon,
+                        size: 10,
+                        color: Theme.of(context).colorScheme.onPrimary),
                   ),
                 ),
               ],
@@ -521,13 +585,19 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
                           actorName.isNotEmpty ? '$actorName · $label' : label,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700),
                         ),
                       ),
                       if (when != null)
                         Text(
                           formatTimeAgo(context, when),
-                          style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withAlpha(128)),
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(128)),
                         ),
                     ],
                   ),
@@ -537,7 +607,12 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
                       summary,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(160)),
                     ),
                   ],
                 ],
@@ -552,7 +627,9 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
   static String _shortActor(String actor) {
     final uri = Uri.tryParse(actor);
     if (uri == null || uri.host.isEmpty) return actor;
-    if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'users' && uri.pathSegments.length >= 2) {
+    if (uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.first == 'users' &&
+        uri.pathSegments.length >= 2) {
       return '@${uri.pathSegments[1]}@${uri.host}';
     }
     return '@${uri.host}';
@@ -578,7 +655,11 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
       final obj = activity['object'];
       if (obj is Map) {
         final inner = (obj['type'] as String?)?.trim() ?? '';
-        if (inner == 'Follow' || inner == 'Accept' || inner == 'Reject' || inner == 'Like' || inner == 'EmojiReact') {
+        if (inner == 'Follow' ||
+            inner == 'Accept' ||
+            inner == 'Reject' ||
+            inner == 'Like' ||
+            inner == 'EmojiReact') {
           return inner;
         }
       }
@@ -589,7 +670,8 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
 
 Map<String, dynamic>? _extractNoteActivity(Map<String, dynamic> activity) {
   final type = (activity['type'] as String?)?.trim() ?? '';
-  if (type == 'Create' || type == 'Announce' || type == 'Update') return activity;
+  if (type == 'Create' || type == 'Announce' || type == 'Update')
+    return activity;
   final obj = activity['object'];
   if (obj is Map) {
     final map = obj.cast<String, dynamic>();

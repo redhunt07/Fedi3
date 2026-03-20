@@ -74,7 +74,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _featured = const [];
     });
     try {
-      final p = await ActorRepository.instance.getActor(widget.actorUrl);
+      final p = await ActorRepository.instance.refreshActor(widget.actorUrl) ??
+          await ActorRepository.instance.getActor(widget.actorUrl);
       if (!mounted) return;
       setState(() => _profile = p);
       await _refreshFollowingStatus();

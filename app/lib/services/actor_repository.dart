@@ -69,14 +69,20 @@ class ActorProfile {
     final id = (json['id'] as String?)?.trim() ?? '';
     if (id.isEmpty) return null;
 
-    final preferredUsername = (json['preferredUsername'] as String?)?.trim() ?? '';
+    final preferredUsername =
+        (json['preferredUsername'] as String?)?.trim() ?? '';
     final name = (json['name'] as String?)?.trim() ?? '';
     final summary = (json['summary'] as String?)?.trim() ?? '';
-    final inbox = (json['inbox'] as String?)?.trim() ?? '';
-    final outbox = (json['outbox'] as String?)?.trim() ?? '';
-    final followers = (json['followers'] as String?)?.trim() ?? '';
-    final following = (json['following'] as String?)?.trim() ?? '';
-    final featured = (json['featured'] as String?)?.trim() ?? '';
+    final inbox =
+        _resolveMaybeRelative(id, (json['inbox'] as String?)?.trim() ?? '');
+    final outbox =
+        _resolveMaybeRelative(id, (json['outbox'] as String?)?.trim() ?? '');
+    final followers =
+        _resolveMaybeRelative(id, (json['followers'] as String?)?.trim() ?? '');
+    final following =
+        _resolveMaybeRelative(id, (json['following'] as String?)?.trim() ?? '');
+    final featured =
+        _resolveMaybeRelative(id, (json['featured'] as String?)?.trim() ?? '');
     var hasFedi3Did = false;
     final alsoKnownAsList = json['alsoKnownAs'];
     if (alsoKnownAsList is List) {
@@ -113,6 +119,7 @@ class ActorProfile {
         }
       }
     }
+    iconUrl = _resolveMaybeRelative(id, iconUrl);
 
     String imageUrl = '';
     final image = json['image'];
@@ -133,6 +140,7 @@ class ActorProfile {
         }
       }
     }
+    imageUrl = _resolveMaybeRelative(id, imageUrl);
 
     String url = '';
     final urlValue = json['url'];
@@ -154,6 +162,7 @@ class ActorProfile {
           }
         }
       }
+      url = _resolveMaybeRelative(id, url);
     }
 
     final fields = <ProfileFieldKV>[];
@@ -182,7 +191,8 @@ class ActorProfile {
         }
       }
     }
-    final movedTo = (json['movedTo'] as String?)?.trim() ?? '';
+    final movedTo =
+        _resolveMaybeRelative(id, (json['movedTo'] as String?)?.trim() ?? '');
 
     return ActorProfile(
       id: id,
@@ -206,13 +216,28 @@ class ActorProfile {
   }
 }
 
+String _resolveMaybeRelative(String baseUrl, String value) {
+  final raw = value.trim();
+  if (raw.isEmpty) return '';
+  final uri = Uri.tryParse(raw);
+  if (uri == null) return raw;
+  if (uri.hasScheme && uri.host.isNotEmpty) return uri.toString();
+  final base = Uri.tryParse(baseUrl.trim());
+  if (base == null || base.host.isEmpty) return raw;
+  if (raw.startsWith('//')) {
+    return '${base.scheme}:$raw';
+  }
+  return base.resolve(raw).toString();
+}
+
 bool _hasRelMe(String html) {
   final relRe = RegExp('rel\\s*=\\s*([\'"]?)me\\1', caseSensitive: false);
   return relRe.hasMatch(html);
 }
 
 Iterable<String> _extractLinks(String html) sync* {
-  final hrefRe = RegExp('href\\s*=\\s*([\'"])([^\'"]+)\\1', caseSensitive: false);
+  final hrefRe =
+      RegExp('href\\s*=\\s*([\'"])([^\'"]+)\\1', caseSensitive: false);
   for (final m in hrefRe.allMatches(html)) {
     final href = m.group(2)?.trim() ?? '';
     if (href.isNotEmpty) yield href;
@@ -227,12 +252,14 @@ class ActorRepository {
   final http.Client _client = http.Client();
 
   final LinkedHashMap<String, ActorProfile> _cache = LinkedHashMap();
-  final LinkedHashMap<String, Future<ActorProfile?>> _inflight = LinkedHashMap();
+  final LinkedHashMap<String, Future<ActorProfile?>> _inflight =
+      LinkedHashMap();
 
   int maxCacheEntries = 512;
 
   Map<String, String> get _acceptHeaders => const {
-        'Accept': 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
+        'Accept':
+            'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
       };
 
   Future<ActorProfile?> getActor(String actorUrl) async {
@@ -280,12 +307,14 @@ class ActorRepository {
     return ActorProfile.tryParse(json.cast<String, dynamic>());
   }
 
-  Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl, {int limit = 20}) async {
+  Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
+      {int limit = 20}) async {
     final page = await fetchOutboxPage(outboxUrl, limit: limit);
     return page.items;
   }
 
-  Future<OutboxPage> fetchOutboxPage(String outboxUrl, {String? pageUrl, int limit = 20}) async {
+  Future<OutboxPage> fetchOutboxPage(String outboxUrl,
+      {String? pageUrl, int limit = 20}) async {
     final root = await _fetchJson(outboxUrl);
     if (root == null) return const OutboxPage(items: [], next: null);
 
@@ -297,7 +326,9 @@ class ActorRepository {
       if (firstLink is String && firstLink.trim().isNotEmpty) {
         page = await _fetchJson(firstLink.trim());
       } else if (firstLink is Map) {
-        final href = (firstLink['id'] as String?)?.trim() ?? (firstLink['href'] as String?)?.trim() ?? '';
+        final href = (firstLink['id'] as String?)?.trim() ??
+            (firstLink['href'] as String?)?.trim() ??
+            '';
         if (href.isNotEmpty) page = await _fetchJson(href);
       }
     }
@@ -305,7 +336,12 @@ class ActorRepository {
     final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
     final out = <Map<String, dynamic>>[];
     for (final it in items) {
-      if (it is Map) out.add(it.cast<String, dynamic>());
+      if (it is Map) {
+        out.add(it.cast<String, dynamic>());
+      } else if (it is String && it.trim().isNotEmpty) {
+        final fetched = await _fetchJson(it.trim());
+        if (fetched != null) out.add(fetched);
+      }
       if (out.length >= limit) break;
     }
 
@@ -314,14 +350,17 @@ class ActorRepository {
     if (nextLink is String && nextLink.trim().isNotEmpty) {
       next = nextLink.trim();
     } else if (nextLink is Map) {
-      final href = (nextLink['id'] as String?)?.trim() ?? (nextLink['href'] as String?)?.trim() ?? '';
+      final href = (nextLink['id'] as String?)?.trim() ??
+          (nextLink['href'] as String?)?.trim() ??
+          '';
       if (href.isNotEmpty) next = href;
     }
 
     return OutboxPage(items: out, next: next);
   }
 
-  Future<List<dynamic>> fetchCollectionItems(String collectionUrl, {int limit = 20}) async {
+  Future<List<dynamic>> fetchCollectionItems(String collectionUrl,
+      {int limit = 20}) async {
     final first = await _fetchJson(collectionUrl);
     if (first == null) return const [];
 
@@ -330,7 +369,9 @@ class ActorRepository {
     if (firstLink is String && firstLink.trim().isNotEmpty) {
       page = await _fetchJson(firstLink.trim());
     } else if (firstLink is Map) {
-      final href = (firstLink['id'] as String?)?.trim() ?? (firstLink['href'] as String?)?.trim() ?? '';
+      final href = (firstLink['id'] as String?)?.trim() ??
+          (firstLink['href'] as String?)?.trim() ??
+          '';
       if (href.isNotEmpty) page = await _fetchJson(href);
     }
 
