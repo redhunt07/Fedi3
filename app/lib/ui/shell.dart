@@ -21,7 +21,6 @@ import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/timelines_screen.dart';
 import 'screens/chat_screen.dart';
-import 'widgets/update_banner.dart';
 import 'widgets/client_version_badge.dart';
 import 'widgets/nerd_status_bar.dart';
 import 'widgets/right_sidebar.dart';
@@ -291,12 +290,7 @@ class _ShellState extends State<Shell> {
       return Scaffold(
         body: Stack(
           children: [
-            Column(
-              children: [
-                const UpdateBanner(),
-                Expanded(child: IndexedStack(index: _index, children: _pages)),
-              ],
-            ),
+            IndexedStack(index: _index, children: _pages),
             const Positioned(
               right: 12,
               bottom: 12,
@@ -374,7 +368,6 @@ class _ShellState extends State<Shell> {
                     Expanded(
                       child: Column(
                         children: [
-                          const UpdateBanner(),
                           Expanded(
                               child: IndexedStack(
                                   index: _index, children: _pages)),
