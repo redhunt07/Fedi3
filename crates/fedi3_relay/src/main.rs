@@ -4742,6 +4742,8 @@ impl Db {
                     );
                     CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
                       ON relay_legacy_feed(username, stream, created_at_ms DESC);
+                    CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup_inserted
+                      ON relay_legacy_feed(username, stream, inserted_at_ms DESC, note_id DESC);
                     CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
                       username TEXT NOT NULL,
                       stream TEXT NOT NULL,
@@ -4766,6 +4768,8 @@ impl Db {
                     );
                     CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
                       ON relay_legacy_feed(username, stream, created_at_ms DESC);
+                    CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup_inserted
+                      ON relay_legacy_feed(username, stream, inserted_at_ms DESC, note_id DESC);
                     CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
                       username TEXT NOT NULL,
                       stream TEXT NOT NULL,
@@ -4986,6 +4990,8 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
               ON relay_legacy_feed(username, stream, created_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup_inserted
+              ON relay_legacy_feed(username, stream, inserted_at_ms DESC, note_id DESC);
 
             CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
               username TEXT NOT NULL,
@@ -7758,31 +7764,31 @@ impl Db {
                 let mut rows;
                 if let Some(since) = since {
                     stmt = conn.prepare(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
-                         WHERE f.username = ?1 AND f.stream = ?2 AND f.created_at_ms > ?3
-                         ORDER BY f.created_at_ms DESC
+                         WHERE f.username = ?1 AND f.stream = ?2 AND f.inserted_at_ms > ?3
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT ?4",
                     )?;
                     rows = stmt.query(params![username, stream_name, since, limit])?;
                 } else if let Some(cur) = cursor {
                     stmt = conn.prepare(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
-                         WHERE f.username = ?1 AND f.stream = ?2 AND f.created_at_ms < ?3
-                         ORDER BY f.created_at_ms DESC
+                         WHERE f.username = ?1 AND f.stream = ?2 AND f.inserted_at_ms < ?3
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT ?4",
                     )?;
                     rows = stmt.query(params![username, stream_name, cur, limit])?;
                 } else {
                     stmt = conn.prepare(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
                          WHERE f.username = ?1 AND f.stream = ?2
-                         ORDER BY f.created_at_ms DESC
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT ?3",
                     )?;
                     rows = stmt.query(params![username, stream_name, limit])?;
@@ -7810,31 +7816,31 @@ impl Db {
                 let mut conn = self.open_pg_conn()?;
                 let rows = if let Some(since) = since {
                     conn.query(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
-                         WHERE f.username = $1 AND f.stream = $2 AND f.created_at_ms > $3
-                         ORDER BY f.created_at_ms DESC
+                         WHERE f.username = $1 AND f.stream = $2 AND f.inserted_at_ms > $3
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT $4",
                         &[&username, &stream_name, &since, &limit],
                     )?
                 } else if let Some(cur) = cursor {
                     conn.query(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
-                         WHERE f.username = $1 AND f.stream = $2 AND f.created_at_ms < $3
-                         ORDER BY f.created_at_ms DESC
+                         WHERE f.username = $1 AND f.stream = $2 AND f.inserted_at_ms < $3
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT $4",
                         &[&username, &stream_name, &cur, &limit],
                     )?
                 } else {
                     conn.query(
-                        "SELECT n.note_json, f.created_at_ms
+                        "SELECT n.note_json, f.inserted_at_ms
                          FROM relay_legacy_feed f
                          JOIN relay_notes n ON n.note_id = f.note_id
                          WHERE f.username = $1 AND f.stream = $2
-                         ORDER BY f.created_at_ms DESC
+                         ORDER BY f.inserted_at_ms DESC, f.note_id DESC
                          LIMIT $3",
                         &[&username, &stream_name, &limit],
                     )?

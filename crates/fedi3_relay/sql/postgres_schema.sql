@@ -194,6 +194,8 @@ CREATE TABLE IF NOT EXISTS relay_legacy_feed (
 );
 CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
   ON relay_legacy_feed(username, stream, created_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup_inserted
+  ON relay_legacy_feed(username, stream, inserted_at_ms DESC, note_id DESC);
 
 CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
   username TEXT NOT NULL,
