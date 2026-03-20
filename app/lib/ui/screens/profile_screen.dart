@@ -20,7 +20,8 @@ import '../widgets/timeline_activity_card.dart';
 import '../utils/open_url.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, required this.appState, required this.actorUrl});
+  const ProfileScreen(
+      {super.key, required this.appState, required this.actorUrl});
 
   final AppState appState;
   final String actorUrl;
@@ -82,16 +83,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final followers = p.followers;
         final following = p.following;
         if (followers.isNotEmpty) {
-          _followersCount = await ActorRepository.instance.fetchCollectionCount(followers);
+          _followersCount =
+              await ActorRepository.instance.fetchCollectionCount(followers);
         }
         if (following.isNotEmpty) {
-          _followingCount = await ActorRepository.instance.fetchCollectionCount(following);
+          _followingCount =
+              await ActorRepository.instance.fetchCollectionCount(following);
         }
         if (!mounted) return;
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final page = await ActorRepository.instance.fetchOutboxPage(p!.outbox, limit: 20);
+        final page = await ActorRepository.instance
+            .fetchOutboxPage(p!.outbox, limit: 20);
         if (!mounted) return;
         setState(() {
           _outbox = page.items.where(_isProfileActivity).toList();
@@ -99,7 +103,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         });
       }
       if (p?.featured.isNotEmpty ?? false) {
-        final items = await ActorRepository.instance.fetchCollectionItems(p!.featured, limit: 6);
+        final items = await ActorRepository.instance
+            .fetchCollectionItems(p!.featured, limit: 6);
         if (!mounted) return;
         final out = <Map<String, dynamic>>[];
         for (final it in items) {
@@ -120,7 +125,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final cfg = widget.appState.config;
     final p = _profile;
     if (cfg == null || p == null) return false;
-    final me = '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '')}/users/${cfg.username}';
+    final me =
+        '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '')}/users/${cfg.username}';
     return p.id == me;
   }
 
@@ -128,18 +134,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!_isLocalProfile()) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    if (identical(_profileStreamConfig, cfg) && _profileStreamSub != null) return;
+    if (identical(_profileStreamConfig, cfg) && _profileStreamSub != null)
+      return;
     _profileStreamConfig = cfg;
     _profileStreamRetry?.cancel();
     _profileStreamSub?.cancel();
-    _profileStreamSub = CoreEventStream(config: cfg).stream(kind: 'profile').listen((ev) {
+    _profileStreamSub =
+        CoreEventStream(config: cfg).stream(kind: 'profile').listen((ev) {
       if (ev.activityType != 'featured') return;
       _refreshProfileImmediate();
     }, onError: (_) {
       _profileStreamSub?.cancel();
       _profileStreamSub = null;
       _profileStreamRetry?.cancel();
-      _profileStreamRetry = Timer(const Duration(seconds: 2), _startProfileStreamIfNeeded);
+      _profileStreamRetry =
+          Timer(const Duration(seconds: 2), _startProfileStreamIfNeeded);
     });
     _startProfileNotifStreamIfNeeded();
   }
@@ -148,11 +157,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!_isLocalProfile()) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    if (identical(_profileNotifStreamConfig, cfg) && _profileNotifStreamSub != null) return;
+    if (identical(_profileNotifStreamConfig, cfg) &&
+        _profileNotifStreamSub != null) return;
     _profileNotifStreamConfig = cfg;
     _profileNotifStreamRetry?.cancel();
     _profileNotifStreamSub?.cancel();
-    _profileNotifStreamSub = CoreEventStream(config: cfg).stream(kind: 'notification').listen((ev) {
+    _profileNotifStreamSub =
+        CoreEventStream(config: cfg).stream(kind: 'notification').listen((ev) {
       if (ev.activityType != 'Follow' &&
           ev.activityType != 'Undo' &&
           ev.activityType != 'Accept' &&
@@ -164,7 +175,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _profileNotifStreamSub?.cancel();
       _profileNotifStreamSub = null;
       _profileNotifStreamRetry?.cancel();
-      _profileNotifStreamRetry = Timer(const Duration(seconds: 2), _startProfileNotifStreamIfNeeded);
+      _profileNotifStreamRetry =
+          Timer(const Duration(seconds: 2), _startProfileNotifStreamIfNeeded);
     });
   }
 
@@ -181,15 +193,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
       final active = refreshed ?? p;
       if (active.followers.isNotEmpty) {
-        _followersCount = await ActorRepository.instance.fetchCollectionCount(active.followers);
+        _followersCount = await ActorRepository.instance
+            .fetchCollectionCount(active.followers);
       }
       if (active.following.isNotEmpty) {
-        _followingCount = await ActorRepository.instance.fetchCollectionCount(active.following);
+        _followingCount = await ActorRepository.instance
+            .fetchCollectionCount(active.following);
       }
       if (!mounted) return;
       setState(() {});
       if (active.outbox.isNotEmpty) {
-        final page = await ActorRepository.instance.fetchOutboxPage(active.outbox, limit: 20);
+        final page = await ActorRepository.instance
+            .fetchOutboxPage(active.outbox, limit: 20);
         if (!mounted) return;
         setState(() {
           _outbox = page.items.where(_isProfileActivity).toList();
@@ -198,7 +213,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
       final featuredUrl = active.featured;
       if (featuredUrl.isNotEmpty) {
-        final items = await ActorRepository.instance.fetchCollectionItems(featuredUrl, limit: 6);
+        final items = await ActorRepository.instance
+            .fetchCollectionItems(featuredUrl, limit: 6);
         if (!mounted) return;
         final out = <Map<String, dynamic>>[];
         for (final it in items) {
@@ -216,19 +232,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   bool _isProfileActivity(Map<String, dynamic> activity) {
     final type = (activity['type'] as String?)?.trim() ?? '';
-    if (type != 'Create') return false;
+    if (type != 'Create' &&
+        type != 'Update' &&
+        type != 'Announce' &&
+        type != 'Note' &&
+        type != 'Article' &&
+        type != 'Question') {
+      return false;
+    }
+
+    final actorUrl = _profile?.id.trim() ?? '';
+    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    if (actorUrl.isNotEmpty && actor.isNotEmpty && actor != actorUrl) {
+      return false;
+    }
+
     final obj = activity['object'];
-    if (obj is! Map) return false;
-    final objType = (obj['type'] as String?)?.trim() ?? '';
-    if (objType != 'Note') return false;
-    if (_profile == null) return true;
-    final actorUrl = _profile!.id;
-    final attributedTo = (obj['attributedTo'] as String?)?.trim() ?? '';
+    if (obj is String) {
+      return obj.trim().isNotEmpty;
+    }
+    if (obj is! Map) {
+      // Some outbox responses can already be note objects.
+      return _isNoteLikeType(type);
+    }
+    final map = obj.cast<String, dynamic>();
+    var objType = (map['type'] as String?)?.trim() ?? '';
+    if (!_isNoteLikeType(objType) && map['object'] is Map) {
+      objType =
+          (((map['object'] as Map).cast<String, dynamic>())['type'] as String?)
+                  ?.trim() ??
+              '';
+    }
+    if (!_isNoteLikeType(objType)) {
+      return false;
+    }
+    if (actorUrl.isEmpty) {
+      return true;
+    }
+    final attributedTo = (map['attributedTo'] as String?)?.trim() ??
+        ((map['object'] is Map)
+            ? ((((map['object'] as Map).cast<String, dynamic>())['attributedTo']
+                        as String?)
+                    ?.trim() ??
+                '')
+            : '');
     if (attributedTo.isNotEmpty) {
       return attributedTo == actorUrl;
     }
-    final actor = (activity['actor'] as String?)?.trim() ?? '';
     return actor.isEmpty || actor == actorUrl;
+  }
+
+  bool _isNoteLikeType(String type) {
+    final t = type.trim();
+    return t == 'Note' || t == 'Article' || t == 'Question' || t == 'Page';
   }
 
   Map<String, dynamic>? _normalizeFeaturedItem(dynamic item) {
@@ -272,7 +328,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final s = await api.fetchFollowingStatus(p.id);
       if (!mounted) return;
       setState(() {
-        if (s == 'none' && (_followingStatus == 'pending' || _followingStatus == 'accepted')) {
+        if (s == 'none' &&
+            (_followingStatus == 'pending' || _followingStatus == 'accepted')) {
           return;
         }
         _followingStatus = s;
@@ -296,7 +353,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         title: Text(_profile?.displayName ?? widget.actorUrl),
         actions: [
-          IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
+          IconButton(
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh)),
         ],
       ),
       body: ListView(
@@ -319,17 +378,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           if (_profile == null && !_loading)
             Center(child: Text(context.l10n.listNoItems)),
-          if (_loading) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+          if (_loading)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator())),
           if (_featured.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text(context.l10n.profileFeatured, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.l10n.profileFeatured,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final a in _featured)
-              TimelineActivityCard(appState: widget.appState, activity: a, elevated: true),
+              TimelineActivityCard(
+                  appState: widget.appState, activity: a, elevated: true),
           ],
           if (_outbox.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text(context.l10n.timelineTabHome, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.l10n.timelineTabHome,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final a in _outbox)
               TimelineActivityCard(appState: widget.appState, activity: a),
@@ -339,7 +405,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ? const CircularProgressIndicator()
                   : OutlinedButton(
                       onPressed: _outboxNext == null ? null : _loadMoreOutbox,
-                      child: Text(_outboxNext == null ? context.l10n.listEnd : context.l10n.listLoadMore),
+                      child: Text(_outboxNext == null
+                          ? context.l10n.listEnd
+                          : context.l10n.listLoadMore),
                     ),
             ),
           ],
@@ -355,7 +423,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (p == null || next == null || next.trim().isEmpty) return;
     setState(() => _outboxLoadingMore = true);
     try {
-      final page = await ActorRepository.instance.fetchOutboxPage(p.outbox, pageUrl: next, limit: 20);
+      final page = await ActorRepository.instance
+          .fetchOutboxPage(p.outbox, pageUrl: next, limit: 20);
       if (!mounted) return;
       setState(() {
         _outbox.addAll(page.items.where(_isProfileActivity));
@@ -374,7 +443,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_followBusy) return;
     setState(() => _followBusy = true);
     try {
-      final following = _followingStatus == 'accepted' || _followingStatus == 'pending';
+      final following =
+          _followingStatus == 'accepted' || _followingStatus == 'pending';
       setState(() => _followingStatus = following ? 'none' : 'pending');
       if (following) {
         await api.unfollow(p.id);
@@ -384,14 +454,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _ensureFollowPoll();
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
       await _refreshFollowingStatus();
       // Some servers accept asynchronously; re-check after a short delay.
       await Future<void>.delayed(const Duration(seconds: 2));
       if (mounted) await _refreshFollowingStatus();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     } finally {
       if (mounted) setState(() => _followBusy = false);
     }
@@ -399,7 +471,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _ensureFollowPoll() {
     if (_followPoll != null) return;
-    _followPoll = Timer.periodic(const Duration(seconds: 6), (_) => _refreshFollowingStatus());
+    _followPoll = Timer.periodic(
+        const Duration(seconds: 6), (_) => _refreshFollowingStatus());
   }
 
   void _stopFollowPoll() {
@@ -431,10 +504,14 @@ class _ProfileHeader extends StatelessWidget {
     final isFollowing = followingStatus == 'accepted';
     final label = isPending
         ? context.l10n.profileFollowPending
-        : (isFollowing ? context.l10n.settingsUnfollow : context.l10n.settingsFollow);
+        : (isFollowing
+            ? context.l10n.settingsUnfollow
+            : context.l10n.settingsFollow);
     final fields = profile.fields;
     final hasBanner = profile.imageUrl.trim().isNotEmpty;
-    final acct = profile.preferredUsername.isNotEmpty ? '@${profile.preferredUsername}' : profile.id;
+    final acct = profile.preferredUsername.isNotEmpty
+        ? '@${profile.preferredUsername}'
+        : profile.id;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -445,9 +522,16 @@ class _ProfileHeader extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withAlpha(120),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
+                  border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outlineVariant
+                          .withAlpha(120)),
                 ),
                 child: InkWell(
                   onTap: () => openUrlExternal(profile.movedTo),
@@ -455,7 +539,9 @@ class _ProfileHeader extends StatelessWidget {
                     children: [
                       const Icon(Icons.arrow_forward, size: 18),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(context.l10n.profileMovedTo(profile.movedTo))),
+                      Expanded(
+                          child: Text(
+                              context.l10n.profileMovedTo(profile.movedTo))),
                     ],
                   ),
                 ),
@@ -475,7 +561,10 @@ class _ProfileHeader extends StatelessWidget {
                         errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                       )
                     else
-                      Container(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                      Container(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest),
                     DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
@@ -499,14 +588,19 @@ class _ProfileHeader extends StatelessWidget {
                             profile.displayName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 20),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 20),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             acct,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(200)),
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(200)),
                           ),
                         ],
                       ),
@@ -534,11 +628,17 @@ class _ProfileHeader extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (!hasBanner) ...[
-                        Text(profile.displayName, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                        Text(profile.displayName,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 16)),
                         const SizedBox(height: 2),
                         Text(
                           acct,
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(179)),
                         ),
                       ],
                       if (profile.url.trim().isNotEmpty)
@@ -546,7 +646,9 @@ class _ProfileHeader extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
                             profile.url,
-                            style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12),
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontSize: 12),
                           ),
                         ),
                     ],
@@ -558,16 +660,26 @@ class _ProfileHeader extends StatelessWidget {
                     FilledButton(
                       onPressed: followBusy ? null : onToggleFollow,
                       child: followBusy
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : Text(label),
                     ),
                     const SizedBox(height: 6),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (followersCount != null) _StatChip(label: context.l10n.profileFollowers, value: followersCount!),
-                        if (followersCount != null && followingCount != null) const SizedBox(width: 6),
-                        if (followingCount != null) _StatChip(label: context.l10n.profileFollowing, value: followingCount!),
+                        if (followersCount != null)
+                          _StatChip(
+                              label: context.l10n.profileFollowers,
+                              value: followersCount!),
+                        if (followersCount != null && followingCount != null)
+                          const SizedBox(width: 6),
+                        if (followingCount != null)
+                          _StatChip(
+                              label: context.l10n.profileFollowing,
+                              value: followingCount!),
                       ],
                     ),
                   ],
@@ -580,7 +692,8 @@ class _ProfileHeader extends StatelessWidget {
             ],
             if (profile.aliases.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text(context.l10n.profileAliases, style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(context.l10n.profileAliases,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
@@ -627,10 +740,11 @@ class _ProfileHeader extends StatelessWidget {
 
   bool _fieldHasVerified(ActorProfile profile, String value) {
     if (profile.verifiedLinks.isEmpty) return false;
-    final matches = RegExp('href\\s*=\\s*([\'"])([^\'"]+)\\1', caseSensitive: false)
-        .allMatches(value)
-        .map((m) => m.group(2)?.trim() ?? '')
-        .where((v) => v.isNotEmpty);
+    final matches =
+        RegExp('href\\s*=\\s*([\'"])([^\'"]+)\\1', caseSensitive: false)
+            .allMatches(value)
+            .map((m) => m.group(2)?.trim() ?? '')
+            .where((v) => v.isNotEmpty);
     for (final href in matches) {
       if (profile.verifiedLinks.contains(href)) {
         return true;
@@ -651,9 +765,13 @@ class _StatChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withAlpha(120),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
+        border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
       ),
       child: Text(
         '$label $value',
