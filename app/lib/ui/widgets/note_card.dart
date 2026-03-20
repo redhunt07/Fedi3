@@ -2307,8 +2307,8 @@ class _QuotedPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prev = replyPreview ?? quotePreview;
-    final inner = (prev['content'] as String?)?.trim() ??
-        (prev['name'] as String?)?.trim() ??
+    final inner = (prev?['content'] as String?)?.trim() ??
+        (prev?['name'] as String?)?.trim() ??
         '';
     final hasPreviewContent = inner.isNotEmpty;
     if (!hasPreviewContent && inReplyTo.isEmpty) return const SizedBox.shrink();
