@@ -3731,6 +3731,28 @@ async fn cached_user_response(
         );
     } else if let Some(kind) = collection_kind_from_path(user, path) {
         if let Ok(Some(json)) = db.get_collection_cache(user, kind) {
+            // Guard against cache pollution: a paged response must not be served
+            // as the collection root (`/outbox`, `/followers`, `/following`).
+            if path == format!("/users/{user}/{kind}") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                    let ty = v
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if ty.ends_with("page") {
+                        let stub = collection_stub_json(user, kind, headers);
+                        return Some(
+                            (
+                                StatusCode::OK,
+                                [("Content-Type", "application/activity+json; charset=utf-8")],
+                                stub,
+                            )
+                                .into_response(),
+                        );
+                    }
+                }
+            }
             return Some(
                 (
                     StatusCode::OK,
@@ -4022,10 +4044,14 @@ async fn forward_to_user(
     }
 
     if method == Method::GET {
-        if matches!(
+        let route_is_cached = matches!(
             classify_forward_route(&user, path),
             ForwardRouteClass::Actor | ForwardRouteClass::Collection
-        ) {
+        );
+        let is_online = { state.tunnels.read().await.contains_key(&user) };
+        // Serve cache immediately only when user is offline.
+        // When online, prefer tunnel as source-of-truth and use cache as fallback.
+        if route_is_cached && !is_online {
             if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
                 state
                     .relay_stale_cache_served
@@ -4036,7 +4062,6 @@ async fn forward_to_user(
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
             return offline_cached_response(&state, &user, path, &headers).await;
         }
-        let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
             if should_drop_duplicate_offline_request(&state, &user, path, now).await {
                 return offline_cached_response(&state, &user, path, &headers).await;
@@ -4069,6 +4094,7 @@ async fn forward_to_user(
 
     let headers_vec = headers_to_vec(&headers);
     let id = format!("{user}-{}", REQ_ID.fetch_add(1, Ordering::Relaxed));
+    let query_is_empty = query.trim().is_empty();
     let req = RelayHttpRequest {
         id: id.clone(),
         method: method.to_string(),
@@ -4162,7 +4188,12 @@ async fn forward_to_user(
                         state.meili_index_user(doc);
                     }
                 } else if let Some(kind) = collection_kind_from_path(&user, path) {
-                    let _ = db.upsert_collection_cache(&user, kind, &actor_json);
+                    // Cache only canonical collection root responses.
+                    // Paged responses (`?page=true&...`) are per-request views and must
+                    // not overwrite root cache used by remote instances.
+                    if query_is_empty {
+                        let _ = db.upsert_collection_cache(&user, kind, &actor_json);
+                    }
                     if kind == "outbox" {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
                             for note in extract_notes_from_value(&v) {
@@ -4447,7 +4478,9 @@ async fn shared_inbox(
         }
     }
     if delivered == 0 && spooled == 0 {
-        (StatusCode::SERVICE_UNAVAILABLE, "no recipients online").into_response()
+        // Interop: shared inbox deliveries may legitimately target users that are
+        // currently unknown/disabled locally. Accepting avoids upstream retry storms.
+        (StatusCode::ACCEPTED, "accepted (no active recipients)").into_response()
     } else {
         (StatusCode::ACCEPTED, "accepted").into_response()
     }
