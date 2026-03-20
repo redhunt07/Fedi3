@@ -184,6 +184,25 @@ INSERT INTO relay_notes_count(id, count)
 SELECT 1, COUNT(*) FROM relay_notes
 ON CONFLICT (id) DO UPDATE SET count = EXCLUDED.count;
 
+CREATE TABLE IF NOT EXISTS relay_legacy_feed (
+  username TEXT NOT NULL,
+  stream TEXT NOT NULL,
+  note_id TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  inserted_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(username, stream, note_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
+  ON relay_legacy_feed(username, stream, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
+  username TEXT NOT NULL,
+  stream TEXT NOT NULL,
+  last_source_ms BIGINT NOT NULL,
+  updated_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(username, stream)
+);
+
 CREATE OR REPLACE FUNCTION relay_tag_counts_insert() RETURNS trigger AS $$
 BEGIN
   INSERT INTO relay_tag_counts(tag, count) VALUES (NEW.tag, 1)

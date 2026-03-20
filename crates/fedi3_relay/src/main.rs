@@ -40,11 +40,11 @@ use std::io::Write;
 use std::net::IpAddr;
 use std::sync::OnceLock;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     path::Path as FsPath,
     path::PathBuf,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     sync::Arc,
     time::Duration,
 };
@@ -55,7 +55,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{NoTls, Row};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use ed25519_dalek::{Signer as _, Verifier as _};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -144,6 +144,32 @@ struct RelayTelemetry {
     p2p_upnp_port_end: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_p2p_peer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_feed_rows: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_backlog_users: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_lag_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_runs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_errors: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_last_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_inserted: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_projection_dedup_skipped: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_sync_v0_hits: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_sync_delta_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_bootstrap_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_sync_delta_calls: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_bootstrap_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +340,12 @@ struct CollectionPage<T> {
     next: Option<String>,
 }
 
+#[derive(Default, Clone, Copy)]
+struct ProjectionApplyStats {
+    inserted: u64,
+    dedup_skipped: u64,
+}
+
 #[derive(Clone)]
 struct AppState {
     tunnels: Arc<RwLock<HashMap<String, TunnelHandle>>>,
@@ -336,6 +368,72 @@ struct AppState {
     search_cache: Option<Arc<SearchCache>>,
     media_cfg: media_store::MediaConfig,
     media_backend: Arc<dyn media_store::MediaBackend>,
+    legacy_projection_stats: Arc<LegacyProjectionStats>,
+    legacy_sync_v0_hits: Arc<AtomicU64>,
+    legacy_sync_delta_latency: Arc<LegacyApiLatencyStats>,
+    legacy_bootstrap_latency: Arc<LegacyApiLatencyStats>,
+}
+
+#[derive(Default)]
+struct LegacyProjectionStats {
+    runs: AtomicU64,
+    errors: AtomicU64,
+    running: AtomicBool,
+    last_run_ms: AtomicU64,
+    last_duration_ms: AtomicU64,
+    inserted: AtomicU64,
+    dedup_skipped: AtomicU64,
+}
+
+const LEGACY_LATENCY_BUCKETS_MS: [u64; 8] = [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000];
+
+#[derive(Default)]
+struct LegacyApiLatencyStats {
+    calls: AtomicU64,
+    buckets: Vec<AtomicU64>,
+}
+
+impl LegacyApiLatencyStats {
+    fn new() -> Self {
+        Self {
+            calls: AtomicU64::new(0),
+            buckets: LEGACY_LATENCY_BUCKETS_MS
+                .iter()
+                .map(|_| AtomicU64::new(0))
+                .collect(),
+        }
+    }
+
+    fn observe(&self, elapsed_ms: u64) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let idx = LEGACY_LATENCY_BUCKETS_MS
+            .iter()
+            .position(|limit| elapsed_ms <= *limit)
+            .unwrap_or(LEGACY_LATENCY_BUCKETS_MS.len().saturating_sub(1));
+        if let Some(bucket) = self.buckets.get(idx) {
+            bucket.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn calls(&self) -> u64 {
+        self.calls.load(Ordering::Relaxed)
+    }
+
+    fn p95_ms(&self) -> u64 {
+        let total = self.calls();
+        if total == 0 {
+            return 0;
+        }
+        let target = ((total as f64) * 0.95).ceil() as u64;
+        let mut cumulative = 0u64;
+        for (idx, bucket) in self.buckets.iter().enumerate() {
+            cumulative = cumulative.saturating_add(bucket.load(Ordering::Relaxed));
+            if cumulative >= target {
+                return LEGACY_LATENCY_BUCKETS_MS[idx];
+            }
+        }
+        *LEGACY_LATENCY_BUCKETS_MS.last().unwrap_or(&0)
+    }
 }
 
 #[derive(Clone)]
@@ -425,7 +523,10 @@ impl MeiliIndexer {
     }
 }
 
-fn spawn_github_issues(cfg: &RelayConfig, http: reqwest::Client) -> Option<Arc<GithubIssueReporter>> {
+fn spawn_github_issues(
+    cfg: &RelayConfig,
+    http: reqwest::Client,
+) -> Option<Arc<GithubIssueReporter>> {
     let repo = cfg.github_repo.as_ref()?.trim().to_string();
     let token = cfg.github_token.as_ref()?.trim().to_string();
     if repo.is_empty() || token.is_empty() {
@@ -487,14 +588,24 @@ fn spawn_github_issues(cfg: &RelayConfig, http: reqwest::Client) -> Option<Arc<G
 }
 
 async fn sync_relay_list_once(state: &AppState) -> Result<()> {
-    let Some(repo) = state.cfg.relay_list_repo.as_deref().filter(|v| !v.is_empty()) else {
+    let Some(repo) = state
+        .cfg
+        .relay_list_repo
+        .as_deref()
+        .filter(|v| !v.is_empty())
+    else {
         return Ok(());
     };
     let path = state.cfg.relay_list_path.trim().to_string();
     let branch = state.cfg.relay_list_branch.trim().to_string();
-    let (mut entries, sha) =
-        fetch_relay_list_from_github(state, repo, &path, &branch, state.cfg.relay_list_token.as_deref())
-            .await?;
+    let (mut entries, sha) = fetch_relay_list_from_github(
+        state,
+        repo,
+        &path,
+        &branch,
+        state.cfg.relay_list_token.as_deref(),
+    )
+    .await?;
 
     if !entries.is_empty() {
         let mut db = state.db.lock().await;
@@ -567,13 +678,8 @@ async fn fetch_relay_list_from_github(
     branch: &str,
     token: Option<&str>,
 ) -> Result<(Vec<RelayListEntry>, Option<String>)> {
-    let url = format!(
-        "https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-    );
-    let mut req = state
-        .http
-        .get(url)
-        .header("User-Agent", "fedi3-relay");
+    let url = format!("https://api.github.com/repos/{repo}/contents/{path}?ref={branch}");
+    let mut req = state.http.get(url).header("User-Agent", "fedi3-relay");
     if let Some(tok) = token {
         req = req.header("Authorization", format!("Bearer {tok}"));
     }
@@ -582,7 +688,10 @@ async fn fetch_relay_list_from_github(
         return Ok((Vec::new(), None));
     }
     if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("relay list fetch failed: {}", resp.status()));
+        return Err(anyhow::anyhow!(
+            "relay list fetch failed: {}",
+            resp.status()
+        ));
     }
     let data: GithubContentResponse = resp.json().await?;
     let Some(content) = data.content else {
@@ -839,6 +948,10 @@ struct RelayConfig {
     relay_media_ttl_secs: u64,
     relay_actor_ttl_secs: u64,
     relay_reputation_ttl_secs: u64,
+    legacy_projection_interval_secs: u64,
+    legacy_projection_batch_size: u32,
+    legacy_projection_max_users_per_cycle: u32,
+    legacy_projection_retention_days: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -965,6 +1078,9 @@ struct RelaySyncNotesQuery {
 
 #[derive(Debug, Deserialize)]
 struct RelayLegacyQuery {
+    v: Option<u32>,
+    username: Option<String>,
+    stream: Option<String>,
     limit: Option<u32>,
     since: Option<i64>,
     cursor: Option<i64>,
@@ -1414,6 +1530,10 @@ async fn main() {
         search_cache,
         media_cfg,
         media_backend: Arc::from(media_backend),
+        legacy_projection_stats: Arc::new(LegacyProjectionStats::default()),
+        legacy_sync_v0_hits: Arc::new(AtomicU64::new(0)),
+        legacy_sync_delta_latency: Arc::new(LegacyApiLatencyStats::new()),
+        legacy_bootstrap_latency: Arc::new(LegacyApiLatencyStats::new()),
     };
 
     let addr = state.cfg.bind;
@@ -1447,8 +1567,9 @@ async fn main() {
         if let Err(e) = sync_relay_list_once(&relay_list_state).await {
             warn!("relay list sync failed: {e:#}");
         }
-        let mut interval =
-            tokio::time::interval(Duration::from_secs(relay_list_state.cfg.relay_list_refresh_secs));
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            relay_list_state.cfg.relay_list_refresh_secs,
+        ));
         loop {
             interval.tick().await;
             if let Err(e) = sync_relay_list_once(&relay_list_state).await {
@@ -1463,6 +1584,7 @@ async fn main() {
     let relay_media_ttl_secs = cleanup_state.cfg.relay_media_ttl_secs;
     let relay_actor_ttl_secs = cleanup_state.cfg.relay_actor_ttl_secs;
     let relay_reputation_ttl_secs = cleanup_state.cfg.relay_reputation_ttl_secs;
+    let legacy_projection_retention_days = cleanup_state.cfg.legacy_projection_retention_days;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
@@ -1482,6 +1604,9 @@ async fn main() {
             }
             if let Err(e) = db.cleanup_relay_reputation(relay_reputation_ttl_secs) {
                 error!("relay_reputation cleanup failed: {e}");
+            }
+            if let Err(e) = db.cleanup_legacy_projection(legacy_projection_retention_days) {
+                error!("legacy projection cleanup failed: {e}");
             }
             if peer_directory_ttl_days > 0 {
                 if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
@@ -1536,6 +1661,33 @@ async fn main() {
         }
     });
 
+    let legacy_projection_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_legacy_projection_once(&legacy_projection_state).await {
+            legacy_projection_state
+                .legacy_projection_stats
+                .errors
+                .fetch_add(1, Ordering::Relaxed);
+            error!("legacy projection worker failed: {e:#}");
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            legacy_projection_state
+                .cfg
+                .legacy_projection_interval_secs
+                .max(15),
+        ));
+        loop {
+            interval.tick().await;
+            if let Err(e) = run_legacy_projection_once(&legacy_projection_state).await {
+                legacy_projection_state
+                    .legacy_projection_stats
+                    .errors
+                    .fetch_add(1, Ordering::Relaxed);
+                error!("legacy projection worker failed: {e:#}");
+            }
+        }
+    });
+
     let app = Router::new()
         .route("/tunnel/:user", get(tunnel_ws))
         .route("/register", post(register))
@@ -1570,7 +1722,10 @@ async fn main() {
         .route("/_fedi3/relay/search/coverage", get(relay_search_coverage))
         .route("/_fedi3/relay/sync/notes", get(relay_sync_notes))
         .route("/_fedi3/relay/legacy/sync", get(relay_legacy_sync))
-        .route("/_fedi3/relay/legacy/bootstrap", get(relay_legacy_bootstrap))
+        .route(
+            "/_fedi3/relay/legacy/bootstrap",
+            get(relay_legacy_bootstrap),
+        )
         .route("/_fedi3/relay/reindex", post(relay_reindex))
         .route("/_fedi3/relay/telemetry", post(relay_telemetry_post))
         .route(
@@ -1586,9 +1741,15 @@ async fn main() {
             axum::routing::delete(relay_move_delete),
         )
         .route("/_fedi3/relay/move_notice", post(relay_move_notice_post))
-        .route("/_fedi3/backup", get(relay_backup_meta).put(relay_backup_put))
+        .route(
+            "/_fedi3/backup",
+            get(relay_backup_meta).put(relay_backup_put),
+        )
         .route("/_fedi3/backup/blob", get(relay_backup_blob))
-        .route("/api/users/show", post(api_user_show).get(api_user_show_get))
+        .route(
+            "/api/users/show",
+            post(api_user_show).get(api_user_show_get),
+        )
         .route("/users/:user/media", post(media_upload))
         .route("/users/:user/media/:id", get(media_get))
         .route("/users/:user", any(forward_user_root))
@@ -2142,6 +2303,25 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(30 * 24 * 60 * 60);
+    let legacy_projection_interval_secs =
+        std::env::var("FEDI3_RELAY_LEGACY_PROJECTION_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(45);
+    let legacy_projection_batch_size = std::env::var("FEDI3_RELAY_LEGACY_PROJECTION_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(5000);
+    let legacy_projection_max_users_per_cycle =
+        std::env::var("FEDI3_RELAY_LEGACY_PROJECTION_MAX_USERS_PER_CYCLE")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1000);
+    let legacy_projection_retention_days =
+        std::env::var("FEDI3_RELAY_LEGACY_PROJECTION_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(180);
     RelayConfig {
         bind,
         base_domain,
@@ -2250,6 +2430,10 @@ fn load_config() -> RelayConfig {
         relay_media_ttl_secs,
         relay_actor_ttl_secs,
         relay_reputation_ttl_secs,
+        legacy_projection_interval_secs,
+        legacy_projection_batch_size,
+        legacy_projection_max_users_per_cycle,
+        legacy_projection_retention_days,
     }
 }
 
@@ -2351,7 +2535,11 @@ async fn handle_tunnel(
                 hello.actor.trim().to_string()
             };
             let db = hello_state.db.lock().await;
-            let _ = db.upsert_peer_directory(&format!("user:{hello_user}"), &hello.username, &actor_url);
+            let _ = db.upsert_peer_directory(
+                &format!("user:{hello_user}"),
+                &hello.username,
+                &actor_url,
+            );
             let stub = actor_stub_from_actor_url(
                 &hello.username,
                 &actor_url,
@@ -2995,6 +3183,64 @@ async fn relay_metrics_prom(
         "fedi3_relay_relays_total {}\n",
         telemetry.relays.len()
     ));
+    if let Some(v) = telemetry.legacy_projection_feed_rows {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_feed_rows gauge\n");
+        out.push_str(&format!("fedi3_relay_legacy_projection_feed_rows {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_projection_backlog_users {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_backlog_users gauge\n");
+        out.push_str(&format!(
+            "fedi3_relay_legacy_projection_backlog_users {v}\n"
+        ));
+    }
+    if let Some(v) = telemetry.legacy_projection_lag_ms {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_lag_ms gauge\n");
+        out.push_str(&format!("fedi3_relay_legacy_projection_lag_ms {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_projection_runs {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_runs counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_projection_runs {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_projection_errors {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_errors counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_projection_errors {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_projection_last_duration_ms {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_last_duration_ms gauge\n");
+        out.push_str(&format!(
+            "fedi3_relay_legacy_projection_last_duration_ms {v}\n"
+        ));
+    }
+    if let Some(v) = telemetry.legacy_projection_inserted {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_inserted counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_projection_inserted {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_projection_dedup_skipped {
+        out.push_str("# TYPE fedi3_relay_legacy_projection_dedup_skipped counter\n");
+        out.push_str(&format!(
+            "fedi3_relay_legacy_projection_dedup_skipped {v}\n"
+        ));
+    }
+    if let Some(v) = telemetry.legacy_sync_v0_hits {
+        out.push_str("# TYPE fedi3_relay_legacy_sync_v0_hits counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_sync_v0_hits {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_sync_delta_calls {
+        out.push_str("# TYPE fedi3_relay_legacy_sync_delta_calls counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_sync_delta_calls {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_bootstrap_calls {
+        out.push_str("# TYPE fedi3_relay_legacy_bootstrap_calls counter\n");
+        out.push_str(&format!("fedi3_relay_legacy_bootstrap_calls {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
+        out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
+        out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
+    }
+    if let Some(v) = telemetry.legacy_bootstrap_p95_ms {
+        out.push_str("# TYPE fedi3_relay_legacy_bootstrap_p95_ms gauge\n");
+        out.push_str(&format!("fedi3_relay_legacy_bootstrap_p95_ms {v}\n"));
+    }
     if let Some(v) = telemetry.search_indexed_users {
         out.push_str("# TYPE fedi3_relay_search_indexed_users gauge\n");
         out.push_str(&format!("fedi3_relay_search_indexed_users {v}\n"));
@@ -3255,14 +3501,17 @@ async fn cached_user_response(
                         .into_response(),
                 );
             }
-            return Some((StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "")
-                .into_response());
+            return Some(
+                (StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "").into_response(),
+            );
         }
 
         // For collections, redirect to the new actor URL + same suffix.
         let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
         let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
-        return Some((StatusCode::PERMANENT_REDIRECT, [("Location", location)], "").into_response());
+        return Some(
+            (StatusCode::PERMANENT_REDIRECT, [("Location", location)], "").into_response(),
+        );
     }
 
     if path == format!("/users/{user}") {
@@ -3734,6 +3983,114 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
     }
     let db = state.db.lock().await;
     let _ = db.relay_meta_set("search_index_last_ms", &now_ms().to_string());
+    Ok(())
+}
+
+async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
+    if state
+        .legacy_projection_stats
+        .running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        debug!("legacy projection worker: previous cycle still running, skipping tick");
+        return Ok(());
+    }
+    struct RunningGuard<'a> {
+        running: &'a AtomicBool,
+    }
+    impl Drop for RunningGuard<'_> {
+        fn drop(&mut self) {
+            self.running.store(false, Ordering::Release);
+        }
+    }
+    let _guard = RunningGuard {
+        running: &state.legacy_projection_stats.running,
+    };
+
+    let started = std::time::Instant::now();
+    let start_ms = now_ms() as u64;
+    let mut inserted = 0u64;
+    let mut dedup = 0u64;
+    let mut processed_users = 0u32;
+    let max_users = state.cfg.legacy_projection_max_users_per_cycle.max(1);
+    let page_size = 200u32;
+    let batch_limit = state.cfg.legacy_projection_batch_size.max(100);
+    let streams = [
+        LegacyFeedKind::Home,
+        LegacyFeedKind::Social,
+        LegacyFeedKind::Local,
+        LegacyFeedKind::Federated,
+    ];
+    let mut offset = 0u32;
+
+    {
+        let db = state.db.lock().await;
+        db.ensure_legacy_projection_tables()?;
+    }
+
+    loop {
+        if processed_users >= max_users {
+            break;
+        }
+        let users = {
+            let db = state.db.lock().await;
+            db.list_enabled_usernames(page_size, offset)?
+        };
+        if users.is_empty() {
+            break;
+        }
+        for username in users {
+            if processed_users >= max_users {
+                break;
+            }
+            let following = {
+                let db = state.db.lock().await;
+                match db.get_collection_cache(&username, "following") {
+                    Ok(Some(json)) => parse_following_actors(&json),
+                    _ => HashSet::new(),
+                }
+            };
+            for stream in streams {
+                let run = {
+                    let db = state.db.lock().await;
+                    db.rebuild_legacy_feed_projection(
+                        &username,
+                        stream,
+                        &following,
+                        state.cfg.base_domain.as_deref(),
+                        batch_limit,
+                    )?
+                };
+                inserted = inserted.saturating_add(run.inserted);
+                dedup = dedup.saturating_add(run.dedup_skipped);
+            }
+            processed_users = processed_users.saturating_add(1);
+        }
+        offset = offset.saturating_add(page_size);
+    }
+
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    state
+        .legacy_projection_stats
+        .runs
+        .fetch_add(1, Ordering::Relaxed);
+    state
+        .legacy_projection_stats
+        .last_run_ms
+        .store(start_ms, Ordering::Relaxed);
+    state
+        .legacy_projection_stats
+        .last_duration_ms
+        .store(elapsed_ms, Ordering::Relaxed);
+    state
+        .legacy_projection_stats
+        .inserted
+        .fetch_add(inserted, Ordering::Relaxed);
+    state
+        .legacy_projection_stats
+        .dedup_skipped
+        .fetch_add(dedup, Ordering::Relaxed);
     Ok(())
 }
 
@@ -4209,7 +4566,9 @@ fn redact_secrets(text: &str) -> String {
     let mut out = text.replace("Bearer ", "Bearer <redacted>");
     for key in ["token=", "secret=", "password=", "apikey=", "api_key="] {
         loop {
-            let Some(pos) = out.to_lowercase().find(key) else { break };
+            let Some(pos) = out.to_lowercase().find(key) else {
+                break;
+            };
             let start = pos + key.len();
             let end = out[start..]
                 .find(|c: char| c.is_whitespace())
@@ -4364,6 +4723,60 @@ impl Db {
         let _ = conn.pragma_update(None, "temp_store", "MEMORY");
         let _ = conn.pragma_update(None, "cache_size", &self.db_cache_kb);
         let _ = conn.busy_timeout(Duration::from_millis(self.db_busy_timeout_ms));
+        Ok(())
+    }
+
+    fn ensure_legacy_projection_tables(&self) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute_batch(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS relay_legacy_feed (
+                      username TEXT NOT NULL,
+                      stream TEXT NOT NULL,
+                      note_id TEXT NOT NULL,
+                      created_at_ms INTEGER NOT NULL,
+                      inserted_at_ms INTEGER NOT NULL,
+                      PRIMARY KEY(username, stream, note_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
+                      ON relay_legacy_feed(username, stream, created_at_ms DESC);
+                    CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
+                      username TEXT NOT NULL,
+                      stream TEXT NOT NULL,
+                      last_source_ms INTEGER NOT NULL,
+                      updated_at_ms INTEGER NOT NULL,
+                      PRIMARY KEY(username, stream)
+                    );
+                    "#,
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.batch_execute(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS relay_legacy_feed (
+                      username TEXT NOT NULL,
+                      stream TEXT NOT NULL,
+                      note_id TEXT NOT NULL,
+                      created_at_ms BIGINT NOT NULL,
+                      inserted_at_ms BIGINT NOT NULL,
+                      PRIMARY KEY(username, stream, note_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
+                      ON relay_legacy_feed(username, stream, created_at_ms DESC);
+                    CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
+                      username TEXT NOT NULL,
+                      stream TEXT NOT NULL,
+                      last_source_ms BIGINT NOT NULL,
+                      updated_at_ms BIGINT NOT NULL,
+                      PRIMARY KEY(username, stream)
+                    );
+                    "#,
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -4562,6 +4975,25 @@ impl Db {
             BEGIN
               UPDATE relay_notes_count SET count = count - 1 WHERE id = 1;
             END;
+
+            CREATE TABLE IF NOT EXISTS relay_legacy_feed (
+              username TEXT NOT NULL,
+              stream TEXT NOT NULL,
+              note_id TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              inserted_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, stream, note_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_legacy_feed_lookup
+              ON relay_legacy_feed(username, stream, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
+              username TEXT NOT NULL,
+              stream TEXT NOT NULL,
+              last_source_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, stream)
+            );
 
             CREATE TABLE IF NOT EXISTS relay_media (
               media_url TEXT PRIMARY KEY,
@@ -4903,7 +5335,12 @@ impl Db {
         }
     }
 
-    fn upsert_relay_reputation(&self, relay_url: &str, score: i32, updated_at_ms: i64) -> Result<()> {
+    fn upsert_relay_reputation(
+        &self,
+        relay_url: &str,
+        score: i32,
+        updated_at_ms: i64,
+    ) -> Result<()> {
         let relay_url = relay_url.trim_end_matches('/');
         match self.driver {
             DbDriver::Sqlite => {
@@ -4945,7 +5382,10 @@ impl Db {
                     "SELECT relay_url, score, updated_at_ms FROM relay_reputation ORDER BY updated_at_ms DESC",
                     &[],
                 )?;
-                Ok(rows.into_iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|r| (r.get(0), r.get(1), r.get(2)))
+                    .collect())
             }
         }
     }
@@ -5132,6 +5572,114 @@ impl Db {
                 let row = conn.query_one("SELECT COUNT(*) FROM users WHERE disabled=false", &[])?;
                 let n: i64 = row.get(0);
                 Ok(n.max(0) as u64)
+            }
+        }
+    }
+
+    fn list_enabled_usernames(&self, limit: u32, offset: u32) -> Result<Vec<String>> {
+        let limit = limit.min(5000).max(1) as i64;
+        let offset = offset as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT username FROM users WHERE disabled=0 ORDER BY created_at_ms DESC LIMIT ?1 OFFSET ?2",
+                )?;
+                let mut rows = stmt.query(params![limit, offset])?;
+                let mut out = Vec::new();
+                while let Some(row) = rows.next()? {
+                    out.push(row.get(0)?);
+                }
+                Ok(out)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT username FROM users WHERE disabled=false ORDER BY created_at_ms DESC LIMIT $1 OFFSET $2",
+                    &[&limit, &offset],
+                )?;
+                Ok(rows.into_iter().map(|r| r.get(0)).collect())
+            }
+        }
+    }
+
+    fn cleanup_legacy_projection(&self, retention_days: u32) -> Result<u64> {
+        if retention_days == 0 {
+            return Ok(0);
+        }
+        let cutoff = now_ms().saturating_sub((retention_days as i64) * 24 * 3600 * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_legacy_feed WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed_state
+                     WHERE updated_at_ms < ?1
+                       OR username NOT IN (SELECT username FROM users WHERE disabled=0)",
+                    params![cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let deleted = conn.execute(
+                    "DELETE FROM relay_legacy_feed WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed_state
+                     WHERE updated_at_ms < $1
+                       OR username NOT IN (SELECT username FROM users WHERE disabled=false)",
+                    &[&cutoff],
+                )?;
+                Ok(deleted as u64)
+            }
+        }
+    }
+
+    fn legacy_projection_overview(&self, stale_cutoff_ms: i64) -> Result<(u64, u64, u64)> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let feed_rows: u64 =
+                    conn.query_row("SELECT COUNT(*) FROM relay_legacy_feed", [], |r| r.get(0))?;
+                let stale_users: u64 = conn.query_row(
+                    "SELECT COUNT(DISTINCT username) FROM relay_legacy_feed_state WHERE updated_at_ms < ?1",
+                    params![stale_cutoff_ms],
+                    |r| r.get(0),
+                )?;
+                let max_lag_ms: i64 = conn.query_row(
+                    "SELECT COALESCE(MAX(?1 - updated_at_ms), 0) FROM relay_legacy_feed_state",
+                    params![now_ms()],
+                    |r| r.get(0),
+                )?;
+                Ok((feed_rows, stale_users, max_lag_ms.max(0) as u64))
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let feed_rows: i64 = conn
+                    .query_one("SELECT COUNT(*) FROM relay_legacy_feed", &[])?
+                    .get(0);
+                let stale_users: i64 = conn
+                    .query_one(
+                        "SELECT COUNT(DISTINCT username) FROM relay_legacy_feed_state WHERE updated_at_ms < $1",
+                        &[&stale_cutoff_ms],
+                    )?
+                    .get(0);
+                let max_lag_ms: i64 = conn
+                    .query_one(
+                        "SELECT COALESCE(MAX($1 - updated_at_ms), 0) FROM relay_legacy_feed_state",
+                        &[&now_ms()],
+                    )?
+                    .get(0);
+                Ok((
+                    feed_rows.max(0) as u64,
+                    stale_users.max(0) as u64,
+                    max_lag_ms.max(0) as u64,
+                ))
             }
         }
     }
@@ -5738,6 +6286,14 @@ impl Db {
                     params![username],
                 )?;
                 let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed_state WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
                     "DELETE FROM media_items WHERE username=?1",
                     params![username],
                 )?;
@@ -5755,6 +6311,14 @@ impl Db {
                 let _ = conn.execute("DELETE FROM user_cache WHERE username=$1", &[&username])?;
                 let _ = conn.execute(
                     "DELETE FROM user_collection_cache WHERE username=$1",
+                    &[&username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed WHERE username=$1",
+                    &[&username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM relay_legacy_feed_state WHERE username=$1",
                     &[&username],
                 )?;
                 let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
@@ -6911,7 +7475,7 @@ impl Db {
         since: Option<i64>,
         cursor: Option<i64>,
     ) -> Result<CollectionPage<(String, i64)>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.min(3000).max(1) as i64;
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -6968,6 +7532,311 @@ impl Db {
                     conn.query(
                         "SELECT note_json, created_at_ms FROM relay_notes ORDER BY created_at_ms DESC LIMIT $1",
                         &[&limit],
+                    )?
+                };
+                let mut items = Vec::<(String, i64)>::new();
+                let mut last_created = None;
+                for row in rows {
+                    let note_json: String = row.get(0);
+                    let created_at_ms: i64 = row.get(1);
+                    last_created = Some(created_at_ms);
+                    items.push((note_json, created_at_ms));
+                }
+                let next = if items.len() as i64 == limit {
+                    last_created.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn rebuild_legacy_feed_projection(
+        &self,
+        username: &str,
+        stream: LegacyFeedKind,
+        following: &HashSet<String>,
+        relay_host: Option<&str>,
+        batch_limit: u32,
+    ) -> Result<ProjectionApplyStats> {
+        let stream_name = stream.as_str();
+        let now = now_ms();
+        let batch_limit = batch_limit.clamp(100, 20_000) as i64;
+        let mut stats = ProjectionApplyStats::default();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut last_source = conn
+                    .query_row(
+                        "SELECT last_source_ms FROM relay_legacy_feed_state WHERE username=?1 AND stream=?2",
+                        params![username, stream_name],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                loop {
+                    let mut stmt = conn.prepare(
+                        "SELECT note_id, actor_id, note_json, created_at_ms
+                         FROM relay_notes
+                         WHERE created_at_ms > ?1
+                         ORDER BY created_at_ms ASC
+                         LIMIT ?2",
+                    )?;
+                    let mut rows = stmt.query(params![last_source, batch_limit])?;
+                    let mut batch_max = last_source;
+                    let mut seen = 0i64;
+                    let mut pending = Vec::<(String, i64)>::new();
+                    while let Some(row) = rows.next()? {
+                        let note_id: String = row.get(0)?;
+                        let actor_id: Option<String> = row.get(1)?;
+                        let note_json: String = row.get(2)?;
+                        let created_at_ms: i64 = row.get(3)?;
+                        seen += 1;
+                        if created_at_ms > batch_max {
+                            batch_max = created_at_ms;
+                        }
+                        let actor = actor_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                serde_json::from_str::<serde_json::Value>(&note_json)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("attributedTo")
+                                            .or_else(|| v.get("actor"))
+                                            .and_then(|a| a.as_str())
+                                            .map(|s| s.to_string())
+                                    })
+                            })
+                            .unwrap_or_default();
+                        if !actor_matches_feed(&actor, stream, following, relay_host) {
+                            continue;
+                        }
+                        pending.push((note_id, created_at_ms));
+                    }
+                    drop(rows);
+                    drop(stmt);
+                    for (note_id, created_at_ms) in pending {
+                        let changed = conn.execute(
+                            "INSERT OR IGNORE INTO relay_legacy_feed(username, stream, note_id, created_at_ms, inserted_at_ms)
+                             VALUES (?1, ?2, ?3, ?4, ?5)",
+                            params![username, stream_name, note_id, created_at_ms, now],
+                        )?;
+                        if changed > 0 {
+                            stats.inserted += 1;
+                        } else {
+                            stats.dedup_skipped += 1;
+                        }
+                    }
+                    if batch_max > last_source {
+                        conn.execute(
+                            "INSERT INTO relay_legacy_feed_state(username, stream, last_source_ms, updated_at_ms)
+                             VALUES (?1, ?2, ?3, ?4)
+                             ON CONFLICT(username, stream) DO UPDATE SET
+                               last_source_ms=excluded.last_source_ms,
+                               updated_at_ms=excluded.updated_at_ms",
+                            params![username, stream_name, batch_max, now],
+                        )?;
+                        last_source = batch_max;
+                    }
+                    if seen < batch_limit {
+                        break;
+                    }
+                }
+                Ok(stats)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let mut last_source = conn
+                    .query_opt(
+                        "SELECT last_source_ms FROM relay_legacy_feed_state WHERE username=$1 AND stream=$2",
+                        &[&username, &stream_name],
+                    )?
+                    .map(|r| r.get::<_, i64>(0))
+                    .unwrap_or(0);
+                loop {
+                    let rows = conn.query(
+                        "SELECT note_id, actor_id, note_json, created_at_ms
+                         FROM relay_notes
+                         WHERE created_at_ms > $1
+                         ORDER BY created_at_ms ASC
+                         LIMIT $2",
+                        &[&last_source, &batch_limit],
+                    )?;
+                    let mut batch_max = last_source;
+                    let seen = rows.len() as i64;
+                    for row in rows {
+                        let note_id: String = row.get(0);
+                        let actor_id: Option<String> = row.get(1);
+                        let note_json: String = row.get(2);
+                        let created_at_ms: i64 = row.get(3);
+                        if created_at_ms > batch_max {
+                            batch_max = created_at_ms;
+                        }
+                        let actor = actor_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                serde_json::from_str::<serde_json::Value>(&note_json)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("attributedTo")
+                                            .or_else(|| v.get("actor"))
+                                            .and_then(|a| a.as_str())
+                                            .map(|s| s.to_string())
+                                    })
+                            })
+                            .unwrap_or_default();
+                        if !actor_matches_feed(&actor, stream, following, relay_host) {
+                            continue;
+                        }
+                        let changed = conn.execute(
+                            "INSERT INTO relay_legacy_feed(username, stream, note_id, created_at_ms, inserted_at_ms)
+                             VALUES ($1, $2, $3, $4, $5)
+                             ON CONFLICT(username, stream, note_id) DO NOTHING",
+                            &[&username, &stream_name, &note_id, &created_at_ms, &now],
+                        )?;
+                        if changed > 0 {
+                            stats.inserted += changed as u64;
+                        } else {
+                            stats.dedup_skipped += 1;
+                        }
+                    }
+                    if batch_max > last_source {
+                        conn.execute(
+                            "INSERT INTO relay_legacy_feed_state(username, stream, last_source_ms, updated_at_ms)
+                             VALUES ($1, $2, $3, $4)
+                             ON CONFLICT(username, stream) DO UPDATE SET
+                               last_source_ms=EXCLUDED.last_source_ms,
+                               updated_at_ms=EXCLUDED.updated_at_ms",
+                            &[&username, &stream_name, &batch_max, &now],
+                        )?;
+                        last_source = batch_max;
+                    }
+                    if seen < batch_limit {
+                        break;
+                    }
+                }
+                Ok(stats)
+            }
+        }
+    }
+
+    fn list_relay_notes_sync_for_user_stream(
+        &self,
+        username: &str,
+        stream: LegacyFeedKind,
+        limit: u32,
+        since: Option<i64>,
+        cursor: Option<i64>,
+        following: &HashSet<String>,
+        relay_host: Option<&str>,
+        projection_batch_size: u32,
+    ) -> Result<CollectionPage<(String, i64)>> {
+        let _ = self.rebuild_legacy_feed_projection(
+            username,
+            stream,
+            following,
+            relay_host,
+            projection_batch_size,
+        )?;
+        let stream_name = stream.as_str();
+        let limit = limit.min(3000).max(1) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since) = since {
+                    stmt = conn.prepare(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = ?1 AND f.stream = ?2 AND f.created_at_ms > ?3
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT ?4",
+                    )?;
+                    rows = stmt.query(params![username, stream_name, since, limit])?;
+                } else if let Some(cur) = cursor {
+                    stmt = conn.prepare(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = ?1 AND f.stream = ?2 AND f.created_at_ms < ?3
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT ?4",
+                    )?;
+                    rows = stmt.query(params![username, stream_name, cur, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = ?1 AND f.stream = ?2
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, stream_name, limit])?;
+                }
+                let mut items = Vec::<(String, i64)>::new();
+                let mut last_created = None;
+                while let Some(row) = rows.next()? {
+                    let note_json: String = row.get(0)?;
+                    let created_at_ms: i64 = row.get(1)?;
+                    last_created = Some(created_at_ms);
+                    items.push((note_json, created_at_ms));
+                }
+                let next = if items.len() as i64 == limit {
+                    last_created.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since) = since {
+                    conn.query(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = $1 AND f.stream = $2 AND f.created_at_ms > $3
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT $4",
+                        &[&username, &stream_name, &since, &limit],
+                    )?
+                } else if let Some(cur) = cursor {
+                    conn.query(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = $1 AND f.stream = $2 AND f.created_at_ms < $3
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT $4",
+                        &[&username, &stream_name, &cur, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT n.note_json, f.created_at_ms
+                         FROM relay_legacy_feed f
+                         JOIN relay_notes n ON n.note_id = f.note_id
+                         WHERE f.username = $1 AND f.stream = $2
+                         ORDER BY f.created_at_ms DESC
+                         LIMIT $3",
+                        &[&username, &stream_name, &limit],
                     )?
                 };
                 let mut items = Vec::<(String, i64)>::new();
@@ -7774,7 +8643,6 @@ impl Db {
             }
         }
     }
-
 }
 
 enum UpsertUserResult {
@@ -8703,9 +9571,8 @@ async fn relay_backup_blob(
     let headers = resp.headers_mut();
     headers.insert(
         http::header::CONTENT_TYPE,
-        HeaderValue::from_str(&item.content_type).unwrap_or_else(|_| {
-            HeaderValue::from_static("application/octet-stream")
-        }),
+        HeaderValue::from_str(&item.content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
     headers.insert(
         http::header::CACHE_CONTROL,
@@ -8714,10 +9581,7 @@ async fn relay_backup_blob(
     resp
 }
 
-async fn api_user_show(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
+async fn api_user_show(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let input: ApiUserShowRequest = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
@@ -8758,8 +9622,14 @@ async fn user_show_response(
     let user_created_ms = db.get_user(&username).ok().flatten().map(|v| v.0);
 
     let actor_cache = db.get_actor_cache_with_meta(&username).ok().flatten();
-    let followers_json = db.get_collection_cache(&username, "followers").ok().flatten();
-    let following_json = db.get_collection_cache(&username, "following").ok().flatten();
+    let followers_json = db
+        .get_collection_cache(&username, "followers")
+        .ok()
+        .flatten();
+    let following_json = db
+        .get_collection_cache(&username, "following")
+        .ok()
+        .flatten();
     let outbox_json = db.get_collection_cache(&username, "outbox").ok().flatten();
     drop(db);
 
@@ -8771,12 +9641,15 @@ async fn user_show_response(
             actor_stub_json(&username, &base)
         });
 
-    let mut actor_id = actor_value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut actor_id = actor_value
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if actor_id.is_empty() {
         if let Some(cached_actor_id) = actor_cache.as_ref().and_then(|c| c.actor_id.clone()) {
             actor_id = cached_actor_id;
-        } else if let Some(actor_url) = actor_cache.as_ref().and_then(|c| c.actor_url.clone())
-        {
+        } else if let Some(actor_url) = actor_cache.as_ref().and_then(|c| c.actor_url.clone()) {
             actor_id = actor_url;
         } else {
             actor_id = format!("{}/users/{username}", relay_self_base(&state.cfg));
@@ -8786,8 +9659,14 @@ async fn user_show_response(
         .get("preferredUsername")
         .and_then(|v| v.as_str())
         .unwrap_or(&username);
-    let name = actor_value.get("name").and_then(|v| v.as_str()).unwrap_or(preferred_username);
-    let summary = actor_value.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let name = actor_value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(preferred_username);
+    let summary = actor_value
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let is_bot = actor_value
         .get("type")
         .and_then(|v| v.as_str())
@@ -9105,6 +9984,14 @@ async fn relay_sync_notes(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<RelaySyncNotesQuery>,
 ) -> impl IntoResponse {
+    state.legacy_sync_v0_hits.fetch_add(1, Ordering::Relaxed);
+    warn!(
+        peer = %peer_ip(&peer),
+        since = ?q.since,
+        cursor = ?q.cursor,
+        limit = ?q.limit,
+        "deprecated legacy v0 sync endpoint hit"
+    );
     if !state
         .limiter
         .check(
@@ -9134,11 +10021,184 @@ async fn relay_sync_notes(
                 })
         })
         .collect::<Vec<_>>();
-    axum::Json(RelaySyncNotesResponse {
+    let body = RelaySyncNotesResponse {
         items,
         next: page.next,
-    })
-    .into_response()
+    };
+    let mut resp = axum::Json(body).into_response();
+    resp.headers_mut().insert(
+        HeaderName::from_static("deprecation"),
+        HeaderValue::from_static("true"),
+    );
+    resp.headers_mut().insert(
+        HeaderName::from_static("warning"),
+        HeaderValue::from_static(
+            "299 - \"Use /_fedi3/relay/legacy/sync?v=1&username=<user> with bearer token\"",
+        ),
+    );
+    resp
+}
+
+async fn require_user_token(
+    state: &AppState,
+    headers: &HeaderMap,
+    username: &str,
+) -> Result<(), Response<Body>> {
+    let Some(tok) = bearer_token(headers) else {
+        return Err(legacy_v1_error(
+            StatusCode::UNAUTHORIZED,
+            "missing_bearer_token",
+            "missing bearer token",
+            false,
+        ));
+    };
+    let db = state.db.lock().await;
+    let authorized = db.verify_token(username, &tok).unwrap_or(false);
+    drop(db);
+    if !authorized {
+        return Err(legacy_v1_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_user_token",
+            "user token required",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LegacyFeedKind {
+    Home,
+    Local,
+    Federated,
+    Social,
+}
+
+impl LegacyFeedKind {
+    fn parse(value: Option<&str>) -> Result<Self, &'static str> {
+        let raw = value.unwrap_or("home").trim().to_ascii_lowercase();
+        match raw.as_str() {
+            "" | "home" => Ok(Self::Home),
+            "local" => Ok(Self::Local),
+            "federated" => Ok(Self::Federated),
+            "social" => Ok(Self::Social),
+            _ => Err("invalid stream"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Local => "local",
+            Self::Federated => "federated",
+            Self::Social => "social",
+        }
+    }
+}
+
+fn parse_following_actors(json: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return out;
+    };
+    let mut push_actor = |value: &str| {
+        let id = value.trim();
+        if !id.is_empty() {
+            out.insert(id.to_string());
+        }
+    };
+    let mut push_from_item = |item: &serde_json::Value| {
+        if let Some(s) = item.as_str() {
+            push_actor(s);
+            return;
+        }
+        if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+            push_actor(id);
+            return;
+        }
+        if let Some(href) = item.get("href").and_then(|v| v.as_str()) {
+            push_actor(href);
+        }
+    };
+    if let Some(arr) = v.get("orderedItems").and_then(|v| v.as_array()) {
+        for item in arr {
+            push_from_item(item);
+        }
+    }
+    if let Some(arr) = v.get("items").and_then(|v| v.as_array()) {
+        for item in arr {
+            push_from_item(item);
+        }
+    }
+    out
+}
+
+fn host_from_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(uri) = raw.parse::<Uri>() {
+        if let Some(host) = uri.host() {
+            return Some(normalize_host(host.to_string()));
+        }
+    }
+    if let Some((_, rest)) = raw.split_once("://") {
+        let host = rest.split('/').next().unwrap_or("").trim();
+        if !host.is_empty() {
+            return Some(normalize_host(host.to_string()));
+        }
+    }
+    None
+}
+
+fn actor_matches_feed(
+    actor: &str,
+    feed: LegacyFeedKind,
+    following: &HashSet<String>,
+    relay_host: Option<&str>,
+) -> bool {
+    if actor.is_empty() {
+        return false;
+    }
+    let actor_host = host_from_url(actor);
+    let is_local = match (relay_host, actor_host.as_deref()) {
+        (Some(relay), Some(actor_h)) => normalize_host(relay.to_string()) == actor_h,
+        _ => false,
+    };
+    match feed {
+        LegacyFeedKind::Federated => true,
+        LegacyFeedKind::Local => is_local,
+        LegacyFeedKind::Home => following.contains(actor),
+        LegacyFeedKind::Social => following.contains(actor) || is_local,
+    }
+}
+
+fn list_legacy_feed_page(
+    db: &Db,
+    username: &str,
+    feed: LegacyFeedKind,
+    limit: u32,
+    since: Option<i64>,
+    cursor: Option<i64>,
+    relay_host: Option<&str>,
+    projection_batch_size: u32,
+) -> Result<CollectionPage<(String, i64)>> {
+    db.ensure_legacy_projection_tables()?;
+    let following = match db.get_collection_cache(username, "following") {
+        Ok(Some(json)) => parse_following_actors(&json),
+        _ => HashSet::new(),
+    };
+    db.list_relay_notes_sync_for_user_stream(
+        username,
+        feed,
+        limit,
+        since,
+        cursor,
+        &following,
+        relay_host,
+        projection_batch_size,
+    )
 }
 
 fn json_or_gzip_response(
@@ -9182,10 +10242,7 @@ fn json_or_gzip_response(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    headers.insert(
-        header::CONTENT_ENCODING,
-        HeaderValue::from_static("gzip"),
-    );
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
     if let Some(name) = filename {
         let disp = format!("attachment; filename=\"{name}\"");
         if let Ok(v) = HeaderValue::from_str(&disp) {
@@ -9195,12 +10252,31 @@ fn json_or_gzip_response(
     (headers, Body::from(compressed)).into_response()
 }
 
+fn legacy_v1_error(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+    retryable: bool,
+) -> Response {
+    let body = serde_json::json!({
+        "schema_version": "1",
+        "error": {
+            "code": code,
+            "message": message.into(),
+            "retryable": retryable,
+        }
+    });
+    (status, axum::Json(body)).into_response()
+}
+
 async fn relay_legacy_sync(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<RelayLegacyQuery>,
 ) -> impl IntoResponse {
-    if !state
+    let started = std::time::Instant::now();
+    let resp = if !state
         .limiter
         .check(
             peer_ip(&peer),
@@ -9209,45 +10285,100 @@ async fn relay_legacy_sync(
         )
         .await
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
-    }
-    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-    let db = state.db.lock().await;
-    let page = match db.list_relay_notes_sync(limit, q.since, q.cursor) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+        legacy_v1_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limited", true)
+    } else if q.v.unwrap_or(1) != 1 {
+        legacy_v1_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_version",
+            "unsupported legacy sync version",
+            false,
+        )
+    } else {
+        let username = q.username.as_deref().unwrap_or("").trim().to_string();
+        if !is_valid_username(&username) {
+            legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_username", "invalid username", false)
+        } else {
+            let feed = match LegacyFeedKind::parse(q.stream.as_deref()) {
+                Ok(v) => v,
+                Err(e) => {
+                    return legacy_v1_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_stream",
+                        e,
+                        false,
+                    )
+                }
+            };
+            if let Err(resp) = require_user_token(&state, &headers, &username).await {
+                resp
+            } else {
+                let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+                let db = state.db.lock().await;
+                let cursor = q.cursor;
+                let page = match list_legacy_feed_page(
+                    &db,
+                    &username,
+                    feed,
+                    limit,
+                    q.since,
+                    cursor,
+                    state.cfg.base_domain.as_deref(),
+                    state.cfg.legacy_projection_batch_size,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        drop(db);
+                        return legacy_v1_error(
+                            StatusCode::BAD_GATEWAY,
+                            "db_error",
+                            format!("db error: {e}"),
+                            true,
+                        );
+                    }
+                };
+                let items = page
+                    .items
+                    .into_iter()
+                    .filter_map(|(note_json, created_at_ms)| {
+                        serde_json::from_str::<serde_json::Value>(&note_json).ok().map(|note| {
+                            serde_json::json!({"note": note, "created_at_ms": created_at_ms})
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let checkpoint_ms = items
+                    .iter()
+                    .filter_map(|v| v.get("created_at_ms").and_then(|v| v.as_i64()))
+                    .max()
+                    .unwrap_or_else(now_ms);
+                let body = serde_json::json!({
+                    "schema_version": "1",
+                    "mode": "delta",
+                    "stream": feed.as_str(),
+                    "username": username,
+                    "relay_url": state.cfg.base_domain,
+                    "generated_at_ms": now_ms(),
+                    "checkpoint_ms": checkpoint_ms,
+                    "items": items,
+                    "next": page.next,
+                });
+                json_or_gzip_response(&body, q.gzip.unwrap_or(false), None)
+            }
+        }
     };
-    let items = page
-        .items
-        .into_iter()
-        .filter_map(|(note_json, created_at_ms)| {
-            serde_json::from_str::<serde_json::Value>(&note_json)
-                .ok()
-                .map(|note| serde_json::json!({"note": note, "created_at_ms": created_at_ms}))
-        })
-        .collect::<Vec<_>>();
-    let checkpoint_ms = items
-        .first()
-        .and_then(|v| v.get("created_at_ms"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or_else(now_ms);
-    let body = serde_json::json!({
-        "mode": "delta",
-        "relay_url": state.cfg.base_domain,
-        "generated_at_ms": now_ms(),
-        "checkpoint_ms": checkpoint_ms,
-        "items": items,
-        "next": page.next,
-    });
-    json_or_gzip_response(&body, q.gzip.unwrap_or(false), None)
+    state
+        .legacy_sync_delta_latency
+        .observe(started.elapsed().as_millis() as u64);
+    resp
 }
 
 async fn relay_legacy_bootstrap(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<RelayLegacyQuery>,
 ) -> impl IntoResponse {
-    if !state
+    let started = std::time::Instant::now();
+    let resp = if !state
         .limiter
         .check(
             peer_ip(&peer),
@@ -9256,41 +10387,94 @@ async fn relay_legacy_bootstrap(
         )
         .await
     {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
-    }
-    let limit = q.limit.unwrap_or(3000).clamp(100, 10000);
-    let db = state.db.lock().await;
-    let page = match db.list_relay_notes_sync(limit, None, q.cursor) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+        legacy_v1_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limited", true)
+    } else if q.v.unwrap_or(1) != 1 {
+        legacy_v1_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_version",
+            "unsupported legacy sync version",
+            false,
+        )
+    } else {
+        let username = q.username.as_deref().unwrap_or("").trim().to_string();
+        if !is_valid_username(&username) {
+            legacy_v1_error(StatusCode::BAD_REQUEST, "invalid_username", "invalid username", false)
+        } else {
+            let feed = match LegacyFeedKind::parse(q.stream.as_deref()) {
+                Ok(v) => v,
+                Err(e) => {
+                    return legacy_v1_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_stream",
+                        e,
+                        false,
+                    )
+                }
+            };
+            if let Err(resp) = require_user_token(&state, &headers, &username).await {
+                resp
+            } else {
+                let limit = q.limit.unwrap_or(3000).clamp(100, 3000);
+                let db = state.db.lock().await;
+                let cursor = q.cursor;
+                let page = match list_legacy_feed_page(
+                    &db,
+                    &username,
+                    feed,
+                    limit,
+                    None,
+                    cursor,
+                    state.cfg.base_domain.as_deref(),
+                    state.cfg.legacy_projection_batch_size,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        drop(db);
+                        return legacy_v1_error(
+                            StatusCode::BAD_GATEWAY,
+                            "db_error",
+                            format!("db error: {e}"),
+                            true,
+                        );
+                    }
+                };
+                let items = page
+                    .items
+                    .into_iter()
+                    .filter_map(|(note_json, created_at_ms)| {
+                        serde_json::from_str::<serde_json::Value>(&note_json).ok().map(|note| {
+                            serde_json::json!({"note": note, "created_at_ms": created_at_ms})
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let checkpoint_ms = items
+                    .iter()
+                    .filter_map(|v| v.get("created_at_ms").and_then(|v| v.as_i64()))
+                    .max()
+                    .unwrap_or_else(now_ms);
+                let body = serde_json::json!({
+                    "schema_version": "1",
+                    "mode": "bootstrap",
+                    "stream": feed.as_str(),
+                    "username": username,
+                    "relay_url": state.cfg.base_domain,
+                    "generated_at_ms": now_ms(),
+                    "checkpoint_ms": checkpoint_ms,
+                    "items": items,
+                    "next": page.next,
+                });
+                json_or_gzip_response(
+                    &body,
+                    q.gzip.unwrap_or(true),
+                    Some("fedi3-legacy-bootstrap.json.gz"),
+                )
+            }
+        }
     };
-    let items = page
-        .items
-        .into_iter()
-        .filter_map(|(note_json, created_at_ms)| {
-            serde_json::from_str::<serde_json::Value>(&note_json)
-                .ok()
-                .map(|note| serde_json::json!({"note": note, "created_at_ms": created_at_ms}))
-        })
-        .collect::<Vec<_>>();
-    let checkpoint_ms = items
-        .first()
-        .and_then(|v| v.get("created_at_ms"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or_else(now_ms);
-    let body = serde_json::json!({
-        "mode": "bootstrap",
-        "relay_url": state.cfg.base_domain,
-        "generated_at_ms": now_ms(),
-        "checkpoint_ms": checkpoint_ms,
-        "items": items,
-        "next": page.next,
-    });
-    json_or_gzip_response(
-        &body,
-        q.gzip.unwrap_or(true),
-        Some("fedi3-legacy-bootstrap.json.gz"),
-    )
+    state
+        .legacy_bootstrap_latency
+        .observe(started.elapsed().as_millis() as u64);
+    resp
 }
 
 async fn relay_search_users(
@@ -9529,13 +10713,7 @@ async fn relay_list(
 }
 
 async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
-    let online_users: Vec<String> = state
-        .tunnels
-        .read()
-        .await
-        .keys()
-        .cloned()
-        .collect();
+    let online_users: Vec<String> = state.tunnels.read().await.keys().cloned().collect();
     let hello_map = state.peer_hello.read().await;
     online_users
         .into_iter()
@@ -9560,12 +10738,7 @@ async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
         .collect()
 }
 
-async fn emit_presence_update(
-    state: &AppState,
-    username: &str,
-    actor_url: &str,
-    online: bool,
-) {
+async fn emit_presence_update(state: &AppState, username: &str, actor_url: &str, online: bool) {
     {
         let mut seen = state.presence_last_seen.lock().await;
         seen.insert(username.to_string(), now_ms());
@@ -9631,7 +10804,9 @@ async fn relay_peers(
     axum::Json(serde_json::json!({ "items": merged })).into_response()
 }
 
-async fn relay_presence_stream(State(state): State<AppState>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+async fn relay_presence_stream(
+    State(state): State<AppState>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let snapshot = presence_snapshot(&state).await;
     let snapshot_payload = serde_json::to_string(&PresenceSnapshot {
         ts_ms: now_ms(),
@@ -9781,7 +10956,9 @@ fn signature_key_id(headers: &HeaderMap) -> Option<String> {
     let sig = signature_header_value(headers)?;
     for part in sig.split(',') {
         let part = part.trim();
-        let Some((k, v)) = part.split_once('=') else { continue };
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
         if k.trim() == "keyId" {
             let key_id = v.trim().trim_matches('"').trim().to_string();
             if !key_id.is_empty() {
@@ -9793,7 +10970,12 @@ fn signature_key_id(headers: &HeaderMap) -> Option<String> {
 }
 
 fn actor_from_key_id(key_id: &str) -> Option<String> {
-    let actor = key_id.split('#').next().unwrap_or(key_id).trim().to_string();
+    let actor = key_id
+        .split('#')
+        .next()
+        .unwrap_or(key_id)
+        .trim()
+        .to_string();
     if actor.is_empty() {
         None
     } else {
@@ -9840,7 +11022,8 @@ async fn verify_webrtc_signature(
     uri: &http::Uri,
     body: &[u8],
 ) -> Result<String> {
-    let sig_header = signature_header_value(headers).ok_or_else(|| anyhow::anyhow!("missing signature"))?;
+    let sig_header =
+        signature_header_value(headers).ok_or_else(|| anyhow::anyhow!("missing signature"))?;
     let key_id = signature_key_id(headers).ok_or_else(|| anyhow::anyhow!("missing keyId"))?;
     let actor_url = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
 
@@ -9887,10 +11070,7 @@ async fn verify_webrtc_signature(
     Ok(actor_url)
 }
 
-async fn webrtc_send(
-    State(state): State<AppState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn webrtc_send(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     let (parts, body) = req.into_parts();
     let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
         Ok(b) => b.to_vec(),
@@ -9900,18 +11080,13 @@ async fn webrtc_send(
         Ok(v) => v,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
-    let from_actor = match verify_webrtc_signature(
-        &state,
-        &parts.headers,
-        &parts.method,
-        &parts.uri,
-        &bytes,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::UNAUTHORIZED, "invalid signature").into_response(),
-    };
+    let from_actor =
+        match verify_webrtc_signature(&state, &parts.headers, &parts.method, &parts.uri, &bytes)
+            .await
+        {
+            Ok(v) => v,
+            Err(_) => return (StatusCode::UNAUTHORIZED, "invalid signature").into_response(),
+        };
 
     let to_peer_id = input.to_peer_id.trim().to_string();
     if to_peer_id.is_empty() || to_peer_id.len() > 128 {
@@ -9948,10 +11123,7 @@ async fn webrtc_send(
     axum::Json(serde_json::json!({ "ok": true, "id": id })).into_response()
 }
 
-async fn webrtc_poll(
-    State(state): State<AppState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn webrtc_poll(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     let (parts, _body) = req.into_parts();
     if verify_webrtc_signature(&state, &parts.headers, &parts.method, &parts.uri, &[])
         .await
@@ -9986,10 +11158,7 @@ async fn webrtc_poll(
     axum::Json(serde_json::json!({ "ok": true, "messages": items })).into_response()
 }
 
-async fn webrtc_ack(
-    State(state): State<AppState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn webrtc_ack(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     let (parts, body) = req.into_parts();
     let bytes = match axum::body::to_bytes(body, 128 * 1024).await {
         Ok(b) => b.to_vec(),
@@ -10617,6 +11786,8 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let search_cutoff_ms = now_ms().saturating_sub(search_window_ms);
     let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
     let relay_sync_cutoff_ms = now_ms().saturating_sub(relay_sync_window_ms);
+    let projection_stale_cutoff_ms = now_ms()
+        .saturating_sub((state.cfg.legacy_projection_interval_secs.max(15) as i64) * 1000 * 2);
     let relay_p2p_peer_id = state.relay_mesh_peer_id.read().await.clone();
     let (
         total_users,
@@ -10629,6 +11800,9 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         search_relays_total,
         search_relays_synced,
         search_relays_last_sync_ms,
+        legacy_projection_feed_rows,
+        legacy_projection_backlog_users,
+        legacy_projection_lag_ms,
     ) = {
         let db = state.db.lock().await;
         let total_users = db.count_users_total().unwrap_or(0);
@@ -10682,6 +11856,13 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
                 actor_url,
             })
             .collect::<Vec<_>>();
+        let (
+            legacy_projection_feed_rows,
+            legacy_projection_backlog_users,
+            legacy_projection_lag_ms,
+        ) = db
+            .legacy_projection_overview(projection_stale_cutoff_ms)
+            .unwrap_or((0, 0, 0));
         (
             total_users,
             total_peers_seen,
@@ -10693,8 +11874,30 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
             relays_total,
             relays_synced,
             last_sync_ms,
+            legacy_projection_feed_rows,
+            legacy_projection_backlog_users,
+            legacy_projection_lag_ms,
         )
     };
+    let projection_runs = state.legacy_projection_stats.runs.load(Ordering::Relaxed);
+    let projection_errors = state.legacy_projection_stats.errors.load(Ordering::Relaxed);
+    let projection_last_duration_ms = state
+        .legacy_projection_stats
+        .last_duration_ms
+        .load(Ordering::Relaxed);
+    let projection_inserted = state
+        .legacy_projection_stats
+        .inserted
+        .load(Ordering::Relaxed);
+    let projection_dedup = state
+        .legacy_projection_stats
+        .dedup_skipped
+        .load(Ordering::Relaxed);
+    let legacy_sync_v0_hits = state.legacy_sync_v0_hits.load(Ordering::Relaxed);
+    let legacy_sync_delta_calls = state.legacy_sync_delta_latency.calls();
+    let legacy_sync_delta_p95_ms = state.legacy_sync_delta_latency.p95_ms();
+    let legacy_bootstrap_calls = state.legacy_bootstrap_latency.calls();
+    let legacy_bootstrap_p95_ms = state.legacy_bootstrap_latency.p95_ms();
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -10722,6 +11925,19 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         p2p_upnp_port_start: state.cfg.p2p_upnp_port_start,
         p2p_upnp_port_end: state.cfg.p2p_upnp_port_end,
         relay_p2p_peer_id,
+        legacy_projection_feed_rows: Some(legacy_projection_feed_rows),
+        legacy_projection_backlog_users: Some(legacy_projection_backlog_users),
+        legacy_projection_lag_ms: Some(legacy_projection_lag_ms),
+        legacy_projection_runs: Some(projection_runs),
+        legacy_projection_errors: Some(projection_errors),
+        legacy_projection_last_duration_ms: Some(projection_last_duration_ms),
+        legacy_projection_inserted: Some(projection_inserted),
+        legacy_projection_dedup_skipped: Some(projection_dedup),
+        legacy_sync_v0_hits: Some(legacy_sync_v0_hits),
+        legacy_sync_delta_p95_ms: Some(legacy_sync_delta_p95_ms),
+        legacy_bootstrap_p95_ms: Some(legacy_bootstrap_p95_ms),
+        legacy_sync_delta_calls: Some(legacy_sync_delta_calls),
+        legacy_bootstrap_calls: Some(legacy_bootstrap_calls),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,
@@ -11455,4 +12671,22 @@ async fn verify_move_notice_signature(
         &signing_string,
         &params.signature,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_latency_p95_tracks_bucket() {
+        let stats = LegacyApiLatencyStats::new();
+        for _ in 0..95 {
+            stats.observe(90);
+        }
+        for _ in 0..5 {
+            stats.observe(1_900);
+        }
+        assert_eq!(stats.calls(), 100);
+        assert_eq!(stats.p95_ms(), 100);
+    }
 }

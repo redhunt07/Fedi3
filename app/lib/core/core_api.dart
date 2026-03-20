@@ -16,12 +16,16 @@ class CoreApi {
   final CoreConfig config;
 
   Map<String, String> get _internalHeaders => {
-        if (config.internalToken.trim().isNotEmpty) 'X-Fedi3-Internal': config.internalToken.trim(),
+        if (config.internalToken.trim().isNotEmpty)
+          'X-Fedi3-Internal': config.internalToken.trim(),
       };
 
   bool get _bindLooksLocal {
     final host = Uri.parse('http://${config.bind}').host.toLowerCase();
-    return host == '127.0.0.1' || host == 'localhost' || host == '0.0.0.0' || host == '::1';
+    return host == '127.0.0.1' ||
+        host == 'localhost' ||
+        host == '0.0.0.0' ||
+        host == '::1';
   }
 
   Uri _baseLocalOrRelay() {
@@ -91,11 +95,13 @@ class CoreApi {
       throw StateError('invalid actor');
     }
 
-    final wf = Uri.https(host, '/.well-known/webfinger', {'resource': 'acct:$user@$host'});
+    final wf = Uri.https(
+        host, '/.well-known/webfinger', {'resource': 'acct:$user@$host'});
 
     final client = _createHttpClient();
     try {
-      final resp = await client.get(wf, headers: {'Accept': 'application/jrd+json, application/json'});
+      final resp = await client.get(wf,
+          headers: {'Accept': 'application/jrd+json, application/json'});
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         throw StateError('webfinger failed: ${resp.statusCode} ${resp.body}');
       }
@@ -108,7 +114,9 @@ class CoreApi {
         final href = link['href']?.toString();
         final type = link['type']?.toString() ?? '';
         if (rel == 'self' && href != null && href.isNotEmpty) {
-          if (type.contains('activity+json') || type.contains('application/json') || type.isEmpty) {
+          if (type.contains('activity+json') ||
+              type.contains('application/json') ||
+              type.isEmpty) {
             return href.replaceAll(RegExp(r'/+$'), '');
           }
         }
@@ -116,7 +124,8 @@ class CoreApi {
       for (final link in links) {
         if (link is! Map) continue;
         final href = link['href']?.toString();
-        if (href != null && href.isNotEmpty) return href.replaceAll(RegExp(r'/+$'), '');
+        if (href != null && href.isNotEmpty)
+          return href.replaceAll(RegExp(r'/+$'), '');
       }
       throw StateError('webfinger: no actor link');
     } finally {
@@ -128,28 +137,43 @@ class CoreApi {
     return _resolveActorInput(input);
   }
 
-  Future<Map<String, dynamic>> fetchTimeline(String kind, {String? cursor, int limit = 50}) async {
+  Future<Map<String, dynamic>> fetchTimeline(String kind,
+      {String? cursor, int limit = 50}) async {
     final uri = _internal('/_fedi3/timeline/$kind', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('timeline $kind failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'timeline $kind failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<void> triggerLegacySync({int pages = 6, int itemsPerActor = 200}) async {
+  Future<void> triggerLegacySync(
+      {int pages = 6, int itemsPerActor = 200}) async {
     final uri = _internal('/_fedi3/sync/legacy', {
       'pages': pages.toString(),
       'items': itemsPerActor.toString(),
       'include_fedi3': '1',
     });
-    final resp = await http.post(uri, headers: {..._internalHeaders, 'Content-Type': 'application/json'}, body: '{}');
+    final resp = await http.post(uri,
+        headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+        body: '{}');
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('legacy sync failed: ${resp.statusCode} ${resp.body}');
     }
+  }
+
+  Future<Map<String, dynamic>> fetchLegacySyncStatus() async {
+    final uri = _internal('/_fedi3/sync/status');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError(
+          'legacy sync status failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> exportBackup() async {
@@ -187,7 +211,8 @@ class CoreApi {
     return json.cast<String, dynamic>();
   }
 
-  Future<Map<String, dynamic>> fetchNoteReplies(String noteId, {String? cursor, int limit = 20}) async {
+  Future<Map<String, dynamic>> fetchNoteReplies(String noteId,
+      {String? cursor, int limit = 20}) async {
     final uri = _internal('/_fedi3/note/replies', {
       'note': noteId,
       'limit': limit.toString(),
@@ -200,7 +225,8 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<void> setNotePinned({required String noteId, required bool pinned}) async {
+  Future<void> setNotePinned(
+      {required String noteId, required bool pinned}) async {
     final uri = _internal('/_fedi3/note/pin');
     final payload = {'id': noteId, 'pinned': pinned};
     final resp = await http.post(
@@ -223,10 +249,14 @@ class CoreApi {
     if (json is! Map) return const [];
     final items = json['items'];
     if (items is! List) return const [];
-    return items.whereType<Map>().map((v) => v.cast<String, dynamic>()).toList();
+    return items
+        .whereType<Map>()
+        .map((v) => v.cast<String, dynamic>())
+        .toList();
   }
 
-  Future<Map<String, dynamic>> fetchReactions(String objectId, {int limit = 50}) async {
+  Future<Map<String, dynamic>> fetchReactions(String objectId,
+      {int limit = 50}) async {
     final uri = _internal('/_fedi3/reactions', {
       'object': objectId,
       'limit': limit.toString(),
@@ -260,7 +290,8 @@ class CoreApi {
       if (tag != null && tag.trim().isNotEmpty) 'tag': tag.trim(),
       'limit': limit.toString(),
       if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     };
     final uri = _internal('/_fedi3/search/notes', params);
@@ -282,7 +313,8 @@ class CoreApi {
       'q': query,
       'limit': limit.toString(),
       if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     };
     final uri = _internal('/_fedi3/search/users', params);
@@ -310,8 +342,10 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> fetchChatMembers({required String threadId}) async {
-    final uri = _internal('/_fedi3/chat/thread/members', {'thread_id': threadId});
+  Future<Map<String, dynamic>> fetchChatMembers(
+      {required String threadId}) async {
+    final uri =
+        _internal('/_fedi3/chat/thread/members', {'thread_id': threadId});
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode == 404) {
       return {'items': []};
@@ -348,12 +382,15 @@ class CoreApi {
   }) async {
     final uri = _internal('/_fedi3/chat/send');
     final body = jsonEncode({
-      if (threadId != null && threadId.trim().isNotEmpty) 'thread_id': threadId.trim(),
+      if (threadId != null && threadId.trim().isNotEmpty)
+        'thread_id': threadId.trim(),
       'recipients': recipients,
       'text': text,
-      if (replyTo != null && replyTo.trim().isNotEmpty) 'reply_to': replyTo.trim(),
+      if (replyTo != null && replyTo.trim().isNotEmpty)
+        'reply_to': replyTo.trim(),
       if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
-      if (attachments != null && attachments.isNotEmpty) 'attachments': attachments,
+      if (attachments != null && attachments.isNotEmpty)
+        'attachments': attachments,
     });
     final resp = await http.post(
       uri,
@@ -366,7 +403,8 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<void> updateChatThreadTitle({required String threadId, required String title}) async {
+  Future<void> updateChatThreadTitle(
+      {required String threadId, required String title}) async {
     final uri = _internal('/_fedi3/chat/thread/update');
     final body = jsonEncode({'thread_id': threadId, 'title': title});
     final resp = await http.post(
@@ -375,7 +413,8 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread update failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'chat thread update failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -391,11 +430,15 @@ class CoreApi {
       headers: {..._internalHeaders, 'Content-Type': 'application/json'},
       body: body,
     );
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: response status = ${resp.statusCode}');
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: response body = ${resp.body}');
+    debugPrint(
+        '[DEBUG] CoreApi.deleteChatThread: response status = ${resp.statusCode}');
+    debugPrint(
+        '[DEBUG] CoreApi.deleteChatThread: response body = ${resp.body}');
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      debugPrint('[DEBUG] CoreApi.deleteChatThread: ERRORE - sollevando eccezione');
-      throw StateError('chat thread delete failed: ${resp.statusCode} ${resp.body}');
+      debugPrint(
+          '[DEBUG] CoreApi.deleteChatThread: ERRORE - sollevando eccezione');
+      throw StateError(
+          'chat thread delete failed: ${resp.statusCode} ${resp.body}');
     }
     debugPrint('[DEBUG] CoreApi.deleteChatThread: successo');
   }
@@ -409,11 +452,13 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread leave failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'chat thread leave failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
-  Future<void> archiveChatThread({required String threadId, bool archived = true}) async {
+  Future<void> archiveChatThread(
+      {required String threadId, bool archived = true}) async {
     final uri = _internal('/_fedi3/chat/thread/archive');
     final body = jsonEncode({'thread_id': threadId, 'archived': archived});
     final resp = await http.post(
@@ -422,7 +467,8 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread archive failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'chat thread archive failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -443,7 +489,8 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread members failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'chat thread members failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -460,7 +507,8 @@ class CoreApi {
     }
   }
 
-  Future<void> editChatMessage({required String messageId, required String text}) async {
+  Future<void> editChatMessage(
+      {required String messageId, required String text}) async {
     final uri = _internal('/_fedi3/chat/edit');
     final body = jsonEncode({'message_id': messageId, 'text': text});
     final resp = await http.post(
@@ -486,7 +534,8 @@ class CoreApi {
     final uri = _internal('/_fedi3/relays/refresh');
     final resp = await http.post(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relays refresh failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'relays refresh failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -511,7 +560,8 @@ class CoreApi {
     }
   }
 
-  Future<Map<String, dynamic>> fetchChatReactions({required List<String> messageIds}) async {
+  Future<Map<String, dynamic>> fetchChatReactions(
+      {required List<String> messageIds}) async {
     final uri = _internal('/_fedi3/chat/reactions');
     final body = jsonEncode({'message_ids': messageIds});
     final resp = await http.post(
@@ -520,7 +570,8 @@ class CoreApi {
       body: body,
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat reactions failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'chat reactions failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
@@ -538,7 +589,8 @@ class CoreApi {
     }
   }
 
-  Future<void> markChatSeen({required String threadId, required String messageId}) async {
+  Future<void> markChatSeen(
+      {required String threadId, required String messageId}) async {
     final uri = _internal('/_fedi3/chat/seen');
     final body = jsonEncode({'thread_id': threadId, 'message_id': messageId});
     final resp = await http.post(
@@ -551,7 +603,8 @@ class CoreApi {
     }
   }
 
-  Future<Map<String, dynamic>> fetchChatStatuses({required List<String> messageIds}) async {
+  Future<Map<String, dynamic>> fetchChatStatuses(
+      {required List<String> messageIds}) async {
     final uri = _internal('/_fedi3/chat/status');
     final body = jsonEncode({'message_ids': messageIds});
     final resp = await http.post(
@@ -575,12 +628,14 @@ class CoreApi {
       'q': query,
       'limit': limit.toString(),
       if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
     };
     final uri = _internal('/_fedi3/search/hashtags', params);
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('search hashtags failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'search hashtags failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
@@ -594,18 +649,24 @@ class CoreApi {
     final uri = _internal('/_fedi3/reactions/actors', {
       'object': objectId,
       'type': type,
-      if (content != null && content.trim().isNotEmpty) 'content': content.trim(),
+      if (content != null && content.trim().isNotEmpty)
+        'content': content.trim(),
       'limit': limit.toString(),
     });
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('reaction actors failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'reaction actors failed: ${resp.statusCode} ${resp.body}');
     }
     final json = jsonDecode(resp.body);
     if (json is! Map) return const [];
     final items = json['items'];
     if (items is! List) return const [];
-    return items.whereType<String>().map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    return items
+        .whereType<String>()
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
   }
 
   Future<void> undoReaction({
@@ -628,7 +689,8 @@ class CoreApi {
       'actor': me,
       'object': objectId,
       if (innerId != null && innerId.trim().isNotEmpty) 'id': innerId.trim(),
-      if (content != null && content.trim().isNotEmpty) 'content': content.trim(),
+      if (content != null && content.trim().isNotEmpty)
+        'content': content.trim(),
     };
 
     final activity = {
@@ -649,12 +711,14 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('undo failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
-  Future<Map<String, dynamic>> fetchNotifications({String? cursor, int limit = 50}) async {
+  Future<Map<String, dynamic>> fetchNotifications(
+      {String? cursor, int limit = 50}) async {
     final uri = _internal('/_fedi3/notifications', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
@@ -670,7 +734,8 @@ class CoreApi {
     final uri = _internal('/_fedi3/migration/status');
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('migration status failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'migration status failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
@@ -686,7 +751,8 @@ class CoreApi {
       body: jsonEncode(payload),
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('migration aliases failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'migration aliases failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
@@ -723,14 +789,16 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('react failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
   Future<void> follow(String actorUrl) async {
     final uri = _internal('/_fedi3/social/follow');
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final resp = await http.post(
       uri,
       headers: {..._internalHeaders, 'Content-Type': 'application/json'},
@@ -743,7 +811,8 @@ class CoreApi {
 
   Future<void> unfollow(String actorUrl) async {
     final uri = _internal('/_fedi3/social/unfollow');
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final resp = await http.post(
       uri,
       headers: {..._internalHeaders, 'Content-Type': 'application/json'},
@@ -755,7 +824,8 @@ class CoreApi {
   }
 
   Future<String> fetchFollowingStatus(String actorUrl) async {
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final uri = _internal('/_fedi3/social/status', {'actor': actor});
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
@@ -819,7 +889,9 @@ class CoreApi {
       }
       final resolved = await _resolveActorInput(targetInput);
       to.add(resolved);
-      if (replyActor != null && replyActor.isNotEmpty && replyActor != resolved) {
+      if (replyActor != null &&
+          replyActor.isNotEmpty &&
+          replyActor != resolved) {
         to.add(replyActor);
       }
     } else if (mode == 'home' || mode == 'followers') {
@@ -846,9 +918,11 @@ class CoreApi {
       'object': {
         'type': 'Note',
         'content': content,
-        if (summary != null && summary.trim().isNotEmpty) 'summary': summary.trim(),
+        if (summary != null && summary.trim().isNotEmpty)
+          'summary': summary.trim(),
         if (sensitive) 'sensitive': true,
-        if (inReplyTo != null && inReplyTo.trim().isNotEmpty) 'inReplyTo': inReplyTo.trim(),
+        if (inReplyTo != null && inReplyTo.trim().isNotEmpty)
+          'inReplyTo': inReplyTo.trim(),
         if (mediaIds.isNotEmpty) 'attachment': mediaIds,
       },
     };
@@ -863,7 +937,8 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('post failed: ${resp.statusCode} ${resp.body}');
     }
   }
@@ -925,7 +1000,8 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('edit failed: ${resp.statusCode} ${resp.body}');
     }
   }
@@ -972,7 +1048,8 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('delete failed: ${resp.statusCode} ${resp.body}');
     }
   }
@@ -985,7 +1062,8 @@ class CoreApi {
     final user = config.username.trim();
     final me = '$base/users/$user';
     final followers = '$me/followers';
-    final to = public ? ['https://www.w3.org/ns/activitystreams#Public'] : [followers];
+    final to =
+        public ? ['https://www.w3.org/ns/activitystreams#Public'] : [followers];
     final cc = public ? [followers] : null;
 
     final activity = {
@@ -1007,7 +1085,8 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('boost failed: ${resp.statusCode} ${resp.body}');
     }
   }
@@ -1040,7 +1119,8 @@ class CoreApi {
       },
       body: jsonEncode(activity),
     );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
+    if (resp.statusCode != 202 &&
+        (resp.statusCode < 200 || resp.statusCode >= 300)) {
       throw StateError('like failed: ${resp.statusCode} ${resp.body}');
     }
   }
@@ -1078,18 +1158,21 @@ class CoreApi {
       },
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay coverage failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'relay coverage failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> fetchRelayPeers({String? query, int limit = 200}) async {
+  Future<Map<String, dynamic>> fetchRelayPeers(
+      {String? query, int limit = 200}) async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final params = <String, String>{'limit': limit.toString()};
     if (query != null && query.trim().isNotEmpty) {
       params['q'] = query.trim();
     }
-    final uri = base.replace(path: '/_fedi3/relay/peers', queryParameters: params);
+    final uri =
+        base.replace(path: '/_fedi3/relay/peers', queryParameters: params);
     final resp = await http.get(uri);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('relay peers failed: ${resp.statusCode} ${resp.body}');
@@ -1106,11 +1189,14 @@ class CoreApi {
       final resp = await client.send(req);
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         final body = await resp.stream.bytesToString();
-        throw StateError('relay presence stream failed: ${resp.statusCode} $body');
+        throw StateError(
+            'relay presence stream failed: ${resp.statusCode} $body');
       }
       String? event;
       final data = StringBuffer();
-      await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+      await for (final line in resp.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())) {
         if (line.startsWith('event:')) {
           event = line.substring(6).trim();
           continue;
@@ -1171,9 +1257,11 @@ class CoreApi {
     if (config.relayToken.trim().isNotEmpty) {
       headers['Authorization'] = 'Bearer ${config.relayToken.trim()}';
     }
-    final resp = await http.post(uri, headers: headers, body: jsonEncode(payload));
+    final resp =
+        await http.post(uri, headers: headers, body: jsonEncode(payload));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay client telemetry failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'relay client telemetry failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -1199,7 +1287,8 @@ class CoreApi {
     final uri = _internal('/_fedi3/profile/refresh');
     final resp = await http.post(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('profile refresh failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'profile refresh failed: ${resp.statusCode} ${resp.body}');
     }
   }
 
@@ -1232,25 +1321,26 @@ class CoreApi {
 
   http.Client _createHttpClient() {
     final client = http.Client();
-    
+
     // Standard anonymous User-Agent
     const userAgent = 'Fedi3/0.1 (+https://fedi3)';
-    
+
     // Apply proxy settings if configured
-    if (config.useTor || (config.proxyHost != null && config.proxyPort != null)) {
+    if (config.useTor ||
+        (config.proxyHost != null && config.proxyPort != null)) {
       final proxyConfig = ProxyConfig(
         host: config.proxyHost ?? '127.0.0.1',
         port: config.proxyPort ?? 9050,
         type: config.proxyType == 'socks5' ? ProxyType.socks5 : ProxyType.http,
       );
-      
+
       return ProxyClient(
         proxy: proxyConfig,
         inner: client,
         defaultHeaders: {'User-Agent': userAgent},
       );
     }
-    
+
     // Return regular client with anonymous User-Agent
     return UserAgentClient(userAgent, client);
   }

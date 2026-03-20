@@ -63,12 +63,34 @@ scripts/relay_smoke_test.sh https://relay.fedi3.com <ADMIN_TOKEN>
 
 ## 5c) Legacy sync endpoints (client offline/cold-start)
 
-- Delta sync: `GET /_fedi3/relay/legacy/sync?since=<checkpoint_ms>&limit=200`
-- Bootstrap snapshot: `GET /_fedi3/relay/legacy/bootstrap?limit=3000&gzip=true`
+- Delta sync v1:
+  `GET /_fedi3/relay/legacy/sync?v=1&username=<user>&stream=<home|social|local|federated>&since=<checkpoint_ms>&cursor=<cursor>&limit=200`
+- Bootstrap v1:
+  `GET /_fedi3/relay/legacy/bootstrap?v=1&username=<user>&stream=<home|social|local|federated>&cursor=<cursor>&limit=3000&gzip=true`
+- Header obbligatorio: `Authorization: Bearer <user_token>`
+- Contratto risposta v1:
+  - success: `schema_version`, `mode`, `stream`, `checkpoint_ms`, `items`, `next`
+  - errore: `schema_version` + `error { code, message, retryable }`
 
 Questi endpoint servono per armonizzare la compatibilita' ActivityPub legacy
 senza toccare la componente P2P: il relay prepara i dati, il client applica
 delta/snapshot quando torna online o si apre su un nuovo device.
+
+### Env consigliate (projection worker)
+
+- `FEDI3_RELAY_LEGACY_PROJECTION_INTERVAL_SECS=45`
+- `FEDI3_RELAY_LEGACY_PROJECTION_BATCH_SIZE=5000`
+- `FEDI3_RELAY_LEGACY_PROJECTION_MAX_USERS_PER_CYCLE=1000`
+- `FEDI3_RELAY_LEGACY_PROJECTION_RETENTION_DAYS=180`
+
+### Metriche legacy sync da monitorare
+
+- `fedi3_relay_legacy_projection_lag_ms`
+- `fedi3_relay_legacy_projection_backlog_users`
+- `fedi3_relay_legacy_projection_runs`
+- `fedi3_relay_legacy_projection_errors`
+- `fedi3_relay_legacy_sync_delta_p95_ms`
+- `fedi3_relay_legacy_bootstrap_p95_ms`
 
 ## 6) Note
 

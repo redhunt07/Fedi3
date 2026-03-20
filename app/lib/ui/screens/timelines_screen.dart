@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -27,21 +27,33 @@ class TimelinesScreen extends StatefulWidget {
   State<TimelinesScreen> createState() => _TimelinesScreenState();
 }
 
-class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProviderStateMixin {
+class _TimelinesScreenState extends State<TimelinesScreen>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 4, vsync: this);
   late final List<GlobalKey<_TimelineListState>> _listKeys =
       List.generate(4, (_) => GlobalKey<_TimelineListState>());
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
+  Timer? _syncStatusPoll;
   CoreConfig? _streamConfig;
+  Map<String, dynamic>? _syncStatus;
+  bool _syncStatusLoading = true;
+  String? _syncStatusError;
   final ScrollController _columnsScroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _startSyncStatusPolling();
+  }
 
   @override
   void dispose() {
     _streamDebounce?.cancel();
     _streamRetry?.cancel();
     _streamSub?.cancel();
+    _syncStatusPoll?.cancel();
     _columnsScroll.dispose();
     _tabs.dispose();
     super.dispose();
@@ -54,8 +66,12 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
       builder: (context, _) {
         final cfg = widget.appState.config!;
         final api = CoreApi(config: cfg);
+        if (widget.appState.isRunning && _syncStatusPoll == null) {
+          _startSyncStatusPolling();
+        }
         _ensureStream(cfg);
-        final isWide = MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
+        final isWide =
+            MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
         final useColumns = isWide && widget.appState.prefs.desktopUseColumns;
         final showInlineComposer = !isWide;
 
@@ -73,6 +89,94 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
                   k.currentState?.refreshFromStream();
                 }
               },
+            ),
+          );
+        }
+
+        final syncReady = (_syncStatus?['ready'] == true);
+        final syncBlocked = _syncStatusLoading || !syncReady;
+        final syncStale = _isSyncStale(_syncStatus);
+        if (syncBlocked) {
+          return Scaffold(
+            appBar: AppBar(title: Text(context.l10n.timelineTitle)),
+            body: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Card(
+                  margin: const EdgeInsets.all(16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: const [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2.2),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Sincronizzazione timeline in corso',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(_syncPhaseText(_syncStatus)),
+                        if (_syncStatusError != null &&
+                            _syncStatusError!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            'Errore locale core: $_syncStatusError',
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error),
+                          ),
+                        ] else if ((_syncStatus?['last_error'] as String?)
+                                    ?.trim()
+                                    .isNotEmpty ==
+                                true) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            'Errore relay/sync: ${(_syncStatus?['last_error'] as String).trim()}',
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error),
+                          ),
+                        ],
+                        if (syncStale) ...[
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Sync in timeout: il relay potrebbe essere lento o temporaneamente non disponibile.',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (_syncStatus != null)
+                              ..._buildStreamChips(_syncStatus!),
+                            OutlinedButton.icon(
+                              onPressed: () =>
+                                  _pollSyncStatus(forceLegacySync: true),
+                              icon: const Icon(Icons.refresh),
+                              label: Text(syncStale
+                                  ? 'Forza recovery sync'
+                                  : 'Riprova sync'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           );
         }
@@ -140,74 +244,81 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
             actions: [
               if (isWide)
                 IconButton(
-                  tooltip: useColumns ? context.l10n.timelineLayoutTabs : context.l10n.timelineLayoutColumns,
+                  tooltip: useColumns
+                      ? context.l10n.timelineLayoutTabs
+                      : context.l10n.timelineLayoutColumns,
                   onPressed: () async {
                     final prefs = widget.appState.prefs;
-                    await widget.appState.savePrefs(prefs.copyWith(desktopUseColumns: !prefs.desktopUseColumns));
+                    await widget.appState.savePrefs(prefs.copyWith(
+                        desktopUseColumns: !prefs.desktopUseColumns));
                   },
-                  icon: Icon(useColumns ? Icons.view_agenda_outlined : Icons.view_week_outlined),
+                  icon: Icon(useColumns
+                      ? Icons.view_agenda_outlined
+                      : Icons.view_week_outlined),
                 ),
             ],
           ),
           body: isWide
               ? (useColumns
                   ? Scrollbar(
-                  controller: _columnsScroll,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: _columnsScroll,
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _TimelineList(
-                          key: _listKeys[0],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'unified',
-                          headerTitle: context.l10n.timelineTabHome,
-                          headerTooltip: context.l10n.timelineHomeTooltip,
-                          constrainWidth: false,
-                          showComposer: showInlineComposer,
+                      controller: _columnsScroll,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _columnsScroll,
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _TimelineList(
+                              key: _listKeys[0],
+                              appState: widget.appState,
+                              api: api,
+                              kind: 'unified',
+                              headerTitle: context.l10n.timelineTabHome,
+                              headerTooltip: context.l10n.timelineHomeTooltip,
+                              constrainWidth: false,
+                              showComposer: showInlineComposer,
+                            ),
+                            const SizedBox(width: 10),
+                            _TimelineList(
+                              key: _listKeys[1],
+                              appState: widget.appState,
+                              api: api,
+                              kind: 'home',
+                              headerTitle: context.l10n.timelineTabLocal,
+                              headerTooltip: context.l10n.timelineLocalTooltip,
+                              constrainWidth: false,
+                              showComposer: showInlineComposer,
+                            ),
+                            const SizedBox(width: 10),
+                            _TimelineList(
+                              key: _listKeys[2],
+                              appState: widget.appState,
+                              api: api,
+                              kind: 'dht',
+                              headerTitle: context.l10n.timelineTabSocial,
+                              headerTooltip: context.l10n.timelineSocialTooltip,
+                              constrainWidth: false,
+                              showComposer: showInlineComposer,
+                            ),
+                            const SizedBox(width: 10),
+                            _TimelineList(
+                              key: _listKeys[3],
+                              appState: widget.appState,
+                              api: api,
+                              kind: 'federated',
+                              headerTitle: context.l10n.timelineTabFederated,
+                              headerTooltip:
+                                  context.l10n.timelineFederatedTooltip,
+                              constrainWidth: false,
+                              showComposer: showInlineComposer,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 10),
-                        _TimelineList(
-                          key: _listKeys[1],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'home',
-                          headerTitle: context.l10n.timelineTabLocal,
-                          headerTooltip: context.l10n.timelineLocalTooltip,
-                          constrainWidth: false,
-                          showComposer: showInlineComposer,
-                        ),
-                        const SizedBox(width: 10),
-                        _TimelineList(
-                          key: _listKeys[2],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'dht',
-                          headerTitle: context.l10n.timelineTabSocial,
-                          headerTooltip: context.l10n.timelineSocialTooltip,
-                          constrainWidth: false,
-                          showComposer: showInlineComposer,
-                        ),
-                        const SizedBox(width: 10),
-                        _TimelineList(
-                          key: _listKeys[3],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'federated',
-                          headerTitle: context.l10n.timelineTabFederated,
-                          headerTooltip: context.l10n.timelineFederatedTooltip,
-                          constrainWidth: false,
-                          showComposer: showInlineComposer,
-                        ),
-                      ],
-                    ),
-                  ),
-                )
+                      ),
+                    )
                   : TabBarView(
                       controller: _tabs,
                       children: [
@@ -322,7 +433,8 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
     _streamRetry?.cancel();
     _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
-      if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox') return;
+      if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox')
+        return;
       final ty = (ev.activityType ?? '').toLowerCase();
       final forceRefresh = ty == 'update' || ty == 'delete' || ty == 'undo';
       _streamDebounce?.cancel();
@@ -351,6 +463,105 @@ class _TimelinesScreenState extends State<TimelinesScreen> with SingleTickerProv
       _ensureStream(cfg);
     });
   }
+
+  void _startSyncStatusPolling() {
+    _syncStatusPoll?.cancel();
+    _syncStatusPoll =
+        Timer.periodic(const Duration(seconds: 3), (_) => _pollSyncStatus());
+    _pollSyncStatus();
+  }
+
+  Future<void> _pollSyncStatus({bool forceLegacySync = false}) async {
+    if (!mounted) return;
+    if (!widget.appState.isRunning) return;
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final api = CoreApi(config: cfg);
+    if (forceLegacySync) {
+      try {
+        await api.triggerLegacySync(pages: 12, itemsPerActor: 600);
+      } catch (_) {
+        // ignore; status poll below reports actual state
+      }
+    }
+    try {
+      final status = await api.fetchLegacySyncStatus();
+      if (!mounted) return;
+      setState(() {
+        _syncStatus = status;
+        _syncStatusLoading = false;
+        _syncStatusError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _syncStatusLoading = false;
+        _syncStatusError = e.toString();
+      });
+    }
+  }
+
+  String _syncPhaseText(Map<String, dynamic>? status) {
+    final phase =
+        (status?['phase'] as String?)?.trim().toLowerCase() ?? 'unknown';
+    switch (phase) {
+      case 'bootstrap':
+      case 'bootstrap_download':
+        return 'Fase 1/3: bootstrap download';
+      case 'delta':
+      case 'delta_catchup':
+        return 'Fase 3/3: delta catch-up';
+      case 'apply':
+        return 'Fase 2/3: apply baseline';
+      case 'idle':
+      case 'ready':
+        return 'Baseline pronta';
+      case 'error':
+        return 'Errore sync: tentativo di recovery in corso';
+      default:
+        return 'Preparazione baseline timeline';
+    }
+  }
+
+  bool _isSyncStale(Map<String, dynamic>? status) {
+    if (status == null) return false;
+    if (status['ready'] == true) return false;
+    final streams = (status['streams'] is Map)
+        ? (status['streams'] as Map).cast<String, dynamic>()
+        : <String, dynamic>{};
+    int latestOk = 0;
+    for (final row in streams.values) {
+      if (row is! Map) continue;
+      final cast = row.cast<String, dynamic>();
+      final ms = cast['last_ok_ms'];
+      if (ms is num && ms.toInt() > latestOk) latestOk = ms.toInt();
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (latestOk <= 0) {
+      return !_syncStatusLoading;
+    }
+    return nowMs - latestOk > const Duration(minutes: 2).inMilliseconds;
+  }
+
+  List<Widget> _buildStreamChips(Map<String, dynamic> status) {
+    final streams = (status['streams'] is Map)
+        ? (status['streams'] as Map).cast<String, dynamic>()
+        : <String, dynamic>{};
+    const order = ['home', 'social', 'local', 'federated'];
+    return order.map((name) {
+      final row = (streams[name] is Map)
+          ? (streams[name] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final ready = row['ready'] == true;
+      final lag = row['lag_ms'];
+      final lagLabel =
+          (lag is num && lag >= 0) ? '${(lag / 1000).round()}s' : '-';
+      return Chip(
+        label: Text(
+            '${name.toUpperCase()} ${ready ? 'OK' : 'WAIT'} - lag $lagLabel'),
+      );
+    }).toList();
+  }
 }
 
 class _TimelineList extends StatefulWidget {
@@ -377,7 +588,8 @@ class _TimelineList extends StatefulWidget {
   State<_TimelineList> createState() => _TimelineListState();
 }
 
-class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveClientMixin {
+class _TimelineListState extends State<_TimelineList>
+    with AutomaticKeepAliveClientMixin {
   String? _cursor;
   bool _loading = false;
   bool _syncing = false;
@@ -643,7 +855,8 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
         final map = obj.cast<String, dynamic>();
         created = readCreatedMs(map);
         if (created == 0 && map['object'] is Map) {
-          created = readCreatedMs((map['object'] as Map).cast<String, dynamic>());
+          created =
+              readCreatedMs((map['object'] as Map).cast<String, dynamic>());
         }
       }
     }
@@ -672,7 +885,8 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
     final filtered = _items;
     final pendingCount = _pending.length;
     final panelColor = Theme.of(context).colorScheme.surfaceContainerLow;
-    final panelBorder = Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
+    final panelBorder =
+        Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
     final list = RefreshIndicator(
       onRefresh: _refresh,
       child: Container(
@@ -710,7 +924,8 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                                 message: widget.headerTooltip,
                                 child: Text(
                                   widget.headerTitle,
-                                  style: const TextStyle(fontWeight: FontWeight.w800),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800),
                                 ),
                               ),
                               if (pendingCount > 0) ...[
@@ -719,15 +934,22 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                                   onTap: _applyPending,
                                   borderRadius: BorderRadius.circular(10),
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
                                     decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.primary.withAlpha(30),
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary
+                                          .withAlpha(30),
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     child: Text(
-                                      context.l10n.timelineNewPosts(pendingCount),
+                                      context.l10n
+                                          .timelineNewPosts(pendingCount),
                                       style: TextStyle(
-                                        color: Theme.of(context).colorScheme.primary,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
                                         fontSize: 11,
                                       ),
                                     ),
@@ -737,12 +959,16 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                               const Spacer(),
                               IconButton(
                                 tooltip: context.l10n.timelineRefreshHint,
-                                onPressed: widget.appState.isRunning && !_syncing ? _forceSyncAndRefresh : null,
+                                onPressed:
+                                    widget.appState.isRunning && !_syncing
+                                        ? _forceSyncAndRefresh
+                                        : null,
                                 icon: _syncing
                                     ? const SizedBox(
                                         width: 18,
                                         height: 18,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
                                       )
                                     : const Icon(Icons.refresh),
                               ),
@@ -767,7 +993,8 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                 if (pendingCount > 0) {
                   return Container(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                    decoration: BoxDecoration(border: Border(bottom: BorderSide(color: panelBorder))),
+                    decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: panelBorder))),
                     child: ListTile(
                       title: Text(context.l10n.timelineNewPosts(pendingCount)),
                       subtitle: Text(context.l10n.timelineShowNewPostsHint),
@@ -812,7 +1039,9 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
                         ? const CircularProgressIndicator()
                         : OutlinedButton(
                             onPressed: _cursor == null ? null : _loadMore,
-                            child: Text(_cursor == null ? context.l10n.listEnd : context.l10n.listLoadMore),
+                            child: Text(_cursor == null
+                                ? context.l10n.listEnd
+                                : context.l10n.listLoadMore),
                           ),
                   ),
                 );
@@ -821,11 +1050,15 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
               final isLast = index == filtered.length + 1;
               return Container(
                 decoration: BoxDecoration(
-                  border: isLast ? null : Border(bottom: BorderSide(color: panelBorder)),
+                  border: isLast
+                      ? null
+                      : Border(bottom: BorderSide(color: panelBorder)),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 child: TimelineActivityCard(
-                  key: ValueKey(_activityId(item).isNotEmpty ? _activityId(item) : index),
+                  key: ValueKey(
+                      _activityId(item).isNotEmpty ? _activityId(item) : index),
                   appState: widget.appState,
                   activity: item,
                 ),
@@ -909,7 +1142,6 @@ class _TimelineListState extends State<_TimelineList> with AutomaticKeepAliveCli
       ),
     );
   }
-
 }
 
 class _TimelineSkeletonCard extends StatelessWidget {
@@ -917,7 +1149,8 @@ class _TimelineSkeletonCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120);
+    final base =
+        Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -926,7 +1159,11 @@ class _TimelineSkeletonCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Container(width: 42, height: 42, decoration: BoxDecoration(color: base, shape: BoxShape.circle)),
+                Container(
+                    width: 42,
+                    height: 42,
+                    decoration:
+                        BoxDecoration(color: base, shape: BoxShape.circle)),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -945,10 +1182,16 @@ class _TimelineSkeletonCard extends StatelessWidget {
             const SizedBox(height: 8),
             Container(height: 12, width: 240, color: base),
             const SizedBox(height: 8),
-            Container(height: 180, width: double.infinity, decoration: BoxDecoration(color: base, borderRadius: BorderRadius.circular(10))),
+            Container(
+                height: 180,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                    color: base, borderRadius: BorderRadius.circular(10))),
           ],
         ),
       ),
     );
   }
 }
+
+

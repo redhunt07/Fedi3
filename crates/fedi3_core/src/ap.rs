@@ -325,6 +325,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/reactions/actors") => reactions_actors_get(state, req).await,
         ("GET", "/_fedi3/notifications") => notifications_get(state, req).await,
         ("POST", "/_fedi3/sync/legacy") => legacy_sync_trigger(state, req).await,
+        ("GET", "/_fedi3/sync/status") => legacy_sync_status_get(state, req).await,
         // Global timeline (P2P gossip) endpoints.
         ("POST", "/_fedi3/global/ingest") => global_ingest(state, req).await,
         ("GET", "/_fedi3/global/timeline") => global_timeline(state, req).await,
@@ -422,12 +423,104 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
 
     let st = state.clone();
     tokio::spawn(async move {
-        let _ =
-            crate::legacy_sync::run_legacy_sync_now(&st, pages, items_per_actor, include_fedi3)
-                .await;
+        let _ = crate::legacy_sync::run_legacy_sync_now(&st, pages, items_per_actor, include_fedi3)
+            .await;
     });
 
     simple(StatusCode::ACCEPTED, "ok")
+}
+
+async fn legacy_sync_status_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let phase = state
+        .social
+        .get_local_meta("relay_legacy_sync_phase")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "idle".to_string());
+    let last_error = state
+        .social
+        .get_local_meta("relay_legacy_last_error")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let mut streams = serde_json::Map::new();
+    let mut all_ready = true;
+    for stream in ["home", "social", "local", "federated"] {
+        let checkpoint_ms = state
+            .social
+            .get_local_meta(&format!("relay_legacy_checkpoint_ms_{stream}"))
+            .ok()
+            .flatten()
+            .or_else(|| {
+                if stream == "home" {
+                    state
+                        .social
+                        .get_local_meta("relay_legacy_checkpoint_ms")
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                }
+            })
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        let last_ok_ms = state
+            .social
+            .get_local_meta(&format!("relay_legacy_last_ok_ms_{stream}"))
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        let last_items = state
+            .social
+            .get_local_meta(&format!("relay_legacy_last_items_{stream}"))
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        let stream_error = state
+            .social
+            .get_local_meta(&format!("relay_legacy_last_error_{stream}"))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let lag_ms = if last_ok_ms > 0 {
+            now_ms.saturating_sub(last_ok_ms).max(0)
+        } else {
+            -1
+        };
+        let ready = checkpoint_ms > 0;
+        if !ready {
+            all_ready = false;
+        }
+        streams.insert(
+            stream.to_string(),
+            serde_json::json!({
+                "checkpoint_ms": checkpoint_ms,
+                "last_ok_ms": last_ok_ms,
+                "lag_ms": lag_ms,
+                "last_items": last_items,
+                "ready": ready,
+                "last_error": stream_error,
+            }),
+        );
+    }
+    let body = serde_json::json!({
+        "phase": phase,
+        "ready": all_ready,
+        "last_error": last_error,
+        "timestamp_ms": now_ms,
+        "streams": streams,
+    });
+    axum::Json(body).into_response()
 }
 
 async fn object_deref_get(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -935,7 +1028,11 @@ fn response_without_body(resp: Response<Body>) -> Response<Body> {
     Response::from_parts(parts, Body::empty())
 }
 
-fn build_media_response(bytes: Vec<u8>, mime: String, range: Option<&HeaderValue>) -> Response<Body> {
+fn build_media_response(
+    bytes: Vec<u8>,
+    mime: String,
+    range: Option<&HeaderValue>,
+) -> Response<Body> {
     let len = bytes.len();
     match parse_range_header(range, len) {
         RangeSpec::Full => {
@@ -1015,12 +1112,20 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
             if let Ok((bytes, mime)) = media_store::load_media(&state.data_dir, stored_name) {
                 let mime = choose_media_type(&item.media_type, mime);
                 let resp = build_media_response(bytes, mime, range);
-                return if is_head { response_without_body(resp) } else { resp };
+                return if is_head {
+                    response_without_body(resp)
+                } else {
+                    resp
+                };
             }
         }
         if let Ok(Some((bytes, mime))) = fetch_and_cache_media(state, &item).await {
             let resp = build_media_response(bytes, mime, range);
-            return if is_head { response_without_body(resp) } else { resp };
+            return if is_head {
+                response_without_body(resp)
+            } else {
+                resp
+            };
         }
         if state.post_delivery_mode == PostDeliveryMode::P2pOnly {
             return simple(StatusCode::NOT_FOUND, "not found");
@@ -1036,7 +1141,11 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     match media_store::load_media(&state.data_dir, stored_name) {
         Ok((bytes, mime)) => {
             let resp = build_media_response(bytes, mime, range);
-            if is_head { response_without_body(resp) } else { resp }
+            if is_head {
+                response_without_body(resp)
+            } else {
+                resp
+            }
         }
         Err(_) => simple(StatusCode::NOT_FOUND, "not found"),
     }
@@ -1134,7 +1243,11 @@ async fn media_p2p_get(state: &ApState, req: Request<Body>) -> Response<Body> {
             if let Ok((bytes, mime)) = media_store::load_media(&state.data_dir, &local) {
                 let mime = choose_media_type(&item.media_type, mime);
                 let resp = build_media_response(bytes, mime, range);
-                return if is_head { response_without_body(resp) } else { resp };
+                return if is_head {
+                    response_without_body(resp)
+                } else {
+                    resp
+                };
             }
         }
     }
@@ -1206,7 +1319,13 @@ async fn fetch_media_from_peer(
         .headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-        .and_then(|(_, v)| if v.trim().is_empty() { None } else { Some(v.clone()) })
+        .and_then(|(_, v)| {
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.clone())
+            }
+        })
         .unwrap_or_else(|| item.media_type.clone());
     Ok(Some((bytes, mime)))
 }
@@ -3037,28 +3156,28 @@ async fn search_notes(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
         if relay_ready {
             if let Ok(Some(relay_page)) = relay_search_notes(state, &q, &tag, limit, cursor).await {
-            total = total.saturating_add(relay_page.total);
-            if next.is_none() {
-                next = relay_page.next.clone();
-            }
-            for note_value in relay_page.items {
-                if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
-                    continue;
+                total = total.saturating_add(relay_page.total);
+                if next.is_none() {
+                    next = relay_page.next.clone();
                 }
-                let Some(activity) = activity_from_note(&note_value) else {
-                    continue;
-                };
-                let mut hydrated = activity;
-                hydrate_activity(state, &mut hydrated, &mut cache);
-                set_search_source(&mut hydrated, "relay");
-                if let Some(note_id) = note_id_from_activity(&hydrated) {
-                    if seen.insert(note_id.to_string()) {
+                for note_value in relay_page.items {
+                    if note_value.get("type").and_then(|t| t.as_str()) != Some("Note") {
+                        continue;
+                    }
+                    let Some(activity) = activity_from_note(&note_value) else {
+                        continue;
+                    };
+                    let mut hydrated = activity;
+                    hydrate_activity(state, &mut hydrated, &mut cache);
+                    set_search_source(&mut hydrated, "relay");
+                    if let Some(note_id) = note_id_from_activity(&hydrated) {
+                        if seen.insert(note_id.to_string()) {
+                            items.push(hydrated);
+                        }
+                    } else {
                         items.push(hydrated);
                     }
-                } else {
-                    items.push(hydrated);
                 }
-            }
             }
         }
     }
@@ -3156,23 +3275,23 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
         if relay_ready {
             if let Ok(Some(relay_page)) = relay_search_users(state, &q, limit, cursor).await {
-            total = total.saturating_add(relay_page.total);
-            if next.is_none() {
-                next = relay_page.next.clone();
-            }
-            for mut v in relay_page.items {
-                if !is_actor_value(&v) {
-                    continue;
+                total = total.saturating_add(relay_page.total);
+                if next.is_none() {
+                    next = relay_page.next.clone();
                 }
-                set_search_source(&mut v, "relay");
-                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                    if seen.insert(id.to_string()) {
+                for mut v in relay_page.items {
+                    if !is_actor_value(&v) {
+                        continue;
+                    }
+                    set_search_source(&mut v, "relay");
+                    if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                        if seen.insert(id.to_string()) {
+                            items.push(v);
+                        }
+                    } else {
                         items.push(v);
                     }
-                } else {
-                    items.push(v);
                 }
-            }
             }
         }
     }
@@ -3623,7 +3742,11 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let text = input.text.trim();
     let payload = chat::ChatPayload {
         op: "message".to_string(),
-        text: if text.is_empty() { None } else { Some(text.to_string()) },
+        text: if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
+        },
         reply_to: input.reply_to.clone(),
         message_id: None,
         status: None,
@@ -3721,9 +3844,10 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                         .upsert_chat_message_status(&message_id2, &actor, "sent");
                 }
                 ChatDeliveryOutcome::Failed => {
-                    let _ = state2
-                        .social
-                        .upsert_chat_message_status(&message_id2, &actor, "queued");
+                    let _ =
+                        state2
+                            .social
+                            .upsert_chat_message_status(&message_id2, &actor, "queued");
                 }
             }
         }
@@ -3768,19 +3892,17 @@ async fn send_chat_payload_to_members(
             .await
         {
             ChatDeliveryOutcome::Sent => {
-                let _ = state.social.upsert_chat_message_status(
-                    envelope_message_id,
-                    &actor,
-                    "sent",
-                );
+                let _ =
+                    state
+                        .social
+                        .upsert_chat_message_status(envelope_message_id, &actor, "sent");
                 sent = sent.saturating_add(1);
             }
             ChatDeliveryOutcome::Failed => {
-                let _ = state.social.upsert_chat_message_status(
-                    envelope_message_id,
-                    &actor,
-                    "queued",
-                );
+                let _ =
+                    state
+                        .social
+                        .upsert_chat_message_status(envelope_message_id, &actor, "queued");
             }
         }
     }
@@ -4424,7 +4546,10 @@ async fn chat_thread_leave_post(state: &ApState, req: Request<Body>) -> Response
     )
     .await;
     if let Err(e) = state.social.delete_chat_thread(&input.thread_id) {
-        warn!("chat leave: local delete failed thread_id={} err={e}", input.thread_id);
+        warn!(
+            "chat leave: local delete failed thread_id={} err={e}",
+            input.thread_id
+        );
     }
     let _ = state.ui_events.send(UiEvent::new(
         "chat",
@@ -4650,18 +4775,13 @@ async fn send_chat_system(
             if chat::verify_bundle(state, &bundle).await.is_err() {
                 continue;
             }
-            if let Ok(env) = chat::encrypt_payload_for_bundle(
-                state,
-                &bundle,
-                thread_id,
-                &message_id,
-                &payload,
-            ) {
+            if let Ok(env) =
+                chat::encrypt_payload_for_bundle(state, &bundle, thread_id, &message_id, &payload)
+            {
                 if send_chat_envelope_http(state, &actor, &env).await {
-                    let _ =
-                        state
-                            .social
-                            .upsert_chat_message_status(&message_id, &actor, "sent");
+                    let _ = state
+                        .social
+                        .upsert_chat_message_status(&message_id, &actor, "sent");
                     sent = sent.saturating_add(1);
                 }
             }
@@ -4781,11 +4901,7 @@ async fn send_chat_envelope_http(
     false
 }
 
-async fn should_accept_bundle(
-    state: &ApState,
-    actor_url: &str,
-    bundle: &chat::ChatBundle,
-) -> bool {
+async fn should_accept_bundle(state: &ApState, actor_url: &str, bundle: &chat::ChatBundle) -> bool {
     if bundle.actor.trim_end_matches('/') != actor_url.trim_end_matches('/') {
         return false;
     }
@@ -4847,20 +4963,17 @@ pub fn start_chat_retry_worker(state: ApState, mut shutdown: watch::Receiver<boo
                 }
                 let ok = retry_chat_message_to_actor(&state, &message_id, &actor_id).await;
                 if !ok {
-                    let _ = state
-                        .social
-                        .upsert_chat_message_status(&message_id, &actor_id, "queued");
+                    let _ =
+                        state
+                            .social
+                            .upsert_chat_message_status(&message_id, &actor_id, "queued");
                 }
             }
         }
     });
 }
 
-async fn retry_chat_message_to_actor(
-    state: &ApState,
-    message_id: &str,
-    actor_id: &str,
-) -> bool {
+async fn retry_chat_message_to_actor(state: &ApState, message_id: &str, actor_id: &str) -> bool {
     let Some(msg) = state.social.get_chat_message(message_id).unwrap_or(None) else {
         return false;
     };
@@ -4881,13 +4994,9 @@ async fn retry_chat_message_to_actor(
     };
 
     if let Ok(Some(bundle)) = fetch_chat_bundle(state, actor_id).await {
-        if let Ok(env) = chat::encrypt_payload_for_bundle(
-            state,
-            &bundle,
-            &msg.thread_id,
-            message_id,
-            &payload,
-        ) {
+        if let Ok(env) =
+            chat::encrypt_payload_for_bundle(state, &bundle, &msg.thread_id, message_id, &payload)
+        {
             if send_chat_envelope_http(state, actor_id, &env).await {
                 let _ = state
                     .social
@@ -5181,9 +5290,7 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
         following,
         inbox,
         outbox,
-        endpoints: ActorEndpoints {
-            shared_inbox,
-        },
+        endpoints: ActorEndpoints { shared_inbox },
         publicKey: PublicKey {
             id: key_id,
             owner: id.clone(),
@@ -7019,10 +7126,8 @@ pub(crate) async fn process_inbox_activity(
                             serde_json::from_slice::<serde_json::Value>(&obj_json)
                         {
                             if let Some(obj_map) = obj_v.as_object_mut() {
-                                let obj_type = obj_map
-                                    .get("type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let obj_type =
+                                    obj_map.get("type").and_then(|v| v.as_str()).unwrap_or("");
                                 if obj_type == "Tombstone" {
                                     let actor_opt =
                                         if actor.is_empty() { None } else { Some(actor) };
@@ -7056,8 +7161,7 @@ pub(crate) async fn process_inbox_activity(
                                             {
                                                 let in_reply_to = in_reply_to.trim();
                                                 if !in_reply_to.is_empty() {
-                                                    let act_store_id =
-                                                        activity_dedup_id(activity);
+                                                    let act_store_id = activity_dedup_id(activity);
                                                     let _ = state.social.upsert_note_reply(
                                                         in_reply_to,
                                                         &act_store_id,
@@ -7132,8 +7236,7 @@ pub(crate) async fn process_inbox_activity(
                             obj_id = Some(oid);
                         }
                         if let Some(obj_id) = obj_id {
-                            let act_id =
-                                activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
                             if !act_id.is_empty() {
                                 let content = activity
                                     .get("content")
@@ -7402,9 +7505,9 @@ pub(crate) async fn process_inbox_activity(
                             .get("object")
                             .and_then(|v| v.as_str())
                             .or_else(|| {
-                                obj_val.get("object").and_then(|v| {
-                                    v.get("id").and_then(|v| v.as_str())
-                                })
+                                obj_val
+                                    .get("object")
+                                    .and_then(|v| v.get("id").and_then(|v| v.as_str()))
                             })
                             .unwrap_or("");
                         let content = obj_val
@@ -7670,12 +7773,14 @@ fn is_notification(
 ) -> bool {
     let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match ty {
-        "Follow" => activity_has_recipient(activity, me_actor)
-            || activity
-                .get("object")
-                .and_then(|v| v.as_str())
-                .map(|v| v == me_actor)
-                .unwrap_or(false),
+        "Follow" => {
+            activity_has_recipient(activity, me_actor)
+                || activity
+                    .get("object")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v == me_actor)
+                    .unwrap_or(false)
+        }
         "Accept" | "Reject" => {
             let obj = activity.get("object").and_then(|v| v.as_object());
             let obj_ty = obj.and_then(|o| o.get("type")).and_then(|v| v.as_str());
@@ -7747,21 +7852,15 @@ fn is_notification(
 }
 
 fn activity_targets_my_object(activity: &serde_json::Value, me_actor: &str) -> bool {
-    let Some(obj_id) = activity
-        .get("object")
-        .and_then(|v| match v {
-            serde_json::Value::String(s) => Some(s.as_str()),
-            serde_json::Value::Object(map) => map
-                .get("id")
+    let Some(obj_id) = activity.get("object").and_then(|v| match v {
+        serde_json::Value::String(s) => Some(s.as_str()),
+        serde_json::Value::Object(map) => map.get("id").and_then(|v| v.as_str()).or_else(|| {
+            map.get("object")
+                .and_then(|o| o.get("id"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    map.get("object")
-                        .and_then(|o| o.get("id"))
-                        .and_then(|v| v.as_str())
-                }),
-            _ => None,
-        })
-    else {
+        }),
+        _ => None,
+    }) else {
         return false;
     };
     let my_prefix = format!("{}/objects/", me_actor.trim_end_matches('/'));
@@ -7781,8 +7880,7 @@ fn activity_mentions_me(activity: &serde_json::Value, me_actor: &str, my_handle:
                     if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
                         let name = name.trim();
                         if name == my_handle
-                            || name.trim_start_matches('@')
-                                == my_handle.trim_start_matches('@')
+                            || name.trim_start_matches('@') == my_handle.trim_start_matches('@')
                         {
                             return true;
                         }
@@ -8074,14 +8172,22 @@ fn is_object_reference(map: &serde_json::Map<String, serde_json::Value>) -> bool
     if ty == "Tombstone" {
         return false;
     }
-    let has_payload = ["content", "name", "summary", "attachment", "source", "tag", "inReplyTo"]
-        .iter()
-        .any(|k| match map.get(*k) {
-            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
-            Some(serde_json::Value::Array(a)) => !a.is_empty(),
-            Some(serde_json::Value::Object(o)) => !o.is_empty(),
-            _ => false,
-        });
+    let has_payload = [
+        "content",
+        "name",
+        "summary",
+        "attachment",
+        "source",
+        "tag",
+        "inReplyTo",
+    ]
+    .iter()
+    .any(|k| match map.get(*k) {
+        Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+        Some(serde_json::Value::Array(a)) => !a.is_empty(),
+        Some(serde_json::Value::Object(o)) => !o.is_empty(),
+        _ => false,
+    });
     !has_payload
 }
 
