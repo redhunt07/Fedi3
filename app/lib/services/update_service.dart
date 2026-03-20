@@ -116,12 +116,13 @@ class UpdateService {
     if (command.isEmpty) {
       throw StateError('manual update command not available');
     }
+    final relaunchPath = _currentExecutablePath();
     if (Platform.isWindows) {
-      await _launchWindowsElevated(command);
+      await _launchWindowsElevated(command, relaunchPath);
       exit(0);
     }
     if (Platform.isLinux) {
-      await _launchLinuxTerminal(command);
+      await _launchLinuxTerminal(command, relaunchPath);
       exit(0);
     }
     throw StateError('manual update launch not supported on this platform');
@@ -352,8 +353,20 @@ class UpdateService {
     return '';
   }
 
-  Future<void> _launchWindowsElevated(String command) async {
-    final encoded = base64.encode(_utf16LeBytes(command));
+  Future<void> _launchWindowsElevated(
+      String command, String? relaunchPath) async {
+    final wrapped = StringBuffer()
+      ..writeln(r'$ErrorActionPreference = "Stop"')
+      ..writeln(command)
+      ..writeln(r'$exitCode = $LASTEXITCODE')
+      ..writeln(r'if ($exitCode -eq $null) { $exitCode = 0 }');
+    if (relaunchPath != null && relaunchPath.trim().isNotEmpty) {
+      final escaped = relaunchPath.replaceAll("'", "''");
+      wrapped.writeln(
+          "if (\$exitCode -eq 0) { Start-Process -FilePath '$escaped' }");
+    }
+    wrapped.writeln(r'exit $exitCode');
+    final encoded = base64.encode(_utf16LeBytes(wrapped.toString()));
     final argList =
         '-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
     await Process.start(
@@ -385,8 +398,9 @@ class UpdateService {
     return bytes;
   }
 
-  Future<void> _launchLinuxTerminal(String command) async {
-    final wrapped = _wrapLinuxCommand(command);
+  Future<void> _launchLinuxTerminal(
+      String command, String? relaunchPath) async {
+    final wrapped = _wrapLinuxCommand(command, relaunchPath);
     final candidates = <Map<String, dynamic>>[
       {
         'bin': 'x-terminal-emulator',
@@ -438,17 +452,21 @@ class UpdateService {
     throw StateError('no terminal available for manual update');
   }
 
-  String _wrapLinuxCommand(String command) {
+  String _wrapLinuxCommand(String command, String? relaunchPath) {
     final escaped = _shellSingleQuoted(command);
+    final relaunch = (relaunchPath ?? '').trim();
+    final relaunchEscaped = _shellSingleQuoted(relaunch);
     return '''
+set -e
 if [ "\$(id -u)" -ne 0 ]; then
   sudo -k bash -lc '$escaped'
 else
   bash -lc '$escaped'
 fi
-echo
-echo "Fedi3 update finished. Press Enter to close."
-read -r _
+if [ -n '$relaunchEscaped' ]; then
+  nohup '$relaunchEscaped' >/dev/null 2>&1 &
+fi
+exit 0
 ''';
   }
 
