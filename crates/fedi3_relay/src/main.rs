@@ -3550,6 +3550,9 @@ async fn cached_user_response(
         );
     }
 
+    if path.starts_with(&format!("/users/{user}/_fedi3/")) {
+        return Some((StatusCode::NOT_FOUND, "not found").into_response());
+    }
     Some((StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response())
 }
 
@@ -3697,6 +3700,9 @@ fn collection_kind_from_path<'a>(user: &str, path: &'a str) -> Option<&'a str> {
     }
     if path == format!("/users/{user}/following") {
         return Some("following");
+    }
+    if path == format!("/users/{user}/collections/featured") {
+        return Some("collections/featured");
     }
     None
 }
@@ -10196,11 +10202,28 @@ fn actor_matches_feed(
         (Some(relay), Some(actor_h)) => normalize_host(relay.to_string()) == actor_h,
         _ => false,
     };
+    let following_empty = following.is_empty();
     match feed {
         LegacyFeedKind::Federated => true,
         LegacyFeedKind::Local => is_local,
-        LegacyFeedKind::Home => following.contains(actor),
-        LegacyFeedKind::Social => following.contains(actor) || is_local,
+        // If following cache is missing/empty, avoid returning an empty home forever:
+        // show local actors until following is hydrated.
+        LegacyFeedKind::Home => {
+            if following_empty {
+                is_local
+            } else {
+                following.contains(actor)
+            }
+        }
+        // Social is the compatibility timeline and must not go empty when following
+        // cache is unavailable. In that case, fallback to federated superset.
+        LegacyFeedKind::Social => {
+            if following_empty {
+                true
+            } else {
+                following.contains(actor) || is_local
+            }
+        }
     }
 }
 
