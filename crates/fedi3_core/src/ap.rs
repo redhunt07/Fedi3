@@ -344,6 +344,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/p2p/resolve_did") => p2p_resolve_did(state, req).await,
         ("POST", "/_fedi3/p2p/follow") => p2p_follow(state, req).await,
         ("POST", "/_fedi3/social/follow") => social_follow(state, req).await,
+        ("POST", "/_fedi3/social/follow/import") => social_follow_import(state, req).await,
         ("POST", "/_fedi3/p2p/unfollow") => social_unfollow(state, req).await,
         ("POST", "/_fedi3/social/unfollow") => social_unfollow(state, req).await,
         ("GET", "/_fedi3/social/status") => social_follow_status_get(state, req).await,
@@ -5414,6 +5415,139 @@ struct SocialFollowReq {
     actor: String,
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct SocialFollowImportReq {
+    #[serde(default)]
+    actors: Vec<String>,
+    #[serde(default)]
+    csv: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    batch_size: Option<usize>,
+    #[serde(default)]
+    pause_ms: Option<u64>,
+}
+
+fn parse_follow_import_csv(csv: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw_line in csv.lines() {
+        let line = raw_line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() {
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("account address") || lower.contains("acount address") {
+            continue;
+        }
+        let mut picked = None;
+        for cell in line.split(&[',', ';', '\t']) {
+            let value = cell.trim().trim_matches('"').trim_matches('\'');
+            if value.is_empty() {
+                continue;
+            }
+            if value.starts_with("http://")
+                || value.starts_with("https://")
+                || value.starts_with('@')
+                || value.matches('@').count() >= 1
+            {
+                picked = Some(value.to_string());
+                break;
+            }
+        }
+        if let Some(v) = picked {
+            out.push(v);
+        }
+    }
+    out
+}
+
+async fn resolve_follow_target_input(state: &ApState, input: &str) -> Option<String> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Some(raw.trim_end_matches('/').to_string());
+    }
+    let handle = raw.trim_start_matches('@');
+    let mut parts = handle.split('@');
+    let user = parts.next()?.trim();
+    let domain = parts.next()?.trim();
+    if user.is_empty() || domain.is_empty() {
+        return None;
+    }
+    let resource = format!("acct:{user}@{domain}");
+    let url = format!(
+        "https://{domain}/.well-known/webfinger?resource={}",
+        encode(&resource)
+    );
+    let resp = state.http.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let links = v.get("links")?.as_array()?;
+    for link in links {
+        let rel = link.get("rel").and_then(|v| v.as_str()).unwrap_or("");
+        if rel != "self" {
+            continue;
+        }
+        let href = link
+            .get("href")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if href.is_empty() {
+            continue;
+        }
+        let t = link.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if t.contains("application/activity+json")
+            || t.contains("application/ld+json")
+            || t.is_empty()
+        {
+            return Some(href.trim_end_matches('/').to_string());
+        }
+    }
+    None
+}
+
+async fn enqueue_follow_actor(state: &ApState, target_actor: &str) -> Result<(), String> {
+    let target_actor = target_actor.trim().trim_end_matches('/');
+    if target_actor.is_empty() {
+        return Err("missing actor".to_string());
+    }
+    if let Ok(Some(_)) = state.social.get_following_status(target_actor) {
+        return Ok(());
+    }
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
+    let id = state.social.new_activity_id(&me);
+    let activity = serde_json::json!({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "id": id,
+      "type": "Follow",
+      "actor": me,
+      "object": target_actor,
+      "to": [target_actor],
+    });
+    let bytes = serde_json::to_vec(&activity).map_err(|e| format!("encode failed: {e}"))?;
+    if let Some(act_id) = activity.get("id").and_then(|v| v.as_str()) {
+        if !act_id.is_empty() {
+            let _ = state.social.store_outbox(act_id, bytes.clone());
+        }
+    }
+    let _ = state
+        .social
+        .set_following(target_actor, FollowingStatus::Pending);
+    state
+        .queue
+        .enqueue_activity(bytes, vec![target_actor.to_string()])
+        .await
+        .map_err(|e| format!("enqueue failed: {e}"))?;
+    Ok(())
+}
+
 async fn social_follow(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (parts, body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
@@ -5433,44 +5567,114 @@ async fn social_follow(state: &ApState, req: Request<Body>) -> Response<Body> {
     if target_actor.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing actor");
     }
-
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
-    let id = state.social.new_activity_id(&me);
-    let activity = serde_json::json!({
-      "@context": "https://www.w3.org/ns/activitystreams",
-      "id": id,
-      "type": "Follow",
-      "actor": me,
-      "object": &target_actor,
-      "to": [&target_actor],
-    });
-
-    let bytes = match serde_json::to_vec(&activity) {
-        Ok(v) => v,
-        Err(_) => return simple(StatusCode::BAD_REQUEST, "encode failed"),
-    };
-    let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    if !act_id.is_empty() {
-        let _ = state.social.store_outbox(act_id, bytes.clone());
-    }
-    if let Some(obj) = activity.get("object").and_then(|v| v.as_str()) {
-        let obj = obj.trim_end_matches('/');
-        let _ = state.social.set_following(obj, FollowingStatus::Pending);
-        match state
-            .queue
-            .enqueue_activity(bytes, vec![obj.to_string()])
-            .await
-        {
-            Ok(pending) => {
-                axum::Json(serde_json::json!({"ok": true, "pending": pending, "target": obj}))
-                    .into_response()
-            }
-            Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
+    match enqueue_follow_actor(state, &target_actor).await {
+        Ok(()) => {
+            axum::Json(serde_json::json!({"ok": true, "target": target_actor})).into_response()
         }
-    } else {
-        simple(StatusCode::BAD_REQUEST, "missing object")
+        Err(err) => simple(StatusCode::BAD_GATEWAY, &err),
     }
+}
+
+async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let import: SocialFollowImportReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let batch_size = import.batch_size.unwrap_or(25).clamp(1, 200);
+    let pause_ms = import.pause_ms.unwrap_or(500).clamp(0, 10_000);
+
+    let mut raw_targets = import.actors;
+    if let Some(csv) = import.csv.as_deref() {
+        raw_targets.extend(parse_follow_import_csv(csv));
+    }
+    if raw_targets.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "empty import");
+    }
+
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    let mut invalid = Vec::new();
+    for raw in raw_targets {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        if let Some(actor_url) = resolve_follow_target_input(state, trimmed).await {
+            normalized.push(actor_url);
+        } else {
+            invalid.push(trimmed.to_string());
+        }
+    }
+    if normalized.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            [("Content-Type", "application/json; charset=utf-8")],
+            serde_json::json!({
+                "ok": false,
+                "imported": 0,
+                "skipped_invalid": invalid.len(),
+                "invalid": invalid,
+            })
+            .to_string(),
+        )
+            .into_response();
+    }
+
+    if import.dry_run {
+        return (
+            StatusCode::OK,
+            [("Content-Type", "application/json; charset=utf-8")],
+            serde_json::json!({
+                "ok": true,
+                "dry_run": true,
+                "candidates": normalized.len(),
+                "invalid": invalid,
+                "targets": normalized,
+            })
+            .to_string(),
+        )
+            .into_response();
+    }
+
+    let mut imported = 0usize;
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    for chunk in normalized.chunks(batch_size) {
+        for actor in chunk {
+            match enqueue_follow_actor(state, actor).await {
+                Ok(()) => imported += 1,
+                Err(err) => failed.push(serde_json::json!({"actor": actor, "error": err})),
+            }
+        }
+        if pause_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(pause_ms)).await;
+        }
+    }
+
+    (
+        StatusCode::OK,
+        [("Content-Type", "application/json; charset=utf-8")],
+        serde_json::json!({
+            "ok": failed.is_empty(),
+            "dry_run": false,
+            "imported": imported,
+            "failed": failed,
+            "invalid": invalid,
+        })
+        .to_string(),
+    )
+        .into_response()
 }
 
 async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> {

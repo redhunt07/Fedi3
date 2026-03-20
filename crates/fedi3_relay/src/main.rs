@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::net::IpAddr;
 use std::sync::OnceLock;
@@ -172,6 +173,12 @@ struct RelayTelemetry {
     legacy_bootstrap_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_negative_cache_hits: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_retry_budget_drops: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_duplicate_request_drops: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_retry_probe_attempts: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -375,7 +382,28 @@ struct AppState {
     legacy_sync_delta_latency: Arc<LegacyApiLatencyStats>,
     legacy_bootstrap_latency: Arc<LegacyApiLatencyStats>,
     tunnel_negative_cache: Arc<Mutex<HashMap<String, i64>>>,
+    forward_retry_budget: Arc<Mutex<HashMap<String, ForwardRetryBudget>>>,
+    recent_forward_requests: Arc<Mutex<HashMap<String, i64>>>,
     relay_negative_cache_hits: Arc<AtomicU64>,
+    relay_retry_budget_drops: Arc<AtomicU64>,
+    relay_duplicate_request_drops: Arc<AtomicU64>,
+    relay_retry_probe_attempts: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForwardRouteClass {
+    Internal,
+    Actor,
+    Collection,
+    Other,
+}
+
+#[derive(Clone, Debug)]
+struct ForwardRetryBudget {
+    window_start_ms: i64,
+    attempts_in_window: u32,
+    cooldown_until_ms: i64,
+    probe_used: bool,
 }
 
 #[derive(Default)]
@@ -920,6 +948,13 @@ struct RelayConfig {
     noisy_backoff_max_secs: u64,
     max_inbox_fanout: usize,
     max_inflight_per_user: usize,
+    forward_dedupe_window_ms: i64,
+    forward_retry_budget_window_ms: i64,
+    forward_retry_budget_max_attempts: u32,
+    forward_retry_cooldown_ms: i64,
+    offline_cache_ttl_internal_ms: i64,
+    offline_cache_ttl_actor_ms: i64,
+    offline_cache_ttl_collection_ms: i64,
     spool_ttl_secs: u64,
     move_notice_ttl_secs: u64,
     move_notice_fanout_interval_secs: u64,
@@ -1539,7 +1574,12 @@ async fn main() {
         legacy_sync_delta_latency: Arc::new(LegacyApiLatencyStats::new()),
         legacy_bootstrap_latency: Arc::new(LegacyApiLatencyStats::new()),
         tunnel_negative_cache: Arc::new(Mutex::new(HashMap::new())),
+        forward_retry_budget: Arc::new(Mutex::new(HashMap::new())),
+        recent_forward_requests: Arc::new(Mutex::new(HashMap::new())),
         relay_negative_cache_hits: Arc::new(AtomicU64::new(0)),
+        relay_retry_budget_drops: Arc::new(AtomicU64::new(0)),
+        relay_duplicate_request_drops: Arc::new(AtomicU64::new(0)),
+        relay_retry_probe_attempts: Arc::new(AtomicU64::new(0)),
     };
 
     let addr = state.cfg.bind;
@@ -2224,6 +2264,42 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(32);
+    let forward_dedupe_window_ms = std::env::var("FEDI3_RELAY_FORWARD_DEDUPE_WINDOW_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(1_200)
+        .clamp(0, 30_000);
+    let forward_retry_budget_window_ms = std::env::var("FEDI3_RELAY_RETRY_BUDGET_WINDOW_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30_000)
+        .clamp(1_000, 600_000);
+    let forward_retry_budget_max_attempts = std::env::var("FEDI3_RELAY_RETRY_BUDGET_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(2)
+        .clamp(1, 20);
+    let forward_retry_cooldown_ms = std::env::var("FEDI3_RELAY_RETRY_COOLDOWN_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(90_000)
+        .clamp(1_000, 900_000);
+    let offline_cache_ttl_internal_ms = std::env::var("FEDI3_RELAY_OFFLINE_CACHE_TTL_INTERNAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(15_000)
+        .clamp(1_000, 300_000);
+    let offline_cache_ttl_actor_ms = std::env::var("FEDI3_RELAY_OFFLINE_CACHE_TTL_ACTOR_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30_000)
+        .clamp(1_000, 300_000);
+    let offline_cache_ttl_collection_ms =
+        std::env::var("FEDI3_RELAY_OFFLINE_CACHE_TTL_COLLECTION_MS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(20_000)
+            .clamp(1_000, 300_000);
     let spool_ttl_secs = std::env::var("FEDI3_RELAY_SPOOL_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -2404,6 +2480,13 @@ fn load_config() -> RelayConfig {
         noisy_backoff_max_secs,
         max_inbox_fanout,
         max_inflight_per_user,
+        forward_dedupe_window_ms,
+        forward_retry_budget_window_ms,
+        forward_retry_budget_max_attempts,
+        forward_retry_cooldown_ms,
+        offline_cache_ttl_internal_ms,
+        offline_cache_ttl_actor_ms,
+        offline_cache_ttl_collection_ms,
         spool_ttl_secs,
         move_notice_ttl_secs,
         move_notice_fanout_interval_secs,
@@ -3246,6 +3329,18 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_negative_cache_hits counter\n");
         out.push_str(&format!("fedi3_relay_negative_cache_hits {v}\n"));
     }
+    if let Some(v) = telemetry.relay_retry_budget_drops {
+        out.push_str("# TYPE fedi3_relay_retry_budget_drops counter\n");
+        out.push_str(&format!("fedi3_relay_retry_budget_drops {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_duplicate_request_drops {
+        out.push_str("# TYPE fedi3_relay_duplicate_request_drops counter\n");
+        out.push_str(&format!("fedi3_relay_duplicate_request_drops {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_retry_probe_attempts {
+        out.push_str("# TYPE fedi3_relay_retry_probe_attempts counter\n");
+        out.push_str(&format!("fedi3_relay_retry_probe_attempts {v}\n"));
+    }
     if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
         out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
         out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
@@ -3569,13 +3664,25 @@ async fn cached_user_response(
     Some((StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response())
 }
 
-const TUNNEL_NEGATIVE_CACHE_TTL_MS: i64 = 15_000;
+fn classify_forward_route(user: &str, path: &str) -> ForwardRouteClass {
+    if path.starts_with(&format!("/users/{user}/_fedi3/")) {
+        ForwardRouteClass::Internal
+    } else if path == format!("/users/{user}") {
+        ForwardRouteClass::Actor
+    } else if collection_kind_from_path(user, path).is_some() {
+        ForwardRouteClass::Collection
+    } else {
+        ForwardRouteClass::Other
+    }
+}
 
 fn tunnel_negative_cache_key(user: &str, path: &str) -> Option<String> {
-    if path.starts_with(&format!("/users/{user}/_fedi3/")) {
-        return Some(format!("{user}:{path}"));
+    match classify_forward_route(user, path) {
+        ForwardRouteClass::Internal | ForwardRouteClass::Actor | ForwardRouteClass::Collection => {
+            Some(format!("{user}:{path}"))
+        }
+        ForwardRouteClass::Other => None,
     }
-    None
 }
 
 fn offline_status_for_path(user: &str, path: &str) -> StatusCode {
@@ -3607,8 +3714,148 @@ async fn tunnel_negative_cache_put(state: &AppState, user: &str, path: &str, now
     let Some(key) = tunnel_negative_cache_key(user, path) else {
         return;
     };
+    let ttl_ms = match classify_forward_route(user, path) {
+        ForwardRouteClass::Internal => state.cfg.offline_cache_ttl_internal_ms,
+        ForwardRouteClass::Actor => state.cfg.offline_cache_ttl_actor_ms,
+        ForwardRouteClass::Collection => state.cfg.offline_cache_ttl_collection_ms,
+        ForwardRouteClass::Other => 0,
+    };
+    if ttl_ms <= 0 {
+        return;
+    }
     let mut cache = state.tunnel_negative_cache.lock().await;
-    cache.insert(key, now.saturating_add(TUNNEL_NEGATIVE_CACHE_TTL_MS.max(1)));
+    cache.insert(key, now.saturating_add(ttl_ms));
+}
+
+fn forward_retry_budget_key(user: &str, path: &str) -> Option<String> {
+    tunnel_negative_cache_key(user, path)
+}
+
+fn retry_budget_jitter_ms(key: &str, now: i64, span: i64) -> i64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    now.hash(&mut hasher);
+    (hasher.finish() as i64).rem_euclid(span.max(1))
+}
+
+async fn forward_retry_budget_allow(state: &AppState, user: &str, path: &str, now: i64) -> bool {
+    let Some(key) = forward_retry_budget_key(user, path) else {
+        return true;
+    };
+    let mut budgets = state.forward_retry_budget.lock().await;
+    if budgets.len() > 25_000 {
+        let cutoff = now
+            .saturating_sub(state.cfg.forward_retry_cooldown_ms.max(1))
+            .saturating_sub(state.cfg.forward_retry_budget_window_ms.max(1));
+        budgets.retain(|_, v| {
+            v.cooldown_until_ms > now
+                || v.window_start_ms >= cutoff
+                || v.attempts_in_window > 0
+                || !v.probe_used
+        });
+    }
+    let entry = budgets.entry(key.clone()).or_insert(ForwardRetryBudget {
+        window_start_ms: now,
+        attempts_in_window: 0,
+        cooldown_until_ms: 0,
+        probe_used: false,
+    });
+    if entry.cooldown_until_ms > 0 && now >= entry.cooldown_until_ms {
+        entry.cooldown_until_ms = 0;
+        entry.attempts_in_window = 0;
+        entry.window_start_ms = now;
+        entry.probe_used = false;
+    }
+    if entry.cooldown_until_ms > now {
+        if !entry.probe_used {
+            entry.probe_used = true;
+            state
+                .relay_retry_probe_attempts
+                .fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+        state
+            .relay_retry_budget_drops
+            .fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    true
+}
+
+async fn forward_retry_budget_failure(state: &AppState, user: &str, path: &str, now: i64) {
+    let Some(key) = forward_retry_budget_key(user, path) else {
+        return;
+    };
+    let mut budgets = state.forward_retry_budget.lock().await;
+    let entry = budgets.entry(key.clone()).or_insert(ForwardRetryBudget {
+        window_start_ms: now,
+        attempts_in_window: 0,
+        cooldown_until_ms: 0,
+        probe_used: false,
+    });
+    if now.saturating_sub(entry.window_start_ms) > state.cfg.forward_retry_budget_window_ms {
+        entry.window_start_ms = now;
+        entry.attempts_in_window = 0;
+    }
+    entry.attempts_in_window = entry.attempts_in_window.saturating_add(1);
+    if entry.attempts_in_window >= state.cfg.forward_retry_budget_max_attempts {
+        let jitter =
+            retry_budget_jitter_ms(&key, now, (state.cfg.forward_retry_cooldown_ms / 5).max(1));
+        entry.cooldown_until_ms = now
+            .saturating_add(state.cfg.forward_retry_cooldown_ms)
+            .saturating_add(jitter);
+        entry.probe_used = false;
+        entry.attempts_in_window = 0;
+        entry.window_start_ms = now;
+    }
+}
+
+async fn forward_retry_budget_success(state: &AppState, user: &str, path: &str) {
+    let Some(key) = forward_retry_budget_key(user, path) else {
+        return;
+    };
+    state.forward_retry_budget.lock().await.remove(&key);
+}
+
+async fn should_drop_duplicate_offline_request(
+    state: &AppState,
+    user: &str,
+    path: &str,
+    now: i64,
+) -> bool {
+    if state.cfg.forward_dedupe_window_ms <= 0 {
+        return false;
+    }
+    let Some(key) = forward_retry_budget_key(user, path) else {
+        return false;
+    };
+    let mut recent = state.recent_forward_requests.lock().await;
+    if recent.len() > 50_000 {
+        let cutoff = now.saturating_sub(state.cfg.forward_dedupe_window_ms.max(1) * 5);
+        recent.retain(|_, ts| *ts >= cutoff);
+    }
+    if let Some(last) = recent.get(&key).copied() {
+        if now.saturating_sub(last) <= state.cfg.forward_dedupe_window_ms {
+            state
+                .relay_duplicate_request_drops
+                .fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+    }
+    recent.insert(key, now);
+    false
+}
+
+async fn offline_cached_response(
+    state: &AppState,
+    user: &str,
+    path: &str,
+    headers: &HeaderMap,
+) -> Response {
+    if let Some(resp) = cached_user_response(state, user, path, headers).await {
+        return resp;
+    }
+    (offline_status_for_path(user, path), "user offline").into_response()
 }
 
 async fn forward_to_user(
@@ -3633,14 +3880,19 @@ async fn forward_to_user(
 
     if method == Method::GET {
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
-            return (offline_status_for_path(&user, path), "user offline").into_response();
+            return offline_cached_response(&state, &user, path, &headers).await;
         }
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
-            tunnel_negative_cache_put(&state, &user, path, now).await;
-            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
-                return resp;
+            if should_drop_duplicate_offline_request(&state, &user, path, now).await {
+                return offline_cached_response(&state, &user, path, &headers).await;
             }
+            if !forward_retry_budget_allow(&state, &user, path, now).await {
+                return offline_cached_response(&state, &user, path, &headers).await;
+            }
+            forward_retry_budget_failure(&state, &user, path, now).await;
+            tunnel_negative_cache_put(&state, &user, path, now).await;
+            return offline_cached_response(&state, &user, path, &headers).await;
         }
     }
 
@@ -3679,11 +3931,10 @@ async fn forward_to_user(
             let mut tunnels = state.tunnels.write().await;
             tunnels.remove(&user);
         }
+        forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
-            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
-                return resp;
-            }
+            return offline_cached_response(&state, &user, path, &headers).await;
         }
         return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
     }
@@ -3691,13 +3942,22 @@ async fn forward_to_user(
     let Ok(resp) =
         tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await
     else {
+        forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
+        if method == Method::GET {
+            return offline_cached_response(&state, &user, path, &headers).await;
+        }
         return (StatusCode::GATEWAY_TIMEOUT, "tunnel timeout").into_response();
     };
     let Ok(resp) = resp else {
+        forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
+        if method == Method::GET {
+            return offline_cached_response(&state, &user, path, &headers).await;
+        }
         return (StatusCode::BAD_GATEWAY, "tunnel response dropped").into_response();
     };
+    forward_retry_budget_success(&state, &user, path).await;
     if let Some(key) = tunnel_negative_cache_key(&user, path) {
         state.tunnel_negative_cache.lock().await.remove(&key);
     }
@@ -6417,8 +6677,10 @@ impl Db {
                     "DELETE FROM peer_directory WHERE username=?1",
                     params![username],
                 )?;
-                let changed =
-                    conn.execute("DELETE FROM users WHERE lower(username)=lower(?1)", params![username])?;
+                let changed = conn.execute(
+                    "DELETE FROM users WHERE lower(username)=lower(?1)",
+                    params![username],
+                )?;
                 Ok(changed > 0)
             }
             DbDriver::Postgres => {
@@ -6440,7 +6702,10 @@ impl Db {
                 let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
                 let _ =
                     conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
-                let changed = conn.execute("DELETE FROM users WHERE lower(username)=lower($1)", &[&username])?;
+                let changed = conn.execute(
+                    "DELETE FROM users WHERE lower(username)=lower($1)",
+                    &[&username],
+                )?;
                 Ok(changed > 0)
             }
         }
@@ -6461,8 +6726,10 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let row =
-                    conn.query_opt("SELECT disabled FROM users WHERE lower(username)=lower($1)", &[&username])?;
+                let row = conn.query_opt(
+                    "SELECT disabled FROM users WHERE lower(username)=lower($1)",
+                    &[&username],
+                )?;
                 Ok(row.map(|r| !r.get::<_, bool>(0)).unwrap_or(false))
             }
         }
@@ -12048,6 +12315,9 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let legacy_bootstrap_calls = state.legacy_bootstrap_latency.calls();
     let legacy_bootstrap_p95_ms = state.legacy_bootstrap_latency.p95_ms();
     let relay_negative_cache_hits = state.relay_negative_cache_hits.load(Ordering::Relaxed);
+    let relay_retry_budget_drops = state.relay_retry_budget_drops.load(Ordering::Relaxed);
+    let relay_duplicate_request_drops = state.relay_duplicate_request_drops.load(Ordering::Relaxed);
+    let relay_retry_probe_attempts = state.relay_retry_probe_attempts.load(Ordering::Relaxed);
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -12089,6 +12359,9 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         legacy_sync_delta_calls: Some(legacy_sync_delta_calls),
         legacy_bootstrap_calls: Some(legacy_bootstrap_calls),
         relay_negative_cache_hits: Some(relay_negative_cache_hits),
+        relay_retry_budget_drops: Some(relay_retry_budget_drops),
+        relay_duplicate_request_drops: Some(relay_duplicate_request_drops),
+        relay_retry_probe_attempts: Some(relay_retry_probe_attempts),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,
