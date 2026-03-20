@@ -173,6 +173,16 @@ class CoreApi {
   Future<Map<String, dynamic>> fetchLegacySyncStatus() async {
     final uri = _internal('/_fedi3/sync/status');
     final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode == 404) {
+      // Backward compatibility: older core builds may not expose sync status.
+      return const {
+        'ready': false,
+        'running': false,
+        'phase': 'bootstrap',
+        'streams': <String, dynamic>{},
+        'endpoint_missing': true,
+      };
+    }
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError(
           'legacy sync status failed: ${resp.statusCode} ${resp.body}');

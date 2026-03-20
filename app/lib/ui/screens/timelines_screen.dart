@@ -939,6 +939,16 @@ class _TimelineListState extends State<_TimelineList>
   Widget build(BuildContext context) {
     super.build(context);
     final filtered = _items;
+    final timelineCache = <Map<String, dynamic>, TimelineItem?>{};
+    final notesById = <String, TimelineItem>{};
+    for (final activity in filtered) {
+      final item = TimelineItem.tryFromActivity(activity);
+      timelineCache[activity] = item;
+      final noteId = item?.note.id.trim() ?? '';
+      if (noteId.isNotEmpty) {
+        notesById[noteId] = item!;
+      }
+    }
     final pendingCount = _pending.length;
     final panelColor = Theme.of(context).colorScheme.surfaceContainerLow;
     final panelBorder =
@@ -1104,6 +1114,20 @@ class _TimelineListState extends State<_TimelineList>
               }
               final item = filtered[index - 2];
               final isLast = index == filtered.length + 1;
+              final timelineItem = timelineCache[item];
+              final replyDepth = _replyDepth(timelineItem, notesById);
+              final card = TimelineActivityCard(
+                key: ValueKey(
+                    _activityId(item).isNotEmpty ? _activityId(item) : index),
+                appState: widget.appState,
+                activity: item,
+              );
+              final nestedCard = replyDepth > 0
+                  ? _NestedReplyLane(
+                      depth: replyDepth,
+                      child: card,
+                    )
+                  : card;
               return Container(
                 decoration: BoxDecoration(
                   border: isLast
@@ -1112,12 +1136,7 @@ class _TimelineListState extends State<_TimelineList>
                 ),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: TimelineActivityCard(
-                  key: ValueKey(
-                      _activityId(item).isNotEmpty ? _activityId(item) : index),
-                  appState: widget.appState,
-                  activity: item,
-                ),
+                child: nestedCard,
               );
             },
           ),
@@ -1195,6 +1214,58 @@ class _TimelineListState extends State<_TimelineList>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  int _replyDepth(TimelineItem? item, Map<String, TimelineItem> notesById) {
+    if (item == null) return 0;
+    var parentId = item.note.inReplyTo.trim();
+    if (parentId.isEmpty) return 0;
+    var depth = 0;
+    final seen = <String>{};
+    while (parentId.isNotEmpty && depth < 3) {
+      if (!seen.add(parentId)) break;
+      final parent = notesById[parentId];
+      if (parent == null) break;
+      depth += 1;
+      parentId = parent.note.inReplyTo.trim();
+    }
+    return depth;
+  }
+}
+
+class _NestedReplyLane extends StatelessWidget {
+  const _NestedReplyLane({required this.depth, required this.child});
+
+  final int depth;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final laneColor = Theme.of(context).colorScheme.primary.withAlpha(85);
+    final clampedDepth = depth.clamp(1, 3);
+    return Padding(
+      padding: EdgeInsets.only(left: 12.0 * clampedDepth),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                width: 2,
+                decoration: BoxDecoration(
+                  color: laneColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: child,
+          ),
+        ],
       ),
     );
   }

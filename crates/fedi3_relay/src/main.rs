@@ -180,6 +180,20 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_retry_probe_attempts: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_circuit_state_transitions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_stale_cache_served: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_tunnel_success_served: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_hot_path_inflight: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_hot_path_queue_depth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_async_job_inflight: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_async_job_queue_depth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature_b64: Option<String>,
@@ -388,6 +402,11 @@ struct AppState {
     relay_retry_budget_drops: Arc<AtomicU64>,
     relay_duplicate_request_drops: Arc<AtomicU64>,
     relay_retry_probe_attempts: Arc<AtomicU64>,
+    relay_circuit_state_transitions: Arc<AtomicU64>,
+    relay_stale_cache_served: Arc<AtomicU64>,
+    relay_tunnel_success_served: Arc<AtomicU64>,
+    hot_path_inflight: Arc<Semaphore>,
+    async_job_slots: Arc<Semaphore>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,10 +419,18 @@ enum ForwardRouteClass {
 
 #[derive(Clone, Debug)]
 struct ForwardRetryBudget {
-    window_start_ms: i64,
-    attempts_in_window: u32,
+    state: ForwardCircuitState,
+    opened_at_ms: i64,
     cooldown_until_ms: i64,
-    probe_used: bool,
+    consecutive_failures: u32,
+    half_open_probe_in_flight: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForwardCircuitState {
+    Closed,
+    Open,
+    HalfOpen,
 }
 
 #[derive(Default)]
@@ -948,6 +975,9 @@ struct RelayConfig {
     noisy_backoff_max_secs: u64,
     max_inbox_fanout: usize,
     max_inflight_per_user: usize,
+    max_hot_path_inflight: usize,
+    max_async_jobs: usize,
+    forward_circuit_failures_to_open: u32,
     forward_dedupe_window_ms: i64,
     forward_retry_budget_window_ms: i64,
     forward_retry_budget_max_attempts: u32,
@@ -1548,6 +1578,8 @@ async fn main() {
         .await,
     );
 
+    let max_hot_path_inflight = cfg.max_hot_path_inflight;
+    let max_async_jobs = cfg.max_async_jobs;
     let state = AppState {
         tunnels: Arc::new(RwLock::new(HashMap::new())),
         inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
@@ -1580,6 +1612,11 @@ async fn main() {
         relay_retry_budget_drops: Arc::new(AtomicU64::new(0)),
         relay_duplicate_request_drops: Arc::new(AtomicU64::new(0)),
         relay_retry_probe_attempts: Arc::new(AtomicU64::new(0)),
+        relay_circuit_state_transitions: Arc::new(AtomicU64::new(0)),
+        relay_stale_cache_served: Arc::new(AtomicU64::new(0)),
+        relay_tunnel_success_served: Arc::new(AtomicU64::new(0)),
+        hot_path_inflight: Arc::new(Semaphore::new(max_hot_path_inflight)),
+        async_job_slots: Arc::new(Semaphore::new(max_async_jobs)),
     };
 
     let addr = state.cfg.bind;
@@ -2264,6 +2301,22 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(32);
+    let max_hot_path_inflight = std::env::var("FEDI3_RELAY_MAX_HOT_PATH_INFLIGHT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(512)
+        .clamp(16, 20_000);
+    let max_async_jobs = std::env::var("FEDI3_RELAY_MAX_ASYNC_JOBS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4)
+        .clamp(1, 64);
+    let forward_circuit_failures_to_open =
+        std::env::var("FEDI3_RELAY_FORWARD_CIRCUIT_FAILURES_TO_OPEN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(3)
+            .clamp(1, 20);
     let forward_dedupe_window_ms = std::env::var("FEDI3_RELAY_FORWARD_DEDUPE_WINDOW_MS")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
@@ -2480,6 +2533,9 @@ fn load_config() -> RelayConfig {
         noisy_backoff_max_secs,
         max_inbox_fanout,
         max_inflight_per_user,
+        max_hot_path_inflight,
+        max_async_jobs,
+        forward_circuit_failures_to_open,
         forward_dedupe_window_ms,
         forward_retry_budget_window_ms,
         forward_retry_budget_max_attempts,
@@ -3341,6 +3397,34 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_retry_probe_attempts counter\n");
         out.push_str(&format!("fedi3_relay_retry_probe_attempts {v}\n"));
     }
+    if let Some(v) = telemetry.relay_circuit_state_transitions {
+        out.push_str("# TYPE fedi3_relay_circuit_state_transitions counter\n");
+        out.push_str(&format!("fedi3_relay_circuit_state_transitions {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_stale_cache_served {
+        out.push_str("# TYPE fedi3_relay_stale_cache_served counter\n");
+        out.push_str(&format!("fedi3_relay_stale_cache_served {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_tunnel_success_served {
+        out.push_str("# TYPE fedi3_relay_tunnel_success_served counter\n");
+        out.push_str(&format!("fedi3_relay_tunnel_success_served {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_hot_path_inflight {
+        out.push_str("# TYPE fedi3_relay_hot_path_inflight gauge\n");
+        out.push_str(&format!("fedi3_relay_hot_path_inflight {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_hot_path_queue_depth {
+        out.push_str("# TYPE fedi3_relay_hot_path_queue_depth gauge\n");
+        out.push_str(&format!("fedi3_relay_hot_path_queue_depth {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_async_job_inflight {
+        out.push_str("# TYPE fedi3_relay_async_job_inflight gauge\n");
+        out.push_str(&format!("fedi3_relay_async_job_inflight {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_async_job_queue_depth {
+        out.push_str("# TYPE fedi3_relay_async_job_queue_depth gauge\n");
+        out.push_str(&format!("fedi3_relay_async_job_queue_depth {v}\n"));
+    }
     if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
         out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
         out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
@@ -3636,6 +3720,15 @@ async fn cached_user_response(
                     .into_response(),
             );
         }
+        let stub = local_actor_stub_json(&state.cfg, headers, user);
+        return Some(
+            (
+                StatusCode::OK,
+                [("Content-Type", "application/activity+json; charset=utf-8")],
+                stub,
+            )
+                .into_response(),
+        );
     } else if let Some(kind) = collection_kind_from_path(user, path) {
         if let Ok(Some(json)) = db.get_collection_cache(user, kind) {
             return Some(
@@ -3746,38 +3839,46 @@ async fn forward_retry_budget_allow(state: &AppState, user: &str, path: &str, no
     if budgets.len() > 25_000 {
         let cutoff = now
             .saturating_sub(state.cfg.forward_retry_cooldown_ms.max(1))
-            .saturating_sub(state.cfg.forward_retry_budget_window_ms.max(1));
+            .saturating_sub(state.cfg.forward_retry_budget_window_ms.max(1) * 2);
         budgets.retain(|_, v| {
             v.cooldown_until_ms > now
-                || v.window_start_ms >= cutoff
-                || v.attempts_in_window > 0
-                || !v.probe_used
+                || v.opened_at_ms >= cutoff
+                || v.consecutive_failures > 0
+                || v.state != ForwardCircuitState::Closed
         });
     }
     let entry = budgets.entry(key.clone()).or_insert(ForwardRetryBudget {
-        window_start_ms: now,
-        attempts_in_window: 0,
+        state: ForwardCircuitState::Closed,
+        opened_at_ms: 0,
         cooldown_until_ms: 0,
-        probe_used: false,
+        consecutive_failures: 0,
+        half_open_probe_in_flight: false,
     });
-    if entry.cooldown_until_ms > 0 && now >= entry.cooldown_until_ms {
-        entry.cooldown_until_ms = 0;
-        entry.attempts_in_window = 0;
-        entry.window_start_ms = now;
-        entry.probe_used = false;
-    }
-    if entry.cooldown_until_ms > now {
-        if !entry.probe_used {
-            entry.probe_used = true;
+    if entry.state == ForwardCircuitState::Open {
+        if now >= entry.cooldown_until_ms {
+            entry.state = ForwardCircuitState::HalfOpen;
+            entry.half_open_probe_in_flight = false;
             state
-                .relay_retry_probe_attempts
+                .relay_circuit_state_transitions
                 .fetch_add(1, Ordering::Relaxed);
-            return true;
+        } else {
+            state
+                .relay_retry_budget_drops
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
         }
+    }
+    if entry.state == ForwardCircuitState::HalfOpen {
+        if entry.half_open_probe_in_flight {
+            state
+                .relay_retry_budget_drops
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        entry.half_open_probe_in_flight = true;
         state
-            .relay_retry_budget_drops
+            .relay_retry_probe_attempts
             .fetch_add(1, Ordering::Relaxed);
-        return false;
     }
     true
 }
@@ -3788,25 +3889,41 @@ async fn forward_retry_budget_failure(state: &AppState, user: &str, path: &str, 
     };
     let mut budgets = state.forward_retry_budget.lock().await;
     let entry = budgets.entry(key.clone()).or_insert(ForwardRetryBudget {
-        window_start_ms: now,
-        attempts_in_window: 0,
+        state: ForwardCircuitState::Closed,
+        opened_at_ms: 0,
         cooldown_until_ms: 0,
-        probe_used: false,
+        consecutive_failures: 0,
+        half_open_probe_in_flight: false,
     });
-    if now.saturating_sub(entry.window_start_ms) > state.cfg.forward_retry_budget_window_ms {
-        entry.window_start_ms = now;
-        entry.attempts_in_window = 0;
-    }
-    entry.attempts_in_window = entry.attempts_in_window.saturating_add(1);
-    if entry.attempts_in_window >= state.cfg.forward_retry_budget_max_attempts {
+    if entry.state == ForwardCircuitState::HalfOpen {
+        entry.state = ForwardCircuitState::Open;
+        entry.consecutive_failures = 0;
+        entry.half_open_probe_in_flight = false;
+        entry.opened_at_ms = now;
         let jitter =
             retry_budget_jitter_ms(&key, now, (state.cfg.forward_retry_cooldown_ms / 5).max(1));
         entry.cooldown_until_ms = now
             .saturating_add(state.cfg.forward_retry_cooldown_ms)
             .saturating_add(jitter);
-        entry.probe_used = false;
-        entry.attempts_in_window = 0;
-        entry.window_start_ms = now;
+        state
+            .relay_circuit_state_transitions
+            .fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+    if entry.consecutive_failures >= state.cfg.forward_circuit_failures_to_open {
+        let jitter =
+            retry_budget_jitter_ms(&key, now, (state.cfg.forward_retry_cooldown_ms / 5).max(1));
+        entry.state = ForwardCircuitState::Open;
+        entry.opened_at_ms = now;
+        entry.cooldown_until_ms = now
+            .saturating_add(state.cfg.forward_retry_cooldown_ms)
+            .saturating_add(jitter);
+        entry.consecutive_failures = 0;
+        entry.half_open_probe_in_flight = false;
+        state
+            .relay_circuit_state_transitions
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -3814,7 +3931,30 @@ async fn forward_retry_budget_success(state: &AppState, user: &str, path: &str) 
     let Some(key) = forward_retry_budget_key(user, path) else {
         return;
     };
-    state.forward_retry_budget.lock().await.remove(&key);
+    let mut budgets = state.forward_retry_budget.lock().await;
+    if let Some(entry) = budgets.get_mut(&key) {
+        if entry.state != ForwardCircuitState::Closed {
+            state
+                .relay_circuit_state_transitions
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        entry.state = ForwardCircuitState::Closed;
+        entry.opened_at_ms = 0;
+        entry.cooldown_until_ms = 0;
+        entry.consecutive_failures = 0;
+        entry.half_open_probe_in_flight = false;
+        return;
+    }
+    budgets.insert(
+        key,
+        ForwardRetryBudget {
+            state: ForwardCircuitState::Closed,
+            opened_at_ms: 0,
+            cooldown_until_ms: 0,
+            consecutive_failures: 0,
+            half_open_probe_in_flight: false,
+        },
+    );
 }
 
 async fn should_drop_duplicate_offline_request(
@@ -3853,6 +3993,9 @@ async fn offline_cached_response(
     headers: &HeaderMap,
 ) -> Response {
     if let Some(resp) = cached_user_response(state, user, path, headers).await {
+        state
+            .relay_stale_cache_served
+            .fetch_add(1, Ordering::Relaxed);
         return resp;
     }
     (offline_status_for_path(user, path), "user offline").into_response()
@@ -3879,6 +4022,17 @@ async fn forward_to_user(
     }
 
     if method == Method::GET {
+        if matches!(
+            classify_forward_route(&user, path),
+            ForwardRouteClass::Actor | ForwardRouteClass::Collection
+        ) {
+            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
+                state
+                    .relay_stale_cache_served
+                    .fetch_add(1, Ordering::Relaxed);
+                return resp;
+            }
+        }
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
             return offline_cached_response(&state, &user, path, &headers).await;
         }
@@ -3895,6 +4049,10 @@ async fn forward_to_user(
             return offline_cached_response(&state, &user, path, &headers).await;
         }
     }
+
+    let Ok(_hot_permit) = state.hot_path_inflight.clone().try_acquire_owned() else {
+        return (StatusCode::TOO_MANY_REQUESTS, "relay hot-path busy").into_response();
+    };
 
     let sem = get_user_semaphore(&state, &user).await;
     let Ok(_permit) = sem.try_acquire_owned() else {
@@ -3957,7 +4115,22 @@ async fn forward_to_user(
         }
         return (StatusCode::BAD_GATEWAY, "tunnel response dropped").into_response();
     };
+    let upstream_status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    if method == Method::GET
+        && matches!(
+            upstream_status,
+            StatusCode::SERVICE_UNAVAILABLE | StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
+        )
+        && forward_retry_budget_key(&user, path).is_some()
+    {
+        forward_retry_budget_failure(&state, &user, path, now_ms()).await;
+        tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
+        return offline_cached_response(&state, &user, path, &headers).await;
+    }
     forward_retry_budget_success(&state, &user, path).await;
+    state
+        .relay_tunnel_success_served
+        .fetch_add(1, Ordering::Relaxed);
     if let Some(key) = tunnel_negative_cache_key(&user, path) {
         state.tunnel_negative_cache.lock().await.remove(&key);
     }
@@ -4084,6 +4257,31 @@ fn moved_actor_stub_json(
     .to_string()
 }
 
+fn local_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str) -> String {
+    let (scheme, host) = origin_for_links_with_cfg(cfg, headers);
+    let base = format!("{scheme}://{host}");
+    serde_json::json!({
+      "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1"
+      ],
+      "id": format!("{base}/users/{user}"),
+      "type": "Person",
+      "preferredUsername": user,
+      "name": user,
+      "inbox": format!("{base}/inbox"),
+      "outbox": format!("{base}/users/{user}/outbox"),
+      "followers": format!("{base}/users/{user}/followers"),
+      "following": format!("{base}/users/{user}/following"),
+      "publicKey": {
+        "id": format!("{base}/users/{user}#main-key"),
+        "owner": format!("{base}/users/{user}"),
+        "publicKeyPem": ""
+      }
+    })
+    .to_string()
+}
+
 fn patch_actor_with_moved_to(actor_json: &str, moved_to_actor: &str) -> Option<String> {
     let mut v: serde_json::Value = serde_json::from_str(actor_json).ok()?;
     if !v.is_object() {
@@ -4173,10 +4371,6 @@ async fn shared_inbox(
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response(),
     };
-    if users.is_empty() {
-        return (StatusCode::BAD_REQUEST, "no local recipients").into_response();
-    }
-
     if users.len() > state.cfg.max_inbox_fanout {
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many recipients").into_response();
     }
@@ -4202,6 +4396,12 @@ async fn shared_inbox(
 
     if let Err(e) = index_activity_bytes_for_search(&state, &body).await {
         error!("relay search index failed: {e}");
+    }
+
+    if users.is_empty() {
+        // Interop: many legacy instances deliver to shared inbox even when this relay
+        // has no concrete local recipients in `to/cc`. Accept and no-op instead of 400.
+        return (StatusCode::ACCEPTED, "accepted (no local recipients)").into_response();
     }
 
     for user in users {
@@ -4291,6 +4491,10 @@ async fn index_activity_bytes_for_search(state: &AppState, body: &Bytes) -> Resu
 }
 
 async fn run_outbox_index_once(state: &AppState) -> Result<()> {
+    let Ok(_job_slot) = state.async_job_slots.clone().try_acquire_owned() else {
+        debug!("outbox indexer skipped: async job slots saturated");
+        return Ok(());
+    };
     let mut offset = 0u32;
     let batch = 200u32;
     loop {
@@ -4319,6 +4523,10 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
 }
 
 async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
+    let Ok(_job_slot) = state.async_job_slots.clone().try_acquire_owned() else {
+        debug!("legacy projection skipped: async job slots saturated");
+        return Ok(());
+    };
     if state
         .legacy_projection_stats
         .running
@@ -4714,10 +4922,13 @@ fn extract_user_from_string(s: &str) -> Vec<String> {
         let rest = &s[ustart..];
         let uname: String = rest
             .chars()
-            .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-')
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
             .collect();
-        if !uname.is_empty() && is_valid_username(&uname) {
-            out.push(uname);
+        if !uname.is_empty() {
+            let normalized = uname.to_ascii_lowercase();
+            if is_valid_username(&normalized) {
+                out.push(normalized);
+            }
         }
         start = ustart;
     }
@@ -12318,6 +12529,19 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let relay_retry_budget_drops = state.relay_retry_budget_drops.load(Ordering::Relaxed);
     let relay_duplicate_request_drops = state.relay_duplicate_request_drops.load(Ordering::Relaxed);
     let relay_retry_probe_attempts = state.relay_retry_probe_attempts.load(Ordering::Relaxed);
+    let relay_circuit_state_transitions = state
+        .relay_circuit_state_transitions
+        .load(Ordering::Relaxed);
+    let relay_stale_cache_served = state.relay_stale_cache_served.load(Ordering::Relaxed);
+    let relay_tunnel_success_served = state.relay_tunnel_success_served.load(Ordering::Relaxed);
+    let hot_path_available = state.hot_path_inflight.available_permits() as u64;
+    let hot_path_capacity = state.cfg.max_hot_path_inflight as u64;
+    let relay_hot_path_inflight = hot_path_capacity.saturating_sub(hot_path_available);
+    let relay_hot_path_queue_depth = relay_hot_path_inflight;
+    let async_available = state.async_job_slots.available_permits() as u64;
+    let async_capacity = state.cfg.max_async_jobs as u64;
+    let relay_async_job_inflight = async_capacity.saturating_sub(async_available);
+    let relay_async_job_queue_depth = relay_async_job_inflight;
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -12362,6 +12586,13 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         relay_retry_budget_drops: Some(relay_retry_budget_drops),
         relay_duplicate_request_drops: Some(relay_duplicate_request_drops),
         relay_retry_probe_attempts: Some(relay_retry_probe_attempts),
+        relay_circuit_state_transitions: Some(relay_circuit_state_transitions),
+        relay_stale_cache_served: Some(relay_stale_cache_served),
+        relay_tunnel_success_served: Some(relay_tunnel_success_served),
+        relay_hot_path_inflight: Some(relay_hot_path_inflight),
+        relay_hot_path_queue_depth: Some(relay_hot_path_queue_depth),
+        relay_async_job_inflight: Some(relay_async_job_inflight),
+        relay_async_job_queue_depth: Some(relay_async_job_queue_depth),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,

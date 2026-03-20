@@ -16,7 +16,7 @@ use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::{
     collections::{HashMap, HashSet},
@@ -38,7 +38,7 @@ use crate::media_backend as media_store;
 use crate::nat::UpnpController;
 use crate::net_metrics::NetMetrics;
 use crate::object_fetch::ObjectFetchWorker;
-use crate::social_db::{FollowingStatus, SocialDb};
+use crate::social_db::{FollowImportJob, FollowingStatus, SocialDb};
 use crate::ui_events::UiEvent;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::stream::unfold;
@@ -55,6 +55,7 @@ const CHAT_RETRY_INTERVAL_SECS: u64 = 20;
 const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
 static CHAT_BUNDLE_INFLIGHT: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
+static FOLLOW_IMPORT_JOB_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct ApConfig {
@@ -345,6 +346,9 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("POST", "/_fedi3/p2p/follow") => p2p_follow(state, req).await,
         ("POST", "/_fedi3/social/follow") => social_follow(state, req).await,
         ("POST", "/_fedi3/social/follow/import") => social_follow_import(state, req).await,
+        ("GET", "/_fedi3/social/follow/import/status") => {
+            social_follow_import_status(state, req).await
+        }
         ("POST", "/_fedi3/p2p/unfollow") => social_unfollow(state, req).await,
         ("POST", "/_fedi3/social/unfollow") => social_unfollow(state, req).await,
         ("GET", "/_fedi3/social/status") => social_follow_status_get(state, req).await,
@@ -5648,33 +5652,203 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
             .into_response();
     }
 
-    let mut imported = 0usize;
-    let mut failed: Vec<serde_json::Value> = Vec::new();
-    for chunk in normalized.chunks(batch_size) {
-        for actor in chunk {
-            match enqueue_follow_actor(state, actor).await {
-                Ok(()) => imported += 1,
-                Err(err) => failed.push(serde_json::json!({"actor": actor, "error": err})),
-            }
-        }
-        if pause_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(pause_ms)).await;
-        }
+    let total_targets = normalized.len();
+    let job_id = next_follow_import_job_id();
+    let queued_detail = serde_json::json!({
+        "invalid": invalid,
+    })
+    .to_string();
+    if let Err(err) = state.social.create_follow_import_job(
+        &job_id,
+        false,
+        total_targets as i64,
+        invalid.len() as i64,
+        Some(&queued_detail),
+    ) {
+        return simple(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to create follow import job: {err}"),
+        );
     }
+
+    let state_cloned = state.clone();
+    let job_id_cloned = job_id.clone();
+    tokio::spawn(async move {
+        run_follow_import_job(
+            state_cloned,
+            job_id_cloned,
+            normalized,
+            invalid.len() as i64,
+            batch_size,
+            pause_ms,
+            queued_detail,
+        )
+        .await;
+    });
 
     (
         StatusCode::OK,
         [("Content-Type", "application/json; charset=utf-8")],
         serde_json::json!({
-            "ok": failed.is_empty(),
+            "ok": true,
+            "queued": true,
             "dry_run": false,
-            "imported": imported,
-            "failed": failed,
-            "invalid": invalid,
+            "job_id": job_id,
+            "status": "queued",
+            "total": total_targets,
         })
         .to_string(),
     )
         .into_response()
+}
+
+async fn social_follow_import_status(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let job_id = query
+        .split('&')
+        .find(|p| p.starts_with("job_id="))
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty());
+    let job_res = if let Some(job_id) = job_id {
+        state.social.get_follow_import_job(job_id)
+    } else {
+        state.social.latest_follow_import_job()
+    };
+    let Some(job) = (match job_res {
+        Ok(v) => v,
+        Err(err) => {
+            return simple(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to load follow import job status: {err}"),
+            );
+        }
+    }) else {
+        return simple(StatusCode::NOT_FOUND, "follow import job not found");
+    };
+
+    (
+        StatusCode::OK,
+        [("Content-Type", "application/json; charset=utf-8")],
+        follow_import_job_status_json(&job).to_string(),
+    )
+        .into_response()
+}
+
+fn follow_import_job_status_json(job: &FollowImportJob) -> serde_json::Value {
+    let detail = job
+        .detail_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    serde_json::json!({
+        "ok": true,
+        "job_id": job.job_id,
+        "status": job.status,
+        "dry_run": job.dry_run,
+        "total_input": job.total_input,
+        "resolved_targets": job.resolved_targets,
+        "imported": job.imported,
+        "failed": job.failed,
+        "invalid": job.invalid,
+        "created_at_ms": job.created_at_ms,
+        "started_at_ms": job.started_at_ms,
+        "finished_at_ms": job.finished_at_ms,
+        "updated_at_ms": job.updated_at_ms,
+        "detail": detail,
+    })
+}
+
+fn next_follow_import_job_id() -> String {
+    let seq = FOLLOW_IMPORT_JOB_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("fi-{}-{seq}", now_ms())
+}
+
+async fn run_follow_import_job(
+    state: ApState,
+    job_id: String,
+    targets: Vec<String>,
+    invalid_count: i64,
+    batch_size: usize,
+    pause_ms: u64,
+    queued_detail: String,
+) {
+    if let Err(err) = state.social.mark_follow_import_job_running(&job_id) {
+        tracing::warn!("follow import job {job_id} failed to mark running: {err}");
+        return;
+    }
+    let mut imported = 0i64;
+    let mut failed_count = 0i64;
+    let mut failed_entries: Vec<serde_json::Value> = Vec::new();
+    let resolved_targets = targets.len() as i64;
+    for chunk in targets.chunks(batch_size) {
+        for actor in chunk {
+            match enqueue_follow_actor(&state, actor).await {
+                Ok(()) => imported += 1,
+                Err(err) => {
+                    failed_count += 1;
+                    if failed_entries.len() < 200 {
+                        failed_entries.push(serde_json::json!({"actor": actor, "error": err}));
+                    }
+                }
+            }
+        }
+        let progress_detail = if failed_entries.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::json!({
+                    "failed": failed_entries,
+                })
+                .to_string(),
+            )
+        };
+        if let Err(err) = state.social.update_follow_import_job_progress(
+            &job_id,
+            resolved_targets,
+            imported,
+            failed_count,
+            invalid_count,
+            progress_detail.as_deref(),
+        ) {
+            tracing::warn!("follow import job {job_id} failed to update progress: {err}");
+        }
+        if pause_ms > 0 {
+            let jitter = ((now_ms() as u64) ^ (resolved_targets as u64)) % 120;
+            tokio::time::sleep(Duration::from_millis(pause_ms.saturating_add(jitter))).await;
+        }
+    }
+
+    let detail = if failed_entries.is_empty() {
+        queued_detail
+    } else {
+        serde_json::json!({
+            "failed": failed_entries,
+        })
+        .to_string()
+    };
+    let final_status = if failed_count == 0 {
+        "completed"
+    } else if imported > 0 {
+        "completed"
+    } else {
+        "failed"
+    };
+    if let Err(err) = state.social.finish_follow_import_job(
+        &job_id,
+        final_status,
+        resolved_targets,
+        imported,
+        failed_count,
+        invalid_count,
+        Some(&detail),
+    ) {
+        tracing::warn!("follow import job {job_id} failed to mark completion: {err}");
+    }
 }
 
 async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> {

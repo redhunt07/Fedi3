@@ -11,21 +11,61 @@ import '../../services/link_preview_repository.dart';
 import '../utils/open_url.dart';
 import 'retry_network_image.dart';
 
-class LinkPreviewCard extends StatelessWidget {
+class LinkPreviewCard extends StatefulWidget {
   const LinkPreviewCard({super.key, required this.url});
 
   final String url;
 
   @override
+  State<LinkPreviewCard> createState() => _LinkPreviewCardState();
+}
+
+class _LinkPreviewCardState extends State<LinkPreviewCard> {
+  Future<LinkPreview?>? _future;
+  LinkPreview? _resolved;
+  String _lastUrl = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _resetFutureIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant LinkPreviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _resetFutureIfNeeded();
+    }
+  }
+
+  void _resetFutureIfNeeded() {
+    final u = widget.url.trim();
+    if (u == _lastUrl && _future != null) return;
+    _lastUrl = u;
+    _resolved = null;
+    if (u.isEmpty) {
+      _future = null;
+      return;
+    }
+    _future = LinkPreviewRepository.instance.get(u).then((value) {
+      if (value != null) _resolved = value;
+      return value;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final u = url.trim();
+    final u = widget.url.trim();
     if (u.isEmpty) return const SizedBox.shrink();
     final host = Uri.tryParse(u)?.host ?? '';
+    final future = _future;
+    if (future == null) return const SizedBox.shrink();
 
     return FutureBuilder<LinkPreview?>(
-      future: LinkPreviewRepository.instance.get(u),
+      future: future,
       builder: (context, snap) {
-        final p = snap.data;
+        final p = snap.data ?? _resolved;
         if (snap.connectionState == ConnectionState.waiting && p == null) {
           return _skeleton(context, host: host, url: u);
         }
@@ -44,7 +84,8 @@ class LinkPreviewCard extends StatelessWidget {
               children: [
                 if (img.isNotEmpty)
                   ClipRRect(
-                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(14)),
+                    borderRadius: const BorderRadius.horizontal(
+                        left: Radius.circular(14)),
                     child: RetryNetworkImage(
                       url: img,
                       width: 96,
@@ -57,14 +98,23 @@ class LinkPreviewCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         if (desc.isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
                             desc,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(179),
+                                fontSize: 12),
                           ),
                         ],
                         const SizedBox(height: 8),
@@ -72,7 +122,12 @@ class LinkPreviewCard extends StatelessWidget {
                           host.isNotEmpty ? host : u,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(128),
+                              fontSize: 12),
                         ),
                       ],
                     ),
@@ -95,7 +150,8 @@ class LinkPreviewCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: const Icon(Icons.link),
-        title: Text(host.isNotEmpty ? host : url, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(host.isNotEmpty ? host : url,
+            maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: _CopyLinkButton(url: url),
         onTap: () => openUrlExternal(url),
@@ -103,7 +159,8 @@ class LinkPreviewCard extends StatelessWidget {
     );
   }
 
-  Widget _skeleton(BuildContext context, {required String host, required String url}) {
+  Widget _skeleton(BuildContext context,
+      {required String host, required String url}) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -113,7 +170,10 @@ class LinkPreviewCard extends StatelessWidget {
               width: 96,
               height: 96,
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withAlpha(120),
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
@@ -122,11 +182,29 @@ class LinkPreviewCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(height: 14, width: double.infinity, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120)),
+                  Container(
+                      height: 14,
+                      width: double.infinity,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(120)),
                   const SizedBox(height: 8),
-                  Container(height: 12, width: double.infinity, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(100)),
+                  Container(
+                      height: 12,
+                      width: double.infinity,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(100)),
                   const SizedBox(height: 8),
-                  Container(height: 12, width: 160, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(80)),
+                  Container(
+                      height: 12,
+                      width: 160,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(80)),
                 ],
               ),
             ),
@@ -150,7 +228,8 @@ class _CopyLinkButton extends StatelessWidget {
       onPressed: () async {
         await Clipboard.setData(ClipboardData(text: url));
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.copied)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(context.l10n.copied)));
       },
     );
   }

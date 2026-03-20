@@ -103,6 +103,23 @@ pub struct ChatMessage {
     pub body_json: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FollowImportJob {
+    pub job_id: String,
+    pub status: String,
+    pub dry_run: bool,
+    pub total_input: i64,
+    pub resolved_targets: i64,
+    pub imported: i64,
+    pub failed: i64,
+    pub invalid: i64,
+    pub detail_json: Option<String>,
+    pub created_at_ms: i64,
+    pub started_at_ms: Option<i64>,
+    pub finished_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
 impl SocialDb {
     fn temp_backup_path(&self) -> Result<PathBuf> {
         let mut buf = [0u8; 16];
@@ -393,6 +410,23 @@ impl SocialDb {
               block_until_ms INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_abuse_block_until ON abuse_strikes(block_until_ms);
+
+            CREATE TABLE IF NOT EXISTS follow_import_jobs (
+              job_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              dry_run INTEGER NOT NULL DEFAULT 0,
+              total_input INTEGER NOT NULL DEFAULT 0,
+              resolved_targets INTEGER NOT NULL DEFAULT 0,
+              imported INTEGER NOT NULL DEFAULT 0,
+              failed INTEGER NOT NULL DEFAULT 0,
+              invalid INTEGER NOT NULL DEFAULT 0,
+              detail_json TEXT NULL,
+              created_at_ms INTEGER NOT NULL,
+              started_at_ms INTEGER NULL,
+              finished_at_ms INTEGER NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_follow_import_jobs_created ON follow_import_jobs(created_at_ms DESC);
 
             "#,
         )?;
@@ -2140,6 +2174,215 @@ impl SocialDb {
             Some(_) => None,
             None => None,
         })
+    }
+
+    pub fn create_follow_import_job(
+        &self,
+        job_id: &str,
+        dry_run: bool,
+        total_input: i64,
+        invalid: i64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Ok(());
+        }
+        let conn = Connection::open(&self.path)?;
+        let now = now_ms();
+        conn.execute(
+            r#"
+            INSERT INTO follow_import_jobs(
+              job_id, status, dry_run, total_input, resolved_targets, imported, failed, invalid,
+              detail_json, created_at_ms, started_at_ms, finished_at_ms, updated_at_ms
+            ) VALUES (?1, 'queued', ?2, ?3, 0, 0, 0, ?4, ?5, ?6, NULL, NULL, ?6)
+            ON CONFLICT(job_id) DO UPDATE SET
+              status=excluded.status,
+              dry_run=excluded.dry_run,
+              total_input=excluded.total_input,
+              invalid=excluded.invalid,
+              detail_json=excluded.detail_json,
+              updated_at_ms=excluded.updated_at_ms
+            "#,
+            params![
+                job_id,
+                if dry_run { 1 } else { 0 },
+                total_input,
+                invalid,
+                detail_json,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_follow_import_job_running(&self, job_id: &str) -> Result<()> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Ok(());
+        }
+        let conn = Connection::open(&self.path)?;
+        let now = now_ms();
+        conn.execute(
+            "UPDATE follow_import_jobs SET status='running', started_at_ms=COALESCE(started_at_ms, ?2), updated_at_ms=?2 WHERE job_id=?1",
+            params![job_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_follow_import_job_progress(
+        &self,
+        job_id: &str,
+        resolved_targets: i64,
+        imported: i64,
+        failed: i64,
+        invalid: i64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Ok(());
+        }
+        let conn = Connection::open(&self.path)?;
+        let now = now_ms();
+        conn.execute(
+            r#"
+            UPDATE follow_import_jobs
+            SET resolved_targets=?2,
+                imported=?3,
+                failed=?4,
+                invalid=?5,
+                detail_json=COALESCE(?6, detail_json),
+                updated_at_ms=?7
+            WHERE job_id=?1
+            "#,
+            params![
+                job_id,
+                resolved_targets,
+                imported,
+                failed,
+                invalid,
+                detail_json,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_follow_import_job(
+        &self,
+        job_id: &str,
+        status: &str,
+        resolved_targets: i64,
+        imported: i64,
+        failed: i64,
+        invalid: i64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Ok(());
+        }
+        let status = status.trim();
+        if status.is_empty() {
+            return Ok(());
+        }
+        let conn = Connection::open(&self.path)?;
+        let now = now_ms();
+        conn.execute(
+            r#"
+            UPDATE follow_import_jobs
+            SET status=?2,
+                resolved_targets=?3,
+                imported=?4,
+                failed=?5,
+                invalid=?6,
+                detail_json=COALESCE(?7, detail_json),
+                finished_at_ms=?8,
+                updated_at_ms=?8
+            WHERE job_id=?1
+            "#,
+            params![
+                job_id,
+                status,
+                resolved_targets,
+                imported,
+                failed,
+                invalid,
+                detail_json,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_follow_import_job(&self, job_id: &str) -> Result<Option<FollowImportJob>> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Ok(None);
+        }
+        let conn = Connection::open(&self.path)?;
+        conn.query_row(
+            r#"
+            SELECT job_id, status, dry_run, total_input, resolved_targets, imported, failed, invalid,
+                   detail_json, created_at_ms, started_at_ms, finished_at_ms, updated_at_ms
+            FROM follow_import_jobs
+            WHERE job_id=?1
+            "#,
+            params![job_id],
+            |r| {
+                Ok(FollowImportJob {
+                    job_id: r.get(0)?,
+                    status: r.get(1)?,
+                    dry_run: r.get::<_, i64>(2)? != 0,
+                    total_input: r.get(3)?,
+                    resolved_targets: r.get(4)?,
+                    imported: r.get(5)?,
+                    failed: r.get(6)?,
+                    invalid: r.get(7)?,
+                    detail_json: r.get(8)?,
+                    created_at_ms: r.get(9)?,
+                    started_at_ms: r.get(10)?,
+                    finished_at_ms: r.get(11)?,
+                    updated_at_ms: r.get(12)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn latest_follow_import_job(&self) -> Result<Option<FollowImportJob>> {
+        let conn = Connection::open(&self.path)?;
+        conn.query_row(
+            r#"
+            SELECT job_id, status, dry_run, total_input, resolved_targets, imported, failed, invalid,
+                   detail_json, created_at_ms, started_at_ms, finished_at_ms, updated_at_ms
+            FROM follow_import_jobs
+            ORDER BY created_at_ms DESC
+            LIMIT 1
+            "#,
+            [],
+            |r| {
+                Ok(FollowImportJob {
+                    job_id: r.get(0)?,
+                    status: r.get(1)?,
+                    dry_run: r.get::<_, i64>(2)? != 0,
+                    total_input: r.get(3)?,
+                    resolved_targets: r.get(4)?,
+                    imported: r.get(5)?,
+                    failed: r.get(6)?,
+                    invalid: r.get(7)?,
+                    detail_json: r.get(8)?,
+                    created_at_ms: r.get(9)?,
+                    started_at_ms: r.get(10)?,
+                    finished_at_ms: r.get(11)?,
+                    updated_at_ms: r.get(12)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     pub fn remove_following(&self, actor_id: &str) -> Result<()> {

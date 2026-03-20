@@ -2307,11 +2307,11 @@ class _QuotedPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prev = replyPreview ?? quotePreview;
-    if (prev == null) return const SizedBox.shrink();
     final inner = (prev['content'] as String?)?.trim() ??
         (prev['name'] as String?)?.trim() ??
         '';
-    if (inner.isEmpty) return const SizedBox.shrink();
+    final hasPreviewContent = inner.isNotEmpty;
+    if (!hasPreviewContent && inReplyTo.isEmpty) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -2354,12 +2354,14 @@ class _QuotedPreview extends StatelessWidget {
                           .onSurface
                           .withAlpha(179),
                       fontSize: 12)),
-              const SizedBox(height: 6),
-              HtmlWidget(
-                inner,
-                buildAsync: !Platform.isLinux,
-                enableCaching: !Platform.isLinux,
-              ),
+              if (hasPreviewContent) ...[
+                const SizedBox(height: 6),
+                HtmlWidget(
+                  inner,
+                  buildAsync: !Platform.isLinux,
+                  enableCaching: !Platform.isLinux,
+                ),
+              ],
               if (inReplyTo.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Text(
