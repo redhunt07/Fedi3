@@ -2770,6 +2770,9 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
                 }
             }
             hydrate_activity(state, &mut v, &mut cache);
+            if is_tombstone_activity(&v) {
+                continue;
+            }
             items.push(v);
         }
     }
@@ -2823,6 +2826,9 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
                 }
             }
             hydrate_activity(state, &mut v, &mut cache);
+            if is_tombstone_activity(&v) {
+                continue;
+            }
             items.push(v);
         }
     }
@@ -2875,6 +2881,9 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
                 }
             }
             hydrate_activity(state, &mut v, &mut cache);
+            if is_tombstone_activity(&v) {
+                continue;
+            }
             items.push(v);
         }
     }
@@ -2927,6 +2936,9 @@ async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body>
                 }
             }
             hydrate_activity(state, &mut v, &mut cache);
+            if is_tombstone_activity(&v) {
+                continue;
+            }
             items.push(v);
         }
     }
@@ -7907,6 +7919,35 @@ fn activity_mentions_me(activity: &serde_json::Value, me_actor: &str, my_handle:
             if check_tags(inner) {
                 return true;
             }
+        }
+    }
+    false
+}
+
+fn is_tombstone_activity(activity: &serde_json::Value) -> bool {
+    if activity
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|t| t == "Tombstone")
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let Some(obj) = activity.get("object") else {
+        return false;
+    };
+    let is_tomb = |v: &serde_json::Value| {
+        v.get("type")
+            .and_then(|x| x.as_str())
+            .map(|t| t == "Tombstone")
+            .unwrap_or(false)
+    };
+    if is_tomb(obj) {
+        return true;
+    }
+    if let Some(inner) = obj.get("object") {
+        if is_tomb(inner) {
+            return true;
         }
     }
     false
