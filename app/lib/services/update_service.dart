@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
@@ -108,8 +109,27 @@ class UpdateService {
     }
   }
 
+  Future<void> launchManualUpdateAndExit({UpdateInfo? info}) async {
+    final command = (info?.manualCommand.trim().isNotEmpty ?? false)
+        ? info!.manualCommand.trim()
+        : await _resolveManualCommand();
+    if (command.isEmpty) {
+      throw StateError('manual update command not available');
+    }
+    if (Platform.isWindows) {
+      await _launchWindowsElevated(command);
+      exit(0);
+    }
+    if (Platform.isLinux) {
+      await _launchLinuxTerminal(command);
+      exit(0);
+    }
+    throw StateError('manual update launch not supported on this platform');
+  }
+
   Future<UpdateInfo?> _fetchLatest() async {
-    final resp = await http.get(Uri.parse(_apiBase), headers: {'User-Agent': 'fedi3-client'});
+    final resp = await http
+        .get(Uri.parse(_apiBase), headers: {'User-Agent': 'fedi3-client'});
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('update check failed: ${resp.statusCode}');
     }
@@ -271,7 +291,8 @@ class UpdateService {
     final raw = v.split('+').first.trim();
     return raw
         .split('.')
-        .map((part) => int.tryParse(part.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .map(
+            (part) => int.tryParse(part.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
         .toList();
   }
 
@@ -279,7 +300,9 @@ class UpdateService {
     try {
       if (Platform.isLinux) {
         final appImage = Platform.environment['APPIMAGE']?.trim();
-        if (appImage != null && appImage.isNotEmpty && File(appImage).existsSync()) {
+        if (appImage != null &&
+            appImage.isNotEmpty &&
+            File(appImage).existsSync()) {
           return appImage;
         }
       }
@@ -292,7 +315,9 @@ class UpdateService {
   bool _isAppImage() {
     if (!Platform.isLinux) return false;
     final appImage = Platform.environment['APPIMAGE']?.trim();
-    return appImage != null && appImage.isNotEmpty && File(appImage).existsSync();
+    return appImage != null &&
+        appImage.isNotEmpty &&
+        File(appImage).existsSync();
   }
 
   Future<String> _linuxManualCommand() async {
@@ -321,6 +346,125 @@ class UpdateService {
     return 'powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"';
   }
 
+  Future<String> _resolveManualCommand() async {
+    if (Platform.isWindows) return _windowsManualCommand();
+    if (Platform.isLinux) return _linuxManualCommand();
+    return '';
+  }
+
+  Future<void> _launchWindowsElevated(String command) async {
+    final encoded = base64.encode(_utf16LeBytes(command));
+    final argList =
+        '-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
+    await Process.start(
+      'powershell',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        'Start-Process',
+        'PowerShell',
+        '-Verb',
+        'RunAs',
+        '-ArgumentList',
+        argList,
+      ],
+      mode: ProcessStartMode.detached,
+    );
+  }
+
+  Uint8List _utf16LeBytes(String value) {
+    final units = value.codeUnits;
+    final bytes = Uint8List(units.length * 2);
+    for (var i = 0; i < units.length; i++) {
+      final unit = units[i];
+      bytes[i * 2] = unit & 0xff;
+      bytes[i * 2 + 1] = (unit >> 8) & 0xff;
+    }
+    return bytes;
+  }
+
+  Future<void> _launchLinuxTerminal(String command) async {
+    final wrapped = _wrapLinuxCommand(command);
+    final candidates = <Map<String, dynamic>>[
+      {
+        'bin': 'x-terminal-emulator',
+        'args': ['-e', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'gnome-terminal',
+        'args': ['--', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'konsole',
+        'args': ['-e', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'xfce4-terminal',
+        'args': ['--command', 'bash -lc "${wrapped.replaceAll('"', '\\"')}"']
+      },
+      {
+        'bin': 'mate-terminal',
+        'args': ['--', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'tilix',
+        'args': ['-e', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'kitty',
+        'args': ['bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'alacritty',
+        'args': ['-e', 'bash', '-lc', wrapped]
+      },
+      {
+        'bin': 'xterm',
+        'args': ['-e', 'bash', '-lc', wrapped]
+      },
+    ];
+    for (final c in candidates) {
+      final bin = c['bin'] as String;
+      if (!await _commandExists(bin)) continue;
+      await Process.start(
+        bin,
+        (c['args'] as List).cast<String>(),
+        mode: ProcessStartMode.detached,
+      );
+      return;
+    }
+    throw StateError('no terminal available for manual update');
+  }
+
+  String _wrapLinuxCommand(String command) {
+    final escaped = _shellSingleQuoted(command);
+    return '''
+if [ "\$(id -u)" -ne 0 ]; then
+  sudo -k bash -lc '$escaped'
+else
+  bash -lc '$escaped'
+fi
+echo
+echo "Fedi3 update finished. Press Enter to close."
+read -r _
+''';
+  }
+
+  String _shellSingleQuoted(String value) {
+    return value.replaceAll("'", "'\"'\"'");
+  }
+
+  Future<bool> _commandExists(String command) async {
+    try {
+      final p = await Process.run('which', [command]);
+      return p.exitCode == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   String _readOsReleaseValue(String content, String key) {
     final pattern = RegExp('^$key=(.*)\$', multiLine: true);
     final match = pattern.firstMatch(content);
@@ -328,7 +472,8 @@ class UpdateService {
     return match.group(1)?.replaceAll('"', '').trim() ?? '';
   }
 
-  Future<void> _installWindows(String downloadPath, String targetPath, String version) async {
+  Future<void> _installWindows(
+      String downloadPath, String targetPath, String version) async {
     final tmp = await getTemporaryDirectory();
     var sourcePath = downloadPath;
     final targetDir = File(targetPath).parent.path;
@@ -348,11 +493,13 @@ class UpdateService {
       ..writeln('start "" "${targetPath}"')
       ..writeln('del "%~f0"');
     await File(batPath).writeAsString(script.toString(), flush: true);
-    await Process.start('cmd', ['/c', batPath], mode: ProcessStartMode.detached);
+    await Process.start('cmd', ['/c', batPath],
+        mode: ProcessStartMode.detached);
     exit(0);
   }
 
-  Future<void> _installLinux(String downloadPath, String targetPath, String version) async {
+  Future<void> _installLinux(
+      String downloadPath, String targetPath, String version) async {
     final tmp = await getTemporaryDirectory();
     final shPath = '${tmp.path}${Platform.pathSeparator}fedi3_update.sh';
     final targetDir = File(targetPath).parent.path;
@@ -361,7 +508,8 @@ class UpdateService {
       ..writeln('sleep 1')
       ..writeln('mv -f "${downloadPath}" "${targetPath}"')
       ..writeln('chmod +x "${targetPath}"')
-      ..writeln('printf "%s" "${version}" > "${targetDir}/${_versionMarkerName}"')
+      ..writeln(
+          'printf "%s" "${version}" > "${targetDir}/${_versionMarkerName}"')
       ..writeln('"${targetPath}" &')
       ..writeln(r'rm -- "$0"');
     final file = File(shPath);
@@ -399,7 +547,8 @@ class UpdateService {
   String? _detectZipRoot(Archive archive) {
     String? root;
     for (final file in archive) {
-      final name = file.name.replaceAll('\\', '/').replaceAll(RegExp(r'^/+'), '');
+      final name =
+          file.name.replaceAll('\\', '/').replaceAll(RegExp(r'^/+'), '');
       if (name.isEmpty) continue;
       final idx = name.indexOf('/');
       if (idx <= 0) {
@@ -417,7 +566,8 @@ class UpdateService {
       final exePath = _currentExecutablePath();
       if (exePath == null) return '';
       final dir = File(exePath).parent.path;
-      final marker = File('${dir}${Platform.pathSeparator}${_versionMarkerName}');
+      final marker =
+          File('${dir}${Platform.pathSeparator}${_versionMarkerName}');
       if (!marker.existsSync()) return '';
       return marker.readAsStringSync().trim();
     } catch (_) {

@@ -22,6 +22,7 @@ import 'screens/settings_screen.dart';
 import 'screens/timelines_screen.dart';
 import 'screens/chat_screen.dart';
 import 'widgets/update_banner.dart';
+import 'widgets/client_version_badge.dart';
 import 'widgets/nerd_status_bar.dart';
 import 'widgets/right_sidebar.dart';
 import 'theme/ui_tokens.dart';
@@ -121,7 +122,8 @@ class _ShellState extends State<Shell> {
     if (identical(_chatStreamConfig, cfg) && _chatStream != null) return;
     _chatStreamConfig = cfg;
     _chatStream?.cancel();
-    _chatStream = CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
+    _chatStream =
+        CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'chat') return;
       final lastSeen = widget.appState.prefs.lastChatSeenMs;
@@ -193,7 +195,8 @@ class _ShellState extends State<Shell> {
     if (identical(_profileStreamConfig, cfg) && _profileStream != null) return;
     _profileStreamConfig = cfg;
     _profileStream?.cancel();
-    _profileStream = CoreEventStream(config: cfg).stream(kind: 'profile').listen((ev) {
+    _profileStream =
+        CoreEventStream(config: cfg).stream(kind: 'profile').listen((ev) {
       if (ev.kind != 'profile' || ev.activityType != 'featured') return;
       final base = cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
       final actorUrl = '$base/users/${cfg.username}';
@@ -279,32 +282,54 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
+    final isWide =
+        MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
     final unread = widget.appState.unreadNotifications;
     final unreadChats = widget.appState.unreadChats;
 
     if (!isWide) {
       return Scaffold(
-        body: Column(
+        body: Stack(
           children: [
-            const UpdateBanner(),
-            Expanded(child: IndexedStack(index: _index, children: _pages)),
+            Column(
+              children: [
+                const UpdateBanner(),
+                Expanded(child: IndexedStack(index: _index, children: _pages)),
+              ],
+            ),
+            const Positioned(
+              right: 12,
+              bottom: 12,
+              child: ClientVersionBadge(),
+            ),
           ],
         ),
         bottomNavigationBar: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SafeArea(top: false, child: NerdStatusBar(appState: widget.appState)),
+            SafeArea(
+                top: false, child: NerdStatusBar(appState: widget.appState)),
             NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: (i) => setState(() => _index = i),
               destinations: [
-                NavigationDestination(icon: const Icon(Icons.dynamic_feed), label: context.l10n.navTimeline),
-                NavigationDestination(icon: const Icon(Icons.search), label: context.l10n.navSearch),
-                NavigationDestination(icon: _badge(Icons.forum, unreadChats), label: context.l10n.navChat),
-                NavigationDestination(icon: _badge(Icons.notifications, unread), label: context.l10n.navNotifications),
-                NavigationDestination(icon: const Icon(Icons.hub), label: context.l10n.navRelays),
-                NavigationDestination(icon: const Icon(Icons.settings), label: context.l10n.navSettings),
+                NavigationDestination(
+                    icon: const Icon(Icons.dynamic_feed),
+                    label: context.l10n.navTimeline),
+                NavigationDestination(
+                    icon: const Icon(Icons.search),
+                    label: context.l10n.navSearch),
+                NavigationDestination(
+                    icon: _badge(Icons.forum, unreadChats),
+                    label: context.l10n.navChat),
+                NavigationDestination(
+                    icon: _badge(Icons.notifications, unread),
+                    label: context.l10n.navNotifications),
+                NavigationDestination(
+                    icon: const Icon(Icons.hub), label: context.l10n.navRelays),
+                NavigationDestination(
+                    icon: const Icon(Icons.settings),
+                    label: context.l10n.navSettings),
               ],
             ),
           ],
@@ -313,41 +338,66 @@ class _ShellState extends State<Shell> {
     }
 
     return Scaffold(
-      body: Row(
+      body: Stack(
         children: [
-          NavigationRail(
-            selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
-            labelType: NavigationRailLabelType.all,
-            destinations: [
-              NavigationRailDestination(icon: const Icon(Icons.dynamic_feed), label: Text(context.l10n.navTimeline)),
-              NavigationRailDestination(icon: const Icon(Icons.search), label: Text(context.l10n.navSearch)),
-              NavigationRailDestination(icon: _badge(Icons.forum, unreadChats), label: Text(context.l10n.navChat)),
-              NavigationRailDestination(icon: _badge(Icons.notifications, unread), label: Text(context.l10n.navNotifications)),
-              NavigationRailDestination(icon: const Icon(Icons.hub), label: Text(context.l10n.navRelays)),
-              NavigationRailDestination(icon: const Icon(Icons.settings), label: Text(context.l10n.navSettings)),
+          Row(
+            children: [
+              NavigationRail(
+                selectedIndex: _index,
+                onDestinationSelected: (i) => setState(() => _index = i),
+                labelType: NavigationRailLabelType.all,
+                destinations: [
+                  NavigationRailDestination(
+                      icon: const Icon(Icons.dynamic_feed),
+                      label: Text(context.l10n.navTimeline)),
+                  NavigationRailDestination(
+                      icon: const Icon(Icons.search),
+                      label: Text(context.l10n.navSearch)),
+                  NavigationRailDestination(
+                      icon: _badge(Icons.forum, unreadChats),
+                      label: Text(context.l10n.navChat)),
+                  NavigationRailDestination(
+                      icon: _badge(Icons.notifications, unread),
+                      label: Text(context.l10n.navNotifications)),
+                  NavigationRailDestination(
+                      icon: const Icon(Icons.hub),
+                      label: Text(context.l10n.navRelays)),
+                  NavigationRailDestination(
+                      icon: const Icon(Icons.settings),
+                      label: Text(context.l10n.navSettings)),
+                ],
+              ),
+              const VerticalDivider(width: 1),
+              Expanded(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        children: [
+                          const UpdateBanner(),
+                          Expanded(
+                              child: IndexedStack(
+                                  index: _index, children: _pages)),
+                          SafeArea(
+                              top: false,
+                              child: NerdStatusBar(appState: widget.appState)),
+                        ],
+                      ),
+                    ),
+                    const VerticalDivider(width: 1),
+                    SizedBox(
+                      width: UiTokens.rightSidebarWidth,
+                      child: RightSidebar(appState: widget.appState),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      children: [
-                        const UpdateBanner(),
-                        Expanded(child: IndexedStack(index: _index, children: _pages)),
-                        SafeArea(top: false, child: NerdStatusBar(appState: widget.appState)),
-                      ],
-                    ),
-                  ),
-                const VerticalDivider(width: 1),
-                SizedBox(
-                  width: UiTokens.rightSidebarWidth,
-                  child: RightSidebar(appState: widget.appState),
-                ),
-              ],
-            ),
+          const Positioned(
+            right: 12,
+            bottom: 12,
+            child: ClientVersionBadge(),
           ),
         ],
       ),
