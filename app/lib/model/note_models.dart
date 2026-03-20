@@ -148,11 +148,20 @@ class Note {
 
   static Note? tryParse(Map<String, dynamic> json) {
     final type = (json['type'] as String?)?.trim() ?? '';
-    if (type != 'Note' && type != 'Article' && type != 'Question' && type != 'Page') return null;
+    if (type != 'Note' &&
+        type != 'Article' &&
+        type != 'Question' &&
+        type != 'Page') {
+      return null;
+    }
     final id = (json['id'] as String?)?.trim() ?? '';
-    if (id.isEmpty) return null;
+    if (id.isEmpty) {
+      return null;
+    }
     final attributedTo = (json['attributedTo'] as String?)?.trim() ?? '';
-    var content = (json['content'] as String?)?.trim() ?? (json['name'] as String?)?.trim() ?? '';
+    var content = (json['content'] as String?)?.trim() ??
+        (json['name'] as String?)?.trim() ??
+        '';
     if (content.isEmpty) {
       content = _contentFromMap(json['contentMap']);
     }
@@ -162,7 +171,8 @@ class Note {
         final srcMap = src.cast<String, dynamic>();
         final srcContent = (srcMap['content'] as String?)?.trim() ?? '';
         if (srcContent.isNotEmpty) {
-          final mediaType = (srcMap['mediaType'] as String?)?.toLowerCase().trim() ?? '';
+          final mediaType =
+              (srcMap['mediaType'] as String?)?.toLowerCase().trim() ?? '';
           if (mediaType.contains('text/plain') && !_looksLikeHtml(srcContent)) {
             content = _htmlFromPlain(srcContent);
           } else {
@@ -338,7 +348,9 @@ class TimelineItem {
       } else {
         return null;
       }
-    } else if (activityType == 'Note' || activityType == 'Article' || activityType == 'Question') {
+    } else if (activityType == 'Note' ||
+        activityType == 'Article' ||
+        activityType == 'Question') {
       noteJson = activity;
       effectiveType = 'Create';
     } else if (activityType.isEmpty && activity['content'] != null) {
@@ -348,6 +360,7 @@ class TimelineItem {
       return null;
     }
 
+    noteJson = _normalizeRelaySyncNoteTimestamps(activity, noteJson);
     final note = noteJson == null ? null : Note.tryParse(noteJson);
     if (note == null) return null;
 
@@ -355,11 +368,17 @@ class TimelineItem {
     final effectiveActor = actor.isNotEmpty
         ? actor
         : (noteJson?['attributedTo'] as String?)?.trim() ?? '';
-    final inReplyToPreview = activity['fedi3InReplyToObject'] is Map ? (activity['fedi3InReplyToObject'] as Map).cast<String, dynamic>() : null;
-    final quotePreview = activity['fedi3QuoteObject'] is Map ? (activity['fedi3QuoteObject'] as Map).cast<String, dynamic>() : null;
+    final inReplyToPreview = activity['fedi3InReplyToObject'] is Map
+        ? (activity['fedi3InReplyToObject'] as Map).cast<String, dynamic>()
+        : null;
+    final quotePreview = activity['fedi3QuoteObject'] is Map
+        ? (activity['fedi3QuoteObject'] as Map).cast<String, dynamic>()
+        : null;
 
     return TimelineItem(
-      activityId: activityId.isNotEmpty ? activityId : (noteJson?['id'] as String?)?.trim() ?? '',
+      activityId: activityId.isNotEmpty
+          ? activityId
+          : (noteJson?['id'] as String?)?.trim() ?? '',
       activityType: effectiveType.isNotEmpty ? effectiveType : activityType,
       actor: effectiveActor,
       note: note,
@@ -373,4 +392,39 @@ class TimelineItem {
 bool _isNoteLikeType(dynamic value) {
   final ty = value is String ? value.trim() : '';
   return ty == 'Note' || ty == 'Article' || ty == 'Question' || ty == 'Page';
+}
+
+Map<String, dynamic>? _normalizeRelaySyncNoteTimestamps(
+  Map<String, dynamic> activity,
+  Map<String, dynamic>? noteJson,
+) {
+  if (noteJson == null) return null;
+  final relaySync = activity['fedi3RelaySync'] == true;
+  if (!relaySync) return noteJson;
+
+  final out = Map<String, dynamic>.from(noteJson);
+  final activityPublished = (activity['published'] as String?)?.trim() ?? '';
+  if (activityPublished.isNotEmpty) {
+    out['published'] = activityPublished;
+  } else {
+    final rawMs = activity['created_at_ms'] ?? activity['createdAtMs'];
+    int? ms;
+    if (rawMs is num) ms = rawMs.toInt();
+    if (rawMs is String) ms = int.tryParse(rawMs.trim());
+    if (ms != null && ms > 0) {
+      out['published'] = DateTime.fromMillisecondsSinceEpoch(
+        ms,
+        isUtc: true,
+      ).toIso8601String();
+    }
+  }
+  if (!out.containsKey('created_at_ms')) {
+    final rawMs = activity['created_at_ms'] ?? activity['createdAtMs'];
+    if (rawMs is num) out['created_at_ms'] = rawMs.toInt();
+    if (rawMs is String) {
+      final parsed = int.tryParse(rawMs.trim());
+      if (parsed != null) out['created_at_ms'] = parsed;
+    }
+  }
+  return out;
 }

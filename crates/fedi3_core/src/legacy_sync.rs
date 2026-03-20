@@ -579,7 +579,12 @@ async fn ingest_relay_note_as_activity(
             }
         }
     }
-    let Some(note_id) = note.get("id").and_then(|v| v.as_str()).map(str::trim) else {
+    let Some(note_id) = note
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .map(|s| s.to_string())
+    else {
         return Ok(false);
     };
     if note_id.is_empty() {
@@ -595,7 +600,30 @@ async fn ingest_relay_note_as_activity(
     if actor.is_empty() {
         return Ok(false);
     }
-    let activity_id = format!("{note_id}#fedi3-relay-sync");
+    let relay_seen_ms = if created_at_ms > 0 {
+        created_at_ms
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    };
+    if let Some(obj) = note.as_object_mut() {
+        obj.entry("created_at_ms".to_string())
+            .or_insert_with(|| Value::Number(relay_seen_ms.into()));
+    }
+    let published = {
+        let secs = relay_seen_ms.div_euclid(1000);
+        let rem_ms = relay_seen_ms.rem_euclid(1000) as i128;
+        time::OffsetDateTime::from_unix_timestamp(secs)
+            .ok()
+            .and_then(|dt| {
+                dt.checked_add(time::Duration::milliseconds(rem_ms as i64))
+                    .and_then(|x| x.format(&time::format_description::well_known::Rfc3339).ok())
+            })
+            .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+    };
+    let activity_id = format!("{note_id}#fedi3-relay-sync:{relay_seen_ms}");
     if !social.mark_inbox_seen(&activity_id).unwrap_or(false) {
         return Ok(false);
     }
@@ -605,13 +633,15 @@ async fn ingest_relay_note_as_activity(
         "type": "Create",
         "actor": actor,
         "object": note,
+        "published": published,
+        "created_at_ms": relay_seen_ms,
+        "fedi3RelaySync": true,
         "to": ["https://www.w3.org/ns/activitystreams#Public"]
     });
     if let Err(e) = ap::process_inbox_activity(state, &activity).await {
         debug!("relay legacy activity ingest failed ({note_id}): {e:#}");
         return Ok(false);
     }
-    let _ = created_at_ms;
     Ok(true)
 }
 
