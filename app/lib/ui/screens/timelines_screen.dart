@@ -1,4 +1,4 @@
-﻿/*
+/*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
@@ -138,9 +138,9 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                                 color: Theme.of(context).colorScheme.error),
                           ),
                         ] else if ((_syncStatus?['last_error'] as String?)
-                                    ?.trim()
-                                    .isNotEmpty ==
-                                true) ...[
+                                ?.trim()
+                                .isNotEmpty ==
+                            true) ...[
                           const SizedBox(height: 10),
                           Text(
                             'Errore relay/sync: ${(_syncStatus?['last_error'] as String).trim()}',
@@ -681,13 +681,29 @@ class _TimelineListState extends State<_TimelineList>
       _error = null;
     });
     try {
-      await widget.api.triggerLegacySync(pages: 10, itemsPerActor: 400);
+      await widget.api.triggerLegacySync(
+        pages: 10,
+        itemsPerActor: 400,
+        resetCheckpoints: _shouldAttemptRecoveryReset(),
+      );
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
     await _refresh();
+  }
+
+  bool _shouldAttemptRecoveryReset() {
+    if (_items.isEmpty) {
+      return true;
+    }
+    final newest = _activityTimestampMs(_items.first);
+    if (newest <= 0) {
+      return true;
+    }
+    final ageMs = DateTime.now().millisecondsSinceEpoch - newest;
+    return ageMs > const Duration(hours: 6).inMilliseconds;
   }
 
   Future<void> _loadMore() async {
@@ -888,7 +904,7 @@ class _TimelineListState extends State<_TimelineList>
     final panelBorder =
         Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
     final list = RefreshIndicator(
-      onRefresh: _refresh,
+      onRefresh: _forceSyncAndRefresh,
       child: Container(
         margin: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -1193,5 +1209,3 @@ class _TimelineSkeletonCard extends StatelessWidget {
     );
   }
 }
-
-

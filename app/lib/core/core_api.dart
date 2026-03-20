@@ -151,12 +151,16 @@ class CoreApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<void> triggerLegacySync(
-      {int pages = 6, int itemsPerActor = 200}) async {
+  Future<void> triggerLegacySync({
+    int pages = 6,
+    int itemsPerActor = 200,
+    bool resetCheckpoints = false,
+  }) async {
     final uri = _internal('/_fedi3/sync/legacy', {
       'pages': pages.toString(),
       'items': itemsPerActor.toString(),
       'include_fedi3': '1',
+      if (resetCheckpoints) 'reset_checkpoints': '1',
     });
     final resp = await http.post(uri,
         headers: {..._internalHeaders, 'Content-Type': 'application/json'},

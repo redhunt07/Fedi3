@@ -420,6 +420,39 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
         .and_then(|p| p.split_once('='))
         .map(|(_, v)| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    let reset_checkpoints = query
+        .split('&')
+        .find(|p| p.starts_with("reset_checkpoints="))
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let mut did_reset = false;
+    let mut cooldown_remaining_ms: i64 = 0;
+    if reset_checkpoints {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let cooldown_ms = 6 * 60 * 60 * 1000;
+        let last_reset_ms = state
+            .social
+            .get_local_meta("relay_legacy_last_recovery_reset_ms")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if now_ms.saturating_sub(last_reset_ms) >= cooldown_ms {
+            reset_legacy_sync_checkpoints(state);
+            let _ = state.social.set_local_meta(
+                "relay_legacy_last_recovery_reset_ms",
+                &now_ms.to_string(),
+            );
+            did_reset = true;
+        } else {
+            cooldown_remaining_ms = cooldown_ms.saturating_sub(now_ms.saturating_sub(last_reset_ms));
+        }
+    }
 
     let st = state.clone();
     tokio::spawn(async move {
@@ -427,7 +460,38 @@ async fn legacy_sync_trigger(state: &ApState, req: Request<Body>) -> Response<Bo
             .await;
     });
 
-    simple(StatusCode::ACCEPTED, "ok")
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "did_reset_checkpoints": did_reset,
+            "reset_cooldown_remaining_ms": cooldown_remaining_ms,
+        })),
+    )
+        .into_response()
+}
+
+fn reset_legacy_sync_checkpoints(state: &ApState) {
+    let _ = state.social.set_local_meta("relay_legacy_bootstrap_done", "0");
+    let _ = state
+        .social
+        .set_local_meta("relay_legacy_sync_phase", "bootstrap_download");
+    let _ = state.social.set_local_meta("relay_legacy_last_error", "");
+    let _ = state.social.set_local_meta("relay_legacy_last_items", "0");
+    for stream in ["home", "social", "local", "federated"] {
+        let _ = state
+            .social
+            .set_local_meta(&format!("relay_legacy_checkpoint_ms_{stream}"), "0");
+        let _ = state
+            .social
+            .set_local_meta(&format!("relay_legacy_last_ok_ms_{stream}"), "0");
+        let _ = state
+            .social
+            .set_local_meta(&format!("relay_legacy_last_items_{stream}"), "0");
+        let _ = state
+            .social
+            .set_local_meta(&format!("relay_legacy_last_error_{stream}"), "");
+    }
 }
 
 async fn legacy_sync_status_get(state: &ApState, req: Request<Body>) -> Response<Body> {
