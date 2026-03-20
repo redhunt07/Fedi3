@@ -21,6 +21,7 @@ pub struct NetMetrics {
     pub relay_tx_bytes: AtomicU64,
     pub relay_last_change_ms: AtomicU64,
     pub relay_rtt_ema_ms: AtomicU64,
+    pub relay_handler_wait_ema_ms: AtomicU64,
     relay_last_error: Mutex<Option<String>>,
 
     pub p2p_enabled: AtomicBool,
@@ -44,6 +45,7 @@ pub struct NetMetrics {
     pub rate_limit_hits: AtomicU64,
     pub http_timeouts: AtomicU64,
     pub http_errors: AtomicU64,
+    pub chat_bundle_skipped_backoff: AtomicU64,
 
     p2p_seen: Mutex<HashMap<String, u64>>,
     mailbox_seen: Mutex<HashMap<String, u64>>,
@@ -89,6 +91,19 @@ impl NetMetrics {
             (prev.saturating_mul(7).saturating_add(ms)) / 8
         };
         self.relay_rtt_ema_ms.store(next, Ordering::Relaxed);
+    }
+
+    pub fn relay_handler_wait_update(&self, ms: u64) {
+        if ms == 0 {
+            return;
+        }
+        let prev = self.relay_handler_wait_ema_ms.load(Ordering::Relaxed);
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
+        self.relay_handler_wait_ema_ms.store(next, Ordering::Relaxed);
     }
 
     pub fn set_p2p_enabled(&self, v: bool) {
@@ -190,6 +205,11 @@ impl NetMetrics {
         self.http_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn chat_bundle_backoff_skip(&self) {
+        self.chat_bundle_skipped_backoff
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn prune_seen(&self, window_ms: u64) {
         let cutoff = now_ms().saturating_sub(window_ms);
         {
@@ -222,7 +242,10 @@ impl NetMetrics {
                 "rx_bytes": self.relay_rx_bytes.load(Ordering::Relaxed),
                 "tx_bytes": self.relay_tx_bytes.load(Ordering::Relaxed),
                 "last_change_ms": self.relay_last_change_ms.load(Ordering::Relaxed),
+                // Backward-compatible key. This is ping/pong tunnel RTT EMA.
                 "rtt_ms": self.relay_rtt_ema_ms.load(Ordering::Relaxed),
+                "ping_rtt_ms": self.relay_rtt_ema_ms.load(Ordering::Relaxed),
+                "handler_wait_ms": self.relay_handler_wait_ema_ms.load(Ordering::Relaxed),
                 "last_error": last_error,
             },
             "mailbox": {
@@ -236,6 +259,9 @@ impl NetMetrics {
                 "rate_limit_hits": self.rate_limit_hits.load(Ordering::Relaxed),
                 "http_timeouts": self.http_timeouts.load(Ordering::Relaxed),
                 "http_errors": self.http_errors.load(Ordering::Relaxed),
+                "chat_bundle_skipped_backoff": self
+                    .chat_bundle_skipped_backoff
+                    .load(Ordering::Relaxed),
             },
         })
     }

@@ -59,6 +59,9 @@ const LEGACY_STREAMS: [&str; 4] = ["home", "social", "local", "federated"];
 const LEGACY_RETRY_ATTEMPTS: u32 = 4;
 const LEGACY_RETRY_BASE_MS: u64 = 250;
 const LEGACY_RETRY_MAX_MS: u64 = 4_000;
+const LEGACY_RTT_HIGH_MS: u64 = 800;
+const LEGACY_RTT_VERY_HIGH_MS: u64 = 1_500;
+const LEGACY_RTT_CRITICAL_MS: u64 = 2_500;
 
 fn relay_note_seen_key(note_id: &str) -> String {
     format!("urn:fedi3:note-seen:{}", note_id.trim())
@@ -436,7 +439,7 @@ async fn sync_from_relay_legacy_stream(
         if total_ingested >= max_items_per_actor.max(1) {
             break;
         }
-        let page_limit = if mode_bootstrap { 1000 } else { 200 };
+        let page_limit = adaptive_legacy_page_limit(state, mode_bootstrap);
         let url = if mode_bootstrap {
             format!(
                 "{}/_fedi3/relay/legacy/bootstrap?v=1&username={}&stream={}&limit={}&gzip=true{}",
@@ -508,6 +511,9 @@ async fn sync_from_relay_legacy_stream(
 
         cursor = data.next;
         pages += 1;
+        if cursor.is_some() {
+            maybe_delay_legacy_sync_page(state).await;
+        }
         if cursor.is_none() {
             break;
         }
@@ -539,6 +545,43 @@ async fn sync_from_relay_legacy_stream(
     }
     let _ = social.set_local_meta("relay_legacy_sync_phase", "ready");
     Ok(total_ingested)
+}
+
+fn adaptive_legacy_page_limit(state: &ap::ApState, mode_bootstrap: bool) -> usize {
+    let base = if mode_bootstrap { 1000usize } else { 200usize };
+    let rtt = state.net.relay_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+    if rtt >= LEGACY_RTT_CRITICAL_MS {
+        return (base / 8).max(100);
+    }
+    if rtt >= LEGACY_RTT_VERY_HIGH_MS {
+        return (base / 4).max(100);
+    }
+    if rtt >= LEGACY_RTT_HIGH_MS {
+        return (base / 2).max(100);
+    }
+    base
+}
+
+async fn maybe_delay_legacy_sync_page(state: &ap::ApState) {
+    let rtt = state.net.relay_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let base_delay = if rtt >= LEGACY_RTT_CRITICAL_MS {
+        250u64
+    } else if rtt >= LEGACY_RTT_VERY_HIGH_MS {
+        180u64
+    } else if rtt >= LEGACY_RTT_HIGH_MS {
+        120u64
+    } else {
+        0u64
+    };
+    if base_delay == 0 {
+        return;
+    }
+    let jitter = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64)
+        % 70;
+    sleep(std::time::Duration::from_millis(base_delay.saturating_add(jitter))).await;
 }
 
 fn retryable_status(status: reqwest::StatusCode) -> bool {

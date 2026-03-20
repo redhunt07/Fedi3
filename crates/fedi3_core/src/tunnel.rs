@@ -124,7 +124,9 @@ pub async fn run_tunnel_with_shutdown(
                     }
                 };
 
+                let handler_start = std::time::Instant::now();
                 let response = handle_relay_http_request(&mut handler, req.clone()).await;
+                metrics.relay_handler_wait_update(handler_start.elapsed().as_millis() as u64);
                 let json = serde_json::to_string(&response)?;
                 metrics.relay_tx_add(json.as_bytes().len() as u64);
                 ws_tx.send(tungstenite::Message::Text(json)).await?;

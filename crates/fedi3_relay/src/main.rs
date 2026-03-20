@@ -171,6 +171,8 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     legacy_bootstrap_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_negative_cache_hits: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature_b64: Option<String>,
@@ -372,6 +374,8 @@ struct AppState {
     legacy_sync_v0_hits: Arc<AtomicU64>,
     legacy_sync_delta_latency: Arc<LegacyApiLatencyStats>,
     legacy_bootstrap_latency: Arc<LegacyApiLatencyStats>,
+    tunnel_negative_cache: Arc<Mutex<HashMap<String, i64>>>,
+    relay_negative_cache_hits: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -1534,6 +1538,8 @@ async fn main() {
         legacy_sync_v0_hits: Arc::new(AtomicU64::new(0)),
         legacy_sync_delta_latency: Arc::new(LegacyApiLatencyStats::new()),
         legacy_bootstrap_latency: Arc::new(LegacyApiLatencyStats::new()),
+        tunnel_negative_cache: Arc::new(Mutex::new(HashMap::new())),
+        relay_negative_cache_hits: Arc::new(AtomicU64::new(0)),
     };
 
     let addr = state.cfg.bind;
@@ -3233,6 +3239,10 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_legacy_bootstrap_calls counter\n");
         out.push_str(&format!("fedi3_relay_legacy_bootstrap_calls {v}\n"));
     }
+    if let Some(v) = telemetry.relay_negative_cache_hits {
+        out.push_str("# TYPE fedi3_relay_negative_cache_hits counter\n");
+        out.push_str(&format!("fedi3_relay_negative_cache_hits {v}\n"));
+    }
     if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
         out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
         out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
@@ -3556,6 +3566,51 @@ async fn cached_user_response(
     Some((StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response())
 }
 
+const TUNNEL_NEGATIVE_CACHE_TTL_MS: i64 = 15_000;
+
+fn tunnel_negative_cache_key(user: &str, path: &str) -> Option<String> {
+    if path.starts_with(&format!("/users/{user}/_fedi3/")) {
+        return Some(format!("{user}:{path}"));
+    }
+    None
+}
+
+fn offline_status_for_path(user: &str, path: &str) -> StatusCode {
+    if path.starts_with(&format!("/users/{user}/_fedi3/")) {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+async fn tunnel_negative_cache_hit(state: &AppState, user: &str, path: &str, now: i64) -> bool {
+    let Some(key) = tunnel_negative_cache_key(user, path) else {
+        return false;
+    };
+    let mut cache = state.tunnel_negative_cache.lock().await;
+    if let Some(until) = cache.get(&key).copied() {
+        if until > now {
+            state
+                .relay_negative_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+    }
+    cache.remove(&key);
+    false
+}
+
+async fn tunnel_negative_cache_put(state: &AppState, user: &str, path: &str, now: i64) {
+    let Some(key) = tunnel_negative_cache_key(user, path) else {
+        return;
+    };
+    let mut cache = state.tunnel_negative_cache.lock().await;
+    cache.insert(
+        key,
+        now.saturating_add(TUNNEL_NEGATIVE_CACHE_TTL_MS.max(1)),
+    );
+}
+
 async fn forward_to_user(
     state: AppState,
     user: String,
@@ -3565,6 +3620,7 @@ async fn forward_to_user(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let now = now_ms();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
@@ -3576,8 +3632,12 @@ async fn forward_to_user(
     }
 
     if method == Method::GET {
+        if tunnel_negative_cache_hit(&state, &user, path, now).await {
+            return (offline_status_for_path(&user, path), "user offline").into_response();
+        }
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
+            tunnel_negative_cache_put(&state, &user, path, now).await;
             if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
                 return resp;
             }
@@ -3619,6 +3679,7 @@ async fn forward_to_user(
             let mut tunnels = state.tunnels.write().await;
             tunnels.remove(&user);
         }
+        tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
             if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
                 return resp;
@@ -3630,11 +3691,16 @@ async fn forward_to_user(
     let Ok(resp) =
         tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await
     else {
+        tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         return (StatusCode::GATEWAY_TIMEOUT, "tunnel timeout").into_response();
     };
     let Ok(resp) = resp else {
+        tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         return (StatusCode::BAD_GATEWAY, "tunnel response dropped").into_response();
     };
+    if let Some(key) = tunnel_negative_cache_key(&user, path) {
+        state.tunnel_negative_cache.lock().await.remove(&key);
+    }
 
     if method == Method::GET && resp.status == 200 {
         if let Ok(bytes) = B64.decode(resp.body_b64.as_bytes()) {
@@ -11952,6 +12018,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let legacy_sync_delta_p95_ms = state.legacy_sync_delta_latency.p95_ms();
     let legacy_bootstrap_calls = state.legacy_bootstrap_latency.calls();
     let legacy_bootstrap_p95_ms = state.legacy_bootstrap_latency.p95_ms();
+    let relay_negative_cache_hits = state.relay_negative_cache_hits.load(Ordering::Relaxed);
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -11992,6 +12059,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         legacy_bootstrap_p95_ms: Some(legacy_bootstrap_p95_ms),
         legacy_sync_delta_calls: Some(legacy_sync_delta_calls),
         legacy_bootstrap_calls: Some(legacy_bootstrap_calls),
+        relay_negative_cache_hits: Some(relay_negative_cache_hits),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,

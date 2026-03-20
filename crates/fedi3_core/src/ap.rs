@@ -16,8 +16,9 @@ use rsa::pkcs8::DecodePrivateKey;
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use urlencoding::encode;
 
@@ -40,15 +41,16 @@ use futures_util::stream::unfold;
 use serde_json::Value;
 use std::convert::Infallible;
 use tokio::sync::{broadcast, watch};
-use tokio::time::sleep;
 use tracing::warn;
 
 const CHAT_BUNDLE_CACHE_TTL_MS: i64 = 15 * 60 * 1000;
-const CHAT_BUNDLE_FETCH_BACKOFF_BASE_MS: i64 = 5_000;
-const CHAT_BUNDLE_FETCH_BACKOFF_MAX_MS: i64 = 10 * 60 * 1000;
+const CHAT_BUNDLE_FETCH_BACKOFF_BASE_MS: i64 = 60_000;
+const CHAT_BUNDLE_FETCH_BACKOFF_MAX_MS: i64 = 180_000;
+const CHAT_BUNDLE_FETCH_FAILURE_THRESHOLD: u32 = 3;
 const CHAT_RETRY_INTERVAL_SECS: u64 = 20;
 const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
+static CHAT_BUNDLE_INFLIGHT: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct ApConfig {
@@ -1855,6 +1857,16 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
         "fedi3_core_relay_rtt_ms {}\n",
         net.relay_rtt_ema_ms.load(Ordering::Relaxed)
     ));
+    out.push_str("# TYPE fedi3_core_relay_ping_rtt_ms gauge\n");
+    out.push_str(&format!(
+        "fedi3_core_relay_ping_rtt_ms {}\n",
+        net.relay_rtt_ema_ms.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_relay_handler_wait_ms gauge\n");
+    out.push_str(&format!(
+        "fedi3_core_relay_handler_wait_ms {}\n",
+        net.relay_handler_wait_ema_ms.load(Ordering::Relaxed)
+    ));
     out.push_str("# TYPE fedi3_core_http_timeouts counter\n");
     out.push_str(&format!(
         "fedi3_core_http_timeouts {}\n",
@@ -1864,6 +1876,11 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
     out.push_str(&format!(
         "fedi3_core_http_errors {}\n",
         net.http_errors.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_chat_bundle_skipped_backoff counter\n");
+    out.push_str(&format!(
+        "fedi3_core_chat_bundle_skipped_backoff {}\n",
+        net.chat_bundle_skipped_backoff.load(Ordering::Relaxed)
     ));
     out.push_str("# TYPE fedi3_core_auth_failures counter\n");
     out.push_str(&format!(
@@ -4874,24 +4891,30 @@ async fn fetch_chat_bundle(
     actor_url: &str,
 ) -> anyhow::Result<Option<chat::ChatBundle>> {
     let actor_url = actor_url.trim_end_matches('/').to_string();
-    if chat_bundle_fetch_backoff_active(state, &actor_url) {
+    if !chat_bundle_circuit_allows_fetch(state, &actor_url) {
+        state.net.chat_bundle_backoff_skip();
         return Ok(None);
     }
+    let Some(_inflight_guard) = chat_bundle_inflight_try_lock(&actor_url).await else {
+        return Ok(None);
+    };
     if let Ok(Some(cached)) = state.social.get_chat_bundle(&actor_url) {
         if let Ok(bundle) = serde_json::from_str::<chat::ChatBundle>(&cached) {
             return Ok(Some(bundle));
         }
     }
-    if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+    let outcome = fetch_chat_bundle_http(state, &actor_url).await?;
+    if outcome.saw_success {
         clear_chat_bundle_fetch_backoff(state, &actor_url);
-        return Ok(bundle);
     }
-    sleep(Duration::from_millis(150)).await;
-    if let Ok(bundle) = fetch_chat_bundle_http(state, &actor_url).await {
+    if let Some(bundle) = outcome.bundle {
+        return Ok(Some(bundle));
+    }
+    if outcome.transient_failure {
+        bump_chat_bundle_fetch_backoff(state, &actor_url);
+    } else if outcome.saw_success {
         clear_chat_bundle_fetch_backoff(state, &actor_url);
-        return Ok(bundle);
     }
-    bump_chat_bundle_fetch_backoff(state, &actor_url);
     Ok(None)
 }
 
@@ -4902,29 +4925,19 @@ fn chat_bundle_backoff_key(actor_url: &str, suffix: &str) -> String {
     format!("chat_bundle_fetch_{suffix}_{actor_hash:x}")
 }
 
-fn chat_bundle_fetch_backoff_active(state: &ApState, actor_url: &str) -> bool {
-    let now = now_ms();
-    let key = chat_bundle_backoff_key(actor_url, "until");
-    let until = state
-        .social
-        .get_local_meta(&key)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    until > now
-}
-
 fn clear_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
     let key_until = chat_bundle_backoff_key(actor_url, "until");
-    let key_count = chat_bundle_backoff_key(actor_url, "count");
+    let key_count = chat_bundle_backoff_key(actor_url, "failures");
+    let key_state = chat_bundle_backoff_key(actor_url, "state");
     let _ = state.social.set_local_meta(&key_until, "0");
     let _ = state.social.set_local_meta(&key_count, "0");
+    let _ = state.social.set_local_meta(&key_state, "closed");
 }
 
 fn bump_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
     let now = now_ms();
-    let key_count = chat_bundle_backoff_key(actor_url, "count");
+    let key_count = chat_bundle_backoff_key(actor_url, "failures");
+    let key_state = chat_bundle_backoff_key(actor_url, "state");
     let current_count = state
         .social
         .get_local_meta(&key_count)
@@ -4933,22 +4946,66 @@ fn bump_chat_bundle_fetch_backoff(state: &ApState, actor_url: &str) {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
     let next_count = current_count.saturating_add(1).min(16);
+    let backoff_step = next_count.saturating_sub(CHAT_BUNDLE_FETCH_FAILURE_THRESHOLD);
     let exp = CHAT_BUNDLE_FETCH_BACKOFF_BASE_MS
-        .saturating_mul(1_i64 << next_count.saturating_sub(1))
+        .saturating_mul(1_i64 << backoff_step.min(3))
         .min(CHAT_BUNDLE_FETCH_BACKOFF_MAX_MS);
-    let jitter = (now % 1000).abs();
+    let jitter = (now % 15_000).abs();
     let until = now.saturating_add(exp.saturating_add(jitter));
     let key_until = chat_bundle_backoff_key(actor_url, "until");
     let _ = state.social.set_local_meta(&key_count, &next_count.to_string());
-    let _ = state.social.set_local_meta(&key_until, &until.to_string());
+    if next_count >= CHAT_BUNDLE_FETCH_FAILURE_THRESHOLD {
+        let _ = state.social.set_local_meta(&key_state, "open");
+        let _ = state.social.set_local_meta(&key_until, &until.to_string());
+    } else {
+        let _ = state.social.set_local_meta(&key_state, "closed");
+        let _ = state.social.set_local_meta(&key_until, "0");
+    }
+}
+
+fn chat_bundle_circuit_allows_fetch(state: &ApState, actor_url: &str) -> bool {
+    let now = now_ms();
+    let key_state = chat_bundle_backoff_key(actor_url, "state");
+    let key_until = chat_bundle_backoff_key(actor_url, "until");
+    let state_val = state
+        .social
+        .get_local_meta(&key_state)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "closed".to_string());
+    let until = state
+        .social
+        .get_local_meta(&key_until)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    match state_val.as_str() {
+        "open" if until > now => false,
+        "open" => {
+            let _ = state.social.set_local_meta(&key_state, "half_open");
+            true
+        }
+        _ => true,
+    }
+}
+
+struct ChatBundleFetchOutcome {
+    bundle: Option<chat::ChatBundle>,
+    transient_failure: bool,
+    saw_success: bool,
 }
 
 async fn fetch_chat_bundle_http(
     state: &ApState,
     actor_url: &str,
-) -> anyhow::Result<Option<chat::ChatBundle>> {
+) -> anyhow::Result<ChatBundleFetchOutcome> {
     let Some(origin) = actor_origin(actor_url) else {
-        return Ok(None);
+        return Ok(ChatBundleFetchOutcome {
+            bundle: None,
+            transient_failure: false,
+            saw_success: false,
+        });
     };
     let mut urls = Vec::new();
     if let Some(user) = actor_user_from_url(actor_url) {
@@ -4956,25 +5013,76 @@ async fn fetch_chat_bundle_http(
     }
     urls.push(format!("{origin}/_fedi3/chat/bundle"));
 
+    let mut transient_failure = false;
+    let mut saw_success = false;
     for url in urls {
-        let resp = state
+        let resp = match state
             .http
             .get(url)
             .header("Accept", "application/json")
             .send()
-            .await?;
+            .await
+        {
+            Ok(resp) => resp,
+            Err(_) => {
+                transient_failure = true;
+                continue;
+            }
+        };
+        let status = resp.status();
+        if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            transient_failure = true;
+            continue;
+        }
         if !resp.status().is_success() {
             continue;
         }
+        saw_success = true;
         let body = resp.bytes().await?;
         if let Ok(bundle) = serde_json::from_slice::<chat::ChatBundle>(&body) {
             if should_accept_bundle(state, actor_url, &bundle).await {
                 store_bundle_cache(state, actor_url, &bundle);
-                return Ok(Some(bundle));
+                return Ok(ChatBundleFetchOutcome {
+                    bundle: Some(bundle),
+                    transient_failure,
+                    saw_success: true,
+                });
             }
         }
     }
-    Ok(None)
+    Ok(ChatBundleFetchOutcome {
+        bundle: None,
+        transient_failure,
+        saw_success,
+    })
+}
+
+struct ChatBundleInflightGuard {
+    actor_url: String,
+}
+
+impl Drop for ChatBundleInflightGuard {
+    fn drop(&mut self) {
+        if let Some(lock) = CHAT_BUNDLE_INFLIGHT.get() {
+            let actor = self.actor_url.clone();
+            let lock = lock.clone();
+            tokio::spawn(async move {
+                lock.lock().await.remove(&actor);
+            });
+        }
+    }
+}
+
+async fn chat_bundle_inflight_try_lock(actor_url: &str) -> Option<ChatBundleInflightGuard> {
+    let lock = CHAT_BUNDLE_INFLIGHT.get_or_init(|| Arc::new(Mutex::new(HashSet::new())));
+    let mut guard = lock.lock().await;
+    if guard.contains(actor_url) {
+        return None;
+    }
+    guard.insert(actor_url.to_string());
+    Some(ChatBundleInflightGuard {
+        actor_url: actor_url.to_string(),
+    })
 }
 
 #[derive(Clone, Copy)]

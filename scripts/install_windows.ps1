@@ -134,12 +134,24 @@ function Install-CoreService {
   $configPath = Join-Path $configBase "Fedi3\config.json"
   $action = New-ScheduledTaskAction -Execute $coreServiceExe -Argument "--config `"$configPath`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
-  # S4U can run without password but often has restricted network access.
-  # InteractiveToken keeps user context/network available when user is logged in.
-  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType InteractiveToken -RunLevel Limited
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-  Start-ScheduledTask -TaskName $taskName | Out-Null
-  Write-Host "Core service scheduled task installed: $taskName"
+  # PowerShell versions expose different enum names:
+  # newer: InteractiveToken, older: Interactive.
+  $principal = $null
+  try {
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType InteractiveToken -RunLevel Limited
+  } catch {
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+  }
+
+  try {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName | Out-Null
+    Write-Host "Core service scheduled task installed: $taskName"
+  } catch {
+    Write-Warning "Scheduled task setup failed: $($_.Exception.Message)"
+    Write-Warning "Starting core service for current session only."
+    Start-Process -FilePath $coreServiceExe -ArgumentList "--config `"$configPath`"" -WindowStyle Hidden
+  }
 }
 
 function Install-Fedi3 {
