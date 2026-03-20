@@ -4930,9 +4930,11 @@ impl Db {
               content_text TEXT NOT NULL,
               content_html TEXT NOT NULL,
               note_json TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL
+              created_at_ms INTEGER NOT NULL,
+              ingested_at_ms INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_relay_notes_created ON relay_notes(created_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_relay_notes_actor ON relay_notes(actor_id);
             CREATE INDEX IF NOT EXISTS idx_relay_notes_published ON relay_notes(published_ms DESC);
 
@@ -5073,6 +5075,18 @@ impl Db {
                     "ALTER TABLE admin_audit ADD COLUMN user_agent TEXT NULL",
                     [],
                 );
+                let _ = conn.execute(
+                    "ALTER TABLE relay_notes ADD COLUMN ingested_at_ms INTEGER NOT NULL DEFAULT 0",
+                    [],
+                );
+                let _ = conn.execute(
+                    "UPDATE relay_notes SET ingested_at_ms=created_at_ms WHERE ingested_at_ms=0",
+                    [],
+                );
+                let _ = conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC)",
+                    [],
+                );
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -5100,6 +5114,11 @@ impl Db {
                     match self.open_pg_conn() {
                         Ok(mut conn) => {
                             conn.batch_execute(include_str!("../sql/postgres_schema.sql"))?;
+                            conn.batch_execute(
+                                "ALTER TABLE relay_notes ADD COLUMN IF NOT EXISTS ingested_at_ms BIGINT NOT NULL DEFAULT 0;
+                                 UPDATE relay_notes SET ingested_at_ms=created_at_ms WHERE ingested_at_ms=0;
+                                 CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC);",
+                            )?;
                             return Ok(());
                         }
                         Err(err) => {
@@ -7055,11 +7074,12 @@ impl Db {
 
     fn upsert_relay_note(&self, note: &RelayNoteIndex) -> Result<()> {
         let published_ms = note.published_ms.unwrap_or(note.created_at_ms);
+        let ingested_at_ms = now_ms();
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=excluded.actor_id,\n               published_ms=excluded.published_ms,\n               content_text=excluded.content_text,\n               content_html=excluded.content_html,\n               note_json=excluded.note_json",
+                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms, ingested_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=excluded.actor_id,\n               published_ms=excluded.published_ms,\n               content_text=excluded.content_text,\n               content_html=excluded.content_html,\n               note_json=excluded.note_json,\n               ingested_at_ms=excluded.ingested_at_ms",
                     params![
                         note.note_id,
                         note.actor_id,
@@ -7067,7 +7087,8 @@ impl Db {
                         note.content_text,
                         note.content_html,
                         note.note_json,
-                        note.created_at_ms
+                        note.created_at_ms,
+                        ingested_at_ms
                     ],
                 )?;
                 let tx = conn.unchecked_transaction()?;
@@ -7095,9 +7116,10 @@ impl Db {
                     &note.content_html,
                     &note.note_json,
                     &note.created_at_ms,
+                    &ingested_at_ms,
                 ];
                 tx.execute(
-                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=EXCLUDED.actor_id,\n               published_ms=EXCLUDED.published_ms,\n               content_text=EXCLUDED.content_text,\n               content_html=EXCLUDED.content_html,\n               note_json=EXCLUDED.note_json",
+                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms, ingested_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=EXCLUDED.actor_id,\n               published_ms=EXCLUDED.published_ms,\n               content_text=EXCLUDED.content_text,\n               content_html=EXCLUDED.content_html,\n               note_json=EXCLUDED.note_json,\n               ingested_at_ms=EXCLUDED.ingested_at_ms",
                     params,
                 )?;
                 tx.execute(
@@ -7587,10 +7609,10 @@ impl Db {
                     .unwrap_or(0);
                 loop {
                     let mut stmt = conn.prepare(
-                        "SELECT note_id, actor_id, note_json, created_at_ms
+                        "SELECT note_id, actor_id, note_json, created_at_ms, ingested_at_ms
                          FROM relay_notes
-                         WHERE created_at_ms > ?1
-                         ORDER BY created_at_ms ASC
+                         WHERE ingested_at_ms > ?1
+                         ORDER BY ingested_at_ms ASC
                          LIMIT ?2",
                     )?;
                     let mut rows = stmt.query(params![last_source, batch_limit])?;
@@ -7602,9 +7624,10 @@ impl Db {
                         let actor_id: Option<String> = row.get(1)?;
                         let note_json: String = row.get(2)?;
                         let created_at_ms: i64 = row.get(3)?;
+                        let ingested_at_ms: i64 = row.get(4)?;
                         seen += 1;
-                        if created_at_ms > batch_max {
-                            batch_max = created_at_ms;
+                        if ingested_at_ms > batch_max {
+                            batch_max = ingested_at_ms;
                         }
                         let actor = actor_id
                             .as_deref()
@@ -7669,10 +7692,10 @@ impl Db {
                     .unwrap_or(0);
                 loop {
                     let rows = conn.query(
-                        "SELECT note_id, actor_id, note_json, created_at_ms
+                        "SELECT note_id, actor_id, note_json, created_at_ms, ingested_at_ms
                          FROM relay_notes
-                         WHERE created_at_ms > $1
-                         ORDER BY created_at_ms ASC
+                         WHERE ingested_at_ms > $1
+                         ORDER BY ingested_at_ms ASC
                          LIMIT $2",
                         &[&last_source, &batch_limit],
                     )?;
@@ -7683,8 +7706,9 @@ impl Db {
                         let actor_id: Option<String> = row.get(1);
                         let note_json: String = row.get(2);
                         let created_at_ms: i64 = row.get(3);
-                        if created_at_ms > batch_max {
-                            batch_max = created_at_ms;
+                        let ingested_at_ms: i64 = row.get(4);
+                        if ingested_at_ms > batch_max {
+                            batch_max = ingested_at_ms;
                         }
                         let actor = actor_id
                             .as_deref()

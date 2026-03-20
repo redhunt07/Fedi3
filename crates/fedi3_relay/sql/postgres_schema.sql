@@ -148,11 +148,14 @@ CREATE TABLE IF NOT EXISTS relay_notes (
   content_html TEXT NOT NULL,
   note_json TEXT NOT NULL,
   created_at_ms BIGINT NOT NULL,
+  ingested_at_ms BIGINT NOT NULL DEFAULT 0,
   search_tsv tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(content_text, '') || ' ' || coalesce(content_html, ''))
   ) STORED
 );
+ALTER TABLE relay_notes ADD COLUMN IF NOT EXISTS ingested_at_ms BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_relay_notes_created ON relay_notes(created_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_relay_notes_actor ON relay_notes(actor_id);
 CREATE INDEX IF NOT EXISTS idx_relay_notes_published ON relay_notes(published_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_relay_notes_search_tsv ON relay_notes USING GIN (search_tsv);
