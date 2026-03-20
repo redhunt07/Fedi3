@@ -621,7 +621,13 @@ async fn ingest_relay_note_as_activity(
         obj.entry("created_at_ms".to_string())
             .or_insert_with(|| Value::Number(relay_seen_ms.into()));
     }
-    let published = {
+    let note_published = note
+        .get("published")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let relay_seen_published = {
         let secs = relay_seen_ms.div_euclid(1000);
         let rem_ms = relay_seen_ms.rem_euclid(1000) as i128;
         time::OffsetDateTime::from_unix_timestamp(secs)
@@ -632,6 +638,7 @@ async fn ingest_relay_note_as_activity(
             })
             .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
     };
+    let published = note_published.unwrap_or(relay_seen_published);
     let activity_id = format!("{note_id}#fedi3-relay-sync:{relay_seen_ms}");
     if !social.mark_inbox_seen(&activity_id).unwrap_or(false) {
         return Ok(false);
