@@ -458,7 +458,15 @@ async fn sync_from_relay_legacy_stream(
                     latest_checkpoint = cp;
                 }
             }
-            if ingest_relay_note_as_activity(state, social, item.note, item.created_at_ms).await? {
+            if ingest_relay_note_as_activity(
+                state,
+                social,
+                stream,
+                item.note,
+                item.created_at_ms,
+            )
+            .await?
+            {
                 total_ingested += 1;
             }
         }
@@ -558,6 +566,7 @@ async fn fetch_relay_page_with_retry(
 async fn ingest_relay_note_as_activity(
     state: &ap::ApState,
     social: &SocialDb,
+    stream: &str,
     mut note: Value,
     created_at_ms: i64,
 ) -> Result<bool> {
@@ -638,9 +647,13 @@ async fn ingest_relay_note_as_activity(
         "fedi3RelaySync": true,
         "to": ["https://www.w3.org/ns/activitystreams#Public"]
     });
+    let activity_bytes = serde_json::to_vec(&activity).unwrap_or_default();
     if let Err(e) = ap::process_inbox_activity(state, &activity).await {
         debug!("relay legacy activity ingest failed ({note_id}): {e:#}");
         return Ok(false);
+    }
+    if stream == "social" && !activity_bytes.is_empty() {
+        let _ = social.insert_global_feed_item(&activity_id, Some(&actor), activity_bytes);
     }
     Ok(true)
 }
