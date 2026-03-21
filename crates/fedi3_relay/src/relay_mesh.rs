@@ -83,16 +83,20 @@ fn load_mesh_config(cfg: &crate::RelayConfig) -> RelayMeshConfig {
         .relay_mesh_listen
         .iter()
         .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .filter(|addr| is_supported_mesh_addr(addr, cfg.relay_mesh_enable_quic))
         .collect::<Vec<_>>();
     let bootstrap = cfg
         .relay_mesh_bootstrap
         .iter()
         .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .filter(|addr| is_supported_mesh_addr(addr, cfg.relay_mesh_enable_quic))
         .collect::<Vec<_>>();
     let mut relay_reserve = Vec::new();
     for s in relay_p2p_infra_multiaddrs(cfg) {
         if let Ok(addr) = s.parse::<Multiaddr>() {
-            relay_reserve.push(addr);
+            if is_supported_mesh_addr(&addr, cfg.relay_mesh_enable_quic) {
+                relay_reserve.push(addr);
+            }
         }
     }
     RelayMeshConfig {
@@ -414,6 +418,20 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
                         if !bootstrapped && !bootstrap_peers.is_empty() {
                             let _ = swarm.behaviour_mut().kad.bootstrap();
                             bootstrapped = true;
+                        }
+                        if let Err(e) = queue_sync_requests_for_peer(
+                            &state,
+                            &mut swarm,
+                            &cfg,
+                            &mut pending,
+                            &mut inflight_relays,
+                            &connected_peers,
+                            remote_peer_id,
+                        ).await {
+                            warn!(
+                                peer_id = %remote_peer_id,
+                                "relay mesh immediate sync queue failed: {e:#}"
+                            );
                         }
                     }
                     SwarmEvent::ConnectionClosed { peer_id: remote_peer_id, connection_id, endpoint, cause, num_established, .. } => {
@@ -859,6 +877,82 @@ async fn queue_sync_requests(
     Ok(())
 }
 
+async fn queue_sync_requests_for_peer(
+    state: &AppState,
+    swarm: &mut Swarm<Behaviour>,
+    cfg: &RelayMeshConfig,
+    pending: &mut HashMap<request_response::OutboundRequestId, PendingSync>,
+    inflight_relays: &mut HashSet<String>,
+    connected_peers: &HashSet<PeerId>,
+    target_peer_id: PeerId,
+) -> Result<()> {
+    let limit = cfg.sync_limit.min(200).max(1);
+    let local_peer_id = state
+        .relay_mesh_peer_id
+        .read()
+        .await
+        .clone()
+        .unwrap_or_default();
+    if target_peer_id.to_string() == local_peer_id || !connected_peers.contains(&target_peer_id) {
+        return Ok(());
+    }
+
+    let (relays, last_map) = {
+        let db = state.db.lock().await;
+        let relays = db.list_relays(500).unwrap_or_default();
+        let last = db.list_relay_sync_state().unwrap_or_default();
+        let mut map = HashMap::new();
+        for (relay_url, last_ms) in last {
+            map.insert(relay_url, last_ms);
+        }
+        (relays, map)
+    };
+
+    for (relay_url, _base_domain, _last_seen, telemetry_json, _sig) in relays {
+        if inflight_relays.contains(&relay_url) {
+            continue;
+        }
+        if !reputation_allows(state, &relay_url, cfg.reputation_ttl_ms).await {
+            continue;
+        }
+        let Some(telemetry_json) = telemetry_json else {
+            continue;
+        };
+        let Some(peer_id) = relay_peer_id_from_telemetry(&telemetry_json) else {
+            continue;
+        };
+        if peer_id != target_peer_id {
+            continue;
+        }
+
+        let since = last_map.get(&relay_url).copied();
+        let req = match build_signed_mesh_request(state, since, None, limit).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let req_id = swarm.behaviour_mut().rr.send_request(&peer_id, req);
+        info!(
+            relay_url = %relay_url,
+            peer_id = %peer_id,
+            since = ?since,
+            "relay mesh sync request queued (on connect)"
+        );
+        pending.insert(
+            req_id,
+            PendingSync {
+                relay_url: relay_url.clone(),
+                peer_id,
+                last_seen: since.unwrap_or(0),
+                max_seen: since.unwrap_or(0),
+            },
+        );
+        inflight_relays.insert(relay_url);
+        break;
+    }
+
+    Ok(())
+}
+
 fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
     for p in addr.iter() {
         if let libp2p::multiaddr::Protocol::P2p(pid) = p {
@@ -930,6 +1024,27 @@ fn peer_direct_dial_addrs(relay_url: &str, peer_id: PeerId) -> Vec<Multiaddr> {
         out.push(addr);
     }
     out
+}
+
+fn is_supported_mesh_addr(addr: &Multiaddr, enable_quic: bool) -> bool {
+    let mut has_tcp = false;
+    for p in addr.iter() {
+        match p {
+            libp2p::multiaddr::Protocol::QuicV1 => {
+                if !enable_quic {
+                    return false;
+                }
+            }
+            libp2p::multiaddr::Protocol::Udp(_) => {
+                if !enable_quic {
+                    return false;
+                }
+            }
+            libp2p::multiaddr::Protocol::Tcp(_) => has_tcp = true,
+            _ => {}
+        }
+    }
+    enable_quic || has_tcp
 }
 
 fn is_local_dial_candidate(ip: IpAddr) -> bool {
