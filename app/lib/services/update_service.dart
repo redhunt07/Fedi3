@@ -121,7 +121,8 @@ class UpdateService {
       if (started) {
         exit(0);
       }
-      throw StateError('update launch cancelled or failed');
+      throw StateError(
+          'update launch cancelled or failed (PowerShell not started)');
     }
     if (Platform.isLinux) {
       final started = await _launchLinuxTerminal(command, relaunchPath);
@@ -374,18 +375,56 @@ class UpdateService {
     final encoded = base64.encode(_utf16LeBytes(wrapped.toString()));
     final argList =
         '-NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
-    final launcher = await Process.run(
-      'powershell',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        r"$ErrorActionPreference='Stop'; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args[0] -PassThru | Out-Null",
-        argList,
-      ],
-    );
-    return launcher.exitCode == 0;
+    try {
+      final launcher = await Process.run(
+        'powershell',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          r"$ErrorActionPreference='Stop'; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args[0] -PassThru | Out-Null",
+          argList,
+        ],
+      );
+      if (launcher.exitCode == 0) return true;
+    } catch (_) {
+      // Fall through to non-elevated launcher.
+    }
+    // Fallback: some environments block RunAs invocation from sandboxed process.
+    // The update script can still run as current user and handles best-effort install.
+    return _launchWindowsDirect(command, relaunchPath);
+  }
+
+  Future<bool> _launchWindowsDirect(String command, String? relaunchPath) async {
+    final wrapped = StringBuffer()
+      ..writeln(r'$ErrorActionPreference = "Stop"')
+      ..writeln(command)
+      ..writeln(r'$exitCode = $LASTEXITCODE')
+      ..writeln(r'if ($exitCode -eq $null) { $exitCode = 0 }');
+    if (relaunchPath != null && relaunchPath.trim().isNotEmpty) {
+      final escaped = relaunchPath.replaceAll("'", "''");
+      wrapped.writeln(
+          "if (\$exitCode -eq 0) { Start-Process -FilePath '$escaped' }");
+    }
+    wrapped.writeln(r'exit $exitCode');
+    try {
+      await Process.start(
+        'powershell',
+        [
+          '-NoExit',
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          wrapped.toString(),
+        ],
+        mode: ProcessStartMode.detached,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Uint8List _utf16LeBytes(String value) {
