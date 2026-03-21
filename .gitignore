@@ -30,3 +30,4 @@ app/fedi3_core.dll
 app/windows/flutter/ephemeral/
 app/linux/flutter/ephemeral/
 app/macos/Flutter/ephemeral/
+.tmp_fedi3_deploy.tgz

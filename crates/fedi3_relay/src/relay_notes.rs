@@ -37,12 +37,20 @@ pub struct RelaySyncActorItem {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelayMeshPeerHint {
+    pub relay_url: String,
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RelaySyncBundle {
     pub relay_url: String,
     pub created_at_ms: i64,
     pub notes: Vec<RelaySyncNoteItem>,
     pub media: Vec<RelaySyncMediaItem>,
     pub actors: Vec<RelaySyncActorItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_hints: Vec<RelayMeshPeerHint>,
     pub next: Option<String>,
     pub signature_b64: Option<String>,
 }

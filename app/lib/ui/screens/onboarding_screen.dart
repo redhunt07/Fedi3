@@ -45,6 +45,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   static const List<String> _bootstrapRelays = [
     'https://relay.fedi3.com',
+    'https://relay.foxyhole.io',
   ];
 
   @override

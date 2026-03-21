@@ -41,6 +41,7 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
 
   static const List<String> _bootstrapRelays = [
     'https://relay.fedi3.com',
+    'https://relay.foxyhole.io',
   ];
 
   @override
@@ -282,13 +283,15 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
         if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
         final json = jsonDecode(resp.body);
         if (json is! Map) continue;
-        final relays = json['relays'];
+        final relays = (json['relays'] is List) ? json['relays'] : json['items'];
         if (relays is! List) continue;
         for (final item in relays) {
           if (item is! Map) continue;
-          final url = (item['relay_url'] as String?)?.trim();
+          final url =
+              (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])?.toString().trim();
           if (url == null || url.isEmpty) continue;
-          final opt = _relayOptionFromUrl(url);
+          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])?.toString().trim();
+          final opt = _relayOptionFromParts(url, ws);
           if (opt != null && seen.add(opt.publicUrl)) {
             found.add(opt);
           }
@@ -324,6 +327,26 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
     final wsScheme = scheme == 'https' ? 'wss' : 'ws';
     final wsUrl = uri.replace(scheme: wsScheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final domain = uri.host;
+    return _RelayOption(
+      publicUrl: publicUrl,
+      wsUrl: wsUrl,
+      domain: domain,
+      label: uri.host,
+    );
+  }
+
+  _RelayOption? _relayOptionFromParts(String base, String? ws) {
+    final uri = Uri.tryParse(base);
+    if (uri == null || uri.host.isEmpty) return null;
+    final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
+    final publicUrl =
+        uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final wsUrl = (ws != null && ws.trim().isNotEmpty)
+        ? ws.trim().replaceAll(RegExp(r'/$'), '')
+        : (scheme == 'https'
+            ? publicUrl.replaceFirst('https://', 'wss://')
+            : publicUrl.replaceFirst('http://', 'ws://'));
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,

@@ -206,6 +206,12 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ap_consistency_mismatch_total: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    telemetry_push_success_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    telemetry_push_fail_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    telemetry_push_fail_401_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_inflight: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_queue_depth: Option<u64>,
@@ -470,6 +476,9 @@ struct AppState {
     ap_signature_policy_applied_total: Arc<AtomicU64>,
     ap_inbox_compat_accept_total: Arc<AtomicU64>,
     ap_consistency_mismatch_total: Arc<AtomicU64>,
+    telemetry_push_success_total: Arc<AtomicU64>,
+    telemetry_push_fail_total: Arc<AtomicU64>,
+    telemetry_push_fail_401_total: Arc<AtomicU64>,
     ap_public_get_fallback_by_reason_route: Arc<Mutex<HashMap<String, u64>>>,
     ap_public_get_requests_by_route: Arc<Mutex<HashMap<String, u64>>>,
     ap_public_get_cache_hits_by_route: Arc<Mutex<HashMap<String, u64>>>,
@@ -1704,6 +1713,9 @@ async fn main() {
         ap_signature_policy_applied_total: Arc::new(AtomicU64::new(0)),
         ap_inbox_compat_accept_total: Arc::new(AtomicU64::new(0)),
         ap_consistency_mismatch_total: Arc::new(AtomicU64::new(0)),
+        telemetry_push_success_total: Arc::new(AtomicU64::new(0)),
+        telemetry_push_fail_total: Arc::new(AtomicU64::new(0)),
+        telemetry_push_fail_401_total: Arc::new(AtomicU64::new(0)),
         ap_public_get_fallback_by_reason_route: Arc::new(Mutex::new(HashMap::new())),
         ap_public_get_requests_by_route: Arc::new(Mutex::new(HashMap::new())),
         ap_public_get_cache_hits_by_route: Arc::new(Mutex::new(HashMap::new())),
@@ -3598,6 +3610,18 @@ async fn relay_metrics_prom(
     if let Some(v) = telemetry.ap_consistency_mismatch_total {
         out.push_str("# TYPE fedi3_relay_ap_consistency_mismatch_total gauge\n");
         out.push_str(&format!("fedi3_relay_ap_consistency_mismatch_total {v}\n"));
+    }
+    if let Some(v) = telemetry.telemetry_push_success_total {
+        out.push_str("# TYPE fedi3_relay_telemetry_push_success_total counter\n");
+        out.push_str(&format!("fedi3_relay_telemetry_push_success_total {v}\n"));
+    }
+    if let Some(v) = telemetry.telemetry_push_fail_total {
+        out.push_str("# TYPE fedi3_relay_telemetry_push_fail_total counter\n");
+        out.push_str(&format!("fedi3_relay_telemetry_push_fail_total {v}\n"));
+    }
+    if let Some(v) = telemetry.telemetry_push_fail_401_total {
+        out.push_str("# TYPE fedi3_relay_telemetry_push_fail_401_total counter\n");
+        out.push_str(&format!("fedi3_relay_telemetry_push_fail_401_total {v}\n"));
     }
     out.push_str("# TYPE fedi3_relay_ap_public_get_fallback_total_by_reason_route counter\n");
     {
@@ -14561,6 +14585,11 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let ap_consistency_mismatch_total = state
         .ap_consistency_mismatch_total
         .load(Ordering::Relaxed);
+    let telemetry_push_success_total = state.telemetry_push_success_total.load(Ordering::Relaxed);
+    let telemetry_push_fail_total = state.telemetry_push_fail_total.load(Ordering::Relaxed);
+    let telemetry_push_fail_401_total = state
+        .telemetry_push_fail_401_total
+        .load(Ordering::Relaxed);
     let hot_path_available = state.hot_path_inflight.available_permits() as u64;
     let hot_path_capacity = state.cfg.max_hot_path_inflight as u64;
     let relay_hot_path_inflight = hot_path_capacity.saturating_sub(hot_path_available);
@@ -14626,6 +14655,9 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         ap_signature_policy_applied_total: Some(ap_signature_policy_applied_total),
         ap_inbox_compat_accept_total: Some(ap_inbox_compat_accept_total),
         ap_consistency_mismatch_total: Some(ap_consistency_mismatch_total),
+        telemetry_push_success_total: Some(telemetry_push_success_total),
+        telemetry_push_fail_total: Some(telemetry_push_fail_total),
+        telemetry_push_fail_401_total: Some(telemetry_push_fail_401_total),
         relay_hot_path_inflight: Some(relay_hot_path_inflight),
         relay_hot_path_queue_depth: Some(relay_hot_path_queue_depth),
         relay_async_job_inflight: Some(relay_async_job_inflight),
@@ -14739,13 +14771,36 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
         }
         let resp = match req.send().await {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                state
+                    .telemetry_push_fail_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(target = %relay_url, "telemetry push request error: {e}");
+                continue;
+            }
         };
         if !resp.status().is_success() {
+            state
+                .telemetry_push_fail_total
+                .fetch_add(1, Ordering::Relaxed);
+            if resp.status() == StatusCode::UNAUTHORIZED {
+                state
+                    .telemetry_push_fail_401_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            warn!(
+                target = %relay_url,
+                status = %resp.status(),
+                "telemetry push rejected"
+            );
             continue;
         }
         if let Ok(remote) = resp.json::<RelayTelemetry>().await {
             if verify_telemetry_signature(&remote).is_err() {
+                state
+                    .telemetry_push_fail_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(target = %relay_url, "telemetry response signature verification failed");
                 continue;
             }
             let telemetry_json = serde_json::to_string(&remote).ok();
@@ -14798,6 +14853,14 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                 };
                 state.meili_index_user(doc);
             }
+            state
+                .telemetry_push_success_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            state
+                .telemetry_push_fail_total
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(target = %relay_url, "telemetry push response decode failed");
         }
     }
     Ok(())

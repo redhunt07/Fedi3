@@ -22,8 +22,8 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signer as _, Verifier as _};
 
 use crate::relay_notes::{
-    note_to_index, RelayActorIndex, RelayMediaIndex, RelaySyncActorItem, RelaySyncBundle,
-    RelaySyncMediaItem, RelaySyncNoteItem,
+    note_to_index, RelayActorIndex, RelayMediaIndex, RelayMeshPeerHint, RelaySyncActorItem,
+    RelaySyncBundle, RelaySyncMediaItem, RelaySyncNoteItem,
 };
 use crate::{now_ms, relay_p2p_infra_multiaddrs, AppState, RelayTelemetry};
 
@@ -553,11 +553,27 @@ async fn handle_sync_response(
         return;
     }
     update_reputation(state, &pend.relay_url, 1, cfg.reputation_ttl_ms).await;
+    let RelaySyncBundle {
+        notes,
+        media,
+        actors,
+        peer_hints,
+        next,
+        ..
+    } = response;
+    let discovered = ingest_peer_hints(state, &peer_hints).await;
+    if discovered > 0 {
+        info!(
+            relay_url = %pend.relay_url,
+            discovered,
+            "relay mesh peer hints discovered"
+        );
+    }
 
     let mut item_count = 0usize;
-    if !response.notes.is_empty() || !response.media.is_empty() || !response.actors.is_empty() {
+    if !notes.is_empty() || !media.is_empty() || !actors.is_empty() {
         let db = state.db.lock().await;
-        for item in response.notes {
+        for item in notes {
             item_count += 1;
             if item.created_at_ms > pend.max_seen {
                 pend.max_seen = item.created_at_ms;
@@ -567,7 +583,7 @@ async fn handle_sync_response(
                 let _ = db.upsert_relay_note(&indexed);
             }
         }
-        for item in response.media {
+        for item in media {
             item_count += 1;
             if item.created_at_ms > pend.max_seen {
                 pend.max_seen = item.created_at_ms;
@@ -583,7 +599,7 @@ async fn handle_sync_response(
             };
             let _ = db.upsert_relay_media(&idx);
         }
-        for item in response.actors {
+        for item in actors {
             item_count += 1;
             if item.updated_at_ms > pend.max_seen {
                 pend.max_seen = item.updated_at_ms;
@@ -604,7 +620,7 @@ async fn handle_sync_response(
         );
     }
 
-    if let Some(next) = response.next.and_then(|v| v.parse::<i64>().ok()) {
+    if let Some(next) = next.and_then(|v| v.parse::<i64>().ok()) {
         let req = match build_signed_mesh_request(state, None, Some(next), cfg.sync_limit).await {
             Ok(v) => v,
             Err(_) => {
@@ -741,6 +757,81 @@ fn relay_peer_id_from_telemetry(telemetry_json: &str) -> Option<PeerId> {
     peer_id.parse::<PeerId>().ok()
 }
 
+fn synthesize_peer_hint_telemetry(relay_url: &str, peer_id: &str) -> String {
+    let now = now_ms();
+    serde_json::json!({
+        "relay_url": relay_url,
+        "timestamp_ms": now,
+        "online_users": 0,
+        "online_peers": 0,
+        "total_users": 0,
+        "total_peers_seen": 0,
+        "peers_seen_window_ms": 0,
+        "peers_seen_cutoff_ms": now,
+        "relays": [],
+        "relay_p2p_peer_id": peer_id
+    })
+    .to_string()
+}
+
+async fn build_peer_hints(state: &AppState, self_relay_url: &str) -> Vec<RelayMeshPeerHint> {
+    let relays = {
+        let db = state.db.lock().await;
+        db.list_relays(200).unwrap_or_default()
+    };
+    let self_url = self_relay_url.trim_end_matches('/');
+    let mut out = Vec::new();
+    for (relay_url, _base_domain, _last_seen, telemetry_json, _sig) in relays {
+        let relay_url = relay_url.trim_end_matches('/').to_string();
+        if relay_url.is_empty() || relay_url == self_url {
+            continue;
+        }
+        let Some(telemetry_json) = telemetry_json else {
+            continue;
+        };
+        let Some(peer_id) = relay_peer_id_from_telemetry(&telemetry_json) else {
+            continue;
+        };
+        out.push(RelayMeshPeerHint {
+            relay_url,
+            peer_id: peer_id.to_string(),
+        });
+    }
+    out
+}
+
+async fn ingest_peer_hints(state: &AppState, hints: &[RelayMeshPeerHint]) -> usize {
+    let self_url = state
+        .cfg
+        .public_url
+        .as_deref()
+        .map(|v| v.trim_end_matches('/').to_string())
+        .unwrap_or_default();
+    let mut discovered = 0usize;
+    let mut db = state.db.lock().await;
+    for hint in hints.iter().take(200) {
+        let relay_url = hint.relay_url.trim_end_matches('/');
+        let peer_id = hint.peer_id.trim();
+        if relay_url.is_empty() || relay_url == self_url || peer_id.is_empty() {
+            continue;
+        }
+        if peer_id.parse::<PeerId>().is_err() {
+            continue;
+        }
+        let base_domain = reqwest::Url::parse(relay_url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()));
+        let telemetry_json = Some(synthesize_peer_hint_telemetry(relay_url, peer_id));
+        if db
+            .upsert_relay(relay_url, base_domain, telemetry_json, None)
+            .is_ok()
+        {
+            discovered += 1;
+        }
+    }
+    discovered
+}
+
 async fn build_sync_bundle(
     state: &AppState,
     notes: Vec<RelaySyncNoteItem>,
@@ -754,12 +845,14 @@ async fn build_sync_bundle(
         .as_deref()
         .map(|v| v.trim_end_matches('/').to_string())
         .unwrap_or_default();
+    let peer_hints = build_peer_hints(state, &relay_url).await;
     RelaySyncBundle {
         relay_url,
         created_at_ms: now_ms(),
         notes,
         media,
         actors,
+        peer_hints,
         next,
         signature_b64: None,
     }

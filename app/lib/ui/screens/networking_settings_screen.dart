@@ -22,6 +22,10 @@ class NetworkingSettingsScreen extends StatefulWidget {
 }
 
 class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
+  static const List<String> _bootstrapRelays = [
+    'https://relay.fedi3.com',
+    'https://relay.foxyhole.io',
+  ];
   bool _loadingRelays = false;
   String? _relayError;
   List<Map<String, dynamic>> _relays = const [];
@@ -43,18 +47,65 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       final api = CoreApi(config: cfg);
       final resp = await api.fetchRelays();
       final items = <Map<String, dynamic>>[];
-      final raw = resp['items'];
+      final raw = (resp['items'] is List) ? resp['items'] : resp['relays'];
       if (raw is List) {
         for (final it in raw) {
           if (it is Map) items.add(it.cast<String, dynamic>());
         }
       }
-      if (mounted) setState(() => _relays = items);
+      final merged = _mergeRelayFallback(items, cfg.publicBaseUrl);
+      if (mounted) setState(() => _relays = merged);
     } catch (e) {
-      if (mounted) setState(() => _relayError = e.toString());
+      final fallback = _mergeRelayFallback(const [], cfg.publicBaseUrl);
+      if (mounted) {
+        setState(() {
+          _relayError = e.toString();
+          _relays = fallback;
+        });
+      }
     } finally {
       if (mounted) setState(() => _loadingRelays = false);
     }
+  }
+
+  List<Map<String, dynamic>> _mergeRelayFallback(
+    List<Map<String, dynamic>> relays,
+    String currentRelay,
+  ) {
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final relay in relays) {
+      final url = (relay['relay_base_url'] ?? relay['relay_url'] ?? relay['base'])
+          ?.toString()
+          .trim();
+      if (url == null || url.isEmpty) continue;
+      if (seen.add(url)) {
+        merged.add(relay);
+      }
+    }
+    if (merged.length > 1) {
+      return merged;
+    }
+    final base = currentRelay.trim();
+    if (base.isNotEmpty && seen.add(base)) {
+      merged.add({'relay_base_url': base, 'relay_ws_url': _defaultWs(base)});
+    }
+    for (final relay in _bootstrapRelays) {
+      if (seen.add(relay)) {
+        merged.add({'relay_base_url': relay, 'relay_ws_url': _defaultWs(relay)});
+      }
+    }
+    return merged;
+  }
+
+  String _defaultWs(String relayBase) {
+    if (relayBase.startsWith('https://')) {
+      return relayBase.replaceFirst('https://', 'wss://');
+    }
+    if (relayBase.startsWith('http://')) {
+      return relayBase.replaceFirst('http://', 'ws://');
+    }
+    return relayBase;
   }
 
   Future<void> _refreshRelays() async {
