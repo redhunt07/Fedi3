@@ -328,7 +328,9 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
         transport,
         behaviour,
         peer_id,
-        libp2p::swarm::Config::with_tokio_executor(),
+        libp2p::swarm::Config::with_tokio_executor().with_idle_connection_timeout(
+            Duration::from_secs(cfg.sync_interval_secs.max(120) + 30),
+        ),
     );
 
     for addr in &cfg.listen {
@@ -802,12 +804,22 @@ async fn queue_sync_requests(
                     .build();
                 if let Err(e) = swarm.dial(opts) {
                     if cfg.diagnostics {
-                        warn!(
-                            relay_url = %relay_url,
-                            peer_id = %peer_id,
-                            candidates = ?dial_addrs,
-                            "relay mesh explicit direct dial failed: {e}"
-                        );
+                        let msg = e.to_string();
+                        if msg.contains("dial condition was configured") {
+                            debug!(
+                                relay_url = %relay_url,
+                                peer_id = %peer_id,
+                                candidates = ?dial_addrs,
+                                "relay mesh explicit direct dial skipped: {msg}"
+                            );
+                        } else {
+                            warn!(
+                                relay_url = %relay_url,
+                                peer_id = %peer_id,
+                                candidates = ?dial_addrs,
+                                "relay mesh explicit direct dial failed: {msg}"
+                            );
+                        }
                     }
                 } else if cfg.diagnostics {
                     debug!(
