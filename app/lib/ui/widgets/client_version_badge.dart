@@ -113,11 +113,30 @@ class _ClientVersionBadgeState extends State<ClientVersionBadge> {
       await UpdateService.instance.launchManualUpdateAndExit(info: info);
     } catch (e) {
       if (!mounted) return;
+      await _showManualFallback(info);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.l10n.updateFailed(e.toString()))),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _showManualFallback(UpdateInfo info) async {
+    if (!mounted || info.manualCommand.trim().isEmpty) return;
+    final l10n = context.l10n;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.updateManual),
+        content: SelectableText(l10n.updateManualBody(info.manualCommand)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.updateDismiss),
+          ),
+        ],
+      ),
+    );
   }
 }

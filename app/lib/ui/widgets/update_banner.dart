@@ -69,6 +69,7 @@ class _UpdateBannerState extends State<UpdateBanner> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.updateFailed(e.toString()))),
         );
+        await _showManual(info);
       }
     } finally {
       if (mounted) {

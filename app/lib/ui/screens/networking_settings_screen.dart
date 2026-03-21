@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
+import '../../services/core_service_control.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import 'relay_admin_screen.dart';
@@ -27,6 +28,8 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     'https://relay.foxyhole.io',
   ];
   bool _loadingRelays = false;
+  bool _restartingCore = false;
+  bool _restartingService = false;
   String? _relayError;
   List<Map<String, dynamic>> _relays = const [];
 
@@ -119,6 +122,61 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     }
   }
 
+  Future<void> _restartCoreNow() async {
+    if (_restartingCore) return;
+    setState(() => _restartingCore = true);
+    try {
+      await widget.appState.stopCore();
+      await widget.appState.startCore();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.networkingRestartCoreRequested)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.settingsErr(e.toString()))),
+      );
+    } finally {
+      if (mounted) setState(() => _restartingCore = false);
+    }
+  }
+
+  Future<void> _restartBackgroundService() async {
+    if (_restartingService) return;
+    setState(() => _restartingService = true);
+    try {
+      final res = await CoreServiceControl.restartBackgroundService();
+      if (!mounted) return;
+      if (res.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.message)),
+        );
+        await widget.appState.startCore();
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(context.l10n.networkingRestartServiceFailedTitle),
+          content: SelectableText(
+            res.manualCommand.trim().isEmpty
+                ? res.message
+                : '${res.message}\n\nManual command:\n${res.manualCommand}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(context.l10n.updateDismiss),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _restartingService = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = widget.appState.config!;
@@ -145,6 +203,53 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
             child: ListTile(
               title: Text(context.l10n.networkingBind),
               subtitle: Text(cfg.bind),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    context.l10n.networkingCoreControlTitle,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _restartingCore ? null : _restartCoreNow,
+                        icon: _restartingCore
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.restart_alt),
+                        label: Text(context.l10n.networkingRestartCoreNow),
+                      ),
+                      if (widget.appState.isExternalCore)
+                        OutlinedButton.icon(
+                          onPressed:
+                              _restartingService ? null : _restartBackgroundService,
+                          icon: _restartingService
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.settings_backup_restore),
+                          label: Text(
+                              context.l10n.networkingRestartBackgroundService),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 16),

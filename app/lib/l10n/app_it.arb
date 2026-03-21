@@ -582,6 +582,11 @@
   "networkingRelaysError": "Sync relay non riuscita",
   "networkingApRelays": "ActivityPub relays",
   "networkingApRelaysEmpty": "Nessun AP relay configurato",
+  "networkingCoreControlTitle": "Controllo core",
+  "networkingRestartCoreNow": "Riavvia Core ora",
+  "networkingRestartBackgroundService": "Riavvia servizio in background",
+  "networkingRestartCoreRequested": "Richiesta di riavvio core inviata.",
+  "networkingRestartServiceFailedTitle": "Riavvio servizio in background fallito",
   "networkingEditAccount": "Modifica account/networking",
   "networkingHint": "Alcune modifiche richiedono il riavvio del core.",
 

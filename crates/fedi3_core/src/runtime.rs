@@ -1011,10 +1011,41 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .layer(TraceLayer::new_for_http());
 
-        let shutdown_for_tunnel = shutdown_rx.clone();
+        let mut shutdown_for_tunnel = shutdown_rx.clone();
         let net_for_tunnel = net.clone();
         let tunnel = tokio::spawn(async move {
-            crate::tunnel::run_tunnel_with_shutdown(&user, &relay_ws, &relay_token, router2, shutdown_for_tunnel, net_for_tunnel).await
+            loop {
+                if *shutdown_for_tunnel.borrow() {
+                    break;
+                }
+                let run = crate::tunnel::run_tunnel_with_shutdown(
+                    &user,
+                    &relay_ws,
+                    &relay_token,
+                    router2.clone(),
+                    shutdown_for_tunnel.clone(),
+                    net_for_tunnel.clone(),
+                )
+                .await;
+                if *shutdown_for_tunnel.borrow() {
+                    break;
+                }
+                if let Err(e) = run {
+                    warn!("tunnel connection ended with error: {e:#}");
+                } else {
+                    warn!("tunnel connection closed");
+                }
+                info!("tunnel reconnect scheduled in 60s");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+                    _ = shutdown_for_tunnel.changed() => {
+                        if *shutdown_for_tunnel.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok::<(), anyhow::Error>(())
         });
 
         // Wait for shutdown, then stop.

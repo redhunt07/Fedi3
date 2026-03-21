@@ -1010,6 +1010,7 @@ struct RelayConfig {
     relay_mesh_listen: Vec<String>,
     relay_mesh_bootstrap: Vec<String>,
     relay_mesh_key_path: PathBuf,
+    relay_mesh_enable_quic: bool,
     relay_mesh_diagnostics: bool,
     relay_mesh_diagnostics_sample_n: u64,
     p2p_upnp_port_start: Option<u16>,
@@ -2183,6 +2184,10 @@ fn load_config() -> RelayConfig {
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("fedi3_relay_mesh_keypair.pb"));
+    let relay_mesh_enable_quic = std::env::var("FEDI3_RELAY_MESH_ENABLE_QUIC")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let relay_mesh_diagnostics = std::env::var("FEDI3_RELAY_MESH_DIAGNOSTICS")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -2649,6 +2654,7 @@ fn load_config() -> RelayConfig {
         relay_mesh_listen,
         relay_mesh_bootstrap,
         relay_mesh_key_path,
+        relay_mesh_enable_quic,
         relay_mesh_diagnostics,
         relay_mesh_diagnostics_sample_n,
         p2p_upnp_port_start,

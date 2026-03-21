@@ -361,20 +361,10 @@ class UpdateService {
 
   Future<bool> _launchWindowsElevated(
       String command, String? relaunchPath) async {
-    final wrapped = StringBuffer()
-      ..writeln(r'$ErrorActionPreference = "Stop"')
-      ..writeln(command)
-      ..writeln(r'$exitCode = $LASTEXITCODE')
-      ..writeln(r'if ($exitCode -eq $null) { $exitCode = 0 }');
-    if (relaunchPath != null && relaunchPath.trim().isNotEmpty) {
-      final escaped = relaunchPath.replaceAll("'", "''");
-      wrapped.writeln(
-          "if (\$exitCode -eq 0) { Start-Process -FilePath '$escaped' }");
-    }
-    wrapped.writeln(r'exit $exitCode');
-    final encoded = base64.encode(_utf16LeBytes(wrapped.toString()));
+    final scriptPath = await _writeWindowsLauncherScript(command, relaunchPath);
+    final escapedScript = scriptPath.replaceAll("'", "''");
     final argList =
-        '-NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded';
+        "@('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File','$escapedScript')";
     try {
       final launcher = await Process.run(
         'powershell',
@@ -383,7 +373,7 @@ class UpdateService {
           '-ExecutionPolicy',
           'Bypass',
           '-Command',
-          r"$ErrorActionPreference='Stop'; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args[0] -PassThru | Out-Null",
+          r"$ErrorActionPreference='Stop'; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList (Invoke-Expression $args[0]) -PassThru | Out-Null",
           argList,
         ],
       );
@@ -397,6 +387,35 @@ class UpdateService {
   }
 
   Future<bool> _launchWindowsDirect(String command, String? relaunchPath) async {
+    final scriptPath = await _writeWindowsLauncherScript(command, relaunchPath);
+    try {
+      await Process.start(
+        'cmd',
+        [
+          '/c',
+          'start',
+          '',
+          'powershell',
+          '-NoExit',
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          scriptPath,
+        ],
+        mode: ProcessStartMode.detached,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String> _writeWindowsLauncherScript(
+      String command, String? relaunchPath) async {
+    final tmp = await getTemporaryDirectory();
+    final scriptPath =
+        '${tmp.path}${Platform.pathSeparator}fedi3_manual_update.ps1';
     final wrapped = StringBuffer()
       ..writeln(r'$ErrorActionPreference = "Stop"')
       ..writeln(command)
@@ -407,35 +426,14 @@ class UpdateService {
       wrapped.writeln(
           "if (\$exitCode -eq 0) { Start-Process -FilePath '$escaped' }");
     }
-    wrapped.writeln(r'exit $exitCode');
-    try {
-      await Process.start(
-        'powershell',
-        [
-          '-NoExit',
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          wrapped.toString(),
-        ],
-        mode: ProcessStartMode.detached,
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Uint8List _utf16LeBytes(String value) {
-    final units = value.codeUnits;
-    final bytes = Uint8List(units.length * 2);
-    for (var i = 0; i < units.length; i++) {
-      final unit = units[i];
-      bytes[i * 2] = unit & 0xff;
-      bytes[i * 2 + 1] = (unit >> 8) & 0xff;
-    }
-    return bytes;
+    wrapped
+      ..writeln('Write-Host ""')
+      ..writeln(r'Write-Host "Update completed with exit code: $exitCode"')
+      ..writeln(r'Write-Host "Press Enter to close..."')
+      ..writeln(r'[void](Read-Host)')
+      ..writeln(r'exit $exitCode');
+    await File(scriptPath).writeAsString(wrapped.toString(), flush: true);
+    return scriptPath;
   }
 
   Future<bool> _launchLinuxTerminal(
@@ -503,10 +501,15 @@ if [ "\$(id -u)" -ne 0 ]; then
 else
   bash -lc '$escaped'
 fi
+status=\$?
 if [ -n '$relaunchEscaped' ]; then
   nohup '$relaunchEscaped' >/dev/null 2>&1 &
 fi
-exit 0
+echo
+echo "Updater exit code: \$status"
+echo "Press Enter to close..."
+read -r _
+exit \$status
 ''';
   }
 

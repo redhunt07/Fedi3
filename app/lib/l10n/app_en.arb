@@ -580,6 +580,11 @@
   "networkingRelaysError": "Relay sync failed",
   "networkingApRelays": "ActivityPub relays",
   "networkingApRelaysEmpty": "No AP relays configured",
+  "networkingCoreControlTitle": "Core control",
+  "networkingRestartCoreNow": "Restart Core now",
+  "networkingRestartBackgroundService": "Restart background service",
+  "networkingRestartCoreRequested": "Core restart requested.",
+  "networkingRestartServiceFailedTitle": "Background service restart failed",
   "networkingEditAccount": "Edit account/networking",
   "networkingHint": "Some changes require restarting the core.",
 

@@ -1298,6 +1298,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get networkingApRelaysEmpty => 'No AP relays configured';
 
   @override
+  String get networkingCoreControlTitle => 'Core control';
+
+  @override
+  String get networkingRestartCoreNow => 'Restart Core now';
+
+  @override
+  String get networkingRestartBackgroundService => 'Restart background service';
+
+  @override
+  String get networkingRestartCoreRequested => 'Core restart requested.';
+
+  @override
+  String get networkingRestartServiceFailedTitle =>
+      'Background service restart failed';
+
+  @override
   String get networkingEditAccount => 'Edit account/networking';
 
   @override

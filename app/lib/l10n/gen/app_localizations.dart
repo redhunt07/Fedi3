@@ -2414,6 +2414,36 @@ abstract class AppLocalizations {
   /// **'No AP relays configured'**
   String get networkingApRelaysEmpty;
 
+  /// No description provided for @networkingCoreControlTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Core control'**
+  String get networkingCoreControlTitle;
+
+  /// No description provided for @networkingRestartCoreNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart Core now'**
+  String get networkingRestartCoreNow;
+
+  /// No description provided for @networkingRestartBackgroundService.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart background service'**
+  String get networkingRestartBackgroundService;
+
+  /// No description provided for @networkingRestartCoreRequested.
+  ///
+  /// In en, this message translates to:
+  /// **'Core restart requested.'**
+  String get networkingRestartCoreRequested;
+
+  /// No description provided for @networkingRestartServiceFailedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Background service restart failed'**
+  String get networkingRestartServiceFailedTitle;
+
   /// No description provided for @networkingEditAccount.
   ///
   /// In en, this message translates to:
