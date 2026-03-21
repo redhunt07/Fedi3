@@ -5,7 +5,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
@@ -507,10 +506,10 @@ exit 0
       ..writeln('@echo off')
       ..writeln('ping 127.0.0.1 -n 2 > nul')
       ..writeln(copyDir
-          ? 'xcopy /E /I /Y "${sourcePath}\\*" "${targetDir}\\" > nul'
-          : 'copy /Y "${sourcePath}" "${targetPath}" > nul')
-      ..writeln('echo ${version} > "${targetDir}\\${_versionMarkerName}"')
-      ..writeln('start "" "${targetPath}"')
+          ? 'xcopy /E /I /Y "$sourcePath\\*" "$targetDir\\" > nul'
+          : 'copy /Y "$sourcePath" "$targetPath" > nul')
+      ..writeln('echo $version > "$targetDir\\$_versionMarkerName"')
+      ..writeln('start "" "$targetPath"')
       ..writeln('del "%~f0"');
     await File(batPath).writeAsString(script.toString(), flush: true);
     await Process.start('cmd', ['/c', batPath],
@@ -526,11 +525,10 @@ exit 0
     final script = StringBuffer()
       ..writeln('#!/bin/sh')
       ..writeln('sleep 1')
-      ..writeln('mv -f "${downloadPath}" "${targetPath}"')
-      ..writeln('chmod +x "${targetPath}"')
-      ..writeln(
-          'printf "%s" "${version}" > "${targetDir}/${_versionMarkerName}"')
-      ..writeln('"${targetPath}" &')
+      ..writeln('mv -f "$downloadPath" "$targetPath"')
+      ..writeln('chmod +x "$targetPath"')
+      ..writeln('printf "%s" "$version" > "$targetDir/$_versionMarkerName"')
+      ..writeln('"$targetPath" &')
       ..writeln(r'rm -- "$0"');
     final file = File(shPath);
     await file.writeAsString(script.toString(), flush: true);
@@ -543,7 +541,7 @@ exit 0
     final input = InputFileStream(zipPath);
     final archive = ZipDecoder().decodeBuffer(input);
     final rootPrefix = _detectZipRoot(archive);
-    final outDir = Directory('${tempDir}${Platform.pathSeparator}fedi3_update');
+    final outDir = Directory('$tempDir${Platform.pathSeparator}fedi3_update');
     if (!await outDir.exists()) {
       await outDir.create(recursive: true);
     }
@@ -586,8 +584,7 @@ exit 0
       final exePath = _currentExecutablePath();
       if (exePath == null) return '';
       final dir = File(exePath).parent.path;
-      final marker =
-          File('${dir}${Platform.pathSeparator}${_versionMarkerName}');
+      final marker = File('$dir${Platform.pathSeparator}$_versionMarkerName');
       if (!marker.existsSync()) return '';
       return marker.readAsStringSync().trim();
     } catch (_) {

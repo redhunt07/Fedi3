@@ -124,6 +124,7 @@ class _NoteCardState extends State<NoteCard> {
   String? _translationSource;
   String? _translationError;
   bool _previewVisible = false;
+  DateTime? _lastPreviewToggleAt;
 
   @override
   void initState() {
@@ -761,6 +762,13 @@ class _NoteCardState extends State<NoteCard> {
                                   : null,
                             ),
                             onPressed: () {
+                              final now = DateTime.now();
+                              final last = _lastPreviewToggleAt;
+                              if (last != null &&
+                                  now.difference(last).inMilliseconds < 250) {
+                                return;
+                              }
+                              _lastPreviewToggleAt = now;
                               final next = !_previewVisible;
                               if (next) {
                                 _prefetchLinkPreview();
@@ -1046,8 +1054,9 @@ class _NoteCardState extends State<NoteCard> {
 
   BoxBorder? _borderForActivity(BuildContext context) {
     final type = widget.item.activityType;
-    if (type != 'Announce' && widget.item.note.inReplyTo.trim().isEmpty)
+    if (type != 'Announce' && widget.item.note.inReplyTo.trim().isEmpty) {
       return null;
+    }
     final scheme = Theme.of(context).colorScheme;
     final color = type == 'Announce'
         ? scheme.primary.withAlpha(160)
@@ -1350,8 +1359,9 @@ class _NoteCardState extends State<NoteCard> {
           final m = it.cast<String, dynamic>();
           final id = (m['id'] as String?)?.trim();
           final content = (m['content'] as String?)?.trim();
-          if (id == null || id.isEmpty || content == null || content.isEmpty)
+          if (id == null || id.isEmpty || content == null || content.isEmpty) {
             continue;
+          }
           emojis[content] = id;
         }
       }
@@ -2307,9 +2317,12 @@ class _QuotedPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prev = replyPreview ?? quotePreview;
-    final inner = (prev?['content'] as String?)?.trim() ??
-        (prev?['name'] as String?)?.trim() ??
-        '';
+    final prevContent = prev == null
+        ? ''
+        : ((prev['content'] as String?)?.trim() ?? '');
+    final prevName =
+        prev == null ? '' : ((prev['name'] as String?)?.trim() ?? '');
+    final inner = prevContent.isNotEmpty ? prevContent : prevName;
     final hasPreviewContent = inner.isNotEmpty;
     if (!hasPreviewContent && inReplyTo.isEmpty) return const SizedBox.shrink();
 

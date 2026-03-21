@@ -130,7 +130,7 @@
   },
 
   "timelineHomeTooltip": "Generic timeline (Relay + Legacy). Shows incoming/outgoing interactions, including with users you don't follow and who don't follow you.",
-  "timelineLocalTooltip": "Follower/Following timeline (Relay + Legacy). Only profiles with a follow/follower relationship.",
+  "timelineLocalTooltip": "Local timeline (Relay + Legacy). Shows public local posts from your instance/relay.",
   "timelineSocialTooltip": "Social timeline (Relay). Best-effort global feed via relay federation.",
   "timelineFederatedTooltip": "Federated timeline (Relay + Legacy). Public content seen by your instance across federation.",
   "timelineLayoutColumns": "Switch to columns",

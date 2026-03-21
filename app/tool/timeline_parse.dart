@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:fedi3/model/note_models.dart';
 
 void main() {
@@ -19,8 +20,8 @@ void main() {
   ''') as Map<String, dynamic>;
 
   final item = TimelineItem.tryFromActivity(raw);
-  print('item: ${item != null}');
+  stdout.writeln('item: ${item != null}');
   if (item != null) {
-    print('note id: ${item.note.id} content: ${item.note.contentHtml}');
+    stdout.writeln('note id: ${item.note.id} content: ${item.note.contentHtml}');
   }
 }

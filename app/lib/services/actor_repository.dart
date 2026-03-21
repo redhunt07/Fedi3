@@ -256,6 +256,7 @@ class ActorRepository {
       LinkedHashMap();
 
   int maxCacheEntries = 512;
+  Duration requestTimeout = const Duration(seconds: 8);
 
   Map<String, String> get _acceptHeaders => const {
         'Accept':
@@ -300,11 +301,17 @@ class ActorRepository {
   Future<ActorProfile?> _fetchActor(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
-    final resp = await _client.get(uri, headers: _acceptHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return null;
-    return ActorProfile.tryParse(json.cast<String, dynamic>());
+    try {
+      final resp =
+          await _client.get(uri, headers: _acceptHeaders).timeout(requestTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return null;
+      return ActorProfile.tryParse(json.cast<String, dynamic>());
+    } catch (_) {
+      // Network/protocol/parse errors are non-fatal for UI.
+      return null;
+    }
   }
 
   Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
@@ -392,11 +399,17 @@ class ActorRepository {
   Future<Map<String, dynamic>?> _fetchJson(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
-    final resp = await _client.get(uri, headers: _acceptHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return null;
-    return json.cast<String, dynamic>();
+    try {
+      final resp =
+          await _client.get(uri, headers: _acceptHeaders).timeout(requestTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return null;
+      return json.cast<String, dynamic>();
+    } catch (_) {
+      // Keep timeline/profile resilient on TLS or transient errors.
+      return null;
+    }
   }
 
   void _remember(String url, ActorProfile profile) {

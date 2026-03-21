@@ -166,14 +166,16 @@ class _ShellState extends State<Shell> {
       _notifDebounce?.cancel();
       _notifDebounce = Timer(const Duration(milliseconds: 350), () async {
         if (!mounted) return;
+        final notificationTitle = context.l10n.notificationsTitle;
+        final notificationBody = context.l10n.notificationsNewActivity;
         if (!await _isDirectInteraction(ev)) return;
         final onNotifTab = _index == 3;
         if (!onNotifTab) {
           widget.appState.incrementUnreadNotifications();
           if (widget.appState.prefs.notifyDirect && !_notificationsMuted()) {
             NotificationService.showGeneralNotification(
-              title: context.l10n.notificationsTitle,
-              body: context.l10n.notificationsNewActivity,
+              title: notificationTitle,
+              body: notificationBody,
             );
           }
         }

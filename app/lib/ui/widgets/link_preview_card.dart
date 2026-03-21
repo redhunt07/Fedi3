@@ -21,6 +21,9 @@ class LinkPreviewCard extends StatefulWidget {
 }
 
 class _LinkPreviewCardState extends State<LinkPreviewCard> {
+  static final Map<String, LinkPreview> _stickyResolved =
+      <String, LinkPreview>{};
+
   Future<LinkPreview?>? _future;
   LinkPreview? _resolved;
   String _lastUrl = '';
@@ -43,13 +46,16 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     final u = widget.url.trim();
     if (u == _lastUrl && _future != null) return;
     _lastUrl = u;
-    _resolved = null;
+    _resolved = _stickyResolved[u];
     if (u.isEmpty) {
       _future = null;
       return;
     }
     _future = LinkPreviewRepository.instance.get(u).then((value) {
-      if (value != null) _resolved = value;
+      if (value != null) {
+        _resolved = value;
+        _stickyResolved[u] = value;
+      }
       return value;
     });
   }

@@ -37,6 +37,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<Map<String, dynamic>> _outbox = const [];
   String? _outboxNext;
   bool _outboxLoadingMore = false;
+  bool _outboxLoading = false;
+  bool _outboxLoaded = false;
+  String? _outboxError;
   List<Map<String, dynamic>> _featured = const [];
   String _followingStatus = 'none';
   bool _followBusy = false;
@@ -72,6 +75,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _loading = true;
       _error = null;
       _featured = const [];
+      _outboxLoading = false;
+      _outboxLoaded = false;
+      _outboxError = null;
     });
     try {
       final p = await ActorRepository.instance.refreshActor(widget.actorUrl) ??
@@ -95,13 +101,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final page = await ActorRepository.instance
-            .fetchOutboxPage(p!.outbox, limit: 20);
-        if (!mounted) return;
-        setState(() {
-          _outbox = page.items.where(_isProfileActivity).toList();
-          _outboxNext = page.next;
-        });
+        await _refreshOutboxOnly(profile: p, silent: true);
       }
       if (p?.featured.isNotEmpty ?? false) {
         final items = await ActorRepository.instance
@@ -135,8 +135,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!_isLocalProfile()) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    if (identical(_profileStreamConfig, cfg) && _profileStreamSub != null)
+    if (identical(_profileStreamConfig, cfg) && _profileStreamSub != null) {
       return;
+    }
     _profileStreamConfig = cfg;
     _profileStreamRetry?.cancel();
     _profileStreamSub?.cancel();
@@ -159,7 +160,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final cfg = widget.appState.config;
     if (cfg == null) return;
     if (identical(_profileNotifStreamConfig, cfg) &&
-        _profileNotifStreamSub != null) return;
+        _profileNotifStreamSub != null) {
+      return;
+    }
     _profileNotifStreamConfig = cfg;
     _profileNotifStreamRetry?.cancel();
     _profileNotifStreamSub?.cancel();
@@ -204,13 +207,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() {});
       if (active.outbox.isNotEmpty) {
-        final page = await ActorRepository.instance
-            .fetchOutboxPage(active.outbox, limit: 20);
-        if (!mounted) return;
-        setState(() {
-          _outbox = page.items.where(_isProfileActivity).toList();
-          _outboxNext = page.next;
-        });
+        await _refreshOutboxOnly(profile: active, silent: true);
       }
       final featuredUrl = active.featured;
       if (featuredUrl.isNotEmpty) {
@@ -377,6 +374,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
               followersCount: _followersCount,
               followingCount: _followingCount,
             ),
+          if (_profile != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(context.l10n.timelineTabHome,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(width: 8),
+                if (_outboxLoading)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Aggiorna profilo',
+                  onPressed: _loading ? null : _refreshProfileImmediate,
+                  icon: const Icon(Icons.person),
+                ),
+                IconButton(
+                  tooltip: 'Aggiorna post',
+                  onPressed: _outboxLoading ? null : _refreshOutboxOnly,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            ),
+            if (_outboxError != null && _outbox.isEmpty)
+              NetworkErrorCard(
+                message: _outboxError,
+                onRetry: _refreshOutboxOnly,
+                compact: true,
+              ),
+            if (_outboxLoading && _outbox.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (!_outboxLoading && _outbox.isEmpty && _outboxLoaded)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'Nessun post visibile al momento. Se hai pubblicato da poco, attendi la sync o aggiorna.',
+                ),
+              ),
+          ],
           if (_profile == null && !_loading)
             Center(child: Text(context.l10n.listNoItems)),
           if (_loading)
@@ -394,9 +436,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   appState: widget.appState, activity: a, elevated: true),
           ],
           if (_outbox.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(context.l10n.timelineTabHome,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final a in _outbox)
               TimelineActivityCard(appState: widget.appState, activity: a),
@@ -438,10 +477,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _refreshOutboxOnly({ActorProfile? profile, bool silent = false}) async {
+    final p = profile ?? _profile;
+    if (p == null || p.outbox.trim().isEmpty) return;
+    if (_outboxLoading) return;
+    if (mounted && !silent) {
+      setState(() {
+        _outboxLoading = true;
+        _outboxError = null;
+      });
+    } else {
+      _outboxLoading = true;
+      _outboxError = null;
+    }
+    try {
+      final page =
+          await ActorRepository.instance.fetchOutboxPage(p.outbox, limit: 20);
+      if (!mounted) return;
+      setState(() {
+        _outbox = page.items.where(_isProfileActivity).toList();
+        _outboxNext = page.next;
+        _outboxLoaded = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _outboxError = e.toString();
+        _outboxLoaded = true;
+      });
+    } finally {
+      if (mounted) setState(() => _outboxLoading = false);
+    }
+  }
+
   Future<void> _toggleFollow(CoreApi api) async {
     final p = _profile;
     if (p == null) return;
     if (_followBusy) return;
+    final previousStatus = _followingStatus;
     setState(() => _followBusy = true);
     try {
       final following =
@@ -463,6 +536,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (mounted) await _refreshFollowingStatus();
     } catch (e) {
       if (!mounted) return;
+      setState(() => _followingStatus = previousStatus);
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     } finally {
@@ -667,6 +741,31 @@ class _ProfileHeader extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2))
                           : Text(label),
                     ),
+                    if (isPending) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest
+                              .withAlpha(120),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .outlineVariant
+                                .withAlpha(120),
+                          ),
+                        ),
+                        child: Text(
+                          context.l10n.profileFollowPending,
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     Row(
                       mainAxisSize: MainAxisSize.min,

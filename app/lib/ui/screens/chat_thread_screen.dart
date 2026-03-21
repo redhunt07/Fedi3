@@ -4,7 +4,6 @@
  */
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
@@ -484,11 +483,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _pickFiles() async {
+    final fallbackFileName = context.l10n.composeFileFallback;
     try {
       final files = await openFiles();
       for (final f in files) {
         final bytes = await f.readAsBytes();
-        final name = f.name.isNotEmpty ? f.name : context.l10n.composeFileFallback;
+        final name = f.name.isNotEmpty ? f.name : fallbackFileName;
         _media.add(_PickedMedia(name: name, bytes: bytes));
       }
       if (mounted) setState(() {});

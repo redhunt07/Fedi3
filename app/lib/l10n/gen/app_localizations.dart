@@ -725,7 +725,7 @@ abstract class AppLocalizations {
   /// No description provided for @timelineLocalTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Follower/Following timeline (Relay + Legacy). Only profiles with a follow/follower relationship.'**
+  /// **'Local timeline (Relay + Legacy). Shows public local posts from your instance/relay.'**
   String get timelineLocalTooltip;
 
   /// No description provided for @timelineSocialTooltip.

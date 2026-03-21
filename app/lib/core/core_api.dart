@@ -124,8 +124,9 @@ class CoreApi {
       for (final link in links) {
         if (link is! Map) continue;
         final href = link['href']?.toString();
-        if (href != null && href.isNotEmpty)
+        if (href != null && href.isNotEmpty) {
           return href.replaceAll(RegExp(r'/+$'), '');
+        }
       }
       throw StateError('webfinger: no actor link');
     } finally {

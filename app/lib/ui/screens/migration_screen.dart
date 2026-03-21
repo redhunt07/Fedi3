@@ -176,21 +176,22 @@ class _MigrationScreenState extends State<MigrationScreen> {
   Future<void> _saveAliases() async {
     if (!widget.appState.isRunning) return;
     setState(() => _savingAliases = true);
+    final l10n = context.l10n;
     try {
       final cfg = widget.appState.config!;
       final api = CoreApi(config: cfg);
       final aliases = _parseAliases(_aliasesCtrl.text);
       final result = await api.setLegacyAliases(aliases);
       final msg = result['restart_required'] == true
-          ? context.l10n.migrationSavedRestart
-          : context.l10n.migrationSaved;
+          ? l10n.migrationSavedRestart
+          : l10n.migrationSaved;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))),
+          SnackBar(content: Text(l10n.settingsErr(e.toString()))),
         );
       }
     } finally {

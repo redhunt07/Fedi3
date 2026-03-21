@@ -4,6 +4,7 @@
  */
 
 import 'dart:convert';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 
@@ -30,20 +31,29 @@ class TimelineActivityCard extends StatefulWidget {
 }
 
 class _TimelineActivityCardState extends State<TimelineActivityCard> {
+  static final LinkedHashMap<String, Map<String, dynamic>> _hydratedCache =
+      LinkedHashMap<String, Map<String, dynamic>>();
+  static final Map<String, Future<Map<String, dynamic>?>> _inflight =
+      <String, Future<Map<String, dynamic>?>>{};
+  static const int _maxHydratedCacheEntries = 512;
+
   Map<String, dynamic>? _activity;
-  bool _hydrating = false;
+  String _fingerprint = '';
 
   @override
   void initState() {
     super.initState();
     _activity = widget.activity;
+    _fingerprint = _activityFingerprint(widget.activity);
     _hydrateIfNeeded();
   }
 
   @override
   void didUpdateWidget(covariant TimelineActivityCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.activity != widget.activity) {
+    final nextFingerprint = _activityFingerprint(widget.activity);
+    if (nextFingerprint != _fingerprint) {
+      _fingerprint = nextFingerprint;
       _activity = widget.activity;
       _hydrateIfNeeded();
     }
@@ -57,22 +67,72 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
     final url = obj.trim();
     if (url.isEmpty) return;
 
-    setState(() => _hydrating = true);
-    try {
-      final api = CoreApi(config: widget.appState.config!);
-      final cached = await api.fetchCachedObject(url);
+    final cached = _hydratedCache[url];
+    if (cached != null) {
+      _remember(url, cached);
       if (!mounted) return;
-      var resolved = cached;
-      resolved ??= await ObjectRepository.instance.fetchObject(url);
-      if (resolved == null) return;
       setState(() {
-        _activity = {...a, 'object': resolved};
+        _activity = {...a, 'object': cached};
+      });
+      return;
+    }
+
+    try {
+      final inflight = _inflight[url];
+      final resolved = inflight ??
+          _resolveObject(url, widget.appState.config!);
+      if (inflight == null) {
+        _inflight[url] = resolved;
+      }
+      Map<String, dynamic>? fetched;
+      try {
+        fetched = await resolved;
+      } finally {
+        if (inflight == null) {
+          _inflight.remove(url);
+        }
+      }
+      if (!mounted) return;
+      if (fetched == null) return;
+      _remember(url, fetched);
+      setState(() {
+        _activity = {...a, 'object': fetched};
       });
     } catch (_) {
       // best-effort
-    } finally {
-      if (mounted) setState(() => _hydrating = false);
     }
+  }
+
+  Future<Map<String, dynamic>?> _resolveObject(String url, config) async {
+    final api = CoreApi(config: config);
+    var resolved = await api.fetchCachedObject(url);
+    resolved ??= await ObjectRepository.instance.fetchObject(url);
+    return resolved;
+  }
+
+  void _remember(String key, Map<String, dynamic> value) {
+    _hydratedCache.remove(key);
+    _hydratedCache[key] = value;
+    while (_hydratedCache.length > _maxHydratedCacheEntries) {
+      _hydratedCache.remove(_hydratedCache.keys.first);
+    }
+  }
+
+  String _activityFingerprint(Map<String, dynamic> activity) {
+    final id = (activity['id'] as String?)?.trim() ?? '';
+    final type = (activity['type'] as String?)?.trim() ?? '';
+    final object = activity['object'];
+    if (object is String) {
+      return '$id|$type|${object.trim()}';
+    }
+    if (object is Map) {
+      final map = object.cast<String, dynamic>();
+      final objectId = (map['id'] as String?)?.trim() ?? '';
+      final objectUpdated = (map['updated'] as String?)?.trim() ?? '';
+      final objectPublished = (map['published'] as String?)?.trim() ?? '';
+      return '$id|$type|$objectId|$objectUpdated|$objectPublished';
+    }
+    return '$id|$type';
   }
 
   @override
@@ -81,15 +141,6 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
     final item = TimelineItem.tryFromActivity(a);
 
     if (item == null) {
-      if (_hydrating) {
-        return const Padding(
-          padding: EdgeInsets.all(12),
-          child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2)),
-        );
-      }
       assert(() {
         final compact = {
           'type': a['type'],

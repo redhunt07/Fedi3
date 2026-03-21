@@ -9,7 +9,6 @@ import 'package:http/http.dart' as http;
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
-import '../../model/core_config.dart';
 import '../../services/relay_admin_api.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
@@ -103,26 +102,6 @@ class _RelaysScreenState extends State<RelaysScreen> {
       if (mounted) {
         setState(() => _loading = false);
       }
-    }
-  }
-
-
-  String? _relayBaseFromConfig(CoreConfig cfg) {
-    final raw = cfg.relayWs.trim();
-    if (raw.isEmpty) return null;
-    try {
-      var uri = Uri.parse(raw);
-      var scheme = uri.scheme;
-      if (scheme == 'wss') {
-        scheme = 'https';
-      } else if (scheme == 'ws') {
-        scheme = 'http';
-      }
-      if (scheme != 'http' && scheme != 'https') return null;
-      uri = uri.replace(scheme: scheme, path: '', query: '', fragment: '');
-      return uri.toString().replaceAll(RegExp(r'/+$'), '');
-    } catch (_) {
-      return null;
     }
   }
 

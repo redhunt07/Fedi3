@@ -97,90 +97,157 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         final syncReady = (_syncStatus?['ready'] == true);
         final syncBlocked = _syncStatusLoading || !syncReady;
         final syncStale = _isSyncStale(_syncStatus);
-        if (syncBlocked) {
-          return Scaffold(
-            appBar: AppBar(title: Text(context.l10n.timelineTitle)),
-            body: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: Card(
-                  margin: const EdgeInsets.all(16),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: const [
-                            SizedBox(
-                              width: 20,
-                              height: 20,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2.2),
-                            ),
-                            SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Sincronizzazione timeline in corso',
-                                style: TextStyle(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(_syncPhaseText(_syncStatus)),
-                        if (_syncStatusError != null &&
-                            _syncStatusError!.trim().isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            'Errore locale core: $_syncStatusError',
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error),
+
+        final timelineBody = isWide
+            ? (useColumns
+                ? Scrollbar(
+                    controller: _columnsScroll,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _columnsScroll,
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _TimelineList(
+                            key: _listKeys[0],
+                            appState: widget.appState,
+                            api: api,
+                            kind: 'unified',
+                            headerTitle: context.l10n.timelineTabHome,
+                            headerTooltip: context.l10n.timelineHomeTooltip,
+                            constrainWidth: false,
+                            showComposer: showInlineComposer,
                           ),
-                        ] else if ((_syncStatus?['last_error'] as String?)
-                                ?.trim()
-                                .isNotEmpty ==
-                            true) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            'Errore relay/sync: ${(_syncStatus?['last_error'] as String).trim()}',
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error),
+                          const SizedBox(width: 10),
+                          _TimelineList(
+                            key: _listKeys[1],
+                            appState: widget.appState,
+                            api: api,
+                            kind: 'local',
+                            headerTitle: context.l10n.timelineTabLocal,
+                            headerTooltip: context.l10n.timelineLocalTooltip,
+                            constrainWidth: false,
+                            showComposer: showInlineComposer,
+                          ),
+                          const SizedBox(width: 10),
+                          _TimelineList(
+                            key: _listKeys[2],
+                            appState: widget.appState,
+                            api: api,
+                            kind: 'dht',
+                            headerTitle: context.l10n.timelineTabSocial,
+                            headerTooltip: context.l10n.timelineSocialTooltip,
+                            constrainWidth: false,
+                            showComposer: showInlineComposer,
+                          ),
+                          const SizedBox(width: 10),
+                          _TimelineList(
+                            key: _listKeys[3],
+                            appState: widget.appState,
+                            api: api,
+                            kind: 'federated',
+                            headerTitle: context.l10n.timelineTabFederated,
+                            headerTooltip: context.l10n.timelineFederatedTooltip,
+                            constrainWidth: false,
+                            showComposer: showInlineComposer,
                           ),
                         ],
-                        if (syncStale) ...[
-                          const SizedBox(height: 10),
-                          const Text(
-                            'Sync in timeout: il relay potrebbe essere lento o temporaneamente non disponibile.',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            if (_syncStatus != null)
-                              ..._buildStreamChips(_syncStatus!),
-                            OutlinedButton.icon(
-                              onPressed: () =>
-                                  _pollSyncStatus(forceLegacySync: true),
-                              icon: const Icon(Icons.refresh),
-                              label: Text(syncStale
-                                  ? 'Forza recovery sync'
-                                  : 'Riprova sync'),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
+                  )
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _TimelineList(
+                        key: _listKeys[0],
+                        appState: widget.appState,
+                        api: api,
+                        kind: 'unified',
+                        headerTitle: context.l10n.timelineTabHome,
+                        headerTooltip: context.l10n.timelineHomeTooltip,
+                        constrainWidth: true,
+                        showComposer: showInlineComposer,
+                      ),
+                      _TimelineList(
+                        key: _listKeys[1],
+                        appState: widget.appState,
+                        api: api,
+                        kind: 'local',
+                        headerTitle: context.l10n.timelineTabLocal,
+                        headerTooltip: context.l10n.timelineLocalTooltip,
+                        constrainWidth: true,
+                        showComposer: showInlineComposer,
+                      ),
+                      _TimelineList(
+                        key: _listKeys[2],
+                        appState: widget.appState,
+                        api: api,
+                        kind: 'dht',
+                        headerTitle: context.l10n.timelineTabSocial,
+                        headerTooltip: context.l10n.timelineSocialTooltip,
+                        constrainWidth: true,
+                        showComposer: showInlineComposer,
+                      ),
+                      _TimelineList(
+                        key: _listKeys[3],
+                        appState: widget.appState,
+                        api: api,
+                        kind: 'federated',
+                        headerTitle: context.l10n.timelineTabFederated,
+                        headerTooltip: context.l10n.timelineFederatedTooltip,
+                        constrainWidth: true,
+                        showComposer: showInlineComposer,
+                      ),
+                    ],
+                  ))
+            : TabBarView(
+                controller: _tabs,
+                children: [
+                  _TimelineList(
+                    key: _listKeys[0],
+                    appState: widget.appState,
+                    api: api,
+                    kind: 'unified',
+                    headerTitle: context.l10n.timelineTabHome,
+                    headerTooltip: context.l10n.timelineHomeTooltip,
+                    constrainWidth: true,
+                    showComposer: showInlineComposer,
                   ),
-                ),
-              ),
-            ),
-          );
-        }
+                  _TimelineList(
+                    key: _listKeys[1],
+                    appState: widget.appState,
+                    api: api,
+                    kind: 'local',
+                    headerTitle: context.l10n.timelineTabLocal,
+                    headerTooltip: context.l10n.timelineLocalTooltip,
+                    constrainWidth: true,
+                    showComposer: showInlineComposer,
+                  ),
+                  _TimelineList(
+                    key: _listKeys[2],
+                    appState: widget.appState,
+                    api: api,
+                    kind: 'dht',
+                    headerTitle: context.l10n.timelineTabSocial,
+                    headerTooltip: context.l10n.timelineSocialTooltip,
+                    constrainWidth: true,
+                    showComposer: showInlineComposer,
+                  ),
+                  _TimelineList(
+                    key: _listKeys[3],
+                    appState: widget.appState,
+                    api: api,
+                    kind: 'federated',
+                    headerTitle: context.l10n.timelineTabFederated,
+                    headerTooltip: context.l10n.timelineFederatedTooltip,
+                    constrainWidth: true,
+                    showComposer: showInlineComposer,
+                  ),
+                ],
+              );
 
         return Scaffold(
           appBar: AppBar(
@@ -259,159 +326,81 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                 ),
             ],
           ),
-          body: isWide
-              ? (useColumns
-                  ? Scrollbar(
-                      controller: _columnsScroll,
-                      thumbVisibility: true,
-                      child: SingleChildScrollView(
-                        controller: _columnsScroll,
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _TimelineList(
-                              key: _listKeys[0],
-                              appState: widget.appState,
-                              api: api,
-                              kind: 'unified',
-                              headerTitle: context.l10n.timelineTabHome,
-                              headerTooltip: context.l10n.timelineHomeTooltip,
-                              constrainWidth: false,
-                              showComposer: showInlineComposer,
-                            ),
-                            const SizedBox(width: 10),
-                            _TimelineList(
-                              key: _listKeys[1],
-                              appState: widget.appState,
-                              api: api,
-                              kind: 'local',
-                              headerTitle: context.l10n.timelineTabLocal,
-                              headerTooltip: context.l10n.timelineLocalTooltip,
-                              constrainWidth: false,
-                              showComposer: showInlineComposer,
-                            ),
-                            const SizedBox(width: 10),
-                            _TimelineList(
-                              key: _listKeys[2],
-                              appState: widget.appState,
-                              api: api,
-                              kind: 'dht',
-                              headerTitle: context.l10n.timelineTabSocial,
-                              headerTooltip: context.l10n.timelineSocialTooltip,
-                              constrainWidth: false,
-                              showComposer: showInlineComposer,
-                            ),
-                            const SizedBox(width: 10),
-                            _TimelineList(
-                              key: _listKeys[3],
-                              appState: widget.appState,
-                              api: api,
-                              kind: 'federated',
-                              headerTitle: context.l10n.timelineTabFederated,
-                              headerTooltip:
-                                  context.l10n.timelineFederatedTooltip,
-                              constrainWidth: false,
-                              showComposer: showInlineComposer,
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : TabBarView(
-                      controller: _tabs,
-                      children: [
-                        _TimelineList(
-                          key: _listKeys[0],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'unified',
-                          headerTitle: context.l10n.timelineTabHome,
-                          headerTooltip: context.l10n.timelineHomeTooltip,
-                          constrainWidth: true,
-                          showComposer: showInlineComposer,
-                        ),
-                        _TimelineList(
-                          key: _listKeys[1],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'local',
-                          headerTitle: context.l10n.timelineTabLocal,
-                          headerTooltip: context.l10n.timelineLocalTooltip,
-                          constrainWidth: true,
-                          showComposer: showInlineComposer,
-                        ),
-                        _TimelineList(
-                          key: _listKeys[2],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'dht',
-                          headerTitle: context.l10n.timelineTabSocial,
-                          headerTooltip: context.l10n.timelineSocialTooltip,
-                          constrainWidth: true,
-                          showComposer: showInlineComposer,
-                        ),
-                        _TimelineList(
-                          key: _listKeys[3],
-                          appState: widget.appState,
-                          api: api,
-                          kind: 'federated',
-                          headerTitle: context.l10n.timelineTabFederated,
-                          headerTooltip: context.l10n.timelineFederatedTooltip,
-                          constrainWidth: true,
-                          showComposer: showInlineComposer,
-                        ),
-                      ],
-                    ))
-              : TabBarView(
-                  controller: _tabs,
-                  children: [
-                    _TimelineList(
-                      key: _listKeys[0],
-                      appState: widget.appState,
-                      api: api,
-                      kind: 'unified',
-                      headerTitle: context.l10n.timelineTabHome,
-                      headerTooltip: context.l10n.timelineHomeTooltip,
-                      constrainWidth: true,
-                      showComposer: showInlineComposer,
-                    ),
-                    _TimelineList(
-                      key: _listKeys[1],
-                      appState: widget.appState,
-                      api: api,
-                      kind: 'local',
-                      headerTitle: context.l10n.timelineTabLocal,
-                      headerTooltip: context.l10n.timelineLocalTooltip,
-                      constrainWidth: true,
-                      showComposer: showInlineComposer,
-                    ),
-                    _TimelineList(
-                      key: _listKeys[2],
-                      appState: widget.appState,
-                      api: api,
-                      kind: 'dht',
-                      headerTitle: context.l10n.timelineTabSocial,
-                      headerTooltip: context.l10n.timelineSocialTooltip,
-                      constrainWidth: true,
-                      showComposer: showInlineComposer,
-                    ),
-                    _TimelineList(
-                      key: _listKeys[3],
-                      appState: widget.appState,
-                      api: api,
-                      kind: 'federated',
-                      headerTitle: context.l10n.timelineTabFederated,
-                      headerTooltip: context.l10n.timelineFederatedTooltip,
-                      constrainWidth: true,
-                      showComposer: showInlineComposer,
-                    ),
-                  ],
+          body: Column(
+            children: [
+              if (syncBlocked || syncStale || _syncStatusError != null)
+                _buildSyncInlineBanner(
+                  context,
+                  syncBlocked: syncBlocked,
+                  syncStale: syncStale,
                 ),
+              Expanded(child: timelineBody),
+            ],
+          ),
         );
       },
+    );
+  }
+
+  Widget _buildSyncInlineBanner(
+    BuildContext context, {
+    required bool syncBlocked,
+    required bool syncStale,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasCoreError =
+        _syncStatusError != null && _syncStatusError!.trim().isNotEmpty;
+    final relayError =
+        ((_syncStatus?['last_error'] as String?)?.trim().isNotEmpty == true)
+            ? (_syncStatus?['last_error'] as String).trim()
+            : '';
+    final title = syncBlocked
+        ? 'Timeline in sincronizzazione'
+        : (syncStale ? 'Sync timeline in ritardo' : 'Sync timeline');
+    final subtitle = hasCoreError
+        ? 'Core locale: ${_syncStatusError!.trim()}'
+        : (relayError.isNotEmpty
+            ? 'Relay/sync: $relayError'
+            : _syncPhaseText(_syncStatus));
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withAlpha(90),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withAlpha(110)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                syncStale ? Icons.warning_amber_rounded : Icons.sync,
+                size: 16,
+                color: syncStale ? scheme.error : scheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _pollSyncStatus(forceLegacySync: true),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: Text(syncStale ? 'Recovery' : 'Aggiorna'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(subtitle, style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            if (_syncStatus != null) ..._buildStreamChips(_syncStatus!),
+          ]),
+        ],
+      ),
     );
   }
 
@@ -557,12 +546,14 @@ class _TimelinesScreenState extends State<TimelinesScreen>
           ? (streams[name] as Map).cast<String, dynamic>()
           : const <String, dynamic>{};
       final ready = row['ready'] == true;
+      final streamError = (row['last_error'] as String?)?.trim() ?? '';
       final lag = row['lag_ms'];
       final lagLabel =
           (lag is num && lag >= 0) ? '${(lag / 1000).round()}s' : '-';
+      final statusLabel =
+          streamError.isNotEmpty ? 'ERR' : (ready ? 'READY' : 'WAIT');
       return Chip(
-        label: Text(
-            '${name.toUpperCase()} ${ready ? 'OK' : 'WAIT'} - lag $lagLabel'),
+        label: Text('${name.toUpperCase()} $statusLabel - lag $lagLabel'),
       );
     }).toList();
   }
@@ -1116,9 +1107,15 @@ class _TimelineListState extends State<_TimelineList>
               final isLast = index == filtered.length + 1;
               final timelineItem = timelineCache[item];
               final replyDepth = _replyDepth(timelineItem, notesById);
+              final keyId = _activityId(item);
+              final keyObjectId = _activityObjectId(item) ?? '';
+              final stableKey = keyId.isNotEmpty
+                  ? keyId
+                  : (keyObjectId.isNotEmpty
+                      ? keyObjectId
+                      : '${widget.kind}-${timelineItem?.note.id ?? index}');
               final card = TimelineActivityCard(
-                key: ValueKey(
-                    _activityId(item).isNotEmpty ? _activityId(item) : index),
+                key: ValueKey(stableKey),
                 appState: widget.appState,
                 activity: item,
               );

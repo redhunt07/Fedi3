@@ -129,7 +129,7 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           Text(context.l10n.p2pSectionTitle, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: _p2pMode,
+            initialValue: _p2pMode,
             items: [
               DropdownMenuItem(
                 value: 'p2p_relay',

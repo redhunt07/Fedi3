@@ -670,8 +670,9 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
 
 Map<String, dynamic>? _extractNoteActivity(Map<String, dynamic> activity) {
   final type = (activity['type'] as String?)?.trim() ?? '';
-  if (type == 'Create' || type == 'Announce' || type == 'Update')
+  if (type == 'Create' || type == 'Announce' || type == 'Update') {
     return activity;
+  }
   final obj = activity['object'];
   if (obj is Map) {
     final map = obj.cast<String, dynamic>();

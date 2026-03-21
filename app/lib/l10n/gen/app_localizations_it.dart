@@ -334,7 +334,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get timelineLocalTooltip =>
-      'Timeline Follower/Follow (Relay + Legacy). Solo profili con cui hai relazione follow/follower.';
+      'Timeline Locale (Relay + Legacy). Mostra i post pubblici locali della tua istanza/relay.';
 
   @override
   String get timelineSocialTooltip =>

@@ -203,13 +203,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _openNewChatDialog() async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final outerContext = context;
+    final directMessageLabel = context.l10n.chatDirectMessage;
+    final groupLabel = context.l10n.chatGroup;
     final threadId = await showDialog<String>(
       context: context,
       builder: (_) => _NewChatDialog(config: cfg, prefs: widget.appState.prefs),
     );
 
-    if (threadId != null && threadId.isNotEmpty && outerContext.mounted) {
+    if (!mounted) return;
+    if (threadId != null && threadId.isNotEmpty) {
       await _loadThreads(reset: true);
       ChatThreadItem? created;
       for (final t in _threads) {
@@ -221,19 +223,20 @@ class _ChatScreenState extends State<ChatScreen> {
       final fallbackName = created?.title?.trim().isNotEmpty == true
           ? created!.title!.trim()
           : ((created?.kind ?? 'group') == 'dm'
-              ? outerContext.l10n.chatDirectMessage
-              : outerContext.l10n.chatGroup);
+              ? directMessageLabel
+              : groupLabel);
       final dmActor = created?.dmActor?.trim() ?? '';
       ActorProfile? profile;
       if (created?.kind == 'dm' && dmActor.isNotEmpty) {
         profile = await ActorRepository.instance.getActor(dmActor);
       }
+      if (!mounted) return;
       final resolvedName = (profile?.displayName.trim().isNotEmpty == true)
           ? profile!.displayName.trim()
           : ((created?.kind == 'dm')
               ? _dmFallbackName(dmActor, fallbackName)
               : fallbackName);
-      await Navigator.of(outerContext).push(
+      await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ChatThreadScreen(
             appState: widget.appState,
@@ -816,11 +819,12 @@ class _NewChatDialogState extends State<_NewChatDialog> {
   }
 
   Future<void> _pickFiles() async {
+    final fallbackFileName = context.l10n.composeFileFallback;
     try {
       final files = await openFiles();
       for (final f in files) {
         final bytes = await f.readAsBytes();
-        final name = f.name.isNotEmpty ? f.name : context.l10n.composeFileFallback;
+        final name = f.name.isNotEmpty ? f.name : fallbackFileName;
         _media.add(_PickedMedia(name: name, bytes: bytes));
       }
       if (mounted) setState(() {});
