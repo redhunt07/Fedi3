@@ -9,14 +9,15 @@ use libp2p::futures::{future::Either, StreamExt};
 use libp2p::{
     core::muxing::StreamMuxerBox,
     core::upgrade,
-    identify, identity, kad, noise, ping, quic, relay, request_response,
+    dns, identify, identity, kad, noise, ping, quic, relay, request_response,
     swarm::{derive_prelude::*, SwarmEvent},
     tcp, websocket, yamux, Multiaddr, PeerId, Swarm, Transport,
 };
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signer as _, Verifier as _};
@@ -50,6 +51,8 @@ struct RelayMeshConfig {
     sync_interval_secs: u64,
     sync_limit: u32,
     reputation_ttl_ms: i64,
+    diagnostics: bool,
+    diagnostics_sample_n: u64,
 }
 
 pub fn spawn_relay_mesh(state: AppState) {
@@ -98,6 +101,8 @@ fn load_mesh_config(cfg: &crate::RelayConfig) -> RelayMeshConfig {
         sync_interval_secs: cfg.relay_sync_interval_secs.max(30),
         sync_limit: cfg.relay_sync_limit.min(200).max(1),
         reputation_ttl_ms: (cfg.relay_reputation_ttl_secs as i64) * 1000,
+        diagnostics: cfg.relay_mesh_diagnostics,
+        diagnostics_sample_n: cfg.relay_mesh_diagnostics_sample_n.max(1),
     }
 }
 
@@ -256,6 +261,10 @@ struct PendingSync {
     max_seen: i64,
 }
 
+fn mesh_diag_enabled(cfg: &RelayMeshConfig, tick: u64) -> bool {
+    cfg.diagnostics && (tick % cfg.diagnostics_sample_n.max(1) == 0)
+}
+
 async fn run_relay_mesh(state: AppState) -> Result<()> {
     let cfg = load_mesh_config(&state.cfg);
     let keypair = load_or_generate_keypair(&cfg.key_path)?;
@@ -268,8 +277,9 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
         tcp::Config::default().nodelay(true),
     ));
     let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws, raw_tcp);
+    let dns_ws_or_tcp = dns::tokio::Transport::system(raw_ws_or_tcp)?;
     let raw_stream =
-        libp2p::core::transport::choice::OrTransport::new(relay_transport, raw_ws_or_tcp);
+        libp2p::core::transport::choice::OrTransport::new(relay_transport, dns_ws_or_tcp);
     let tcp_transport = raw_stream
         .upgrade(upgrade::Version::V1)
         .authenticate(noise::Config::new(&keypair)?)
@@ -342,6 +352,9 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
         if let Some(pid) = extract_peer_id(addr) {
             swarm.behaviour_mut().kad.add_address(&pid, addr.clone());
         }
+        if cfg.diagnostics {
+            debug!(%addr, "relay mesh bootstrap dial candidate");
+        }
         let _ = swarm.dial(addr.clone());
     }
 
@@ -350,6 +363,7 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
     let mut pending: HashMap<request_response::OutboundRequestId, PendingSync> = HashMap::new();
     let mut inflight_relays: HashSet<String> = HashSet::new();
     let mut bootstrapped = false;
+    let mut diag_tick: u64 = 0;
     let mut sync_tick = tokio::time::interval(Duration::from_secs(cfg.sync_interval_secs));
     sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -361,14 +375,59 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
                 }
             }
             ev = swarm.select_next_some() => {
+                diag_tick = diag_tick.wrapping_add(1);
                 match ev {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!(%peer_id, %address, "relay mesh listening");
                     }
-                    SwarmEvent::ConnectionEstablished { .. } => {
+                    SwarmEvent::Dialing { peer_id: target_peer_id, connection_id } => {
+                        if mesh_diag_enabled(&cfg, diag_tick) {
+                            debug!(
+                                local_peer_id = %peer_id,
+                                target_peer_id = ?target_peer_id,
+                                ?connection_id,
+                                "relay mesh dialing"
+                            );
+                        }
+                    }
+                    SwarmEvent::ConnectionEstablished { peer_id: remote_peer_id, connection_id, endpoint, num_established, .. } => {
+                        if mesh_diag_enabled(&cfg, diag_tick) {
+                            info!(
+                                local_peer_id = %peer_id,
+                                remote_peer_id = %remote_peer_id,
+                                ?connection_id,
+                                ?endpoint,
+                                num_established,
+                                "relay mesh connection established"
+                            );
+                        }
                         if !bootstrapped && !bootstrap_peers.is_empty() {
                             let _ = swarm.behaviour_mut().kad.bootstrap();
                             bootstrapped = true;
+                        }
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id: remote_peer_id, connection_id, endpoint, cause, num_established, .. } => {
+                        if mesh_diag_enabled(&cfg, diag_tick) {
+                            debug!(
+                                local_peer_id = %peer_id,
+                                remote_peer_id = %remote_peer_id,
+                                ?connection_id,
+                                ?endpoint,
+                                ?cause,
+                                num_established,
+                                "relay mesh connection closed"
+                            );
+                        }
+                    }
+                    SwarmEvent::OutgoingConnectionError { peer_id: target_peer_id, connection_id, error } => {
+                        if mesh_diag_enabled(&cfg, diag_tick) {
+                            warn!(
+                                local_peer_id = %peer_id,
+                                target_peer_id = ?target_peer_id,
+                                ?connection_id,
+                                error = ?error,
+                                "relay mesh outgoing connection error"
+                            );
                         }
                     }
                     SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message })) => {
@@ -386,6 +445,15 @@ async fn run_relay_mesh(state: AppState) -> Result<()> {
                     SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::OutboundFailure { request_id, error, .. })) => {
                         if let Some(pending) = pending.remove(&request_id) {
                             inflight_relays.remove(&pending.relay_url);
+                            if mesh_diag_enabled(&cfg, diag_tick) {
+                                warn!(
+                                    relay = %pending.relay_url,
+                                    peer_id = %pending.peer_id,
+                                    request_id = ?request_id,
+                                    error = ?error,
+                                    "relay mesh outbound failure detailed"
+                                );
+                            }
                             warn!(relay=%pending.relay_url, "relay mesh request failed: {error}");
                         }
                     }
@@ -687,14 +755,47 @@ async fn queue_sync_requests(
         let Some(peer_id) = relay_peer_id_from_telemetry(&telemetry_json) else {
             continue;
         };
+        if cfg.diagnostics {
+            debug!(
+                relay_url = %relay_url,
+                telemetry_peer_id = %peer_id,
+                "relay mesh telemetry peer id selected"
+            );
+        }
         if peer_id.to_string() == local_peer_id {
             continue;
         }
 
         let since = last_map.get(&relay_url).copied();
-        for addr in peer_circuit_addrs(&cfg.relay_reserve, &peer_id) {
-            swarm.add_peer_address(peer_id, addr.clone());
-            let _ = swarm.dial(addr);
+        let direct_addrs = peer_direct_addrs(&relay_url);
+        let circuit_addrs = peer_circuit_addrs(&cfg.relay_reserve);
+        if cfg.diagnostics {
+            debug!(
+                relay_url = %relay_url,
+                peer_id = %peer_id,
+                direct_candidates = ?direct_addrs,
+                circuit_candidates = ?circuit_addrs,
+                "relay mesh dial candidates prepared"
+            );
+        }
+        for addr in direct_addrs {
+            swarm.add_peer_address(peer_id, addr);
+        }
+        for addr in circuit_addrs {
+            swarm.add_peer_address(peer_id, addr);
+        }
+        if !swarm.is_connected(&peer_id) {
+            if let Some(addr) = peer_direct_dial_addr(&relay_url, peer_id) {
+                if let Err(e) = swarm.dial(addr.clone()) {
+                    if cfg.diagnostics {
+                        warn!(relay_url = %relay_url, peer_id = %peer_id, %addr, "relay mesh explicit direct dial failed: {e}");
+                    }
+                } else if cfg.diagnostics {
+                    debug!(relay_url = %relay_url, peer_id = %peer_id, %addr, "relay mesh explicit direct dial queued");
+                }
+            }
+            // Let the connection establish first; request-response send_request fails fast if not connected yet.
+            continue;
         }
         let req = match build_signed_mesh_request(state, since, None, limit).await {
             Ok(v) => v,
@@ -731,21 +832,76 @@ fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
     None
 }
 
-fn peer_circuit_addrs(base: &[Multiaddr], peer_id: &PeerId) -> Vec<Multiaddr> {
+fn peer_circuit_addrs(base: &[Multiaddr]) -> Vec<Multiaddr> {
     let mut out = Vec::new();
     for addr in base {
-        let mut a = addr.clone();
-        let has_peer = a
+        let has_peer = addr
             .iter()
             .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)));
         if !has_peer {
             continue;
         }
+        let mut a = addr.clone();
         a.push(libp2p::multiaddr::Protocol::P2pCircuit);
-        a.push(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
         out.push(a);
     }
     out
+}
+
+fn peer_direct_addrs(relay_url: &str) -> Vec<Multiaddr> {
+    let mut out = Vec::new();
+    let Ok(url) = reqwest::Url::parse(relay_url) else {
+        return out;
+    };
+    let Some(host) = url.host_str() else {
+        return out;
+    };
+    if let Ok(addrs) = (host, 4011).to_socket_addrs() {
+        for sock in addrs {
+            let ip = sock.ip();
+            if is_local_dial_candidate(ip) {
+                continue;
+            }
+            let host_proto = if ip.is_ipv6() {
+                format!("/ip6/{ip}")
+            } else {
+                format!("/ip4/{ip}")
+            };
+            let tcp = format!("{host_proto}/tcp/4011");
+            if let Ok(addr) = tcp.parse::<Multiaddr>() {
+                out.push(addr);
+            }
+        }
+    }
+    if out.is_empty() {
+        let host_proto = if host.contains(':') {
+            format!("/ip6/{host}")
+        } else {
+            format!("/dns4/{host}")
+        };
+        let tcp = format!("{host_proto}/tcp/4011");
+        if let Ok(addr) = tcp.parse::<Multiaddr>() {
+            out.push(addr);
+        }
+    }
+    out
+}
+
+fn peer_direct_dial_addr(relay_url: &str, peer_id: PeerId) -> Option<Multiaddr> {
+    let mut addrs = peer_direct_addrs(relay_url);
+    if addrs.is_empty() {
+        return None;
+    }
+    let mut addr = addrs.remove(0);
+    addr.push(libp2p::multiaddr::Protocol::P2p(peer_id.into()));
+    Some(addr)
+}
+
+fn is_local_dial_candidate(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_unspecified(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+    }
 }
 
 fn relay_peer_id_from_telemetry(telemetry_json: &str) -> Option<PeerId> {
