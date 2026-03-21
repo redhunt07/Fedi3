@@ -41,9 +41,21 @@ CREATE TABLE IF NOT EXISTS inbox_spool (
   query TEXT NOT NULL,
   headers_json TEXT NOT NULL,
   body_b64 TEXT NOT NULL,
-  body_len BIGINT NOT NULL
+  body_len BIGINT NOT NULL,
+  tries BIGINT NOT NULL DEFAULT 0
 );
+ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS tries BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS inbox_spool_user_created ON inbox_spool(username, created_at_ms);
+CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
+
+CREATE TABLE IF NOT EXISTS ap_peer_compat_policy (
+  host TEXT NOT NULL,
+  family TEXT NULL,
+  policy TEXT NOT NULL,
+  updated_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(host, family)
+);
+CREATE INDEX IF NOT EXISTS idx_ap_peer_compat_policy_host ON ap_peer_compat_policy(host);
 
 CREATE TABLE IF NOT EXISTS relay_registry (
   relay_url TEXT PRIMARY KEY,

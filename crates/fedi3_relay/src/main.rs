@@ -9,7 +9,7 @@ use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, Path, Query, RawQuery, State,
+        ConnectInfo, OriginalUri, Path, Query, RawQuery, State,
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{from_fn, from_fn_with_state, Next},
@@ -186,6 +186,26 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_tunnel_success_served: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_inbox_accept_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_inbox_reject_invalid_sig_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_actor_resolve_404_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_inbound_dedup_drop_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_public_get_fallback_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_spool_deadletter_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_follow_pending_over_5m_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_signature_policy_applied_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_inbox_compat_accept_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ap_consistency_mismatch_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_inflight: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_queue_depth: Option<u64>,
@@ -315,6 +335,41 @@ struct SpoolItem {
     query: String,
     headers_json: String,
     body_b64: String,
+    tries: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApSignaturePolicy {
+    Strict,
+    CompatRelaxedDigest,
+    CompatRelaxedHeaders,
+}
+
+impl ApSignaturePolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApSignaturePolicy::Strict => "strict",
+            ApSignaturePolicy::CompatRelaxedDigest => "compat_relaxed_digest",
+            ApSignaturePolicy::CompatRelaxedHeaders => "compat_relaxed_headers",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "strict" => Some(Self::Strict),
+            "compat_relaxed_digest" => Some(Self::CompatRelaxedDigest),
+            "compat_relaxed_headers" => Some(Self::CompatRelaxedHeaders),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ApCompatPolicyRow {
+    host: String,
+    family: Option<String>,
+    policy: ApSignaturePolicy,
+    updated_at_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -405,6 +460,27 @@ struct AppState {
     relay_circuit_state_transitions: Arc<AtomicU64>,
     relay_stale_cache_served: Arc<AtomicU64>,
     relay_tunnel_success_served: Arc<AtomicU64>,
+    ap_inbox_accept_total: Arc<AtomicU64>,
+    ap_inbox_reject_invalid_sig_total: Arc<AtomicU64>,
+    ap_actor_resolve_404_total: Arc<AtomicU64>,
+    ap_inbound_dedup_drop_total: Arc<AtomicU64>,
+    ap_public_get_fallback_total: Arc<AtomicU64>,
+    ap_spool_deadletter_total: Arc<AtomicU64>,
+    ap_follow_pending_over_5m_total: Arc<AtomicU64>,
+    ap_signature_policy_applied_total: Arc<AtomicU64>,
+    ap_inbox_compat_accept_total: Arc<AtomicU64>,
+    ap_consistency_mismatch_total: Arc<AtomicU64>,
+    ap_public_get_fallback_by_reason_route: Arc<Mutex<HashMap<String, u64>>>,
+    ap_public_get_requests_by_route: Arc<Mutex<HashMap<String, u64>>>,
+    ap_public_get_cache_hits_by_route: Arc<Mutex<HashMap<String, u64>>>,
+    ap_signature_policy_by_peer_policy: Arc<Mutex<HashMap<String, u64>>>,
+    ap_inbox_compat_accept_by_peer: Arc<Mutex<HashMap<String, u64>>>,
+    ap_spool_deadletter_by_reason: Arc<Mutex<HashMap<String, u64>>>,
+    peer_software_cache: Arc<Mutex<HashMap<String, (String, i64)>>>,
+    inbound_ap_dedupe: Arc<Mutex<HashMap<String, i64>>>,
+    reconcile_last_run_ms: Arc<AtomicU64>,
+    reconcile_last_ok: Arc<AtomicBool>,
+    reconcile_last_error: Arc<Mutex<Option<String>>>,
     hot_path_inflight: Arc<Semaphore>,
     async_job_slots: Arc<Semaphore>,
 }
@@ -982,6 +1058,7 @@ struct RelayConfig {
     forward_retry_budget_window_ms: i64,
     forward_retry_budget_max_attempts: u32,
     forward_retry_cooldown_ms: i64,
+    ap_inbound_dedupe_window_ms: i64,
     offline_cache_ttl_internal_ms: i64,
     offline_cache_ttl_actor_ms: i64,
     offline_cache_ttl_collection_ms: i64,
@@ -990,6 +1067,7 @@ struct RelayConfig {
     move_notice_fanout_interval_secs: u64,
     spool_max_rows_per_user: usize,
     spool_flush_batch: usize,
+    spool_deadletter_max_tries: i64,
     peer_directory_ttl_days: u32,
     media_backend: String,
     media_dir: PathBuf,
@@ -1021,6 +1099,7 @@ struct RelayConfig {
     legacy_projection_batch_size: u32,
     legacy_projection_max_users_per_cycle: u32,
     legacy_projection_retention_days: u32,
+    reconcile_interval_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1615,6 +1694,27 @@ async fn main() {
         relay_circuit_state_transitions: Arc::new(AtomicU64::new(0)),
         relay_stale_cache_served: Arc::new(AtomicU64::new(0)),
         relay_tunnel_success_served: Arc::new(AtomicU64::new(0)),
+        ap_inbox_accept_total: Arc::new(AtomicU64::new(0)),
+        ap_inbox_reject_invalid_sig_total: Arc::new(AtomicU64::new(0)),
+        ap_actor_resolve_404_total: Arc::new(AtomicU64::new(0)),
+        ap_inbound_dedup_drop_total: Arc::new(AtomicU64::new(0)),
+        ap_public_get_fallback_total: Arc::new(AtomicU64::new(0)),
+        ap_spool_deadletter_total: Arc::new(AtomicU64::new(0)),
+        ap_follow_pending_over_5m_total: Arc::new(AtomicU64::new(0)),
+        ap_signature_policy_applied_total: Arc::new(AtomicU64::new(0)),
+        ap_inbox_compat_accept_total: Arc::new(AtomicU64::new(0)),
+        ap_consistency_mismatch_total: Arc::new(AtomicU64::new(0)),
+        ap_public_get_fallback_by_reason_route: Arc::new(Mutex::new(HashMap::new())),
+        ap_public_get_requests_by_route: Arc::new(Mutex::new(HashMap::new())),
+        ap_public_get_cache_hits_by_route: Arc::new(Mutex::new(HashMap::new())),
+        ap_signature_policy_by_peer_policy: Arc::new(Mutex::new(HashMap::new())),
+        ap_inbox_compat_accept_by_peer: Arc::new(Mutex::new(HashMap::new())),
+        ap_spool_deadletter_by_reason: Arc::new(Mutex::new(HashMap::new())),
+        peer_software_cache: Arc::new(Mutex::new(HashMap::new())),
+        inbound_ap_dedupe: Arc::new(Mutex::new(HashMap::new())),
+        reconcile_last_run_ms: Arc::new(AtomicU64::new(0)),
+        reconcile_last_ok: Arc::new(AtomicBool::new(false)),
+        reconcile_last_error: Arc::new(Mutex::new(None)),
         hot_path_inflight: Arc::new(Semaphore::new(max_hot_path_inflight)),
         async_job_slots: Arc::new(Semaphore::new(max_async_jobs)),
     };
@@ -1771,6 +1871,22 @@ async fn main() {
         }
     });
 
+    let reconcile_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_reconciliation_once(&reconcile_state).await {
+            warn!("reconcile bootstrap failed: {e:#}");
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            reconcile_state.cfg.reconcile_interval_secs.max(30),
+        ));
+        loop {
+            interval.tick().await;
+            if let Err(e) = run_reconciliation_once(&reconcile_state).await {
+                warn!("reconcile worker failed: {e:#}");
+            }
+        }
+    });
+
     let app = Router::new()
         .route("/tunnel/:user", get(tunnel_ws))
         .route("/register", post(register))
@@ -1799,6 +1915,14 @@ async fn main() {
         .route("/_fedi3/relay/p2p_infra", get(relay_p2p_infra))
         .route("/_fedi3/relay/metrics", get(relay_metrics_json))
         .route("/_fedi3/relay/metrics.prom", get(relay_metrics_prom))
+        .route(
+            "/_fedi3/relay/compat/policy",
+            get(relay_compat_policy_get).post(relay_compat_policy_post),
+        )
+        .route(
+            "/_fedi3/relay/diagnostics/ap-consistency",
+            get(relay_ap_consistency_diagnostics),
+        )
         .route("/_fedi3/relay/search/notes", get(relay_search_notes))
         .route("/_fedi3/relay/search/users", get(relay_search_users))
         .route("/_fedi3/relay/search/hashtags", get(relay_search_hashtags))
@@ -1810,6 +1934,10 @@ async fn main() {
             get(relay_legacy_bootstrap),
         )
         .route("/_fedi3/relay/reindex", post(relay_reindex))
+        .route(
+            "/_fedi3/relay/reconcile",
+            get(relay_reconcile_status).post(relay_reconcile_run),
+        )
         .route("/_fedi3/relay/telemetry", post(relay_telemetry_post))
         .route(
             "/_fedi3/relay/telemetry/client",
@@ -2337,6 +2465,11 @@ fn load_config() -> RelayConfig {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(90_000)
         .clamp(1_000, 900_000);
+    let ap_inbound_dedupe_window_ms = std::env::var("FEDI3_RELAY_AP_INBOUND_DEDUPE_WINDOW_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30_000)
+        .clamp(0, 300_000);
     let offline_cache_ttl_internal_ms = std::env::var("FEDI3_RELAY_OFFLINE_CACHE_TTL_INTERNAL_MS")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
@@ -2380,6 +2513,11 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50);
+    let spool_deadletter_max_tries = std::env::var("FEDI3_RELAY_SPOOL_DEADLETTER_MAX_TRIES")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(8)
+        .clamp(1, 100);
     let media_backend =
         std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
     let media_dir =
@@ -2457,6 +2595,11 @@ fn load_config() -> RelayConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(180);
+    let reconcile_interval_secs = std::env::var("FEDI3_RELAY_RECONCILE_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300)
+        .clamp(30, 3600);
     RelayConfig {
         bind,
         base_domain,
@@ -2540,6 +2683,7 @@ fn load_config() -> RelayConfig {
         forward_retry_budget_window_ms,
         forward_retry_budget_max_attempts,
         forward_retry_cooldown_ms,
+        ap_inbound_dedupe_window_ms,
         offline_cache_ttl_internal_ms,
         offline_cache_ttl_actor_ms,
         offline_cache_ttl_collection_ms,
@@ -2548,6 +2692,7 @@ fn load_config() -> RelayConfig {
         move_notice_fanout_interval_secs,
         spool_max_rows_per_user,
         spool_flush_batch,
+        spool_deadletter_max_tries,
         peer_directory_ttl_days,
         media_backend,
         media_dir: PathBuf::from(media_dir),
@@ -2579,6 +2724,7 @@ fn load_config() -> RelayConfig {
         legacy_projection_batch_size,
         legacy_projection_max_users_per_cycle,
         legacy_projection_retention_days,
+        reconcile_interval_secs,
     }
 }
 
@@ -3409,6 +3555,116 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_tunnel_success_served counter\n");
         out.push_str(&format!("fedi3_relay_tunnel_success_served {v}\n"));
     }
+    if let Some(v) = telemetry.ap_inbox_accept_total {
+        out.push_str("# TYPE fedi3_relay_ap_inbox_accept_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_inbox_accept_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_inbox_reject_invalid_sig_total {
+        out.push_str("# TYPE fedi3_relay_ap_inbox_reject_invalid_sig_total counter\n");
+        out.push_str(&format!(
+            "fedi3_relay_ap_inbox_reject_invalid_sig_total {v}\n"
+        ));
+    }
+    if let Some(v) = telemetry.ap_actor_resolve_404_total {
+        out.push_str("# TYPE fedi3_relay_ap_actor_resolve_404_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_actor_resolve_404_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_inbound_dedup_drop_total {
+        out.push_str("# TYPE fedi3_relay_ap_inbound_dedup_drop_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_inbound_dedup_drop_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_public_get_fallback_total {
+        out.push_str("# TYPE fedi3_relay_ap_public_get_fallback_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_public_get_fallback_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_spool_deadletter_total {
+        out.push_str("# TYPE fedi3_relay_ap_spool_deadletter_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_spool_deadletter_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_follow_pending_over_5m_total {
+        out.push_str("# TYPE fedi3_relay_ap_follow_pending_over_5m_total gauge\n");
+        out.push_str(&format!("fedi3_relay_ap_follow_pending_over_5m_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_signature_policy_applied_total {
+        out.push_str("# TYPE fedi3_relay_ap_signature_policy_applied_total counter\n");
+        out.push_str(&format!(
+            "fedi3_relay_ap_signature_policy_applied_total {v}\n"
+        ));
+    }
+    if let Some(v) = telemetry.ap_inbox_compat_accept_total {
+        out.push_str("# TYPE fedi3_relay_ap_inbox_compat_accept_total counter\n");
+        out.push_str(&format!("fedi3_relay_ap_inbox_compat_accept_total {v}\n"));
+    }
+    if let Some(v) = telemetry.ap_consistency_mismatch_total {
+        out.push_str("# TYPE fedi3_relay_ap_consistency_mismatch_total gauge\n");
+        out.push_str(&format!("fedi3_relay_ap_consistency_mismatch_total {v}\n"));
+    }
+    out.push_str("# TYPE fedi3_relay_ap_public_get_fallback_total_by_reason_route counter\n");
+    {
+        let map = state.ap_public_get_fallback_by_reason_route.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let reason = parts.next().unwrap_or("other");
+            let route = parts.next().unwrap_or("other");
+            out.push_str(&format!(
+                "fedi3_relay_ap_public_get_fallback_total_by_reason_route{{reason=\"{}\",route=\"{}\"}} {}\n",
+                reason, route, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_public_get_requests_total counter\n");
+    {
+        let map = state.ap_public_get_requests_by_route.lock().await;
+        for (route, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_ap_public_get_requests_total{{route=\"{}\"}} {}\n",
+                route, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_public_get_cache_hits_total counter\n");
+    {
+        let map = state.ap_public_get_cache_hits_by_route.lock().await;
+        for (route, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_ap_public_get_cache_hits_total{{route=\"{}\"}} {}\n",
+                route, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_signature_policy_applied_total_by_peer_policy counter\n");
+    {
+        let map = state.ap_signature_policy_by_peer_policy.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let policy = parts.next().unwrap_or("strict");
+            let peer = parts.next().unwrap_or("unknown");
+            out.push_str(&format!(
+                "fedi3_relay_ap_signature_policy_applied_total_by_peer_policy{{policy=\"{}\",peer=\"{}\"}} {}\n",
+                policy, peer, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_inbox_compat_accept_total_by_peer counter\n");
+    {
+        let map = state.ap_inbox_compat_accept_by_peer.lock().await;
+        for (peer, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_ap_inbox_compat_accept_total_by_peer{{peer=\"{}\"}} {}\n",
+                peer, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_spool_deadletter_total_by_reason counter\n");
+    {
+        let map = state.ap_spool_deadletter_by_reason.lock().await;
+        for (reason, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_ap_spool_deadletter_total_by_reason{{reason=\"{}\"}} {}\n",
+                reason, v
+            ));
+        }
+    }
     if let Some(v) = telemetry.relay_hot_path_inflight {
         out.push_str("# TYPE fedi3_relay_hot_path_inflight gauge\n");
         out.push_str(&format!("fedi3_relay_hot_path_inflight {v}\n"));
@@ -3617,6 +3873,7 @@ async fn forward_user_rest(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path((user, rest)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
     RawQuery(raw_query): RawQuery,
     method: Method,
     headers: HeaderMap,
@@ -3644,9 +3901,62 @@ async fn forward_user_rest(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
 
+    if method == Method::GET {
+        let full_path = format!("/users/{user}/{rest}");
+        if is_public_ap_get_path(&user, &full_path) {
+            observe_public_get_request(&state, &user, &full_path).await;
+        }
+    }
+
+    // Prefer relay read-model for local actor outbox/object reads to avoid
+    // returning stale/non-note activities when core tunnel data is inconsistent.
+    if method == Method::GET && rest == "outbox" {
+        if let Some(mut resp) =
+            local_outbox_read_model_response(&state, &headers, &user, raw_query.as_deref()).await
+        {
+            observe_public_get_cache_hit(&state, &user, &format!("/users/{user}/outbox")).await;
+            normalize_ap_response_content_type(&headers, &mut resp);
+            return resp;
+        }
+    }
+    if method == Method::GET && rest.starts_with("objects/") {
+        if let Some(mut resp) = local_object_read_model_response(&state, &user, &rest).await {
+            observe_public_get_cache_hit(
+                &state,
+                &user,
+                &format!("/users/{user}/{rest}"),
+            )
+            .await;
+            normalize_ap_response_content_type(&headers, &mut resp);
+            return resp;
+        }
+        state
+            .ap_actor_resolve_404_total
+            .fetch_add(1, Ordering::Relaxed);
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    if method == Method::GET && rest.starts_with("activities/") {
+        if let Some(mut resp) =
+            local_activity_read_model_response(&state, &headers, &user, &rest).await
+        {
+            observe_public_get_cache_hit(
+                &state,
+                &user,
+                &format!("/users/{user}/{rest}"),
+            )
+            .await;
+            normalize_ap_response_content_type(&headers, &mut resp);
+            return resp;
+        }
+        state
+            .ap_actor_resolve_404_total
+            .fetch_add(1, Ordering::Relaxed);
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+
     // ActivityPub interop: remote servers deliver direct-to-actor inbox
     // (`/users/<user>/inbox`) even when the local client is offline.
-    // Accept and spool instead of returning 503 to avoid remote queue failures.
+    // Canonical handling: verify at relay, then deliver/spool to shared inbox path.
     if method == Method::POST && rest == "inbox" {
         let (exists, enabled) = {
             let db = state.db.lock().await;
@@ -3658,27 +3968,68 @@ async fn forward_user_rest(
         if !exists {
             return (StatusCode::NOT_FOUND, "not found").into_response();
         }
-        if enabled {
-            let is_online = { state.tunnels.read().await.contains_key(&user) };
-            if is_online {
-                // Preserve prior behavior for online users, but route to canonical
-                // local inbox path used by the core.
-                return forward_to_user(
-                    state,
-                    user,
-                    Method::POST,
-                    "/inbox",
-                    String::new(),
-                    headers,
-                    body,
-                )
-                .await;
-            }
+        if !enabled {
+            return (StatusCode::ACCEPTED, "accepted (user disabled)").into_response();
+        }
+        let activity: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => return (StatusCode::BAD_REQUEST, "invalid activity json").into_response(),
+        };
+        if activity.get("type").and_then(|v| v.as_str()).is_none() {
+            return (StatusCode::BAD_REQUEST, "invalid activity payload").into_response();
+        }
+        let (actor_url, applied_policy) =
+            match verify_ap_signature_with_policy(&state, &headers, &method, &uri, &body).await {
+                Ok(v) => v,
+                Err(_) => {
+                    state
+                        .ap_inbox_reject_invalid_sig_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return (StatusCode::UNAUTHORIZED, "invalid signature").into_response();
+                }
+            };
+        let peer_host = actor_host(&actor_url).unwrap_or_else(|| "unknown".to_string());
+        observe_signature_policy_applied(&state, applied_policy, &peer_host).await;
+        if !matches!(applied_policy, ApSignaturePolicy::Strict) {
+            state
+                .ap_inbox_compat_accept_total
+                .fetch_add(1, Ordering::Relaxed);
+            let mut m = state.ap_inbox_compat_accept_by_peer.lock().await;
+            let cur = m.get(&peer_host).copied().unwrap_or(0);
+            m.insert(peer_host, cur.saturating_add(1));
+        }
 
-            let headers_vec = headers_to_vec(&headers);
-            let body_b64 = B64.encode(&body);
-            let db = state.db.lock().await;
-            let _ = db.enqueue_spool(
+        let dedupe_key = inbound_activity_dedupe_key(&user, &activity, &body);
+        if is_duplicate_inbound_activity(&state, &dedupe_key, now_ms()).await {
+            state
+                .ap_inbound_dedup_drop_total
+                .fetch_add(1, Ordering::Relaxed);
+            return (StatusCode::ACCEPTED, "accepted (duplicate)").into_response();
+        }
+
+        let is_online = { state.tunnels.read().await.contains_key(&user) };
+        if is_online {
+            let resp = forward_to_user(
+                state.clone(),
+                user.clone(),
+                Method::POST,
+                "/inbox",
+                String::new(),
+                headers.clone(),
+                body.clone(),
+            )
+            .await;
+            if resp.status().is_success() || resp.status().as_u16() == 202 {
+                state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
+                return (StatusCode::ACCEPTED, "accepted").into_response();
+            }
+        }
+
+        let headers_vec = headers_to_vec(&headers);
+        let body_b64 = B64.encode(&body);
+        let db = state.db.lock().await;
+        if db
+            .enqueue_spool(
                 &state.cfg,
                 &user,
                 "POST",
@@ -3687,10 +4038,13 @@ async fn forward_user_rest(
                 &headers_vec,
                 &body_b64,
                 body.len() as i64,
-            );
+            )
+            .is_ok()
+        {
+            state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
             return (StatusCode::ACCEPTED, "accepted").into_response();
         }
-        return (StatusCode::ACCEPTED, "accepted (user disabled)").into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, "spool unavailable").into_response();
     }
 
     // Allow internal UI/core endpoints to be accessed via the relay when the client
@@ -3712,7 +4066,13 @@ async fn cached_user_response(
     path: &str,
     headers: &HeaderMap,
 ) -> Option<Response> {
-    if path != format!("/users/{user}") && !is_cached_collection_path(user, path) {
+    let is_object_path = path.starts_with(&format!("/users/{user}/objects/"));
+    let is_activity_path = path.starts_with(&format!("/users/{user}/activities/"));
+    if path != format!("/users/{user}")
+        && !is_cached_collection_path(user, path)
+        && !is_object_path
+        && !is_activity_path
+    {
         return None;
     }
 
@@ -3821,6 +4181,64 @@ async fn cached_user_response(
             )
                 .into_response(),
         );
+    } else if is_object_path {
+        if let Some(object_id) = path
+            .strip_prefix(&format!("/users/{user}/objects/"))
+            .filter(|v| !v.is_empty() && !v.contains('/'))
+        {
+            if let Ok(Some(note_json)) = db.get_local_object_note_json(user, object_id) {
+                return Some(
+                    (
+                        StatusCode::OK,
+                        [("Content-Type", "application/activity+json; charset=utf-8")],
+                        note_json,
+                    )
+                        .into_response(),
+                );
+            }
+        }
+        return Some((StatusCode::NOT_FOUND, "not found").into_response());
+    } else if is_activity_path {
+        if let Some(activity_id) = path
+            .strip_prefix(&format!("/users/{user}/activities/"))
+            .filter(|v| !v.is_empty() && !v.contains('/'))
+        {
+            if let Ok(Some(outbox_json)) = db.get_collection_cache(user, "outbox") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&outbox_json) {
+                    if let Some(found) = find_activity_in_value(&v, activity_id) {
+                        return Some(
+                            (
+                                StatusCode::OK,
+                                [("Content-Type", "application/activity+json; charset=utf-8")],
+                                found.to_string(),
+                            )
+                                .into_response(),
+                        );
+                    }
+                }
+            }
+            if let Ok(Some((note_json, actor_id_hint))) = db.get_local_activity_note_json(user, activity_id)
+            {
+                if let Some(synth) = synthetic_create_activity_json(
+                    &state.cfg,
+                    headers,
+                    user,
+                    activity_id,
+                    &note_json,
+                    actor_id_hint.as_deref(),
+                ) {
+                    return Some(
+                        (
+                            StatusCode::OK,
+                            [("Content-Type", "application/activity+json; charset=utf-8")],
+                            synth,
+                        )
+                            .into_response(),
+                    );
+                }
+            }
+        }
+        return Some((StatusCode::NOT_FOUND, "not found").into_response());
     }
 
     if path.starts_with(&format!("/users/{user}/_fedi3/")) {
@@ -3839,6 +4257,90 @@ fn classify_forward_route(user: &str, path: &str) -> ForwardRouteClass {
     } else {
         ForwardRouteClass::Other
     }
+}
+
+fn is_public_ap_get_path(user: &str, path: &str) -> bool {
+    path == format!("/users/{user}")
+        || collection_kind_from_path(user, path).is_some()
+        || path.starts_with(&format!("/users/{user}/objects/"))
+        || path.starts_with(&format!("/users/{user}/activities/"))
+}
+
+#[derive(Clone, Copy)]
+enum PublicGetFallbackReason {
+    Tunnel401,
+    Tunnel403,
+    Upstream5xx,
+    Timeout,
+    Transport,
+    Offline,
+}
+
+impl PublicGetFallbackReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            PublicGetFallbackReason::Tunnel401 => "tunnel_401",
+            PublicGetFallbackReason::Tunnel403 => "tunnel_403",
+            PublicGetFallbackReason::Upstream5xx => "upstream_5xx",
+            PublicGetFallbackReason::Timeout => "timeout",
+            PublicGetFallbackReason::Transport => "transport",
+            PublicGetFallbackReason::Offline => "offline",
+        }
+    }
+}
+
+fn public_ap_route_label(user: &str, path: &str) -> Option<&'static str> {
+    if path == format!("/users/{user}") {
+        Some("actor")
+    } else if path == format!("/users/{user}/outbox") {
+        Some("outbox")
+    } else if path == format!("/users/{user}/followers") {
+        Some("followers")
+    } else if path == format!("/users/{user}/following") {
+        Some("following")
+    } else if path.starts_with(&format!("/users/{user}/objects/")) {
+        Some("objects")
+    } else if path.starts_with(&format!("/users/{user}/activities/")) {
+        Some("activities")
+    } else {
+        None
+    }
+}
+
+async fn observe_public_get_request(state: &AppState, user: &str, path: &str) {
+    let Some(route) = public_ap_route_label(user, path) else {
+        return;
+    };
+    let mut m = state.ap_public_get_requests_by_route.lock().await;
+    let key = route.to_string();
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_public_get_cache_hit(state: &AppState, user: &str, path: &str) {
+    let Some(route) = public_ap_route_label(user, path) else {
+        return;
+    };
+    let mut m = state.ap_public_get_cache_hits_by_route.lock().await;
+    let key = route.to_string();
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_public_get_fallback(
+    state: &AppState,
+    user: &str,
+    path: &str,
+    reason: PublicGetFallbackReason,
+) {
+    state
+        .ap_public_get_fallback_total
+        .fetch_add(1, Ordering::Relaxed);
+    let route = public_ap_route_label(user, path).unwrap_or("other");
+    let key = format!("{}|{}", reason.as_str(), route);
+    let mut m = state.ap_public_get_fallback_by_reason_route.lock().await;
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
 }
 
 fn tunnel_negative_cache_key(user: &str, path: &str) -> Option<String> {
@@ -4058,6 +4560,37 @@ async fn should_drop_duplicate_offline_request(
     false
 }
 
+fn inbound_activity_dedupe_key(user: &str, activity: &serde_json::Value, body: &[u8]) -> String {
+    if let Some(id) = activity.get("id").and_then(|v| v.as_str()) {
+        let trimmed = id.trim();
+        if !trimmed.is_empty() {
+            return format!("{user}:id:{trimmed}");
+        }
+    }
+    let digest = Sha256::digest(body);
+    format!("{user}:sha256:{}", B64.encode(digest))
+}
+
+async fn is_duplicate_inbound_activity(
+    state: &AppState,
+    dedupe_key: &str,
+    now_ms: i64,
+) -> bool {
+    if state.cfg.ap_inbound_dedupe_window_ms <= 0 {
+        return false;
+    }
+    let mut map = state.inbound_ap_dedupe.lock().await;
+    let cutoff = now_ms.saturating_sub(state.cfg.ap_inbound_dedupe_window_ms.max(1) * 4);
+    map.retain(|_, ts| *ts >= cutoff);
+    if let Some(last_seen) = map.get(dedupe_key).copied() {
+        if now_ms.saturating_sub(last_seen) <= state.cfg.ap_inbound_dedupe_window_ms {
+            return true;
+        }
+    }
+    map.insert(dedupe_key.to_string(), now_ms);
+    false
+}
+
 async fn offline_cached_response(
     state: &AppState,
     user: &str,
@@ -4065,10 +4598,24 @@ async fn offline_cached_response(
     headers: &HeaderMap,
 ) -> Response {
     if let Some(resp) = cached_user_response(state, user, path, headers).await {
+        observe_public_get_cache_hit(state, user, path).await;
         state
             .relay_stale_cache_served
             .fetch_add(1, Ordering::Relaxed);
-        return resp;
+        let mut out = resp;
+        normalize_ap_response_content_type(headers, &mut out);
+        if out.status() == StatusCode::NOT_FOUND && is_public_ap_get_path(user, path) {
+            state
+                .ap_actor_resolve_404_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        return out;
+    }
+    if is_public_ap_get_path(user, path) {
+        state
+            .ap_actor_resolve_404_total
+            .fetch_add(1, Ordering::Relaxed);
+        return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     (offline_status_for_path(user, path), "user offline").into_response()
 }
@@ -4092,35 +4639,69 @@ async fn forward_to_user(
             return (StatusCode::NOT_FOUND, "not found").into_response();
         }
     }
+    if method == Method::GET && is_public_ap_get_path(&user, path) {
+        observe_public_get_request(&state, &user, path).await;
+    }
 
     if method == Method::GET {
-        let route_is_cached = matches!(
-            classify_forward_route(&user, path),
-            ForwardRouteClass::Actor | ForwardRouteClass::Collection
-        );
+        let route_is_cached = is_public_ap_get_path(&user, path);
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         // Serve cache immediately only when user is offline.
         // When online, prefer tunnel as source-of-truth and use cache as fallback.
         if route_is_cached && !is_online {
             if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
+                observe_public_get_cache_hit(&state, &user, path).await;
                 state
                     .relay_stale_cache_served
                     .fetch_add(1, Ordering::Relaxed);
-                return resp;
+                let mut out = resp;
+                normalize_ap_response_content_type(&headers, &mut out);
+                if out.status() == StatusCode::NOT_FOUND {
+                    state
+                        .ap_actor_resolve_404_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                return out;
             }
         }
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
+            if is_public_ap_get_path(&user, path) {
+                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Offline)
+                    .await;
+            }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
         if !is_online {
             if should_drop_duplicate_offline_request(&state, &user, path, now).await {
+                if is_public_ap_get_path(&user, path) {
+                    observe_public_get_fallback(
+                        &state,
+                        &user,
+                        path,
+                        PublicGetFallbackReason::Offline,
+                    )
+                    .await;
+                }
                 return offline_cached_response(&state, &user, path, &headers).await;
             }
             if !forward_retry_budget_allow(&state, &user, path, now).await {
+                if is_public_ap_get_path(&user, path) {
+                    observe_public_get_fallback(
+                        &state,
+                        &user,
+                        path,
+                        PublicGetFallbackReason::Offline,
+                    )
+                    .await;
+                }
                 return offline_cached_response(&state, &user, path, &headers).await;
             }
             forward_retry_budget_failure(&state, &user, path, now).await;
             tunnel_negative_cache_put(&state, &user, path, now).await;
+            if is_public_ap_get_path(&user, path) {
+                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Offline)
+                    .await;
+            }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
     }
@@ -4168,6 +4749,10 @@ async fn forward_to_user(
         forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
+            if is_public_ap_get_path(&user, path) {
+                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Transport)
+                    .await;
+            }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
         return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
@@ -4179,6 +4764,10 @@ async fn forward_to_user(
         forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
+            if is_public_ap_get_path(&user, path) {
+                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Timeout)
+                    .await;
+            }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
         return (StatusCode::GATEWAY_TIMEOUT, "tunnel timeout").into_response();
@@ -4187,11 +4776,44 @@ async fn forward_to_user(
         forward_retry_budget_failure(&state, &user, path, now_ms()).await;
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
+            if is_public_ap_get_path(&user, path) {
+                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Transport)
+                    .await;
+            }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
         return (StatusCode::BAD_GATEWAY, "tunnel response dropped").into_response();
     };
     let upstream_status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    if method == Method::GET
+        && matches!(
+            upstream_status,
+            StatusCode::UNAUTHORIZED
+                | StatusCode::FORBIDDEN
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::BAD_GATEWAY
+                | StatusCode::GATEWAY_TIMEOUT
+        )
+        && is_public_ap_get_path(&user, path)
+    {
+        debug!(
+            user = %user,
+            path = %path,
+            status = %upstream_status,
+            "GET fallback to read-model/cache"
+        );
+        let reason = if upstream_status == StatusCode::UNAUTHORIZED {
+            PublicGetFallbackReason::Tunnel401
+        } else if upstream_status == StatusCode::FORBIDDEN {
+            PublicGetFallbackReason::Tunnel403
+        } else {
+            PublicGetFallbackReason::Upstream5xx
+        };
+        observe_public_get_fallback(&state, &user, path, reason).await;
+        forward_retry_budget_failure(&state, &user, path, now_ms()).await;
+        tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
+        return offline_cached_response(&state, &user, path, &headers).await;
+    }
     if method == Method::GET
         && matches!(
             upstream_status,
@@ -4264,7 +4886,16 @@ async fn forward_to_user(
         }
     }
 
-    build_response(resp)
+    let mut out = build_response(resp);
+    if method == Method::GET && is_public_ap_get_path(&user, path) {
+        normalize_ap_response_content_type(&headers, &mut out);
+        if out.status() == StatusCode::NOT_FOUND {
+            state
+                .ap_actor_resolve_404_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    out
 }
 
 fn is_cached_collection_path(user: &str, path: &str) -> bool {
@@ -4301,6 +4932,260 @@ fn collection_stub_json(user: &str, kind: &str, headers: &HeaderMap) -> String {
     .to_string()
 }
 
+fn raw_query_param<'a>(raw_query: Option<&'a str>, key: &str) -> Option<&'a str> {
+    let q = raw_query?;
+    for pair in q.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == key {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn query_flag_true(raw_query: Option<&str>, key: &str) -> bool {
+    raw_query_param(raw_query, key)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+fn parse_query_i64(raw_query: Option<&str>, key: &str) -> Option<i64> {
+    raw_query_param(raw_query, key).and_then(|v| v.parse::<i64>().ok())
+}
+
+fn parse_query_u32(raw_query: Option<&str>, key: &str) -> Option<u32> {
+    raw_query_param(raw_query, key).and_then(|v| v.parse::<u32>().ok())
+}
+
+async fn local_outbox_read_model_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &str,
+    raw_query: Option<&str>,
+) -> Option<Response> {
+    let (scheme, host) = origin_for_links_with_cfg(&state.cfg, headers);
+    let base = format!("{scheme}://{host}");
+    let outbox = format!("{base}/users/{user}/outbox");
+    let db = state.db.lock().await;
+    let total = db.count_local_outbox_notes(user).ok()?;
+
+    if !query_flag_true(raw_query, "page") {
+        let body = serde_json::json!({
+          "@context": "https://www.w3.org/ns/activitystreams",
+          "id": outbox,
+          "type": "OrderedCollection",
+          "totalItems": total,
+          "first": format!("{outbox}?page=true"),
+        });
+        return Some(
+            (
+                StatusCode::OK,
+                [("Content-Type", "application/activity+json; charset=utf-8")],
+                body.to_string(),
+            )
+                .into_response(),
+        );
+    }
+
+    let limit = parse_query_u32(raw_query, "limit").unwrap_or(20).clamp(1, 80);
+    let cursor = parse_query_i64(raw_query, "cursor");
+    let page = db.list_local_outbox_notes(user, limit, cursor).ok()?;
+    let mut ordered_items = Vec::with_capacity(page.items.len());
+    for (note_json, _ts) in page.items {
+        if let Ok(note) = serde_json::from_str::<serde_json::Value>(&note_json) {
+            let activity_id = note
+                .get("id")
+                .and_then(|v| v.as_str())
+                .and_then(|id| id.rsplit('/').next())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .unwrap_or("unknown");
+            let actor_hint = note.get("attributedTo").and_then(|v| v.as_str());
+            if let Some(create_json) = synthetic_create_activity_json(
+                &state.cfg,
+                headers,
+                user,
+                activity_id,
+                &note_json,
+                actor_hint,
+            ) {
+                if let Ok(activity) = serde_json::from_str::<serde_json::Value>(&create_json) {
+                    ordered_items.push(activity);
+                    continue;
+                }
+            }
+            ordered_items.push(note);
+        }
+    }
+    let next = page.next.map(|c| format!("{outbox}?page=true&cursor={c}&limit={limit}"));
+    let body = serde_json::json!({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "id": format!("{outbox}?page=true"),
+      "type": "OrderedCollectionPage",
+      "partOf": outbox,
+      "orderedItems": ordered_items,
+      "next": next,
+    });
+    Some(
+        (
+            StatusCode::OK,
+            [("Content-Type", "application/activity+json; charset=utf-8")],
+            body.to_string(),
+        )
+            .into_response(),
+    )
+}
+
+async fn local_object_read_model_response(
+    state: &AppState,
+    user: &str,
+    rest: &str,
+) -> Option<Response> {
+    let object_id = rest.strip_prefix("objects/")?;
+    if object_id.is_empty() || object_id.contains('/') {
+        return None;
+    }
+    let db = state.db.lock().await;
+    let note_json = db.get_local_object_note_json(user, object_id).ok().flatten()?;
+    let note = serde_json::from_str::<serde_json::Value>(&note_json).ok()?;
+    let note = ensure_activitystreams_context(note);
+    Some(
+        (
+            StatusCode::OK,
+            [("Content-Type", "application/activity+json; charset=utf-8")],
+            note.to_string(),
+        )
+            .into_response(),
+    )
+}
+
+fn activity_suffix_matches(activity_id: &str, candidate_id: &str) -> bool {
+    candidate_id.ends_with(&format!("/activities/{activity_id}"))
+}
+
+fn find_activity_in_value(v: &serde_json::Value, activity_id: &str) -> Option<serde_json::Value> {
+    if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
+        if activity_suffix_matches(activity_id, id) {
+            return Some(v.clone());
+        }
+    }
+    if let Some(items) = v.get("orderedItems").and_then(|x| x.as_array()) {
+        for item in items {
+            if let Some(hit) = find_activity_in_value(item, activity_id) {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
+fn synthetic_create_activity_json(
+    cfg: &RelayConfig,
+    headers: &HeaderMap,
+    user: &str,
+    activity_id: &str,
+    note_json: &str,
+    actor_id_hint: Option<&str>,
+) -> Option<String> {
+    let note: serde_json::Value = serde_json::from_str(note_json).ok()?;
+    let note = ensure_activitystreams_context(note);
+    let (scheme, host) = origin_for_links_with_cfg(cfg, headers);
+    let base = format!("{scheme}://{host}");
+    let actor = actor_id_hint
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{base}/users/{user}"));
+    let published = note
+        .get("published")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    let activity = serde_json::json!({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "id": format!("{base}/users/{user}/activities/{activity_id}"),
+      "type": "Create",
+      "actor": actor,
+      "object": note,
+      "published": published,
+    });
+    Some(activity.to_string())
+}
+
+fn ensure_activitystreams_context(mut v: serde_json::Value) -> serde_json::Value {
+    if !v.get("@context").is_some() {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "@context".to_string(),
+                serde_json::Value::String("https://www.w3.org/ns/activitystreams".to_string()),
+            );
+        }
+    }
+    v
+}
+
+async fn local_activity_read_model_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &str,
+    rest: &str,
+) -> Option<Response> {
+    let activity_id = rest.strip_prefix("activities/")?;
+    if activity_id.is_empty()
+        || activity_id.contains('/')
+        || !activity_id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-' || c == '_')
+    {
+        return None;
+    }
+
+    let db = state.db.lock().await;
+    if let Ok(Some(outbox_json)) = db.get_collection_cache(user, "outbox") {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&outbox_json) {
+            if let Some(found) = find_activity_in_value(&v, activity_id) {
+                debug!(user = %user, activity_id = %activity_id, "activity read-model cache hit");
+                return Some(
+                    (
+                        StatusCode::OK,
+                        [("Content-Type", "application/activity+json; charset=utf-8")],
+                        found.to_string(),
+                    )
+                        .into_response(),
+                );
+            }
+        }
+    }
+
+    if let Ok(Some((note_json, actor_id_hint))) = db.get_local_activity_note_json(user, activity_id) {
+        if let Some(synth) = synthetic_create_activity_json(
+            &state.cfg,
+            headers,
+            user,
+            activity_id,
+            &note_json,
+            actor_id_hint.as_deref(),
+        ) {
+            debug!(
+                user = %user,
+                activity_id = %activity_id,
+                "activity read-model synthetic create"
+            );
+            return Some(
+                (
+                    StatusCode::OK,
+                    [("Content-Type", "application/activity+json; charset=utf-8")],
+                    synth,
+                )
+                    .into_response(),
+            );
+        }
+    }
+
+    debug!(user = %user, activity_id = %activity_id, "activity read-model miss");
+    None
+}
+
 fn wants_activity_json(headers: &HeaderMap) -> bool {
     let accept = headers
         .get("Accept")
@@ -4312,6 +5197,36 @@ fn wants_activity_json(headers: &HeaderMap) -> bool {
         || accept.contains("application/json")
         || accept.contains("*/*")
         || accept.is_empty()
+}
+
+fn preferred_ap_content_type(headers: &HeaderMap) -> &'static str {
+    let accept = headers
+        .get("Accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if accept.contains("application/ld+json") && !accept.contains("application/activity+json") {
+        "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"; charset=utf-8"
+    } else {
+        "application/activity+json; charset=utf-8"
+    }
+}
+
+fn normalize_ap_response_content_type(req_headers: &HeaderMap, resp: &mut Response) {
+    let current = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !(current.contains("application/activity+json") || current.contains("application/ld+json"))
+    {
+        return;
+    }
+    let preferred = preferred_ap_content_type(req_headers);
+    if let Ok(v) = HeaderValue::from_str(preferred) {
+        resp.headers_mut().insert(header::CONTENT_TYPE, v);
+    }
 }
 
 fn moved_actor_stub_json(
@@ -4439,6 +5354,7 @@ fn patch_actor_with_online_status(actor_json: &str, online_status: &str) -> Opti
 async fn shared_inbox(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    OriginalUri(uri): OriginalUri,
     method: Method,
     headers: HeaderMap,
     body: Bytes,
@@ -4452,6 +5368,40 @@ async fn shared_inbox(
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response(),
     };
+    let activity: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid activity json").into_response(),
+    };
+    if activity.get("type").and_then(|v| v.as_str()).is_none() {
+        return (StatusCode::BAD_REQUEST, "invalid activity payload").into_response();
+    }
+    let (actor_url, applied_policy) =
+        match verify_ap_signature_with_policy(&state, &headers, &method, &uri, &body).await {
+            Ok(v) => v,
+            Err(_) => {
+                state
+                    .ap_inbox_reject_invalid_sig_total
+                    .fetch_add(1, Ordering::Relaxed);
+                return (StatusCode::UNAUTHORIZED, "invalid signature").into_response();
+            }
+        };
+    let peer_host = actor_host(&actor_url).unwrap_or_else(|| "unknown".to_string());
+    observe_signature_policy_applied(&state, applied_policy, &peer_host).await;
+    if !matches!(applied_policy, ApSignaturePolicy::Strict) {
+        state
+            .ap_inbox_compat_accept_total
+            .fetch_add(1, Ordering::Relaxed);
+        let mut m = state.ap_inbox_compat_accept_by_peer.lock().await;
+        let cur = m.get(&peer_host).copied().unwrap_or(0);
+        m.insert(peer_host, cur.saturating_add(1));
+    }
+    let dedupe_key = inbound_activity_dedupe_key("_shared", &activity, &body);
+    if is_duplicate_inbound_activity(&state, &dedupe_key, now_ms()).await {
+        state
+            .ap_inbound_dedup_drop_total
+            .fetch_add(1, Ordering::Relaxed);
+        return (StatusCode::ACCEPTED, "accepted (duplicate)").into_response();
+    }
     if users.len() > state.cfg.max_inbox_fanout {
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many recipients").into_response();
     }
@@ -4482,6 +5432,7 @@ async fn shared_inbox(
     if users.is_empty() {
         // Interop: many legacy instances deliver to shared inbox even when this relay
         // has no concrete local recipients in `to/cc`. Accept and no-op instead of 400.
+        state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
         return (StatusCode::ACCEPTED, "accepted (no local recipients)").into_response();
     }
 
@@ -4530,8 +5481,10 @@ async fn shared_inbox(
     if delivered == 0 && spooled == 0 {
         // Interop: shared inbox deliveries may legitimately target users that are
         // currently unknown/disabled locally. Accepting avoids upstream retry storms.
+        state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
         (StatusCode::ACCEPTED, "accepted (no active recipients)").into_response()
     } else {
+        state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
         (StatusCode::ACCEPTED, "accepted").into_response()
     }
 }
@@ -4923,18 +5876,24 @@ async fn flush_spool_for_user(state: AppState, user: String) {
         }
 
         let mut delivered_ids: Vec<i64> = Vec::new();
+        let mut deadletter_ids: Vec<i64> = Vec::new();
         for item in &items {
             let headers_vec: Vec<(String, String)> =
                 serde_json::from_str(&item.headers_json).unwrap_or_default();
             let headers = vec_to_headers(&headers_vec);
             let body_bytes = B64.decode(item.body_b64.as_bytes()).unwrap_or_default();
             let method = item.method.parse::<Method>().unwrap_or(Method::POST);
+            let canonical_path = if item.path == format!("/users/{user}/inbox") {
+                "/inbox".to_string()
+            } else {
+                item.path.clone()
+            };
 
             let resp = forward_to_user(
                 state.clone(),
                 user.clone(),
                 method,
-                &item.path,
+                &canonical_path,
                 item.query.clone(),
                 headers,
                 Bytes::from(body_bytes),
@@ -4949,6 +5908,21 @@ async fn flush_spool_for_user(state: AppState, user: String) {
                 // User went offline mid-flush.
                 break;
             }
+            {
+                let db = state.db.lock().await;
+                let _ = db.bump_spool_try(item.id);
+            }
+            if item.tries.saturating_add(1) >= state.cfg.spool_deadletter_max_tries {
+                deadletter_ids.push(item.id);
+                state
+                    .ap_spool_deadletter_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let mut m = state.ap_spool_deadletter_by_reason.lock().await;
+                let key = format!("http_{}", resp.status().as_u16());
+                let cur = m.get(&key).copied().unwrap_or(0);
+                m.insert(key, cur.saturating_add(1));
+                continue;
+            }
             // Any other error: keep remaining items for later to avoid a hot loop.
             break;
         }
@@ -4960,9 +5934,16 @@ async fn flush_spool_for_user(state: AppState, user: String) {
                 break;
             }
         }
+        if !deadletter_ids.is_empty() {
+            let db = state.db.lock().await;
+            if let Err(e) = db.delete_spool_ids(&deadletter_ids) {
+                error!(%user, "spool deadletter delete failed: {e}");
+                break;
+            }
+        }
 
         // If we couldn't deliver a full batch, stop.
-        if delivered_ids.len() < items.len() {
+        if delivered_ids.len().saturating_add(deadletter_ids.len()) < items.len() {
             break;
         }
     }
@@ -5452,9 +6433,20 @@ impl Db {
               query TEXT NOT NULL,
               headers_json TEXT NOT NULL,
               body_b64 TEXT NOT NULL,
-              body_len INTEGER NOT NULL
+              body_len INTEGER NOT NULL,
+              tries INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS inbox_spool_user_created ON inbox_spool(username, created_at_ms);
+            CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
+
+            CREATE TABLE IF NOT EXISTS ap_peer_compat_policy (
+              host TEXT NOT NULL,
+              family TEXT NULL,
+              policy TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(host, family)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ap_peer_compat_policy_host ON ap_peer_compat_policy(host);
 
             CREATE TABLE IF NOT EXISTS relay_registry (
               relay_url TEXT PRIMARY KEY,
@@ -5707,6 +6699,10 @@ impl Db {
                     [],
                 );
                 let _ = conn.execute(
+                    "ALTER TABLE inbox_spool ADD COLUMN tries INTEGER NOT NULL DEFAULT 0",
+                    [],
+                );
+                let _ = conn.execute(
                     "DELETE FROM users
                      WHERE rowid NOT IN (
                        SELECT MIN(rowid) FROM users GROUP BY lower(username)
@@ -5723,6 +6719,10 @@ impl Db {
                 );
                 let _ = conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC)",
+                    [],
+                );
+                let _ = conn.execute(
+                    "CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms)",
                     [],
                 );
                 Ok(())
@@ -5763,6 +6763,18 @@ impl Db {
                                 "ALTER TABLE relay_notes ADD COLUMN IF NOT EXISTS ingested_at_ms BIGINT NOT NULL DEFAULT 0;
                                  UPDATE relay_notes SET ingested_at_ms=created_at_ms WHERE ingested_at_ms=0;
                                  CREATE INDEX IF NOT EXISTS idx_relay_notes_ingested ON relay_notes(ingested_at_ms DESC);",
+                            )?;
+                            conn.batch_execute(
+                                "ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS tries BIGINT NOT NULL DEFAULT 0;
+                                 CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
+                                 CREATE TABLE IF NOT EXISTS ap_peer_compat_policy (
+                                   host TEXT NOT NULL,
+                                   family TEXT NULL,
+                                   policy TEXT NOT NULL,
+                                   updated_at_ms BIGINT NOT NULL,
+                                   PRIMARY KEY(host, family)
+                                 );
+                                 CREATE INDEX IF NOT EXISTS idx_ap_peer_compat_policy_host ON ap_peer_compat_policy(host);",
                             )?;
                             return Ok(());
                         }
@@ -7047,7 +8059,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)",
                     params![username, now, method, path, query, headers_json, body_b64, body_len],
                 )?;
 
@@ -7068,7 +8080,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)",
                     &[&username, &now, &method, &path, &query, &headers_json, &body_b64, &body_len],
                 )?;
                 let row = conn.query_one(
@@ -7094,7 +8106,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT id, method, path, query, headers_json, body_b64 FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
+                    "SELECT id, method, path, query, headers_json, body_b64, tries FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
                 )?;
                 let mut rows = stmt.query(params![username, limit])?;
                 let mut out = Vec::new();
@@ -7106,6 +8118,7 @@ impl Db {
                         query: r.get(3)?,
                         headers_json: r.get(4)?,
                         body_b64: r.get(5)?,
+                        tries: r.get(6)?,
                     });
                 }
                 Ok(out)
@@ -7113,7 +8126,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT id, method, path, query, headers_json, body_b64 FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
+                    "SELECT id, method, path, query, headers_json, body_b64, tries FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
                     &[&username, &limit],
                 )?;
                 let mut out = Vec::new();
@@ -7125,9 +8138,124 @@ impl Db {
                         query: r.get(3),
                         headers_json: r.get(4),
                         body_b64: r.get(5),
+                        tries: r.get(6),
                     });
                 }
                 Ok(out)
+            }
+        }
+    }
+
+    fn bump_spool_try(&self, id: i64) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let _ = conn.execute(
+                    "UPDATE inbox_spool SET tries = tries + 1 WHERE id=?1",
+                    params![id],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let _ = conn.execute(
+                    "UPDATE inbox_spool SET tries = tries + 1 WHERE id=$1",
+                    &[&id],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_ap_compat_policies(&self) -> Result<Vec<ApCompatPolicyRow>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT host, family, policy, updated_at_ms FROM ap_peer_compat_policy ORDER BY host ASC, family ASC",
+                )?;
+                let mut rows = stmt.query([])?;
+                let mut out = Vec::new();
+                while let Some(r) = rows.next()? {
+                    let policy_s: String = r.get(2)?;
+                    let policy = ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
+                    out.push(ApCompatPolicyRow {
+                        host: r.get(0)?,
+                        family: r.get::<_, Option<String>>(1)?,
+                        policy,
+                        updated_at_ms: r.get(3)?,
+                    });
+                }
+                Ok(out)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT host, family, policy, updated_at_ms FROM ap_peer_compat_policy ORDER BY host ASC, family ASC",
+                    &[],
+                )?;
+                let mut out = Vec::new();
+                for r in rows {
+                    let policy_s: String = r.get(2);
+                    let policy = ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
+                    out.push(ApCompatPolicyRow {
+                        host: r.get(0),
+                        family: r.get(1),
+                        policy,
+                        updated_at_ms: r.get(3),
+                    });
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    fn upsert_ap_compat_policy(
+        &self,
+        host: &str,
+        family: Option<&str>,
+        policy: ApSignaturePolicy,
+    ) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO ap_peer_compat_policy(host, family, policy, updated_at_ms) VALUES (?1, ?2, ?3, ?4)",
+                    params![host, family, policy.as_str(), now],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let _ = conn.execute(
+                    "INSERT INTO ap_peer_compat_policy(host, family, policy, updated_at_ms)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT(host, family) DO UPDATE SET policy=EXCLUDED.policy, updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[&host, &family, &policy.as_str(), &now],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn delete_ap_compat_policy(&self, host: &str, family: Option<&str>) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let _ = conn.execute(
+                    "DELETE FROM ap_peer_compat_policy WHERE host=?1 AND ((family IS NULL AND ?2 IS NULL) OR family=?2)",
+                    params![host, family],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let _ = conn.execute(
+                    "DELETE FROM ap_peer_compat_policy WHERE host=$1 AND ((family IS NULL AND $2 IS NULL) OR family=$2)",
+                    &[&host, &family],
+                )?;
+                Ok(())
             }
         }
     }
@@ -8539,6 +9667,200 @@ impl Db {
                     items,
                     next,
                 })
+            }
+        }
+    }
+
+    fn count_local_outbox_notes(&self, username: &str) -> Result<u64> {
+        let like = format!("%/users/{username}/objects/%");
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare("SELECT COUNT(*) FROM relay_notes WHERE note_id LIKE ?1")?;
+                let total: i64 = stmt.query_row(params![like], |r| r.get(0))?;
+                Ok(total.max(0) as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "SELECT COUNT(*) FROM relay_notes WHERE note_id LIKE $1",
+                    &[&like],
+                )?;
+                let total: i64 = row.get(0);
+                Ok(total.max(0) as u64)
+            }
+        }
+    }
+
+    fn list_local_outbox_notes(
+        &self,
+        username: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<(String, i64)>> {
+        let like = format!("%/users/{username}/objects/%");
+        let limit = limit.clamp(1, 200) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(cur) = cursor {
+                    stmt = conn.prepare(
+                        "SELECT note_json, COALESCE(published_ms, created_at_ms) AS order_ms
+                         FROM relay_notes
+                         WHERE note_id LIKE ?1
+                           AND COALESCE(published_ms, created_at_ms) < ?2
+                         ORDER BY order_ms DESC, note_id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![like, cur, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT note_json, COALESCE(published_ms, created_at_ms) AS order_ms
+                         FROM relay_notes
+                         WHERE note_id LIKE ?1
+                         ORDER BY order_ms DESC, note_id DESC
+                         LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![like, limit])?;
+                }
+                let mut items = Vec::<(String, i64)>::new();
+                let mut last = None;
+                while let Some(row) = rows.next()? {
+                    let note_json: String = row.get(0)?;
+                    let order_ms: i64 = row.get(1)?;
+                    last = Some(order_ms);
+                    items.push((note_json, order_ms));
+                }
+                let next = if items.len() as i64 == limit {
+                    last.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(cur) = cursor {
+                    conn.query(
+                        "SELECT note_json, COALESCE(published_ms, created_at_ms) AS order_ms
+                         FROM relay_notes
+                         WHERE note_id LIKE $1
+                           AND COALESCE(published_ms, created_at_ms) < $2
+                         ORDER BY order_ms DESC, note_id DESC
+                         LIMIT $3",
+                        &[&like, &cur, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT note_json, COALESCE(published_ms, created_at_ms) AS order_ms
+                         FROM relay_notes
+                         WHERE note_id LIKE $1
+                         ORDER BY order_ms DESC, note_id DESC
+                         LIMIT $2",
+                        &[&like, &limit],
+                    )?
+                };
+                let mut items = Vec::<(String, i64)>::new();
+                let mut last = None;
+                for row in rows {
+                    let note_json: String = row.get(0);
+                    let order_ms: i64 = row.get(1);
+                    last = Some(order_ms);
+                    items.push((note_json, order_ms));
+                }
+                let next = if items.len() as i64 == limit {
+                    last.map(|v| v.to_string())
+                } else {
+                    None
+                };
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn get_local_object_note_json(&self, username: &str, object_id: &str) -> Result<Option<String>> {
+        let suffix = format!("%/users/{username}/objects/{object_id}");
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT note_json
+                     FROM relay_notes
+                     WHERE note_id LIKE ?1
+                     ORDER BY COALESCE(published_ms, created_at_ms) DESC
+                     LIMIT 1",
+                )?;
+                let mut rows = stmt.query(params![suffix])?;
+                if let Some(row) = rows.next()? {
+                    return Ok(Some(row.get(0)?));
+                }
+                Ok(None)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT note_json
+                     FROM relay_notes
+                     WHERE note_id LIKE $1
+                     ORDER BY COALESCE(published_ms, created_at_ms) DESC
+                     LIMIT 1",
+                    &[&suffix],
+                )?;
+                Ok(rows.first().map(|r| r.get::<usize, String>(0)))
+            }
+        }
+    }
+
+    fn get_local_activity_note_json(
+        &self,
+        username: &str,
+        activity_id: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let suffix = format!("%/users/{username}/activities/{activity_id}%");
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT note_json, actor_id
+                     FROM relay_notes
+                     WHERE note_id LIKE ?1 OR note_json LIKE ?1
+                     ORDER BY COALESCE(published_ms, created_at_ms) DESC
+                     LIMIT 1",
+                )?;
+                let mut rows = stmt.query(params![suffix])?;
+                if let Some(row) = rows.next()? {
+                    let note_json: String = row.get(0)?;
+                    let actor_id: Option<String> = row.get(1)?;
+                    return Ok(Some((note_json, actor_id)));
+                }
+                Ok(None)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT note_json, actor_id
+                     FROM relay_notes
+                     WHERE note_id LIKE $1 OR note_json LIKE $1
+                     ORDER BY COALESCE(published_ms, created_at_ms) DESC
+                     LIMIT 1",
+                    &[&suffix],
+                )?;
+                Ok(rows.first().map(|r| {
+                    (
+                        r.get::<usize, String>(0),
+                        r.get::<usize, Option<String>>(1),
+                    )
+                }))
             }
         }
     }
@@ -11394,6 +12716,437 @@ async fn relay_reindex(State(state): State<AppState>, headers: HeaderMap) -> imp
     (StatusCode::ACCEPTED, "reindex started").into_response()
 }
 
+fn collection_root_json_for_reconcile(
+    cfg: &RelayConfig,
+    user: &str,
+    kind: &str,
+    total_items: u64,
+) -> String {
+    let base = user_base_url(cfg, user);
+    let id = format!("{base}/users/{user}/{kind}");
+    serde_json::json!({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      "id": id,
+      "type": "OrderedCollection",
+      "totalItems": total_items,
+      "first": format!("{id}?page=true")
+    })
+    .to_string()
+}
+
+fn patch_collection_total_items(json: &str, total_items: u64) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(json).ok()?;
+    if v.get("type").is_none() {
+        v["type"] = serde_json::Value::String("OrderedCollection".to_string());
+    }
+    v["totalItems"] = serde_json::Value::Number(total_items.into());
+    serde_json::to_string(&v).ok()
+}
+
+fn collection_items_len(json: &str) -> u64 {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return 0;
+    };
+    if let Some(arr) = v.get("orderedItems").and_then(|x| x.as_array()) {
+        return arr.len() as u64;
+    }
+    if let Some(arr) = v.get("items").and_then(|x| x.as_array()) {
+        return arr.len() as u64;
+    }
+    0
+}
+
+fn reconcile_user_aggregates(db: &Db, cfg: &RelayConfig, user: &str) -> Result<()> {
+    let outbox_total = db.count_local_outbox_notes(user).unwrap_or(0);
+    let outbox_json = db
+        .get_collection_cache(user, "outbox")?
+        .and_then(|json| patch_collection_total_items(&json, outbox_total))
+        .unwrap_or_else(|| collection_root_json_for_reconcile(cfg, user, "outbox", outbox_total));
+    db.upsert_collection_cache(user, "outbox", &outbox_json)?;
+
+    for kind in ["followers", "following"] {
+        let existing = db.get_collection_cache(user, kind)?;
+        let total = existing
+            .as_deref()
+            .map(collection_items_len)
+            .unwrap_or(0)
+            .max(existing
+                .as_deref()
+                .and_then(collection_total_items)
+                .unwrap_or(0));
+        let normalized = existing
+            .as_deref()
+            .and_then(|json| patch_collection_total_items(json, total))
+            .unwrap_or_else(|| collection_root_json_for_reconcile(cfg, user, kind, total));
+        db.upsert_collection_cache(user, kind, &normalized)?;
+    }
+    Ok(())
+}
+
+fn ensure_actor_minimum_fields(db: &Db, cfg: &RelayConfig, user: &str) -> Result<()> {
+    let Some(actor_json) = db.get_actor_cache(user)? else {
+        return Ok(());
+    };
+    let mut v: serde_json::Value = serde_json::from_str(&actor_json).unwrap_or_else(|_| {
+        actor_stub_json(user, &user_base_template(cfg))
+    });
+    let base = user_base_url(cfg, user);
+    let id = format!("{base}/users/{user}");
+    let inbox = format!("{base}/inbox");
+    let outbox = format!("{base}/users/{user}/outbox");
+    let followers = format!("{base}/users/{user}/followers");
+    let following = format!("{base}/users/{user}/following");
+    v["@context"] = serde_json::json!([
+      "https://www.w3.org/ns/activitystreams",
+      "https://w3id.org/security/v1"
+    ]);
+    v["id"] = serde_json::Value::String(id.clone());
+    v["type"] = serde_json::Value::String("Person".to_string());
+    v["preferredUsername"] = serde_json::Value::String(user.to_string());
+    v["url"] = serde_json::Value::String(id.clone());
+    v["inbox"] = serde_json::Value::String(inbox);
+    v["outbox"] = serde_json::Value::String(outbox);
+    v["followers"] = serde_json::Value::String(followers);
+    v["following"] = serde_json::Value::String(following);
+    if v.get("publicKey").is_none() {
+        v["publicKey"] = serde_json::json!({
+          "id": format!("{id}#main-key"),
+          "owner": id,
+          "publicKeyPem": ""
+        });
+    }
+    let normalized = serde_json::to_string(&v).unwrap_or(actor_json);
+    db.upsert_actor_cache(user, &normalized)?;
+    Ok(())
+}
+
+async fn run_reconciliation_once_with_mode(state: &AppState, full: bool) -> Result<()> {
+    let started_ms = now_ms();
+    let Ok(_job_slot) = state.async_job_slots.clone().try_acquire_owned() else {
+        debug!("reconcile skipped: async job slots saturated");
+        return Ok(());
+    };
+    let mut offset = 0u32;
+    let batch = 200u32;
+    loop {
+        let users = {
+            let db = state.db.lock().await;
+            db.list_users(batch, offset).unwrap_or_default()
+        };
+        if users.is_empty() {
+            break;
+        }
+        for (username, _created_at_ms, disabled) in users {
+            if disabled != 0 {
+                continue;
+            }
+            let db = state.db.lock().await;
+            reconcile_user_aggregates(&db, &state.cfg, &username)?;
+            if full {
+                ensure_actor_minimum_fields(&db, &state.cfg, &username)?;
+            }
+        }
+        offset = offset.saturating_add(batch);
+    }
+    state
+        .reconcile_last_run_ms
+        .store(started_ms as u64, Ordering::Relaxed);
+    state.reconcile_last_ok.store(true, Ordering::Relaxed);
+    *state.reconcile_last_error.lock().await = None;
+    Ok(())
+}
+
+async fn run_reconciliation_once(state: &AppState) -> Result<()> {
+    run_reconciliation_once_with_mode(state, false).await
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReconcileRunQuery {
+    sync: Option<bool>,
+    full: Option<bool>,
+}
+
+async fn relay_reconcile_run(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<ReconcileRunQuery>,
+) -> impl IntoResponse {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_reconcile_run", None).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if q.sync.unwrap_or(false) {
+        let resp = match run_reconciliation_once_with_mode(&state, q.full.unwrap_or(false)).await {
+            Ok(_) => (StatusCode::OK, "reconcile done").into_response(),
+            Err(e) => {
+                state.reconcile_last_ok.store(false, Ordering::Relaxed);
+                *state.reconcile_last_error.lock().await = Some(e.to_string());
+                (StatusCode::BAD_GATEWAY, format!("reconcile failed: {e:#}")).into_response()
+            }
+        };
+        let _ = state.db.lock().await.insert_admin_audit(
+            "admin_reconcile_run",
+            None,
+            None,
+            Some(&audit.ip),
+            resp.status().is_success(),
+            None,
+            &audit.meta,
+        );
+        return resp;
+    }
+
+    let st = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_reconciliation_once_with_mode(&st, q.full.unwrap_or(false)).await {
+            st.reconcile_last_ok.store(false, Ordering::Relaxed);
+            *st.reconcile_last_error.lock().await = Some(e.to_string());
+            warn!("manual reconcile failed: {e:#}");
+        }
+    });
+    let resp = (StatusCode::ACCEPTED, "reconcile started").into_response();
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_reconcile_run",
+        None,
+        None,
+        Some(&audit.ip),
+        true,
+        None,
+        &audit.meta,
+    );
+    resp
+}
+
+async fn relay_reconcile_status(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_reconcile_status", None).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let last_run_ms = state.reconcile_last_run_ms.load(Ordering::Relaxed);
+    let last_ok = state.reconcile_last_ok.load(Ordering::Relaxed);
+    let last_error = state.reconcile_last_error.lock().await.clone();
+    let body = serde_json::json!({
+      "interval_secs": state.cfg.reconcile_interval_secs,
+      "last_run_ms": if last_run_ms == 0 { serde_json::Value::Null } else { serde_json::json!(last_run_ms) },
+      "last_ok": last_ok,
+      "last_error": last_error,
+    });
+    let resp = axum::Json(body).into_response();
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_reconcile_status",
+        None,
+        None,
+        Some(&audit.ip),
+        true,
+        None,
+        &audit.meta,
+    );
+    resp
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CompatPolicyUpsertInput {
+    host: Option<String>,
+    family: Option<String>,
+    policy: Option<String>,
+    delete: Option<bool>,
+}
+
+async fn relay_compat_policy_get(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_compat_policy_get", None).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let rows = {
+        let db = state.db.lock().await;
+        db.list_ap_compat_policies().unwrap_or_default()
+    };
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+              "host": r.host,
+              "family": r.family,
+              "policy": r.policy.as_str(),
+              "updated_at_ms": r.updated_at_ms
+            })
+        })
+        .collect();
+    let resp = axum::Json(serde_json::json!({ "items": items })).into_response();
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_compat_policy_get",
+        None,
+        None,
+        Some(&audit.ip),
+        true,
+        None,
+        &audit.meta,
+    );
+    resp
+}
+
+async fn relay_compat_policy_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_compat_policy_post", None).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let input: CompatPolicyUpsertInput = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    let host = input
+        .host
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return (StatusCode::BAD_REQUEST, "host required").into_response();
+    }
+    let family = input
+        .family
+        .as_deref()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty());
+    let delete = input.delete.unwrap_or(false);
+    let db = state.db.lock().await;
+    let ok = if delete {
+        db.delete_ap_compat_policy(&host, family.as_deref()).is_ok()
+    } else {
+        let Some(policy_s) = input.policy.as_deref() else {
+            return (StatusCode::BAD_REQUEST, "policy required").into_response();
+        };
+        let Some(policy) = ApSignaturePolicy::parse(policy_s) else {
+            return (StatusCode::BAD_REQUEST, "invalid policy").into_response();
+        };
+        db.upsert_ap_compat_policy(&host, family.as_deref(), policy)
+            .is_ok()
+    };
+    drop(db);
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_compat_policy_post",
+        None,
+        None,
+        Some(&audit.ip),
+        ok,
+        Some(if delete { "delete" } else { "upsert" }),
+        &audit.meta,
+    );
+    if ok {
+        (StatusCode::OK, "ok").into_response()
+    } else {
+        (StatusCode::BAD_GATEWAY, "db error").into_response()
+    }
+}
+
+async fn relay_ap_consistency_diagnostics(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_ap_consistency_diag", None).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let users = {
+        let db = state.db.lock().await;
+        db.list_users(500, 0).unwrap_or_default()
+    };
+    let mut actor_missing = 0u64;
+    let mut outbox_missing = 0u64;
+    let mut followers_missing = 0u64;
+    let mut following_missing = 0u64;
+    let mut actor_field_mismatch = 0u64;
+    let mut samples = Vec::new();
+
+    for (username, _created_at_ms, disabled) in users {
+        if disabled != 0 {
+            continue;
+        }
+        let db = state.db.lock().await;
+        let actor = db.get_actor_cache(&username).ok().flatten();
+        let outbox = db.get_collection_cache(&username, "outbox").ok().flatten();
+        let followers = db.get_collection_cache(&username, "followers").ok().flatten();
+        let following = db.get_collection_cache(&username, "following").ok().flatten();
+        drop(db);
+        if actor.is_none() {
+            actor_missing = actor_missing.saturating_add(1);
+        }
+        if outbox.is_none() {
+            outbox_missing = outbox_missing.saturating_add(1);
+        }
+        if followers.is_none() {
+            followers_missing = followers_missing.saturating_add(1);
+        }
+        if following.is_none() {
+            following_missing = following_missing.saturating_add(1);
+        }
+        if let Some(actor_json) = actor.as_deref() {
+            let expected_id = format!("{}/users/{}", user_base_url(&state.cfg, &username), username);
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(actor_json) {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                let inbox = v.get("inbox").and_then(|x| x.as_str()).unwrap_or("");
+                let outbox_f = v.get("outbox").and_then(|x| x.as_str()).unwrap_or("");
+                if id != expected_id || inbox.is_empty() || outbox_f.is_empty() {
+                    actor_field_mismatch = actor_field_mismatch.saturating_add(1);
+                    if samples.len() < 20 {
+                        samples.push(serde_json::json!({
+                          "username": username,
+                          "expected_id": expected_id,
+                          "actual_id": id,
+                          "inbox": inbox,
+                          "outbox": outbox_f
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    let total_mismatch = actor_missing
+        .saturating_add(outbox_missing)
+        .saturating_add(followers_missing)
+        .saturating_add(following_missing)
+        .saturating_add(actor_field_mismatch);
+    state
+        .ap_consistency_mismatch_total
+        .store(total_mismatch, Ordering::Relaxed);
+    let body = serde_json::json!({
+      "mismatches": {
+        "actor_missing": actor_missing,
+        "outbox_missing": outbox_missing,
+        "followers_missing": followers_missing,
+        "following_missing": following_missing,
+        "actor_field_mismatch": actor_field_mismatch,
+        "total": total_mismatch
+      },
+      "samples": samples
+    });
+    let resp = axum::Json(body).into_response();
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_ap_consistency_diag",
+        None,
+        None,
+        Some(&audit.ip),
+        true,
+        None,
+        &audit.meta,
+    );
+    resp
+}
+
 async fn relay_list(
     State(state): State<AppState>,
     Query(q): Query<RelayTelemetryQuery>,
@@ -11693,6 +13446,99 @@ fn actor_from_key_id(key_id: &str) -> Option<String> {
     }
 }
 
+fn actor_host(actor_url: &str) -> Option<String> {
+    let parsed = actor_url.parse::<http::Uri>().ok()?;
+    parsed.host().map(|h| normalize_host(h.to_string()))
+}
+
+async fn detect_peer_software_family(state: &AppState, host: &str) -> Option<String> {
+    let now = now_ms();
+    {
+        let cache = state.peer_software_cache.lock().await;
+        if let Some((fam, ts)) = cache.get(host) {
+            if now.saturating_sub(*ts) <= 6 * 60 * 60 * 1000 {
+                return Some(fam.clone());
+            }
+        }
+    }
+    let url = format!("https://{host}/.well-known/nodeinfo");
+    let resp = state.http.get(&url).send().await.ok()?;
+    let v = resp.json::<serde_json::Value>().await.ok()?;
+    let href = v
+        .get("links")
+        .and_then(|x| x.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|item| {
+                let rel = item.get("rel").and_then(|x| x.as_str()).unwrap_or("");
+                let href = item.get("href").and_then(|x| x.as_str()).unwrap_or("");
+                if rel.contains("/2.0") && !href.is_empty() {
+                    Some(href.to_string())
+                } else {
+                    None
+                }
+            })
+        })?;
+    let resp2 = state.http.get(href).send().await.ok()?;
+    let n = resp2.json::<serde_json::Value>().await.ok()?;
+    let software = n
+        .get("software")
+        .and_then(|x| x.get("name"))
+        .and_then(|x| x.as_str())?
+        .to_ascii_lowercase();
+    let family = if software.contains("mastodon") {
+        "mastodon"
+    } else if software.contains("sharkey") {
+        "sharkey"
+    } else if software.contains("misskey") {
+        "misskey"
+    } else {
+        return None;
+    };
+    let mut cache = state.peer_software_cache.lock().await;
+    cache.insert(host.to_string(), (family.to_string(), now));
+    Some(family.to_string())
+}
+
+async fn resolve_ap_signature_policy(state: &AppState, actor_url: &str) -> ApSignaturePolicy {
+    let Some(host) = actor_host(actor_url) else {
+        return ApSignaturePolicy::Strict;
+    };
+    let family = detect_peer_software_family(state, &host).await;
+    let rows = {
+        let db = state.db.lock().await;
+        db.list_ap_compat_policies().unwrap_or_default()
+    };
+    if let Some(f) = family.as_deref() {
+        if let Some(row) = rows
+            .iter()
+            .find(|r| r.host == host && r.family.as_deref() == Some(f))
+        {
+            return row.policy;
+        }
+    }
+    if let Some(row) = rows
+        .iter()
+        .find(|r| r.host == host && r.family.is_none())
+    {
+        return row.policy;
+    }
+    ApSignaturePolicy::Strict
+}
+
+async fn observe_signature_policy_applied(
+    state: &AppState,
+    policy: ApSignaturePolicy,
+    peer: &str,
+) {
+    state
+        .ap_signature_policy_applied_total
+        .fetch_add(1, Ordering::Relaxed);
+    let mut m = state.ap_signature_policy_by_peer_policy.lock().await;
+    let key = format!("{}|{}", policy.as_str(), peer);
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
 async fn fetch_actor_public_key_pem(state: &AppState, actor_url: &str) -> Result<String> {
     let now = now_ms();
     {
@@ -11778,6 +13624,84 @@ async fn verify_webrtc_signature(
         return Err(anyhow::anyhow!("signature invalid"));
     }
     Ok(actor_url)
+}
+
+async fn verify_ap_signature_with_policy(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &http::Uri,
+    body: &[u8],
+) -> Result<(String, ApSignaturePolicy)> {
+    let sig_header =
+        signature_header_value(headers).ok_or_else(|| anyhow::anyhow!("missing signature"))?;
+    let key_id = signature_key_id(headers).ok_or_else(|| anyhow::anyhow!("missing keyId"))?;
+    let actor_url = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
+    let policy = resolve_ap_signature_policy(state, &actor_url).await;
+    let is_relaxed_headers = matches!(policy, ApSignaturePolicy::CompatRelaxedHeaders);
+    let is_relaxed_digest = matches!(
+        policy,
+        ApSignaturePolicy::CompatRelaxedDigest | ApSignaturePolicy::CompatRelaxedHeaders
+    );
+
+    if !is_relaxed_headers {
+        let date = headers
+            .get("Date")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if date.is_empty() {
+            return Err(anyhow::anyhow!("missing date"));
+        }
+        let ts = parse_http_date(date)?;
+        let now = std::time::SystemTime::now();
+        let diff = if now > ts {
+            now.duration_since(ts).unwrap_or_default()
+        } else {
+            ts.duration_since(now).unwrap_or_default()
+        };
+        if diff > Duration::from_secs(300) {
+            return Err(anyhow::anyhow!("date skew"));
+        }
+    }
+
+    if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
+        let Some((alg, value)) = d.split_once('=') else {
+            if !is_relaxed_digest {
+                return Err(anyhow::anyhow!("bad digest"));
+            }
+            let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
+            let params = parse_signature_header(&sig_header)?;
+            let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+            if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
+                return Err(anyhow::anyhow!("signature invalid"));
+            }
+            return Ok((actor_url, policy));
+        };
+        if !alg.trim().eq_ignore_ascii_case("SHA-256") {
+            if !is_relaxed_digest {
+                return Err(anyhow::anyhow!("unsupported digest"));
+            }
+        } else {
+            let expected = B64.decode(value.trim().as_bytes()).unwrap_or_default();
+            let actual = Sha256::digest(body);
+            if expected.as_slice() != actual.as_slice() && !is_relaxed_digest {
+                return Err(anyhow::anyhow!("digest mismatch"));
+            }
+        }
+    } else if !is_relaxed_digest {
+        // In strict mode we allow missing Digest on empty bodies only.
+        if !body.is_empty() {
+            return Err(anyhow::anyhow!("missing digest"));
+        }
+    }
+
+    let params = parse_signature_header(&sig_header)?;
+    let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+    let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
+    if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
+        return Err(anyhow::anyhow!("signature invalid"));
+    }
+    Ok((actor_url, policy))
 }
 
 async fn webrtc_send(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
@@ -12617,6 +14541,26 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         .load(Ordering::Relaxed);
     let relay_stale_cache_served = state.relay_stale_cache_served.load(Ordering::Relaxed);
     let relay_tunnel_success_served = state.relay_tunnel_success_served.load(Ordering::Relaxed);
+    let ap_inbox_accept_total = state.ap_inbox_accept_total.load(Ordering::Relaxed);
+    let ap_inbox_reject_invalid_sig_total = state
+        .ap_inbox_reject_invalid_sig_total
+        .load(Ordering::Relaxed);
+    let ap_actor_resolve_404_total = state.ap_actor_resolve_404_total.load(Ordering::Relaxed);
+    let ap_inbound_dedup_drop_total = state.ap_inbound_dedup_drop_total.load(Ordering::Relaxed);
+    let ap_public_get_fallback_total = state.ap_public_get_fallback_total.load(Ordering::Relaxed);
+    let ap_spool_deadletter_total = state.ap_spool_deadletter_total.load(Ordering::Relaxed);
+    let ap_follow_pending_over_5m_total = state
+        .ap_follow_pending_over_5m_total
+        .load(Ordering::Relaxed);
+    let ap_signature_policy_applied_total = state
+        .ap_signature_policy_applied_total
+        .load(Ordering::Relaxed);
+    let ap_inbox_compat_accept_total = state
+        .ap_inbox_compat_accept_total
+        .load(Ordering::Relaxed);
+    let ap_consistency_mismatch_total = state
+        .ap_consistency_mismatch_total
+        .load(Ordering::Relaxed);
     let hot_path_available = state.hot_path_inflight.available_permits() as u64;
     let hot_path_capacity = state.cfg.max_hot_path_inflight as u64;
     let relay_hot_path_inflight = hot_path_capacity.saturating_sub(hot_path_available);
@@ -12672,6 +14616,16 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         relay_circuit_state_transitions: Some(relay_circuit_state_transitions),
         relay_stale_cache_served: Some(relay_stale_cache_served),
         relay_tunnel_success_served: Some(relay_tunnel_success_served),
+        ap_inbox_accept_total: Some(ap_inbox_accept_total),
+        ap_inbox_reject_invalid_sig_total: Some(ap_inbox_reject_invalid_sig_total),
+        ap_actor_resolve_404_total: Some(ap_actor_resolve_404_total),
+        ap_inbound_dedup_drop_total: Some(ap_inbound_dedup_drop_total),
+        ap_public_get_fallback_total: Some(ap_public_get_fallback_total),
+        ap_spool_deadletter_total: Some(ap_spool_deadletter_total),
+        ap_follow_pending_over_5m_total: Some(ap_follow_pending_over_5m_total),
+        ap_signature_policy_applied_total: Some(ap_signature_policy_applied_total),
+        ap_inbox_compat_accept_total: Some(ap_inbox_compat_accept_total),
+        ap_consistency_mismatch_total: Some(ap_consistency_mismatch_total),
         relay_hot_path_inflight: Some(relay_hot_path_inflight),
         relay_hot_path_queue_depth: Some(relay_hot_path_queue_depth),
         relay_async_job_inflight: Some(relay_async_job_inflight),
