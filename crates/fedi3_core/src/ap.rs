@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 use urlencoding::encode;
@@ -56,6 +56,45 @@ const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
 static CHAT_BUNDLE_INFLIGHT: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FOLLOW_IMPORT_JOB_SEQ: AtomicU64 = AtomicU64::new(1);
+
+enum PathLatencyKind {
+    Chat,
+    Timeline,
+}
+
+struct PathLatencyGuard {
+    net: Arc<NetMetrics>,
+    start: Instant,
+    kind: PathLatencyKind,
+}
+
+impl PathLatencyGuard {
+    fn chat(net: Arc<NetMetrics>) -> Self {
+        Self {
+            net,
+            start: Instant::now(),
+            kind: PathLatencyKind::Chat,
+        }
+    }
+
+    fn timeline(net: Arc<NetMetrics>) -> Self {
+        Self {
+            net,
+            start: Instant::now(),
+            kind: PathLatencyKind::Timeline,
+        }
+    }
+}
+
+impl Drop for PathLatencyGuard {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed().as_millis() as u64;
+        match self.kind {
+            PathLatencyKind::Chat => self.net.chat_path_latency_update(elapsed),
+            PathLatencyKind::Timeline => self.net.timeline_fill_latency_update(elapsed),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ApConfig {
@@ -113,6 +152,10 @@ pub struct ApState {
     pub internal_token: String,
     pub global_ingest: GlobalIngestPolicy,
     pub post_delivery_mode: PostDeliveryMode,
+    pub p2p_failover_aggressive: bool,
+    pub p2p_latency_slo_p95_ms: u64,
+    pub p2p_recover_probe_window_secs: u64,
+    pub p2p_transport_hysteresis_secs: u64,
     pub inbox_limits: InboxRateLimits,
     pub inbox_limiter: Arc<Mutex<HashMap<String, RateState>>>,
 }
@@ -1764,6 +1807,11 @@ async fn p2p_debug_get(state: &ApState, req: Request<Body>) -> Response<Body> {
         return simple(StatusCode::UNAUTHORIZED, "internal token required");
     }
     let net = state.net.snapshot_json();
+    let last_failover_reason = net
+        .get("failover")
+        .and_then(|v| v.get("last_failover_reason"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let p2p = serde_json::json!({
         "enabled": state.net.p2p_enabled.load(Ordering::Relaxed),
         "connected_peers": state.net.p2p_connected_peers.load(Ordering::Relaxed),
@@ -1810,6 +1858,10 @@ async fn p2p_debug_get(state: &ApState, req: Request<Body>) -> Response<Body> {
         "webrtc_ice_credential": cfg.webrtc_ice_credential,
         "webrtc_connect_timeout_secs": cfg.webrtc_connect_timeout_secs,
         "webrtc_idle_ttl_secs": cfg.webrtc_idle_ttl_secs,
+        "failover_aggressive": state.p2p_failover_aggressive,
+        "latency_slo_p95_ms": state.p2p_latency_slo_p95_ms,
+        "recover_probe_window_secs": state.p2p_recover_probe_window_secs,
+        "transport_hysteresis_secs": state.p2p_transport_hysteresis_secs,
     });
     let resp = serde_json::json!({
         "ts_ms": now_ms(),
@@ -1824,6 +1876,13 @@ async fn p2p_debug_get(state: &ApState, req: Request<Body>) -> Response<Body> {
         "p2p": p2p,
         "mailbox": mailbox,
         "webrtc": webrtc,
+        "transport_state": if state.net.relay_preferred_active_peers.load(Ordering::Relaxed) > 0 {
+            "RelayPreferred"
+        } else {
+            "DirectP2P"
+        },
+        "relay_preferred_until_ms": state.net.relay_preferred_until_ms.load(Ordering::Relaxed),
+        "last_failover_reason": last_failover_reason,
     });
     (
         StatusCode::OK,
@@ -1920,6 +1979,66 @@ async fn net_metrics_prom(state: &ApState, req: Request<Body>) -> Response<Body>
         "fedi3_core_chat_group_membership_conflict_total {}\n",
         net.chat_group_membership_conflict_total
             .load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_failover_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_failover_total {}\n",
+        net.transport_failover_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_failover_timeout_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_failover_timeout_total {}\n",
+        net.transport_failover_timeout_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_failover_rtt_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_failover_rtt_total {}\n",
+        net.transport_failover_rtt_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_failover_queue_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_failover_queue_total {}\n",
+        net.transport_failover_queue_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_failover_error_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_failover_error_total {}\n",
+        net.transport_failover_error_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_transport_recover_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_transport_recover_total {}\n",
+        net.transport_recover_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_relay_preferred_active_peers gauge\n");
+    out.push_str(&format!(
+        "fedi3_core_relay_preferred_active_peers {}\n",
+        net.relay_preferred_active_peers.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_chat_path_latency_ms gauge\n");
+    out.push_str(&format!(
+        "fedi3_core_chat_path_latency_ms {}\n",
+        net.chat_path_latency_ema_ms.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_timeline_fill_latency_ms gauge\n");
+    out.push_str(&format!(
+        "fedi3_core_timeline_fill_latency_ms {}\n",
+        net.timeline_fill_latency_ema_ms.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_upnp_map_success_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_upnp_map_success_total {}\n",
+        net.upnp_map_success_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_upnp_map_fail_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_upnp_map_fail_total {}\n",
+        net.upnp_map_fail_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_core_upnp_map_renew_total counter\n");
+    out.push_str(&format!(
+        "fedi3_core_upnp_map_renew_total {}\n",
+        net.upnp_map_renew_total.load(Ordering::Relaxed)
     ));
     out.push_str("# TYPE fedi3_core_auth_failures counter\n");
     out.push_str(&format!(
@@ -2110,10 +2229,17 @@ async fn core_upnp_toggle(state: &ApState, req: Request<Body>) -> Response<Body>
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
     let mut controller = state.upnp.lock().await;
+    if action.enabled && controller.status().enabled {
+        state.net.upnp_map_renew();
+    }
     let status = if action.enabled {
         match controller.enable().await {
-            Ok(status) => status,
+            Ok(status) => {
+                state.net.upnp_map_success();
+                status
+            }
             Err(e) => {
+                state.net.upnp_map_fail();
                 controller.record_error(format!("{e:#}"));
                 controller.status.clone()
             }
@@ -2122,6 +2248,7 @@ async fn core_upnp_toggle(state: &ApState, req: Request<Body>) -> Response<Body>
         match controller.disable().await {
             Ok(status) => status,
             Err(e) => {
+                state.net.upnp_map_fail();
                 controller.record_error(format!("{e:#}"));
                 controller.status.clone()
             }
@@ -3082,6 +3209,7 @@ fn timeline_items_from_page(
 }
 
 async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::timeline(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3101,6 +3229,7 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
 }
 
 async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::timeline(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3120,6 +3249,7 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
 }
 
 async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::timeline(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3139,6 +3269,7 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
 }
 
 async fn timeline_local(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::timeline(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3161,6 +3292,7 @@ async fn timeline_local(state: &ApState, req: Request<Body>) -> Response<Body> {
 }
 
 async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::timeline(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3745,6 +3877,7 @@ struct ChatThreadArchiveReq {
 }
 
 async fn chat_bundle_get(state: &ApState, _req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::chat(state.net.clone());
     match chat::build_chat_bundle(state) {
         Ok(bundle) => (
             StatusCode::OK,
@@ -3806,6 +3939,7 @@ async fn chat_inbox_post(state: &ApState, req: Request<Body>) -> Response<Body> 
 }
 
 async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::chat(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3873,6 +4007,7 @@ async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body>
 }
 
 async fn chat_thread_messages_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::chat(state.net.clone());
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -3907,6 +4042,7 @@ async fn chat_thread_messages_get(state: &ApState, req: Request<Body>) -> Respon
 }
 
 async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let _lat = PathLatencyGuard::chat(state.net.clone());
     let (parts, body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
@@ -5292,16 +5428,28 @@ async fn send_chat_envelope_http(
         Ok(v) => v,
         Err(_) => return false,
     };
+    let timeout_ms = state
+        .p2p_latency_slo_p95_ms
+        .saturating_mul(2)
+        .clamp(300, 3_000);
     for url in urls {
         let resp = state
             .http
             .post(url)
             .header("Content-Type", "application/json")
+            .timeout(Duration::from_millis(timeout_ms))
             .body(body.clone())
             .send()
             .await;
-        if matches!(resp, Ok(r) if r.status().is_success()) {
+        if matches!(resp, Ok(ref r) if r.status().is_success()) {
             return true;
+        }
+        if let Err(e) = &resp {
+            if e.is_timeout() {
+                state.net.transport_failover("chat_http_timeout");
+            } else {
+                state.net.transport_failover("chat_http_error");
+            }
         }
     }
     false

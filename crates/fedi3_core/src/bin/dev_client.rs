@@ -104,6 +104,10 @@ async fn main() -> anyhow::Result<()> {
             max_bytes_per_actor_per_min: 256 * 1024,
         },
         post_delivery_mode: QueueSettings::default().post_delivery_mode,
+        p2p_failover_aggressive: QueueSettings::default().p2p_failover_aggressive,
+        p2p_latency_slo_p95_ms: QueueSettings::default().p2p_latency_slo_p95_ms,
+        p2p_recover_probe_window_secs: QueueSettings::default().p2p_recover_probe_window_secs,
+        p2p_transport_hysteresis_secs: QueueSettings::default().p2p_transport_hysteresis_secs,
         inbox_limits: InboxRateLimits {
             max_reqs_per_min: 120,
             max_bytes_per_min: 2 * 1024 * 1024,
@@ -123,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     queue.start_worker(
         shutdown_rx.clone(),
         state.delivery.clone(),
+        state.net.clone(),
         state.private_key_pem.clone(),
         key_id,
         QueueSettings::default(),

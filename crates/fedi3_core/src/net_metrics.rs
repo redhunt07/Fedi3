@@ -51,10 +51,24 @@ pub struct NetMetrics {
     pub timeline_local_items_total: AtomicU64,
     pub search_result_type_mismatch_total: AtomicU64,
     pub chat_group_membership_conflict_total: AtomicU64,
+    pub transport_failover_total: AtomicU64,
+    pub transport_failover_timeout_total: AtomicU64,
+    pub transport_failover_rtt_total: AtomicU64,
+    pub transport_failover_queue_total: AtomicU64,
+    pub transport_failover_error_total: AtomicU64,
+    pub transport_recover_total: AtomicU64,
+    pub relay_preferred_active_peers: AtomicU64,
+    pub relay_preferred_until_ms: AtomicU64,
+    pub chat_path_latency_ema_ms: AtomicU64,
+    pub timeline_fill_latency_ema_ms: AtomicU64,
+    pub upnp_map_success_total: AtomicU64,
+    pub upnp_map_fail_total: AtomicU64,
+    pub upnp_map_renew_total: AtomicU64,
 
     p2p_seen: Mutex<HashMap<String, u64>>,
     mailbox_seen: Mutex<HashMap<String, u64>>,
     webrtc_seen: Mutex<HashMap<String, u64>>,
+    last_failover_reason: Mutex<Option<String>>,
 }
 
 impl NetMetrics {
@@ -241,6 +255,80 @@ impl NetMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn transport_failover(&self, reason: &str) {
+        self.transport_failover_total.fetch_add(1, Ordering::Relaxed);
+        let reason = reason.trim().to_ascii_lowercase();
+        if reason.contains("timeout") {
+            self.transport_failover_timeout_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else if reason.contains("rtt") || reason.contains("latency") {
+            self.transport_failover_rtt_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else if reason.contains("queue") {
+            self.transport_failover_queue_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.transport_failover_error_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let mut g = self.last_failover_reason.lock().unwrap();
+        *g = Some(reason);
+    }
+
+    pub fn transport_recover(&self) {
+        self.transport_recover_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn set_relay_preferred_state(&self, active_peers: u64, until_ms: u64, reason: Option<&str>) {
+        self.relay_preferred_active_peers
+            .store(active_peers, Ordering::Relaxed);
+        self.relay_preferred_until_ms
+            .store(until_ms, Ordering::Relaxed);
+        if let Some(r) = reason {
+            let mut g = self.last_failover_reason.lock().unwrap();
+            *g = Some(r.trim().to_string());
+        }
+    }
+
+    pub fn chat_path_latency_update(&self, ms: u64) {
+        if ms == 0 {
+            return;
+        }
+        let prev = self.chat_path_latency_ema_ms.load(Ordering::Relaxed);
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
+        self.chat_path_latency_ema_ms.store(next, Ordering::Relaxed);
+    }
+
+    pub fn timeline_fill_latency_update(&self, ms: u64) {
+        if ms == 0 {
+            return;
+        }
+        let prev = self.timeline_fill_latency_ema_ms.load(Ordering::Relaxed);
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
+        self.timeline_fill_latency_ema_ms
+            .store(next, Ordering::Relaxed);
+    }
+
+    pub fn upnp_map_success(&self) {
+        self.upnp_map_success_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn upnp_map_fail(&self) {
+        self.upnp_map_fail_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn upnp_map_renew(&self) {
+        self.upnp_map_renew_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn prune_seen(&self, window_ms: u64) {
         let cutoff = now_ms().saturating_sub(window_ms);
         {
@@ -265,6 +353,7 @@ impl NetMetrics {
 
     pub fn snapshot_json(&self) -> serde_json::Value {
         let last_error = self.relay_last_error.lock().unwrap().clone();
+        let last_failover_reason = self.last_failover_reason.lock().unwrap().clone();
         self.prune_seen(60_000);
         serde_json::json!({
             "ts_ms": now_ms(),
@@ -308,7 +397,35 @@ impl NetMetrics {
                 "chat_group_membership_conflict_total": self
                     .chat_group_membership_conflict_total
                     .load(Ordering::Relaxed),
+                "transport_failover_total": self
+                    .transport_failover_total
+                    .load(Ordering::Relaxed),
+                "transport_recover_total": self
+                    .transport_recover_total
+                    .load(Ordering::Relaxed),
             },
+            "failover": {
+                "relay_preferred_active_peers": self
+                    .relay_preferred_active_peers
+                    .load(Ordering::Relaxed),
+                "relay_preferred_until_ms": self
+                    .relay_preferred_until_ms
+                    .load(Ordering::Relaxed),
+                "last_failover_reason": last_failover_reason,
+            },
+            "latency": {
+                "chat_path_latency_ms": self
+                    .chat_path_latency_ema_ms
+                    .load(Ordering::Relaxed),
+                "timeline_fill_latency_ms": self
+                    .timeline_fill_latency_ema_ms
+                    .load(Ordering::Relaxed),
+            },
+            "upnp": {
+                "map_success_total": self.upnp_map_success_total.load(Ordering::Relaxed),
+                "map_fail_total": self.upnp_map_fail_total.load(Ordering::Relaxed),
+                "map_renew_total": self.upnp_map_renew_total.load(Ordering::Relaxed),
+            }
         })
     }
 }

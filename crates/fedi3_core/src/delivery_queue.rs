@@ -4,6 +4,7 @@
  */
 
 use crate::delivery::Delivery;
+use crate::net_metrics::NetMetrics;
 use crate::ui_events::UiEvent;
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, RngCore};
@@ -21,6 +22,7 @@ use tracing::{info, warn};
 pub struct DeliveryQueue {
     db_path: PathBuf,
     notify: Arc<Notify>,
+    failover: Arc<tokio::sync::RwLock<HashMap<String, PeerFailoverState>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -35,6 +37,11 @@ pub struct QueueSettings {
     pub delivered_ttl_secs: u64,
     pub dead_ttl_secs: u64,
     pub max_history_rows: u64,
+    pub p2p_failover_aggressive: bool,
+    pub p2p_latency_slo_p95_ms: u64,
+    pub p2p_recover_probe_window_secs: u64,
+    pub p2p_transport_hysteresis_secs: u64,
+    pub p2p_failover_queue_pending_threshold: u64,
 }
 
 impl Default for QueueSettings {
@@ -50,8 +57,22 @@ impl Default for QueueSettings {
             delivered_ttl_secs: 14 * 24 * 3600,
             dead_ttl_secs: 30 * 24 * 3600,
             max_history_rows: 100_000,
+            p2p_failover_aggressive: true,
+            p2p_latency_slo_p95_ms: 300,
+            p2p_recover_probe_window_secs: 30,
+            p2p_transport_hysteresis_secs: 60,
+            p2p_failover_queue_pending_threshold: 200,
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PeerFailoverState {
+    relay_preferred_until_ms: i64,
+    last_failover_reason: Option<String>,
+    consecutive_failures: u32,
+    last_success_ms: i64,
+    last_probe_ms: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +100,7 @@ impl DeliveryQueue {
         Ok(Self {
             db_path,
             notify: Arc::new(Notify::new()),
+            failover: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         })
     }
 
@@ -140,6 +162,7 @@ impl DeliveryQueue {
         &self,
         shutdown: watch::Receiver<bool>,
         delivery: Arc<Delivery>,
+        net: Arc<NetMetrics>,
         private_key_pem: String,
         key_id: String,
         settings: QueueSettings,
@@ -151,6 +174,7 @@ impl DeliveryQueue {
                 .run_loop(
                     shutdown,
                     delivery,
+                    net,
                     private_key_pem,
                     key_id,
                     settings,
@@ -167,6 +191,7 @@ impl DeliveryQueue {
         &self,
         mut shutdown: watch::Receiver<bool>,
         delivery: Arc<Delivery>,
+        net: Arc<NetMetrics>,
         private_key_pem: String,
         key_id: String,
         settings: QueueSettings,
@@ -314,13 +339,14 @@ impl DeliveryQueue {
                     break;
                 }
                 let res = self
-                    .process_one(
-                        &delivery,
-                        &private_key_pem,
-                        &key_id,
-                        &settings,
-                        job,
-                        &ui_events,
+                .process_one(
+                    &delivery,
+                    &net,
+                    &private_key_pem,
+                    &key_id,
+                    &settings,
+                    job,
+                    &ui_events,
                     )
                     .await;
                 if let Err(e) = res {
@@ -368,6 +394,7 @@ impl DeliveryQueue {
     async fn process_one(
         &self,
         delivery: &Delivery,
+        net: &Arc<NetMetrics>,
         private_key_pem: &str,
         key_id: &str,
         settings: &QueueSettings,
@@ -410,6 +437,29 @@ impl DeliveryQueue {
         let attempt_no: u32 = job.attempt.saturating_add(1);
 
         if job.status != 3 {
+            if settings.p2p_failover_aggressive {
+                if let Some(peer_id) = p2p_peer_id.as_deref() {
+                    if self
+                        .should_prefer_relay(peer_id, settings, net)
+                        .await
+                    {
+                        self.deliver_via_relay(
+                            &job,
+                            private_key_pem,
+                            effective_key_id,
+                            &inbox_url,
+                            &job.activity_json,
+                            attempt_no,
+                            Some("relay_preferred active".to_string()),
+                            delivery,
+                            settings,
+                            &ui_events,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
             if let Some(peer_id) = p2p_peer_id.as_deref() {
                 if !p2p_peer_addrs.is_empty() {
                     let _ = delivery.p2p_add_peer_addrs(peer_id, p2p_peer_addrs).await;
@@ -455,6 +505,7 @@ impl DeliveryQueue {
                 }
 
                 if p2p_ok {
+                    self.note_direct_success(peer_id, net).await;
                     self.mark_delivered(&job.id).await?;
                     return Ok(());
                 }
@@ -472,10 +523,16 @@ impl DeliveryQueue {
                             .await
                             .is_ok()
                         {
+                            self.note_direct_success(peer_id, net).await;
                             self.mark_delivered(&job.id).await?;
                             return Ok(());
                         }
                     }
+                }
+
+                if settings.p2p_failover_aggressive {
+                    self.activate_relay_preferred(peer_id, "p2p delivery failed", settings, net)
+                        .await;
                 }
 
                 if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
@@ -534,6 +591,103 @@ impl DeliveryQueue {
         )
         .await?;
         Ok(())
+    }
+
+    async fn should_prefer_relay(
+        &self,
+        peer_id: &str,
+        settings: &QueueSettings,
+        net: &Arc<NetMetrics>,
+    ) -> bool {
+        let now = now_ms();
+        let p2p_rtt = net.p2p_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if p2p_rtt > settings.p2p_latency_slo_p95_ms {
+            self.activate_relay_preferred(peer_id, "p2p_rtt_over_slo", settings, net)
+                .await;
+        }
+        let handler_wait = net
+            .relay_handler_wait_ema_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if handler_wait > settings.p2p_latency_slo_p95_ms {
+            self.activate_relay_preferred(peer_id, "handler_wait_over_slo", settings, net)
+                .await;
+        }
+        if settings.p2p_failover_queue_pending_threshold > 0 {
+            if let Ok(stats) = self.stats().await {
+                if stats.pending >= settings.p2p_failover_queue_pending_threshold {
+                    self.activate_relay_preferred(peer_id, "queue_pressure", settings, net)
+                        .await;
+                }
+            }
+        }
+        let state = self.failover.read().await;
+        state
+            .get(peer_id)
+            .map(|s| s.relay_preferred_until_ms > now)
+            .unwrap_or(false)
+    }
+
+    async fn activate_relay_preferred(
+        &self,
+        peer_id: &str,
+        reason: &str,
+        settings: &QueueSettings,
+        net: &Arc<NetMetrics>,
+    ) {
+        let now = now_ms();
+        let until = now.saturating_add((settings.p2p_transport_hysteresis_secs as i64) * 1000);
+        {
+            let mut map = self.failover.write().await;
+            let entry = map.entry(peer_id.to_string()).or_default();
+            entry.relay_preferred_until_ms = until;
+            entry.last_failover_reason = Some(reason.to_string());
+            entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+            if now.saturating_sub(entry.last_probe_ms)
+                > (settings.p2p_recover_probe_window_secs as i64) * 1000
+            {
+                entry.last_probe_ms = now;
+            }
+            let active = map
+                .values()
+                .filter(|v| v.relay_preferred_until_ms > now)
+                .count() as u64;
+            let max_until = map
+                .values()
+                .map(|v| v.relay_preferred_until_ms)
+                .max()
+                .unwrap_or(0) as u64;
+            net.set_relay_preferred_state(active, max_until, Some(reason));
+        }
+        net.transport_failover(reason);
+    }
+
+    async fn note_direct_success(&self, peer_id: &str, net: &Arc<NetMetrics>) {
+        let now = now_ms();
+        let mut did_recover = false;
+        {
+            let mut map = self.failover.write().await;
+            if let Some(entry) = map.get_mut(peer_id) {
+                if entry.relay_preferred_until_ms > now {
+                    did_recover = true;
+                }
+                entry.relay_preferred_until_ms = 0;
+                entry.last_success_ms = now;
+                entry.consecutive_failures = 0;
+            }
+            let active = map
+                .values()
+                .filter(|v| v.relay_preferred_until_ms > now)
+                .count() as u64;
+            let max_until = map
+                .values()
+                .map(|v| v.relay_preferred_until_ms)
+                .max()
+                .unwrap_or(0) as u64;
+            net.set_relay_preferred_state(active, max_until, None);
+        }
+        if did_recover {
+            net.transport_recover();
+        }
     }
 
     async fn deliver_via_relay(

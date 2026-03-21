@@ -248,6 +248,18 @@ fn normalize_app_config(raw: Value) -> Result<Value> {
     if let Some(v) = get_u64(obj, &["p2pCacheTtlSecs"]) {
         out.insert("p2p_cache_ttl_secs".to_string(), json!(v));
     }
+    if let Some(v) = get_bool(obj, &["p2pFailoverAggressive"]) {
+        out.insert("p2p_failover_aggressive".to_string(), json!(v));
+    }
+    if let Some(v) = get_u64(obj, &["p2pLatencySloP95Ms"]) {
+        out.insert("p2p_latency_slo_p95_ms".to_string(), json!(v));
+    }
+    if let Some(v) = get_u64(obj, &["p2pRecoverProbeWindowSecs"]) {
+        out.insert("p2p_recover_probe_window_secs".to_string(), json!(v));
+    }
+    if let Some(v) = get_u64(obj, &["p2pTransportHysteresisSecs"]) {
+        out.insert("p2p_transport_hysteresis_secs".to_string(), json!(v));
+    }
 
     Ok(Value::Object(out))
 }

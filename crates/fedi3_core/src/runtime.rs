@@ -192,6 +192,18 @@ pub struct CoreStartConfig {
     /// Mailbox cache TTL for P2P store-and-forward (seconds).
     #[serde(default)]
     pub p2p_cache_ttl_secs: Option<u64>,
+    /// Aggressive transport failover to relay/mailbox on lag.
+    #[serde(default)]
+    pub p2p_failover_aggressive: Option<bool>,
+    /// UX latency SLO threshold (ms) used by failover controller.
+    #[serde(default)]
+    pub p2p_latency_slo_p95_ms: Option<u64>,
+    /// Seconds before attempting recovery probe to direct transport.
+    #[serde(default)]
+    pub p2p_recover_probe_window_secs: Option<u64>,
+    /// Relay-preferred hysteresis window in seconds after failover.
+    #[serde(default)]
+    pub p2p_transport_hysteresis_secs: Option<u64>,
 }
 
 impl Default for CoreStartConfig {
@@ -232,6 +244,10 @@ impl Default for CoreStartConfig {
             post_delivery_mode: None,
             p2p_relay_fallback_secs: None,
             p2p_cache_ttl_secs: None,
+            p2p_failover_aggressive: None,
+            p2p_latency_slo_p95_ms: None,
+            p2p_recover_probe_window_secs: None,
+            p2p_transport_hysteresis_secs: None,
             upnp_port_start: None,
             upnp_port_end: None,
             upnp_lease_secs: None,
@@ -521,6 +537,18 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         if let Some(fallback_secs) = cfg.p2p_relay_fallback_secs {
             queue_settings.p2p_relay_fallback_secs = fallback_secs.clamp(0, 600);
         }
+        if let Some(v) = cfg.p2p_failover_aggressive {
+            queue_settings.p2p_failover_aggressive = v;
+        }
+        if let Some(v) = cfg.p2p_latency_slo_p95_ms {
+            queue_settings.p2p_latency_slo_p95_ms = v.clamp(100, 5_000);
+        }
+        if let Some(v) = cfg.p2p_recover_probe_window_secs {
+            queue_settings.p2p_recover_probe_window_secs = v.clamp(5, 600);
+        }
+        if let Some(v) = cfg.p2p_transport_hysteresis_secs {
+            queue_settings.p2p_transport_hysteresis_secs = v.clamp(5, 600);
+        }
         queue_settings.p2p_cache_ttl_secs = p2p_cache_ttl_secs;
 
         let upnp_range = match (cfg.upnp_port_start, cfg.upnp_port_end) {
@@ -582,6 +610,10 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             internal_token,
             global_ingest,
             post_delivery_mode: queue_settings.post_delivery_mode,
+            p2p_failover_aggressive: queue_settings.p2p_failover_aggressive,
+            p2p_latency_slo_p95_ms: queue_settings.p2p_latency_slo_p95_ms,
+            p2p_recover_probe_window_secs: queue_settings.p2p_recover_probe_window_secs,
+            p2p_transport_hysteresis_secs: queue_settings.p2p_transport_hysteresis_secs,
             inbox_limits: InboxRateLimits {
                 max_reqs_per_min: 120,
                 max_bytes_per_min: 2 * 1024 * 1024,
@@ -750,9 +782,25 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         }
 
         let key_id_for_queue = key_id.clone();
+        {
+            let state_for_upnp = state.clone();
+            tokio::spawn(async move {
+                let mut upnp = state_for_upnp.upnp.lock().await;
+                if !upnp.status().enabled {
+                    match upnp.enable().await {
+                        Ok(_) => state_for_upnp.net.upnp_map_success(),
+                        Err(e) => {
+                            state_for_upnp.net.upnp_map_fail();
+                            upnp.record_error(format!("{e:#}"));
+                        }
+                    }
+                }
+            });
+        }
         queue.start_worker(
             shutdown_rx.clone(),
             state.delivery.clone(),
+            state.net.clone(),
             state.private_key_pem.clone(),
             key_id_for_queue,
             queue_settings,
