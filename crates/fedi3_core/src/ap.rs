@@ -2376,6 +2376,7 @@ struct MigrationStatusResp {
     domain: String,
     public_base_url: String,
     followers_count: u64,
+    following_count: u64,
     legacy_followers_count: u64,
     also_known_as: Vec<String>,
     legacy_aliases: Vec<String>,
@@ -2400,6 +2401,11 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
     let key_id = format!("{actor}#main-key");
     let did = fedi3_did(state);
     let followers_count = state.social.count_followers().unwrap_or(0);
+    let following_count = state
+        .social
+        .list_following(0, None)
+        .map(|p| p.total)
+        .unwrap_or(0);
     let legacy_followers_count = state
         .social
         .count_legacy_followers()
@@ -2470,6 +2476,7 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
         domain: state.cfg.domain.clone(),
         public_base_url: base,
         followers_count,
+        following_count,
         legacy_followers_count,
         also_known_as,
         legacy_aliases,

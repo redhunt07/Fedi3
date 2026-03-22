@@ -88,16 +88,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await _refreshFollowingStatus();
       _startProfileStreamIfNeeded();
       if (p != null) {
-        final followers = p.followers;
-        final following = p.following;
-        if (followers.isNotEmpty) {
-          _followersCount =
-              await ActorRepository.instance.fetchCollectionCount(followers);
-        }
-        if (following.isNotEmpty) {
-          _followingCount =
-              await ActorRepository.instance.fetchCollectionCount(following);
-        }
+        await _refreshProfileCounts(p);
         if (!mounted) return;
         setState(() {});
       }
@@ -197,14 +188,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() => _profile = refreshed);
       }
       final active = refreshed ?? p;
-      if (active.followers.isNotEmpty) {
-        _followersCount = await ActorRepository.instance
-            .fetchCollectionCount(active.followers);
-      }
-      if (active.following.isNotEmpty) {
-        _followingCount = await ActorRepository.instance
-            .fetchCollectionCount(active.following);
-      }
+      await _refreshProfileCounts(active);
       if (!mounted) return;
       setState(() {});
       if (active.outbox.isNotEmpty) {
@@ -513,6 +497,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
     } finally {
       if (mounted) setState(() => _outboxLoading = false);
+    }
+  }
+
+  Future<void> _refreshProfileCounts(ActorProfile profile) async {
+    if (_isLocalProfile()) {
+      final cfg = widget.appState.config;
+      if (cfg != null) {
+        try {
+          final status = await CoreApi(config: cfg).fetchMigrationStatus();
+          _followersCount = (status['followers_count'] as num?)?.toInt();
+          _followingCount = (status['following_count'] as num?)?.toInt();
+          return;
+        } catch (_) {
+          // Fall through to public AP collection counts.
+        }
+      }
+    }
+
+    final followers = profile.followers;
+    final following = profile.following;
+    if (followers.isNotEmpty) {
+      _followersCount =
+          await ActorRepository.instance.fetchCollectionCount(followers);
+    }
+    if (following.isNotEmpty) {
+      _followingCount =
+          await ActorRepository.instance.fetchCollectionCount(following);
     }
   }
 
