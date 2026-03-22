@@ -15,6 +15,7 @@ import '../services/core_event_stream.dart';
 import '../services/actor_repository.dart';
 import '../services/notification_service.dart';
 import '../services/update_service.dart';
+import '../services/rss_feed_service.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/relays_screen.dart';
 import 'screens/search_screen.dart';
@@ -97,6 +98,7 @@ class _ShellState extends State<Shell> {
       _startProfileStream();
     }
     UpdateService.instance.start();
+    unawaited(RssFeedService.instance.start());
   }
 
   @override
@@ -110,6 +112,7 @@ class _ShellState extends State<Shell> {
     _profileStream?.cancel();
     _profileRetry?.cancel();
     UpdateService.instance.stop();
+    RssFeedService.instance.stop();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
   }

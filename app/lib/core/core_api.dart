@@ -140,16 +140,28 @@ class CoreApi {
 
   Future<Map<String, dynamic>> fetchTimeline(String kind,
       {String? cursor, int limit = 50}) async {
-    final uri = _internal('/_fedi3/timeline/$kind', {
+    final isSocial = kind.trim().toLowerCase() == 'social';
+    final resolvedKind = isSocial ? 'dht' : kind;
+    final query = {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
-    });
+    };
+    final uri = _internal('/_fedi3/timeline/$resolvedKind', query);
     final resp = await http.get(uri, headers: _internalHeaders);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError(
-          'timeline $kind failed: ${resp.statusCode} ${resp.body}');
+          'timeline $resolvedKind failed: ${resp.statusCode} ${resp.body}');
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (!isSocial) return decoded;
+    final items = decoded['items'];
+    final hasItems = items is List && items.isNotEmpty;
+    if (hasItems) return decoded;
+
+    final fallbackUri = _internal('/_fedi3/timeline/federated', query);
+    final fallback = await http.get(fallbackUri, headers: _internalHeaders);
+    if (fallback.statusCode < 200 || fallback.statusCode >= 300) return decoded;
+    return jsonDecode(fallback.body) as Map<String, dynamic>;
   }
 
   Future<void> triggerLegacySync({

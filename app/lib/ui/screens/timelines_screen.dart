@@ -16,6 +16,7 @@ import '../../state/app_state.dart';
 import '../widgets/inline_composer.dart';
 import '../widgets/core_not_running_card.dart';
 import '../widgets/network_error_card.dart';
+import '../widgets/rss_ticker.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
 
@@ -137,7 +138,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                             key: _listKeys[2],
                             appState: widget.appState,
                             api: api,
-                            kind: 'dht',
+                            kind: 'social',
                             headerTitle: context.l10n.timelineTabSocial,
                             headerTooltip: context.l10n.timelineSocialTooltip,
                             constrainWidth: false,
@@ -150,7 +151,8 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                             api: api,
                             kind: 'federated',
                             headerTitle: context.l10n.timelineTabFederated,
-                            headerTooltip: context.l10n.timelineFederatedTooltip,
+                            headerTooltip:
+                                context.l10n.timelineFederatedTooltip,
                             constrainWidth: false,
                             showComposer: showInlineComposer,
                           ),
@@ -185,7 +187,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                         key: _listKeys[2],
                         appState: widget.appState,
                         api: api,
-                        kind: 'dht',
+                        kind: 'social',
                         headerTitle: context.l10n.timelineTabSocial,
                         headerTooltip: context.l10n.timelineSocialTooltip,
                         constrainWidth: true,
@@ -230,7 +232,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                     key: _listKeys[2],
                     appState: widget.appState,
                     api: api,
-                    kind: 'dht',
+                    kind: 'social',
                     headerTitle: context.l10n.timelineTabSocial,
                     headerTooltip: context.l10n.timelineSocialTooltip,
                     constrainWidth: true,
@@ -328,6 +330,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
           ),
           body: Column(
             children: [
+              const RssTicker(),
               if (syncBlocked || syncStale || _syncStatusError != null)
                 _buildSyncInlineBanner(
                   context,
@@ -429,7 +432,13 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         return;
       }
       final ty = (ev.activityType ?? '').toLowerCase();
-      final forceRefresh = ty == 'update' || ty == 'delete' || ty == 'undo';
+      final forceRefresh = ty == 'update' ||
+          ty == 'delete' ||
+          ty == 'undo' ||
+          ty == 'like' ||
+          ty == 'emojireact' ||
+          ty == 'announce' ||
+          ty == 'create';
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 250), () {
         for (final k in _listKeys) {
@@ -629,7 +638,7 @@ class _TimelineListState extends State<_TimelineList>
   void initState() {
     super.initState();
     _refresh();
-    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _pollNew());
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) => _pollNew());
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -720,16 +729,8 @@ class _TimelineListState extends State<_TimelineList>
           .toList();
       setState(() {
         for (final it in items) {
-          final id = _activityId(it);
-          final objectId = _activityObjectId(it);
-          if (id.isNotEmpty && _knownIds.contains(id)) {
-            continue;
-          }
-          if (objectId != null && _knownObjectIds.contains(objectId)) {
-            continue;
-          }
-          if (id.isNotEmpty) _knownIds.add(id);
-          if (objectId != null) _knownObjectIds.add(objectId);
+          if (_mergeExisting(it)) continue;
+          _registerKnown(it);
           _items.add(it);
         }
         _cursor = _readCursor(resp['next']);
@@ -760,13 +761,11 @@ class _TimelineListState extends State<_TimelineList>
 
       final fresh = <Map<String, dynamic>>[];
       for (final it in items) {
+        if (_mergeExisting(it)) continue;
         final id = _activityId(it);
         final objectId = _activityObjectId(it);
-        if (id.isNotEmpty && _knownIds.contains(id)) continue;
-        if (objectId != null && _knownObjectIds.contains(objectId)) continue;
         if (id.isEmpty && objectId == null) continue;
-        if (id.isNotEmpty) _knownIds.add(id);
-        if (objectId != null) _knownObjectIds.add(objectId);
+        _registerKnown(it);
         fresh.add(it);
       }
       if (fresh.isEmpty) return;
@@ -924,6 +923,51 @@ class _TimelineListState extends State<_TimelineList>
       if (ta != tb) return tb.compareTo(ta);
       return _activityId(b).compareTo(_activityId(a));
     });
+  }
+
+  bool _mergeExisting(Map<String, dynamic> incoming) {
+    final id = _activityId(incoming);
+    final objectId = _activityObjectId(incoming);
+    bool replaceIn(List<Map<String, dynamic>> target) {
+      for (var i = 0; i < target.length; i++) {
+        final current = target[i];
+        final sameId = id.isNotEmpty && _activityId(current) == id;
+        final sameObject =
+            objectId != null && _activityObjectId(current) == objectId;
+        if (!sameId && !sameObject) continue;
+        if (!_sameActivityPayload(current, incoming)) {
+          target[i] = incoming;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    return replaceIn(_items) || replaceIn(_pending);
+  }
+
+  bool _sameActivityPayload(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) {
+    final aa = a['object'];
+    final bb = b['object'];
+    String objectId(dynamic obj) {
+      if (obj is String) return obj.trim();
+      if (obj is Map) return (obj['id'] as String?)?.trim() ?? '';
+      return '';
+    }
+
+    return _activityTimestampMs(a) == _activityTimestampMs(b) &&
+        objectId(aa) == objectId(bb) &&
+        (a['type']?.toString() ?? '') == (b['type']?.toString() ?? '');
+  }
+
+  void _registerKnown(Map<String, dynamic> activity) {
+    final id = _activityId(activity);
+    final objectId = _activityObjectId(activity);
+    if (id.isNotEmpty) _knownIds.add(id);
+    if (objectId != null) _knownObjectIds.add(objectId);
   }
 
   @override

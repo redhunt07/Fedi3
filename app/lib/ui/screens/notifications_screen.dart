@@ -13,6 +13,7 @@ import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/notification_archive_store.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
@@ -126,6 +127,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       _cursor = null;
       _coreUnreachable = false;
     });
+    final archived = await NotificationArchiveStore.instance.readArchive();
+    if (mounted && archived.isNotEmpty) {
+      setState(() {
+        _items.addAll(archived);
+      });
+    }
     await _loadMore();
     await _markSeenNow();
     widget.appState.clearUnreadNotifications();
@@ -134,7 +141,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _markSeenNow() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final prefs = widget.appState.prefs;
-    await widget.appState.savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
+    await widget.appState
+        .savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
   }
 
   Future<void> _loadMore() async {
@@ -153,18 +161,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .map((m) => m.cast<String, dynamic>())
           .toList();
       final next = (resp['next'] as String?)?.trim();
+      final merged =
+          await NotificationArchiveStore.instance.mergeAndPersist(items);
       if (!mounted) return;
       setState(() {
-        _items.addAll(items);
+        _items
+          ..clear()
+          ..addAll(merged);
         _cursor = (next != null && next.isNotEmpty) ? next : null;
       });
     } catch (e) {
       final msg = e.toString();
-      if (msg.contains('SocketException') || msg.contains('Connection refused') || msg.contains('errno = 1225')) {
+      if (msg.contains('SocketException') ||
+          msg.contains('Connection refused') ||
+          msg.contains('errno = 1225')) {
+        final archive = await NotificationArchiveStore.instance.readArchive();
         if (mounted) {
           setState(() {
             _coreUnreachable = true;
             _error = msg;
+            if (archive.isNotEmpty) {
+              _items
+                ..clear()
+                ..addAll(archive);
+            }
           });
         }
         _scheduleRetryIfOffline(msg);
@@ -197,7 +217,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   bool _matchesFilter(Map<String, dynamic> item) {
     if (_filter == 'all') return true;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     return switch (_filter) {
       'mentions' => type == 'Create',
@@ -227,14 +249,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(context.l10n.notificationsCoreNotRunning, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.notificationsCoreNotRunning,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         Text(context.l10n.settingsCoreServiceHint),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
                           Text(
                             humanizeError(context, _error!),
-                            style: TextStyle(color: Theme.of(context).colorScheme.error),
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error),
                           ),
                         ],
                       ],
@@ -248,7 +273,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
         final canLoadMore = _cursor != null && !_loading;
         final filtered = _items.where(_matchesFilter).toList(growable: false);
-        final panelBorder = Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
+        final panelBorder =
+            Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
         return Scaffold(
           appBar: AppBar(
             title: Text(context.l10n.notificationsTitle),
@@ -262,7 +288,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 },
                 icon: const Icon(Icons.mark_email_read_outlined),
               ),
-              IconButton(onPressed: _loading ? null : _refresh, icon: const Icon(Icons.refresh)),
+              IconButton(
+                  onPressed: _loading ? null : _refresh,
+                  icon: const Icon(Icons.refresh)),
             ],
           ),
           body: RefreshIndicator(
@@ -294,7 +322,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ChoiceChip(
                         label: const Text('Reactions'),
                         selected: _filter == 'reactions',
-                        onSelected: (_) => setState(() => _filter = 'reactions'),
+                        onSelected: (_) =>
+                            setState(() => _filter = 'reactions'),
                       ),
                       ChoiceChip(
                         label: const Text('Follows'),
@@ -336,7 +365,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         ? const CircularProgressIndicator()
                         : OutlinedButton(
                             onPressed: canLoadMore ? _loadMore : null,
-                            child: Text(canLoadMore ? context.l10n.listLoadMore : context.l10n.listEnd),
+                            child: Text(canLoadMore
+                                ? context.l10n.listLoadMore
+                                : context.l10n.listEnd),
                           ),
                   ),
                 ),
@@ -378,7 +409,9 @@ class _NotificationItemState extends State<_NotificationItem> {
   }
 
   Future<void> _loadActor() async {
-    final activity = (widget.item['activity'] is Map) ? (widget.item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final activity = (widget.item['activity'] is Map)
+        ? (widget.item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final actorUrl = (activity['actor'] as String?)?.trim() ?? '';
     if (actorUrl.isEmpty || actorUrl == _actorUrl) return;
     _actorUrl = actorUrl;
@@ -387,16 +420,21 @@ class _NotificationItemState extends State<_NotificationItem> {
     setState(() => _actor = profile);
   }
 
-  void _openTarget(BuildContext context, Map<String, dynamic>? noteActivity, String actorUrl) {
+  void _openTarget(BuildContext context, Map<String, dynamic>? noteActivity,
+      String actorUrl) {
     if (noteActivity != null) {
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: widget.appState, activity: noteActivity)),
+        MaterialPageRoute(
+            builder: (_) => NoteDetailScreen(
+                appState: widget.appState, activity: noteActivity)),
       );
       return;
     }
     if (actorUrl.isNotEmpty) {
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: actorUrl)),
+        MaterialPageRoute(
+            builder: (_) =>
+                ProfileScreen(appState: widget.appState, actorUrl: actorUrl)),
       );
     }
   }
@@ -404,16 +442,23 @@ class _NotificationItemState extends State<_NotificationItem> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final ts = (item['ts'] is num) ? (item['ts'] as num).toInt() : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final ts = (item['ts'] is num)
+        ? (item['ts'] as num).toInt()
+        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     final actorUrl = (activity['actor'] as String?)?.trim() ?? '';
     final label = _labelFor(context, type);
-    final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
+    final when =
+        ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
     final actorName = _actor?.displayName ?? _shortActor(actorUrl);
     final actorHandle = actorName.isEmpty
         ? ''
-        : (_actor?.preferredUsername.isNotEmpty == true ? _actor!.preferredUsername : _shortActor(actorUrl));
+        : (_actor?.preferredUsername.isNotEmpty == true
+            ? _actor!.preferredUsername
+            : _shortActor(actorUrl));
     final summary = _notificationSummary(activity);
     final noteActivity = _extractNoteActivity(activity);
 
@@ -426,7 +471,9 @@ class _NotificationItemState extends State<_NotificationItem> {
         children: [
           InkWell(
             borderRadius: BorderRadius.circular(14),
-            onTap: canOpen ? () => _openTarget(context, noteActivity, actorUrl) : null,
+            onTap: canOpen
+                ? () => _openTarget(context, noteActivity, actorUrl)
+                : null,
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -450,9 +497,13 @@ class _NotificationItemState extends State<_NotificationItem> {
                             decoration: BoxDecoration(
                               color: _badgeColorFor(context, type),
                               shape: BoxShape.circle,
-                              border: Border.all(color: Theme.of(context).colorScheme.surface, width: 2),
+                              border: Border.all(
+                                  color: Theme.of(context).colorScheme.surface,
+                                  width: 2),
                             ),
-                            child: Icon(iconData, size: 10, color: Theme.of(context).colorScheme.onPrimary),
+                            child: Icon(iconData,
+                                size: 10,
+                                color: Theme.of(context).colorScheme.onPrimary),
                           ),
                         ),
                       ],
@@ -471,17 +522,29 @@ class _NotificationItemState extends State<_NotificationItem> {
                                   actorName.isNotEmpty
                                       ? TextSpan(
                                           children: [
-                                            TextSpan(text: actorName, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                            TextSpan(
+                                                text: actorName,
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w800)),
                                             TextSpan(text: ' · $label'),
                                           ],
                                         )
-                                      : TextSpan(text: label, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                      : TextSpan(
+                                          text: label,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w800)),
                                 ),
                               ),
                               if (when != null)
                                 Text(
                                   formatTimeAgo(context, when),
-                                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                                  style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurface
+                                          .withAlpha(128),
+                                      fontSize: 12),
                                 ),
                             ],
                           ),
@@ -489,23 +552,42 @@ class _NotificationItemState extends State<_NotificationItem> {
                             const SizedBox(height: 4),
                             Text(
                               actorHandle,
-                              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+                              style: TextStyle(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withAlpha(160),
+                                  fontSize: 12),
                             ),
                           ],
                           if (summary.isNotEmpty) ...[
                             const SizedBox(height: 6),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.surfaceContainerHigh.withAlpha(90),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHigh
+                                    .withAlpha(90),
                                 borderRadius: BorderRadius.circular(10),
-                                border: Border(left: BorderSide(color: Theme.of(context).colorScheme.primary.withAlpha(140), width: 2)),
+                                border: Border(
+                                    left: BorderSide(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withAlpha(140),
+                                        width: 2)),
                               ),
                               child: Text(
                                 summary,
                                 maxLines: 3,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withAlpha(179)),
                               ),
                             ),
                           ],
@@ -516,14 +598,21 @@ class _NotificationItemState extends State<_NotificationItem> {
                                 if (type == 'Follow' && actorUrl.isNotEmpty)
                                   TextButton(
                                     onPressed: () async {
-                                      final api = CoreApi(config: widget.appState.config!);
+                                      final api = CoreApi(
+                                          config: widget.appState.config!);
                                       try {
                                         await api.follow(actorUrl);
                                         if (!context.mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Followed back')));
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(const SnackBar(
+                                                content:
+                                                    Text('Followed back')));
                                       } catch (e) {
                                         if (!context.mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Follow back failed: $e')));
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(SnackBar(
+                                                content: Text(
+                                                    'Follow back failed: $e')));
                                       }
                                     },
                                     child: const Text('Follow back'),
@@ -532,7 +621,10 @@ class _NotificationItemState extends State<_NotificationItem> {
                                   TextButton(
                                     onPressed: () {
                                       Navigator.of(context).push(
-                                        MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: widget.appState, activity: activity)),
+                                        MaterialPageRoute(
+                                            builder: (_) => NoteDetailScreen(
+                                                appState: widget.appState,
+                                                activity: activity)),
                                       );
                                     },
                                     child: const Text('Reply'),
@@ -550,7 +642,10 @@ class _NotificationItemState extends State<_NotificationItem> {
           ),
           if (noteActivity != null) ...[
             const SizedBox(height: 6),
-            TimelineActivityCard(appState: widget.appState, activity: noteActivity, elevated: true),
+            TimelineActivityCard(
+                appState: widget.appState,
+                activity: noteActivity,
+                elevated: true),
           ],
         ],
       ),
@@ -582,7 +677,6 @@ class _NotificationItemState extends State<_NotificationItem> {
       _ => context.l10n.notificationsGeneric,
     };
   }
-
 }
 
 Color _badgeColorFor(BuildContext context, String type) {
@@ -624,7 +718,9 @@ String _extractNestedType(dynamic obj) {
 
 Map<String, dynamic>? _extractNoteActivity(Map<String, dynamic> activity) {
   final type = (activity['type'] as String?)?.trim() ?? '';
-  if (type == 'Create' || type == 'Announce' || type == 'Update') return activity;
+  if (type == 'Create' || type == 'Announce' || type == 'Update') {
+    return activity;
+  }
   final obj = activity['object'];
   if (obj is Map) {
     final map = obj.cast<String, dynamic>();
@@ -682,7 +778,9 @@ bool _isNoteLikeType(dynamic value) {
 String _shortActor(String actor) {
   final uri = Uri.tryParse(actor);
   if (uri == null || uri.host.isEmpty) return actor;
-  if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'users' && uri.pathSegments.length >= 2) {
+  if (uri.pathSegments.isNotEmpty &&
+      uri.pathSegments.first == 'users' &&
+      uri.pathSegments.length >= 2) {
     return '@${uri.pathSegments[1]}@${uri.host}';
   }
   return '@${uri.host}';

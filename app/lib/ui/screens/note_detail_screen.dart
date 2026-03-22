@@ -40,11 +40,23 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   String? _currentId;
   bool _loading = false;
   String? _error;
+  Timer? _autoRefresh;
 
   @override
   void initState() {
     super.initState();
     unawaited(_loadContext());
+    _autoRefresh = Timer.periodic(const Duration(seconds: 12), (_) {
+      if (!mounted || _loading) return;
+      unawaited(_loadContext());
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRefresh?.cancel();
+    _scroll.dispose();
+    super.dispose();
   }
 
   Future<void> _loadContext() async {
@@ -196,7 +208,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
               appState: widget.appState,
               item: TimelineItem(
                 activityId: (widget.activity['id'] as String?)?.trim() ?? '',
-                activityType: (widget.activity['type'] as String?)?.trim() ?? '',
+                activityType:
+                    (widget.activity['type'] as String?)?.trim() ?? '',
                 actor: (widget.activity['actor'] as String?)?.trim() ?? '',
                 note: Note(
                   id: '',
@@ -232,6 +245,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
       if (published != null) return published.millisecondsSinceEpoch;
       return note.createdAtMs;
     }
+
     void walk(String id, int depth) {
       if (seen.contains(id)) return;
       seen.add(id);
@@ -250,6 +264,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
         walk(k, depth + 1);
       }
     }
+
     walk(rootId, 0);
     return out;
   }
@@ -261,7 +276,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     if (key == null) return;
     final ctx = key.currentContext;
     if (ctx == null) return;
-    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+    Scrollable.ensureVisible(ctx,
+        duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
   }
 }
 
@@ -302,7 +318,8 @@ class _ThreadNodeRow extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.only(left: pad),
       child: Card(
-        color: isRoot ? Theme.of(context).colorScheme.primary.withAlpha(20) : null,
+        color:
+            isRoot ? Theme.of(context).colorScheme.primary.withAlpha(20) : null,
         child: Column(
           children: [
             Row(
@@ -311,7 +328,8 @@ class _ThreadNodeRow extends StatelessWidget {
                   IconButton(
                     tooltip: collapsed ? 'Expand' : 'Collapse',
                     onPressed: onToggleCollapse,
-                    icon: Icon(collapsed ? Icons.chevron_right : Icons.expand_more),
+                    icon: Icon(
+                        collapsed ? Icons.chevron_right : Icons.expand_more),
                   )
                 else
                   const SizedBox(width: 40),

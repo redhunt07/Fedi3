@@ -193,7 +193,8 @@ class _NoteCardState extends State<NoteCard> {
 
   bool _hasPreviewForCurrentNote() {
     final note = _overrideNote ?? widget.item.note;
-    final url = _extractFirstLinkPreviewUrl(note.contentHtml, note.attachments);
+    final url = _extractFirstLinkPreviewUrl(
+        note.contentHtml, note.attachments, note.hashtags);
     return url != null && url.isNotEmpty;
   }
 
@@ -241,8 +242,12 @@ class _NoteCardState extends State<NoteCard> {
     final isOwner = _isOwner(note);
     final stats = _liveStats ?? _statsFromRaw(widget.rawActivity);
     final content = _injectCustomEmoji(note.contentHtml, note.emojis);
-    final previewUrl =
-        _extractFirstLinkPreviewUrl(note.contentHtml, note.attachments);
+    final previewUrl = _extractFirstLinkPreviewUrl(
+        note.contentHtml, note.attachments, note.hashtags);
+    final normalizedTags = <String>{
+      for (final t in note.hashtags)
+        if (t.trim().isNotEmpty) t.trim().toLowerCase(),
+    };
     final display =
         _noteActor?.displayName ?? _fallbackActorLabel(note.attributedTo);
     final handle = _handleFor(note);
@@ -444,6 +449,7 @@ class _NoteCardState extends State<NoteCard> {
                       child: _NoteContent(
                         appState: widget.appState,
                         html: content,
+                        onTapHashtag: (tag) => _openHashtag(context, tag),
                         onTapUrl: (url) async {
                           if (_looksLikeActorUrl(url)) {
                             _openProfile(context, url);
@@ -457,6 +463,7 @@ class _NoteCardState extends State<NoteCard> {
                     _NoteContent(
                       appState: widget.appState,
                       html: content,
+                      onTapHashtag: (tag) => _openHashtag(context, tag),
                       onTapUrl: (url) async {
                         if (_looksLikeActorUrl(url)) {
                           _openProfile(context, url);
@@ -495,13 +502,13 @@ class _NoteCardState extends State<NoteCard> {
                   else
                     const SizedBox.shrink(),
                 ],
-                if (note.hashtags.isNotEmpty) ...[
+                if (normalizedTags.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
                     children: [
-                      for (final tag in note.hashtags)
+                      for (final tag in normalizedTags)
                         ActionChip(
                           label: Text('#$tag'),
                           onPressed: () => _openHashtag(context, tag),
@@ -966,7 +973,11 @@ class _NoteCardState extends State<NoteCard> {
 
   void _prefetchLinkPreview() {
     final note = _overrideNote ?? widget.item.note;
-    final url = _extractFirstLinkPreviewUrl(note.contentHtml, note.attachments);
+    final url = _extractFirstLinkPreviewUrl(
+      note.contentHtml,
+      note.attachments,
+      note.hashtags,
+    );
     final u = url?.trim() ?? '';
     if (u.isEmpty || u == _lastPreviewUrl) return;
     _lastPreviewUrl = u;
@@ -1706,7 +1717,9 @@ class _NoteCardState extends State<NoteCard> {
       setState(() {
         _replying = false;
         _replyCtrl.clear();
+        _showReplies = true;
       });
+      await _loadReplies(api, inReplyTo);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
     } catch (e) {
@@ -1833,7 +1846,13 @@ class _NoteCardState extends State<NoteCard> {
       final next = (resp['next'] as String?)?.trim();
       if (!mounted) return;
       setState(() {
-        _replies.addAll(items);
+        if (cursor == null || cursor.trim().isEmpty) {
+          _replies
+            ..clear()
+            ..addAll(items);
+        } else {
+          _replies.addAll(items);
+        }
         _repliesCursor = (next != null && next.isNotEmpty) ? next : null;
       });
     } catch (e) {
@@ -1882,9 +1901,16 @@ class _NoteCardState extends State<NoteCard> {
   }
 
   String? _extractFirstLinkPreviewUrl(
-      String html, List<NoteAttachment> attachments) {
+    String html,
+    List<NoteAttachment> attachments,
+    List<String> hashtags,
+  ) {
     final h = _decodeHtmlEntities(html.trim());
     if (h.isEmpty) return null;
+    final normalizedTags = hashtags
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet();
 
     final attachmentUrls =
         attachments.map((a) => a.url.trim()).where((s) => s.isNotEmpty).toSet();
@@ -1899,6 +1925,15 @@ class _NoteCardState extends State<NoteCard> {
       if (uri == null || uri.host.isEmpty) return null;
       final path = uri.path;
       if (path.startsWith('/users/') || path.startsWith('/@')) return null;
+      if (path.startsWith('/tags/') ||
+          path.startsWith('/tag/') ||
+          path.startsWith('/hashtag/')) {
+        return null;
+      }
+      final last = uri.pathSegments.isEmpty
+          ? ''
+          : uri.pathSegments.last.trim().toLowerCase();
+      if (last.isNotEmpty && normalizedTags.contains(last)) return null;
       if (attachmentUrls.contains(u)) return null;
       return u;
     }
@@ -2317,9 +2352,8 @@ class _QuotedPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prev = replyPreview ?? quotePreview;
-    final prevContent = prev == null
-        ? ''
-        : ((prev['content'] as String?)?.trim() ?? '');
+    final prevContent =
+        prev == null ? '' : ((prev['content'] as String?)?.trim() ?? '');
     final prevName =
         prev == null ? '' : ((prev['name'] as String?)?.trim() ?? '');
     final inner = prevContent.isNotEmpty ? prevContent : prevName;
@@ -2398,11 +2432,15 @@ class _QuotedPreview extends StatelessWidget {
 
 class _NoteContent extends StatelessWidget {
   const _NoteContent(
-      {required this.appState, required this.html, required this.onTapUrl});
+      {required this.appState,
+      required this.html,
+      required this.onTapUrl,
+      this.onTapHashtag});
 
   final AppState appState;
   final String html;
   final FutureOr<bool> Function(String url) onTapUrl;
+  final void Function(String tag)? onTapHashtag;
 
   @override
   Widget build(BuildContext context) {
@@ -2417,6 +2455,23 @@ class _NoteContent extends StatelessWidget {
         if (element.localName != 'a') return null;
         final href = element.attributes['href']?.trim() ?? '';
         if (href.isEmpty) return null;
+        final hashtag = _extractHashtag(element, href);
+        if (hashtag != null && hashtag.isNotEmpty) {
+          return InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: onTapHashtag == null ? null : () => onTapHashtag!(hashtag),
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4, bottom: 2),
+              child: Text(
+                '#$hashtag',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          );
+        }
         final isMention = element.classes.contains('mention') ||
             element.classes.contains('u-url');
         if (!isMention) return null;
@@ -2429,6 +2484,32 @@ class _NoteContent extends StatelessWidget {
         );
       },
     );
+  }
+
+  String? _extractHashtag(dynamic element, String href) {
+    final label = element.text.trim();
+    final lowerHref = href.toLowerCase();
+    final hasTagClass = element.classes.contains('hashtag') ||
+        (element.attributes['rel']?.toLowerCase().contains('tag') ?? false);
+    if (!hasTagClass &&
+        !label.startsWith('#') &&
+        !lowerHref.contains('/tags/') &&
+        !lowerHref.contains('/tag/')) {
+      return null;
+    }
+    final raw = label.startsWith('#') ? label.substring(1) : label;
+    final fromLabel = _normalizeTag(raw);
+    if (fromLabel != null) return fromLabel;
+    final uri = Uri.tryParse(href);
+    if (uri == null || uri.pathSegments.isEmpty) return null;
+    return _normalizeTag(uri.pathSegments.last);
+  }
+
+  String? _normalizeTag(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.isEmpty) return null;
+    if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(v)) return null;
+    return v;
   }
 
   String _linkifyPlainUrls(String input) {

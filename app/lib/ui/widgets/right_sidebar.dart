@@ -13,11 +13,13 @@ import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/notification_archive_store.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/search_screen.dart';
 import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
 import 'inline_composer.dart';
@@ -43,6 +45,7 @@ class _RightSidebarState extends State<RightSidebar> {
 
   bool _loading = false;
   List<Map<String, dynamic>> _items = const [];
+  List<_HotTag> _hotTags = const [];
   String _draftKey = '';
   ComposeDraft? _draft;
   ActorProfile? _selfProfile;
@@ -70,6 +73,7 @@ class _RightSidebarState extends State<RightSidebar> {
       _startStream();
     }
     _loadSelfProfile();
+    _loadHotTags();
   }
 
   @override
@@ -130,10 +134,17 @@ class _RightSidebarState extends State<RightSidebar> {
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .toList();
+      final archive =
+          await NotificationArchiveStore.instance.mergeAndPersist(items);
+      unawaited(_loadHotTags());
       if (!mounted) return;
-      setState(() => _items = items);
+      setState(() =>
+          _items = NotificationArchiveStore.instance.sidebarQueue(archive));
     } catch (_) {
-      // best-effort
+      final archive = await NotificationArchiveStore.instance.readArchive();
+      if (!mounted) return;
+      setState(() =>
+          _items = NotificationArchiveStore.instance.sidebarQueue(archive));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -150,6 +161,34 @@ class _RightSidebarState extends State<RightSidebar> {
         await ActorRepository.instance.getActor(actorUrl);
     if (!mounted) return;
     setState(() => _selfProfile = profile);
+  }
+
+  Future<void> _loadHotTags() async {
+    final cfg = widget.appState.config;
+    if (cfg == null || !widget.appState.isRunning) return;
+    try {
+      final api = CoreApi(config: cfg);
+      final resp = await api.searchHashtags(
+        query: '',
+        source: 'all',
+        consistency: 'best',
+        limit: 10,
+      );
+      final rawItems =
+          (resp['items'] is List) ? (resp['items'] as List) : const [];
+      final tags = <_HotTag>[];
+      for (final item in rawItems) {
+        if (item is! Map) continue;
+        final name = (item['name'] as String?)?.trim().toLowerCase() ?? '';
+        if (name.isEmpty) continue;
+        final count = (item['count'] as num?)?.toInt() ?? 0;
+        tags.add(_HotTag(name: name, count: count));
+      }
+      if (!mounted) return;
+      setState(() => _hotTags = tags);
+    } catch (_) {
+      // best-effort
+    }
   }
 
   @override
@@ -280,7 +319,7 @@ class _RightSidebarState extends State<RightSidebar> {
                     else
                       Column(
                         children: [
-                          for (final it in _items.take(8))
+                          for (final it in _items.take(10))
                             _SidebarNotificationRow(
                                 appState: widget.appState,
                                 item: it,
@@ -325,6 +364,45 @@ class _RightSidebarState extends State<RightSidebar> {
                 subtitle: Text(cfg?.publicBaseUrl ?? ''),
               ),
             ),
+            if (_hotTags.isNotEmpty) ...[
+              const SizedBox(height: UiTokens.gapMd),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(UiTokens.padCard),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Hashtag popolari',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: UiTokens.gapSm),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final tag in _hotTags.take(10))
+                            ActionChip(
+                              label: Text('#${tag.name} (${tag.count})'),
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => SearchScreen(
+                                      appState: widget.appState,
+                                      initialQuery: '#${tag.name}',
+                                      initialTab: SearchTab.posts,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         );
       },
@@ -420,6 +498,13 @@ class _RightSidebarState extends State<RightSidebar> {
     if (!mounted) return;
     setState(() => _draft = null);
   }
+}
+
+class _HotTag {
+  const _HotTag({required this.name, required this.count});
+
+  final String name;
+  final int count;
 }
 
 class _SidebarNotificationRow extends StatefulWidget {
@@ -673,6 +758,7 @@ Map<String, dynamic>? _extractNoteActivity(Map<String, dynamic> activity) {
   if (type == 'Create' || type == 'Announce' || type == 'Update') {
     return activity;
   }
+
   final obj = activity['object'];
   if (obj is Map) {
     final map = obj.cast<String, dynamic>();
