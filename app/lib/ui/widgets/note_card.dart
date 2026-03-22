@@ -61,12 +61,14 @@ class NoteCard extends StatefulWidget {
 }
 
 class _NoteCardState extends State<NoteCard> {
+  static final Map<String, String> _replyDraftByNoteId = <String, String>{};
   ActorProfile? _noteActor;
   ActorProfile? _boostActor;
   String? _lastPreviewUrl;
   bool _showRaw = false;
   bool _replying = false;
   final TextEditingController _replyCtrl = TextEditingController();
+  final FocusNode _replyFocus = FocusNode();
   bool _showThread = false;
   bool _threadLoading = false;
   String? _threadError;
@@ -134,6 +136,13 @@ class _NoteCardState extends State<NoteCard> {
     _loadActors();
     _liveStats = _statsFromRaw(widget.rawActivity);
     _previewVisible = _hasPreviewForCurrentNote();
+    final noteId = widget.item.note.id.trim();
+    final savedDraft = noteId.isEmpty ? null : _replyDraftByNoteId[noteId];
+    if (savedDraft != null && savedDraft.isNotEmpty) {
+      _replyCtrl.text = savedDraft;
+      _replying = true;
+    }
+    _replyCtrl.addListener(_onReplyDraftChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final cfg = widget.appState.config;
@@ -158,6 +167,9 @@ class _NoteCardState extends State<NoteCard> {
       if (widget.appState.isRunning) {
         _loadMyReactions(api, note.id);
       }
+      if (_replying && _replyCtrl.text.trim().isNotEmpty) {
+        _replyFocus.requestFocus();
+      }
     });
   }
 
@@ -168,6 +180,7 @@ class _NoteCardState extends State<NoteCard> {
       _liveStats = _statsFromRaw(widget.rawActivity);
     }
     if (oldWidget.item.note.id != widget.item.note.id) {
+      _persistReplyDraft(oldWidget.item.note.id);
       _overrideNote = null;
       _deletedOverride = false;
       _myLikeId = null;
@@ -182,6 +195,14 @@ class _NoteCardState extends State<NoteCard> {
       _translationSource = null;
       _translationError = null;
       _previewVisible = _hasPreviewForCurrentNote();
+      final nextNoteId = widget.item.note.id.trim();
+      final draft =
+          nextNoteId.isEmpty ? null : _replyDraftByNoteId[nextNoteId] ?? '';
+      _replyCtrl.value = TextEditingValue(
+        text: draft ?? '',
+        selection: TextSelection.collapsed(offset: (draft ?? '').length),
+      );
+      _replying = (draft ?? '').trim().isNotEmpty;
       final cfg = widget.appState.config;
       if (cfg != null && widget.appState.isRunning) {
         _loadMyReactions(CoreApi(config: cfg), widget.item.note.id);
@@ -200,8 +221,49 @@ class _NoteCardState extends State<NoteCard> {
 
   @override
   void dispose() {
+    _persistReplyDraft(widget.item.note.id);
+    _replyCtrl.removeListener(_onReplyDraftChanged);
     _replyCtrl.dispose();
+    _replyFocus.dispose();
     super.dispose();
+  }
+
+  void _onReplyDraftChanged() {
+    _persistReplyDraft(widget.item.note.id);
+  }
+
+  void _persistReplyDraft(String noteId) {
+    final key = noteId.trim();
+    if (key.isEmpty) return;
+    final text = _replyCtrl.text.trim();
+    if (text.isEmpty) {
+      _replyDraftByNoteId.remove(key);
+      return;
+    }
+    _replyDraftByNoteId[key] = _replyCtrl.text;
+  }
+
+  void _clearReplyDraft(String noteId) {
+    final key = noteId.trim();
+    if (key.isNotEmpty) {
+      _replyDraftByNoteId.remove(key);
+    }
+    _replyCtrl.clear();
+  }
+
+  void _toggleReplyComposer(String noteId) {
+    setState(() {
+      _replying = !_replying;
+      if (!_replying) {
+        _clearReplyDraft(noteId);
+      }
+    });
+    if (_replying) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _replyFocus.requestFocus();
+      });
+    }
   }
 
   Future<void> _loadActors() async {
@@ -696,10 +758,7 @@ class _NoteCardState extends State<NoteCard> {
                           tooltip: context.l10n.activityReply,
                           icon: const Icon(Icons.reply, size: 18),
                           onPressed: canAct
-                              ? () => setState(() {
-                                    _replying = !_replying;
-                                    if (!_replying) _replyCtrl.clear();
-                                  })
+                              ? () => _toggleReplyComposer(note.id)
                               : null,
                         ),
                         _ActionButton(
@@ -916,7 +975,9 @@ class _NoteCardState extends State<NoteCard> {
                 if (_replying) ...[
                   const SizedBox(height: 8),
                   TextField(
+                    key: ValueKey('reply-${note.id}'),
                     controller: _replyCtrl,
+                    focusNode: _replyFocus,
                     minLines: 1,
                     maxLines: 5,
                     decoration: InputDecoration(
@@ -928,7 +989,7 @@ class _NoteCardState extends State<NoteCard> {
                       TextButton(
                         onPressed: () => setState(() {
                           _replying = false;
-                          _replyCtrl.clear();
+                          _clearReplyDraft(note.id);
                         }),
                         child: Text(context.l10n.activityCancel),
                       ),
@@ -1340,7 +1401,7 @@ class _NoteCardState extends State<NoteCard> {
         _myEmojiIds.clear();
         _reactionsOpen = false;
         _replying = false;
-        _replyCtrl.clear();
+        _clearReplyDraft(note.id);
       });
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -1716,10 +1777,11 @@ class _NoteCardState extends State<NoteCard> {
       if (!context.mounted) return;
       setState(() {
         _replying = false;
-        _replyCtrl.clear();
+        _clearReplyDraft(inReplyTo);
         _showReplies = true;
       });
       await _loadReplies(api, inReplyTo);
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
     } catch (e) {

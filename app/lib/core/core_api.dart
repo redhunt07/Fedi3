@@ -154,14 +154,72 @@ class CoreApi {
     }
     final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
     if (!isSocial) return decoded;
-    final items = decoded['items'];
-    final hasItems = items is List && items.isNotEmpty;
-    if (hasItems) return decoded;
 
     final fallbackUri = _internal('/_fedi3/timeline/federated', query);
     final fallback = await http.get(fallbackUri, headers: _internalHeaders);
     if (fallback.statusCode < 200 || fallback.statusCode >= 300) return decoded;
-    return jsonDecode(fallback.body) as Map<String, dynamic>;
+    final fed = jsonDecode(fallback.body) as Map<String, dynamic>;
+    final dhtItems = ((decoded['items'] as List<dynamic>?) ?? const [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .toList();
+    final fedItems = ((fed['items'] as List<dynamic>?) ?? const [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .toList();
+
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void addAll(Iterable<Map<String, dynamic>> source) {
+      for (final item in source) {
+        final id = item['id']?.toString().trim() ?? '';
+        final obj = item['object'];
+        final objectId = obj is String
+            ? obj.trim()
+            : (obj is Map ? (obj['id']?.toString().trim() ?? '') : '');
+        final key = id.isNotEmpty
+            ? id
+            : (objectId.isNotEmpty
+                ? objectId
+                : '${item['type']}-${item['actor']}-${item['published']}-${item['created_at_ms']}');
+        if (!seen.add(key)) continue;
+        merged.add(item);
+      }
+    }
+
+    addAll(dhtItems);
+    addAll(fedItems);
+    merged.sort((a, b) => _timelineTimestampMs(b) - _timelineTimestampMs(a));
+    if (merged.length > limit) {
+      merged.removeRange(limit, merged.length);
+    }
+
+    return <String, dynamic>{
+      ...decoded,
+      'items': merged,
+      'next': decoded['next'] ?? fed['next'],
+    };
+  }
+
+  int _timelineTimestampMs(Map<String, dynamic> item) {
+    final published = item['published']?.toString().trim() ?? '';
+    if (published.isNotEmpty) {
+      final dt = DateTime.tryParse(published);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    final updated = item['updated']?.toString().trim() ?? '';
+    if (updated.isNotEmpty) {
+      final dt = DateTime.tryParse(updated);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    final created = item['created_at_ms'];
+    if (created is num) return created.toInt();
+    if (created is String) return int.tryParse(created.trim()) ?? 0;
+    final obj = item['object'];
+    if (obj is Map) {
+      return _timelineTimestampMs(obj.cast<String, dynamic>());
+    }
+    return 0;
   }
 
   Future<void> triggerLegacySync({
