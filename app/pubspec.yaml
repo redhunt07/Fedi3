@@ -1,7 +1,7 @@
 ﻿name: fedi3
 description: Personal ActivityPub instance client (Flutter UI + Rust core)
 publish_to: "none"
-version: 0.9.18+2
+version: 0.9.18+3
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

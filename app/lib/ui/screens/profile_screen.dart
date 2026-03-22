@@ -4,9 +4,11 @@
  */
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
+import 'package:file_selector/file_selector.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -54,6 +56,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Timer? _profileNotifStreamRetry;
   CoreConfig? _profileNotifStreamConfig;
   bool _profileRefreshBusy = false;
+  bool _followImportBusy = false;
+  String? _followImportJobId;
+  Timer? _followImportPoll;
+  String? _followImportStatusLabel;
 
   @override
   void initState() {
@@ -64,6 +70,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void dispose() {
     _followPoll?.cancel();
+    _followImportPoll?.cancel();
     _profileStreamRetry?.cancel();
     _profileStreamSub?.cancel();
     _profileNotifStreamRetry?.cancel();
@@ -387,8 +394,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onPressed: _outboxLoading ? null : _refreshOutboxOnly,
                   icon: const Icon(Icons.refresh),
                 ),
+                if (_isLocalProfile())
+                  IconButton(
+                    tooltip: _followImportBusy
+                        ? 'Import follow in corso'
+                        : 'Importa follow da CSV',
+                    onPressed: _followImportBusy ? null : () => _pickFollowCsv(api),
+                    icon: _followImportBusy
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.upload_file),
+                  ),
               ],
             ),
+            if (_isLocalProfile() &&
+                _followImportStatusLabel != null &&
+                _followImportStatusLabel!.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 8),
+                child: Text(
+                  _followImportStatusLabel!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             if (_outboxError != null && _outbox.isEmpty)
               NetworkErrorCard(
                 message: _outboxError,
@@ -559,6 +593,79 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _followBusy = false);
     }
+  }
+
+  Future<void> _pickFollowCsv(CoreApi api) async {
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'CSV', extensions: ['csv']),
+        ],
+      );
+      if (file == null) return;
+      setState(() {
+        _followImportBusy = true;
+        _followImportStatusLabel = 'Import follow in avvio...';
+      });
+      final bytes = await file.readAsBytes();
+      final csv = utf8.decode(bytes, allowMalformed: true);
+      final result = await api.importFollowCsv(csv: csv);
+      final jobId = result['job_id']?.toString().trim();
+      if (!mounted) return;
+      setState(() {
+        _followImportJobId = (jobId == null || jobId.isEmpty) ? null : jobId;
+        _followImportStatusLabel = 'Import queued';
+      });
+      _startFollowImportPoll(api);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _followImportBusy = false;
+        _followImportStatusLabel = 'Import follow fallito';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import follow fallito: $e')),
+      );
+    }
+  }
+
+  void _startFollowImportPoll(CoreApi api) {
+    _followImportPoll?.cancel();
+    _followImportPoll = Timer.periodic(const Duration(seconds: 2), (_) async {
+      final jobId = _followImportJobId;
+      if (jobId == null || jobId.isEmpty) {
+        _followImportPoll?.cancel();
+        return;
+      }
+      try {
+        final status = await api.fetchFollowImportStatus(jobId: jobId);
+        if (!mounted) return;
+        final stateLabel = status['status']?.toString() ?? 'unknown';
+        final imported = (status['imported'] as num?)?.toInt() ?? 0;
+        final failed = (status['failed'] as num?)?.toInt() ?? 0;
+        final invalid = (status['invalid'] as num?)?.toInt() ?? 0;
+        setState(() {
+          _followImportStatusLabel =
+              'Import follow: $stateLabel, imported=$imported, failed=$failed, invalid=$invalid';
+        });
+        if (stateLabel == 'completed' || stateLabel == 'failed') {
+          _followImportPoll?.cancel();
+          setState(() => _followImportBusy = false);
+          await _refreshProfileImmediate();
+          await _refreshOutboxOnly(silent: true);
+        }
+      } catch (e) {
+        if (!mounted) return;
+        _followImportPoll?.cancel();
+        setState(() {
+          _followImportBusy = false;
+          _followImportStatusLabel = 'Import follow: errore stato job';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Errore stato import follow: $e')),
+        );
+      }
+    });
   }
 
   void _ensureFollowPoll() {

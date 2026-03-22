@@ -1377,6 +1377,46 @@ class CoreApi {
     }
   }
 
+  Future<Map<String, dynamic>> importFollowCsv({
+    required String csv,
+    int batchSize = 25,
+    int pauseMs = 500,
+    bool dryRun = false,
+  }) async {
+    final uri = _internal('/_fedi3/social/follow/import');
+    final payload = {
+      'csv': csv,
+      'batch_size': batchSize,
+      'pause_ms': pauseMs,
+      'dry_run': dryRun,
+    };
+    final resp = await http.post(
+      uri,
+      headers: {
+        ..._internalHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(payload),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError(
+          'follow import failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> fetchFollowImportStatus({String? jobId}) async {
+    final uri = _internal('/_fedi3/social/follow/import/status', {
+      if (jobId != null && jobId.trim().isNotEmpty) 'job_id': jobId.trim(),
+    });
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError(
+          'follow import status failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> fetchUpnpStatus() async {
     final uri = _internal('/_fedi3/core/upnp');
     final resp = await http.get(uri, headers: _internalHeaders);
