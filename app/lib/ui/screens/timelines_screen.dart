@@ -602,6 +602,7 @@ class _TimelineListState extends State<_TimelineList>
   final _knownIds = <String>{};
   final _knownObjectIds = <String>{};
   final _pending = <Map<String, dynamic>>[];
+  final _stableUiKeys = <String, String>{};
   final _scroll = ScrollController();
   Timer? _poll;
   Timer? _retry;
@@ -676,6 +677,7 @@ class _TimelineListState extends State<_TimelineList>
       _pending.clear();
       _knownIds.clear();
       _knownObjectIds.clear();
+      _stableUiKeys.clear();
     });
     await _loadMore();
   }
@@ -725,7 +727,7 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
-          .where(_isRenderableTimelineActivity)
+          .where(_isTimelineCandidateActivity)
           .toList();
       setState(() {
         for (final it in items) {
@@ -755,7 +757,7 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
-          .where(_isRenderableTimelineActivity)
+          .where(_isTimelineCandidateActivity)
           .toList();
       if (items.isEmpty) return;
 
@@ -896,6 +898,62 @@ class _TimelineListState extends State<_TimelineList>
 
   bool _isRenderableTimelineActivity(Map<String, dynamic> activity) {
     return TimelineItem.tryFromActivity(activity) != null;
+  }
+
+  bool _isTimelineCandidateActivity(Map<String, dynamic> activity) {
+    if (_isRenderableTimelineActivity(activity)) return true;
+    final type = (activity['type'] as String?)?.trim() ?? '';
+    if (type != 'Create' && type != 'Announce' && type != 'Update') {
+      return false;
+    }
+    final object = activity['object'];
+    if (object is String) {
+      return object.trim().isNotEmpty;
+    }
+    if (object is! Map) return false;
+    final map = object.cast<String, dynamic>();
+    final objectId = (map['id'] as String?)?.trim() ?? '';
+    if (objectId.isNotEmpty) return true;
+    final objectType = (map['type'] as String?)?.trim() ?? '';
+    return objectType == 'Note' ||
+        objectType == 'Article' ||
+        objectType == 'Question' ||
+        objectType == 'Page';
+  }
+
+  String _activityFingerprint(Map<String, dynamic> activity) {
+    final type = (activity['type'] as String?)?.trim() ?? '';
+    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    final objectId = _activityObjectId(activity) ?? '';
+    final ts = _activityTimestampMs(activity);
+    String text = '';
+    final object = activity['object'];
+    if (object is Map) {
+      final map = object.cast<String, dynamic>();
+      text = (map['content'] as String?)?.trim() ??
+          (map['summary'] as String?)?.trim() ??
+          '';
+    }
+    return '$type|$actor|$objectId|$ts|$text';
+  }
+
+  String _stableUiKeyForActivity(Map<String, dynamic> activity) {
+    final id = _activityId(activity);
+    final objectId = _activityObjectId(activity) ?? '';
+    final fingerprint = _activityFingerprint(activity);
+    for (final probe in [id, objectId, fingerprint]) {
+      if (probe.isEmpty) continue;
+      final existing = _stableUiKeys[probe];
+      if (existing != null && existing.isNotEmpty) return existing;
+    }
+    final assigned = id.isNotEmpty
+        ? id
+        : (objectId.isNotEmpty ? objectId : '${widget.kind}|$fingerprint');
+    for (final alias in [id, objectId, fingerprint]) {
+      if (alias.isEmpty) continue;
+      _stableUiKeys[alias] = assigned;
+    }
+    return assigned;
   }
 
   String? _activityObjectId(Map<String, dynamic> activity) {
@@ -1151,13 +1209,7 @@ class _TimelineListState extends State<_TimelineList>
               final isLast = index == filtered.length + 1;
               final timelineItem = timelineCache[item];
               final replyDepth = _replyDepth(timelineItem, notesById);
-              final keyId = _activityId(item);
-              final keyObjectId = _activityObjectId(item) ?? '';
-              final stableKey = keyId.isNotEmpty
-                  ? keyId
-                  : (keyObjectId.isNotEmpty
-                      ? keyObjectId
-                      : '${widget.kind}-${timelineItem?.note.id ?? index}');
+              final stableKey = _stableUiKeyForActivity(item);
               final card = TimelineActivityCard(
                 key: ValueKey(stableKey),
                 appState: widget.appState,

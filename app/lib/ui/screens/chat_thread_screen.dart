@@ -1116,23 +1116,35 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       body: Column(
         children: [
           Expanded(child: _buildMessages()),
-          if (_typingActors.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _typingLabel(context),
-                  style: TextStyle(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withAlpha(150),
-                      fontSize: 12),
-                ),
-              ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: _typingActors.isEmpty
+                  ? const SizedBox(
+                      key: ValueKey('typing-empty'),
+                      height: 0,
+                    )
+                  : Align(
+                      key: const ValueKey('typing-active'),
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _typingLabel(context),
+                        style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(150),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
             ),
-          _buildComposer(),
+          ),
+          KeyedSubtree(
+            key: const ValueKey('chat-composer'),
+            child: _buildComposer(),
+          ),
         ],
       ),
     );
