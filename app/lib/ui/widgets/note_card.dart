@@ -62,6 +62,8 @@ class NoteCard extends StatefulWidget {
 
 class _NoteCardState extends State<NoteCard> {
   static final Map<String, String> _replyDraftByNoteId = <String, String>{};
+  static final Map<String, _TranslationCacheEntry> _translationByNoteId =
+      <String, _TranslationCacheEntry>{};
   ActorProfile? _noteActor;
   ActorProfile? _boostActor;
   String? _lastPreviewUrl;
@@ -136,6 +138,7 @@ class _NoteCardState extends State<NoteCard> {
     _loadActors();
     _liveStats = _statsFromRaw(widget.rawActivity);
     _previewVisible = _hasPreviewForCurrentNote();
+    _restoreTranslationFromCache(widget.item.note.id);
     final noteId = widget.item.note.id.trim();
     final savedDraft = noteId.isEmpty ? null : _replyDraftByNoteId[noteId];
     if (savedDraft != null && savedDraft.isNotEmpty) {
@@ -181,6 +184,7 @@ class _NoteCardState extends State<NoteCard> {
     }
     if (oldWidget.item.note.id != widget.item.note.id) {
       _persistReplyDraft(oldWidget.item.note.id);
+      _persistTranslationCache(oldWidget.item.note.id);
       _overrideNote = null;
       _deletedOverride = false;
       _myLikeId = null;
@@ -195,6 +199,7 @@ class _NoteCardState extends State<NoteCard> {
       _translationSource = null;
       _translationError = null;
       _previewVisible = _hasPreviewForCurrentNote();
+      _restoreTranslationFromCache(widget.item.note.id);
       final nextNoteId = widget.item.note.id.trim();
       final draft =
           nextNoteId.isEmpty ? null : _replyDraftByNoteId[nextNoteId] ?? '';
@@ -222,6 +227,7 @@ class _NoteCardState extends State<NoteCard> {
   @override
   void dispose() {
     _persistReplyDraft(widget.item.note.id);
+    _persistTranslationCache(widget.item.note.id);
     _replyCtrl.removeListener(_onReplyDraftChanged);
     _replyCtrl.dispose();
     _replyFocus.dispose();
@@ -264,6 +270,32 @@ class _NoteCardState extends State<NoteCard> {
         _replyFocus.requestFocus();
       });
     }
+  }
+
+  void _restoreTranslationFromCache(String noteId) {
+    final key = noteId.trim();
+    if (key.isEmpty) return;
+    final cached = _translationByNoteId[key];
+    if (cached == null) return;
+    _translatedText = cached.text;
+    _translationSource = cached.source;
+    _translationVisible = cached.visible;
+    _translationError = null;
+  }
+
+  void _persistTranslationCache(String noteId) {
+    final key = noteId.trim();
+    if (key.isEmpty) return;
+    final text = _translatedText?.trim() ?? '';
+    if (text.isEmpty) {
+      _translationByNoteId.remove(key);
+      return;
+    }
+    _translationByNoteId[key] = _TranslationCacheEntry(
+      text: _translatedText!,
+      source: _translationSource,
+      visible: _translationVisible,
+    );
   }
 
   Future<void> _loadActors() async {
@@ -1054,6 +1086,7 @@ class _NoteCardState extends State<NoteCard> {
     if (_translationLoading) return;
     if (_translatedText != null) {
       setState(() => _translationVisible = !_translationVisible);
+      _persistTranslationCache(widget.item.note.id);
       return;
     }
     final plain = _plainTextFromHtml(html);
@@ -1073,6 +1106,7 @@ class _NoteCardState extends State<NoteCard> {
         _translationSource = res.detectedSource;
         _translationVisible = true;
       });
+      _persistTranslationCache(widget.item.note.id);
     } catch (e) {
       if (!mounted) return;
       setState(() => _translationError = e.toString());
@@ -2061,6 +2095,18 @@ class _ReactionStats {
   final int likeCount;
   final int boostCount;
   final List<_EmojiCount> emojis;
+}
+
+class _TranslationCacheEntry {
+  const _TranslationCacheEntry({
+    required this.text,
+    required this.source,
+    required this.visible,
+  });
+
+  final String text;
+  final String? source;
+  final bool visible;
 }
 
 class _EmojiCount {

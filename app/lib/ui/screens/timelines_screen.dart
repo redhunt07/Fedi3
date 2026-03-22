@@ -728,6 +728,7 @@ class _TimelineListState extends State<_TimelineList>
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
           .where(_isTimelineCandidateActivity)
+          .where(_matchesTooltipSemantics)
           .toList();
       setState(() {
         for (final it in items) {
@@ -758,6 +759,7 @@ class _TimelineListState extends State<_TimelineList>
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
           .where(_isTimelineCandidateActivity)
+          .where(_matchesTooltipSemantics)
           .toList();
       if (items.isEmpty) return;
 
@@ -1026,6 +1028,90 @@ class _TimelineListState extends State<_TimelineList>
     final objectId = _activityObjectId(activity);
     if (id.isNotEmpty) _knownIds.add(id);
     if (objectId != null) _knownObjectIds.add(objectId);
+  }
+
+  String _activityActorId(Map<String, dynamic> activity) {
+    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    if (actor.isNotEmpty) return actor;
+    final object = activity['object'];
+    if (object is Map) {
+      final map = object.cast<String, dynamic>();
+      final attributed = (map['attributedTo'] as String?)?.trim() ?? '';
+      if (attributed.isNotEmpty) return attributed;
+      final nested = map['object'];
+      if (nested is Map) {
+        final nestedAttributed =
+            (nested['attributedTo'] as String?)?.trim() ?? '';
+        if (nestedAttributed.isNotEmpty) return nestedAttributed;
+      }
+    }
+    return '';
+  }
+
+  bool _isPublicActivity(Map<String, dynamic> activity) {
+    bool hasPublic(dynamic value) {
+      if (value is String) {
+        return value.trim() == 'https://www.w3.org/ns/activitystreams#Public';
+      }
+      if (value is List) {
+        for (final entry in value) {
+          if (entry is String &&
+              entry.trim() == 'https://www.w3.org/ns/activitystreams#Public') {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    if (hasPublic(activity['to']) || hasPublic(activity['cc'])) return true;
+    final object = activity['object'];
+    if (object is Map) {
+      if (hasPublic(object['to']) || hasPublic(object['cc'])) return true;
+      final nested = object['object'];
+      if (nested is Map) {
+        if (hasPublic(nested['to']) || hasPublic(nested['cc'])) return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isLocalActorId(String actorId) {
+    final actor = actorId.trim();
+    if (actor.isEmpty) return false;
+    final cfgDomain = widget.appState.config?.domain.trim().toLowerCase() ?? '';
+    final publicBase = widget.appState.config?.publicBaseUrl.trim() ?? '';
+    String publicHost = '';
+    if (publicBase.isNotEmpty) {
+      try {
+        publicHost = (Uri.parse(publicBase).host).trim().toLowerCase();
+      } catch (_) {}
+    }
+    try {
+      final host = Uri.parse(actor).host.trim().toLowerCase();
+      if (host.isEmpty) return false;
+      if (cfgDomain.isNotEmpty && host == cfgDomain) return true;
+      if (publicHost.isNotEmpty && host == publicHost) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  bool _matchesTooltipSemantics(Map<String, dynamic> activity) {
+    final kind = widget.kind.trim().toLowerCase();
+    if (kind == 'unified' || kind == 'home') return true;
+    final actorId = _activityActorId(activity);
+    final localActor = _isLocalActorId(actorId);
+    final isPublic = _isPublicActivity(activity);
+    if (kind == 'local') {
+      return localActor && isPublic;
+    }
+    if (kind == 'social') {
+      return !localActor && isPublic;
+    }
+    if (kind == 'federated') {
+      return !localActor && isPublic;
+    }
+    return true;
   }
 
   @override

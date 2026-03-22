@@ -14,7 +14,7 @@ class NotificationArchiveStore {
   static final NotificationArchiveStore instance = NotificationArchiveStore._();
 
   static const int _maxArchiveItems = 2000;
-  static const int _maxSidebarItems = 10;
+  static const int _maxSidebarItems = 5;
 
   Future<File> _file() async {
     final dir = await getApplicationSupportDirectory();

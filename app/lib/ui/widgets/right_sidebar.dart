@@ -35,6 +35,7 @@ class RightSidebar extends StatefulWidget {
 }
 
 class _RightSidebarState extends State<RightSidebar> {
+  static const int _maxSidebarNotifications = 5;
   Timer? _poll;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
@@ -129,7 +130,8 @@ class _RightSidebarState extends State<RightSidebar> {
     setState(() => _loading = true);
     try {
       final api = CoreApi(config: cfg);
-      final resp = await api.fetchNotifications(limit: 12);
+      final resp =
+          await api.fetchNotifications(limit: _maxSidebarNotifications);
       final items = (resp['items'] as List<dynamic>? ?? const [])
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
@@ -319,7 +321,8 @@ class _RightSidebarState extends State<RightSidebar> {
                     else
                       Column(
                         children: [
-                          for (final it in _items.take(10))
+                          for (final it
+                              in _items.take(_maxSidebarNotifications))
                             _SidebarNotificationRow(
                                 appState: widget.appState,
                                 item: it,
