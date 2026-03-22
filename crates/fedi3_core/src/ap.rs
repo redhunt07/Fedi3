@@ -5620,7 +5620,83 @@ async fn resolve_follow_target_input(state: &ApState, input: &str) -> Option<Str
         return None;
     }
     if raw.starts_with("http://") || raw.starts_with("https://") {
-        return Some(raw.trim_end_matches('/').to_string());
+        let url = raw.trim_end_matches('/').to_string();
+        // Try to canonicalize profile URLs like /@user to actor IDs (/users/user).
+        if let Ok(resp) = state
+            .http
+            .get(&url)
+            .header(
+                "Accept",
+                "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+            )
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(v) = resp.json::<serde_json::Value>().await {
+                    if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
+                        let id = id.trim().trim_end_matches('/');
+                        if id.starts_with("http://") || id.starts_with("https://") {
+                            return Some(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(uri) = url.parse::<http::Uri>() {
+            if let Some(host) = uri.host() {
+                let path = uri.path().trim_matches('/');
+                if let Some(user) = path.strip_prefix('@') {
+                    if !user.trim().is_empty() {
+                        let resource = format!("acct:{}@{}", user.trim(), host);
+                        let wf = format!(
+                            "https://{}/.well-known/webfinger?resource={}",
+                            host,
+                            encode(&resource)
+                        );
+                        if let Ok(resp) = state.http.get(wf).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(v) = resp.json::<serde_json::Value>().await {
+                                    if let Some(links) = v.get("links").and_then(|x| x.as_array())
+                                    {
+                                        for link in links {
+                                            let rel = link
+                                                .get("rel")
+                                                .and_then(|x| x.as_str())
+                                                .unwrap_or("");
+                                            if rel != "self" {
+                                                continue;
+                                            }
+                                            let href = link
+                                                .get("href")
+                                                .and_then(|x| x.as_str())
+                                                .unwrap_or("")
+                                                .trim();
+                                            if href.is_empty() {
+                                                continue;
+                                            }
+                                            let t = link
+                                                .get("type")
+                                                .and_then(|x| x.as_str())
+                                                .unwrap_or("");
+                                            if t.contains("application/activity+json")
+                                                || t.contains("application/ld+json")
+                                                || t.is_empty()
+                                            {
+                                                return Some(
+                                                    href.trim_end_matches('/').to_string()
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return Some(url);
     }
     let handle = raw.trim_start_matches('@');
     let mut parts = handle.split('@');
