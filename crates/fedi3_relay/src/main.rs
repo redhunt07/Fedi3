@@ -492,6 +492,7 @@ struct AppState {
     reconcile_last_error: Arc<Mutex<Option<String>>>,
     hot_path_inflight: Arc<Semaphore>,
     async_job_slots: Arc<Semaphore>,
+    spool_flush_inflight: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1080,6 +1081,7 @@ struct RelayConfig {
     spool_max_rows_per_user: usize,
     spool_flush_batch: usize,
     spool_deadletter_max_tries: i64,
+    spool_retry_interval_secs: u64,
     peer_directory_ttl_days: u32,
     media_backend: String,
     media_dir: PathBuf,
@@ -1732,6 +1734,7 @@ async fn main() {
         reconcile_last_error: Arc::new(Mutex::new(None)),
         hot_path_inflight: Arc::new(Semaphore::new(max_hot_path_inflight)),
         async_job_slots: Arc::new(Semaphore::new(max_async_jobs)),
+        spool_flush_inflight: Arc::new(Mutex::new(HashSet::new())),
     };
 
     let addr = state.cfg.bind;
@@ -1815,6 +1818,25 @@ async fn main() {
                 if let Err(e) = db.cleanup_peer_registry(peer_directory_ttl_days) {
                     error!("peer_registry cleanup failed: {e}");
                 }
+            }
+        }
+    });
+
+    // Periodic spool retry for online users: ensures Follow/Accept processing
+    // doesn't stall if the first flush attempt happens before core is fully ready.
+    let spool_retry_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            spool_retry_state.cfg.spool_retry_interval_secs.max(5),
+        ));
+        loop {
+            interval.tick().await;
+            let users = {
+                let tunnels = spool_retry_state.tunnels.read().await;
+                tunnels.keys().cloned().collect::<Vec<_>>()
+            };
+            for user in users {
+                maybe_spawn_spool_flush_for_user(&spool_retry_state, &user).await;
             }
         }
     });
@@ -2546,6 +2568,11 @@ fn load_config() -> RelayConfig {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(8)
         .clamp(1, 100);
+    let spool_retry_interval_secs = std::env::var("FEDI3_RELAY_SPOOL_RETRY_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(20)
+        .clamp(5, 300);
     let media_backend =
         std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
     let media_dir =
@@ -2724,6 +2751,7 @@ fn load_config() -> RelayConfig {
         spool_max_rows_per_user,
         spool_flush_batch,
         spool_deadletter_max_tries,
+        spool_retry_interval_secs,
         peer_directory_ttl_days,
         media_backend,
         media_dir: PathBuf::from(media_dir),
@@ -2894,7 +2922,7 @@ async fn handle_tunnel(
         let _ = index_outbox_for_user(&cache_state, &cache_user).await;
     });
 
-    tokio::spawn(flush_spool_for_user(state.clone(), user.clone()));
+    maybe_spawn_spool_flush_for_user(&state, &user).await;
 
     let inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>> =
         Arc::new(RwLock::new(HashMap::new()));
@@ -4085,6 +4113,9 @@ async fn forward_user_rest(
             .is_ok()
         {
             state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
+            if state.tunnels.read().await.contains_key(&user) {
+                maybe_spawn_spool_flush_for_user(&state, &user).await;
+            }
             return (StatusCode::ACCEPTED, "accepted").into_response();
         }
         return (StatusCode::SERVICE_UNAVAILABLE, "spool unavailable").into_response();
@@ -5481,10 +5512,11 @@ async fn shared_inbox(
 
     for user in users {
         let is_online = { state.tunnels.read().await.contains_key(&user) };
+        let mut delivered_now = false;
         if is_online {
             let resp = forward_to_user(
                 state.clone(),
-                user,
+                user.clone(),
                 Method::POST,
                 "/inbox",
                 String::new(),
@@ -5494,10 +5526,14 @@ async fn shared_inbox(
             .await;
             if resp.status().is_success() || resp.status().as_u16() == 202 {
                 delivered += 1;
+                delivered_now = true;
             }
+        }
+        if delivered_now {
             continue;
         }
 
+        let mut queued_for_online_flush = false;
         let db = state.db.lock().await;
         match db.is_user_enabled(&user) {
             Ok(true) => {
@@ -5515,10 +5551,15 @@ async fn shared_inbox(
                     .is_ok()
                 {
                     spooled += 1;
+                    queued_for_online_flush = is_online;
                 }
             }
             Ok(false) => {}
             Err(e) => error!(%user, "db error: {e}"),
+        }
+        drop(db);
+        if queued_for_online_flush {
+            maybe_spawn_spool_flush_for_user(&state, &user).await;
         }
     }
     if delivered == 0 && spooled == 0 {
@@ -5891,6 +5932,24 @@ fn user_base_template(cfg: &RelayConfig) -> String {
         return format!("{scheme}://{{user}}.{base_domain}");
     }
     relay_self_base(cfg)
+}
+
+async fn maybe_spawn_spool_flush_for_user(state: &AppState, user: &str) {
+    if !is_valid_username(user) {
+        return;
+    }
+    let mut inflight = state.spool_flush_inflight.lock().await;
+    if !inflight.insert(user.to_string()) {
+        return;
+    }
+    drop(inflight);
+    let st = state.clone();
+    let u = user.to_string();
+    tokio::spawn(async move {
+        flush_spool_for_user(st.clone(), u.clone()).await;
+        let mut inflight = st.spool_flush_inflight.lock().await;
+        inflight.remove(&u);
+    });
 }
 
 async fn flush_spool_for_user(state: AppState, user: String) {
