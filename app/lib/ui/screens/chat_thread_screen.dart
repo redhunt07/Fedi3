@@ -85,7 +85,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _title = widget.title;
     _archived = widget.isArchived;
     _resolveDmTitle();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadMessages(reset: true));
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _loadMessages(reset: true));
     _markSeen();
     _markThreadSeen();
     _lastRunning = widget.appState.isRunning;
@@ -157,7 +158,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   Future<void> _markSeen() async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    await widget.appState.savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
+    await widget.appState
+        .savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
     widget.appState.clearUnreadChats();
   }
 
@@ -189,7 +191,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         return;
       }
       if (ty == 'react') {
-        final ids = _messages.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
+        final ids = _messages
+            .map((m) => m.messageId)
+            .where((id) => id.isNotEmpty)
+            .toList();
         if (ids.isNotEmpty) {
           _loadReactions(ids);
         }
@@ -305,11 +310,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       }
       if (items.isNotEmpty) {
         final latest = items.first;
-        await api.markChatSeen(threadId: latest.threadId, messageId: latest.messageId);
+        await api.markChatSeen(
+            threadId: latest.threadId, messageId: latest.messageId);
         await _markSeen();
         await _markThreadSeen();
       }
-      final ids = items.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
+      final ids =
+          items.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
       if (ids.isNotEmpty) {
         await _loadStatuses(ids);
         await _loadReactions(ids);
@@ -396,7 +403,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             if (reaction.isEmpty) continue;
             final count = (r['count'] as num?)?.toInt() ?? 0;
             final me = r['me'] == true;
-            reactions.add(_ReactionItem(reaction: reaction, count: count, me: me));
+            reactions
+                .add(_ReactionItem(reaction: reaction, count: count, me: me));
           }
         }
         map[msgId] = reactions;
@@ -414,7 +422,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     await _sendReaction(message, emoji, remove: false);
   }
 
-  Future<void> _sendReaction(ChatMessageItem message, String reaction, {required bool remove}) async {
+  Future<void> _sendReaction(ChatMessageItem message, String reaction,
+      {required bool remove}) async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
     try {
@@ -423,7 +432,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         reaction: reaction,
         remove: remove,
       );
-      final ids = _messages.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
+      final ids = _messages
+          .map((m) => m.messageId)
+          .where((id) => id.isNotEmpty)
+          .toList();
       if (ids.isNotEmpty) {
         await _loadReactions(ids);
       }
@@ -447,7 +459,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           final resp = await api.uploadMedia(bytes: m.bytes, filename: m.name);
           final id = (resp['id'] as String?)?.trim();
           final url = (resp['url'] as String?)?.trim();
-          final mediaType = (resp['media_type'] as String?)?.trim() ?? lookupMimeType(m.name) ?? '';
+          final mediaType = (resp['media_type'] as String?)?.trim() ??
+              lookupMimeType(m.name) ??
+              '';
           if (id != null && id.isNotEmpty && url != null && url.isNotEmpty) {
             m.coreMediaId = id;
             m.url = url;
@@ -506,7 +520,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final insertAt = sel.baseOffset >= 0 ? sel.baseOffset : text.length;
     final next = text.replaceRange(insertAt, insertAt, emoji);
     _composerCtrl.text = next;
-    _composerCtrl.selection = TextSelection.collapsed(offset: insertAt + emoji.length);
+    _composerCtrl.selection =
+        TextSelection.collapsed(offset: insertAt + emoji.length);
   }
 
   Future<void> _openRenameDialog() async {
@@ -522,7 +537,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           decoration: InputDecoration(hintText: context.l10n.chatRenameHint),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(context.l10n.cancel)),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(context.l10n.cancel)),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
             child: Text(context.l10n.chatSave),
@@ -533,7 +550,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     ctrl.dispose();
     if (result == null || result.isEmpty) return;
     try {
-      await CoreApi(config: cfg).updateChatThreadTitle(threadId: widget.threadId, title: result);
+      await CoreApi(config: cfg)
+          .updateChatThreadTitle(threadId: widget.threadId, title: result);
       if (mounted) {
         setState(() => _title = result);
       }
@@ -606,7 +624,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   if (rawItems is List) {
                     for (final it in rawItems) {
                       if (it is! Map) continue;
-                      final profile = ActorProfile.tryParse(it.cast<String, dynamic>());
+                      final profile =
+                          ActorProfile.tryParse(it.cast<String, dynamic>());
                       if (profile != null) list.add(profile);
                     }
                   }
@@ -624,7 +643,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               setState(() => working = true);
               try {
                 final actor = await api.resolveActorInput(value);
-                await api.updateChatThreadMembers(threadId: widget.threadId, add: [actor]);
+                await api.updateChatThreadMembers(
+                    threadId: widget.threadId, add: [actor]);
                 if (!members.contains(actor)) {
                   members = [...members, actor];
                 }
@@ -642,7 +662,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               if (!context.mounted) return;
               setState(() => working = true);
               try {
-                await api.updateChatThreadMembers(threadId: widget.threadId, remove: [actor]);
+                await api.updateChatThreadMembers(
+                    threadId: widget.threadId, remove: [actor]);
                 members = members.where((m) => m != actor).toList();
                 if (context.mounted) setState(() {});
               } catch (e) {
@@ -676,18 +697,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           constraints: const BoxConstraints(maxHeight: 160),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(12),
-                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                           ),
                           child: ListView.separated(
                             shrinkWrap: true,
                             itemCount: suggestions.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
                             itemBuilder: (context, index) {
                               final profile = suggestions[index];
                               return ListTile(
                                 dense: true,
-                                title: Text(profile.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                subtitle: Text(profile.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                title: Text(profile.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                                subtitle: Text(profile.id,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
                                 onTap: () => addMember(profile.id),
                               );
                             },
@@ -696,7 +724,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       ),
                     const SizedBox(height: 12),
                     if (error != null)
-                      Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                      Text(error!,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error)),
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 200,
@@ -706,10 +736,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           final actor = members[index];
                           return ListTile(
                             dense: true,
-                            title: Text(actor, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            title: Text(actor,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
                             trailing: IconButton(
                               tooltip: context.l10n.chatRemoveMember,
-                              onPressed: working ? null : () => removeMember(actor),
+                              onPressed:
+                                  working ? null : () => removeMember(actor),
                               icon: const Icon(Icons.person_remove),
                             ),
                           );
@@ -720,7 +752,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(context.l10n.cancel)),
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(context.l10n.cancel)),
               ],
             );
           },
@@ -747,7 +781,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               }
               final bytes = resp.bodyBytes;
               final name = 'gif-${gif.id}.gif';
-              setState(() => _media.add(_PickedMedia(name: name, bytes: bytes)));
+              setState(
+                  () => _media.add(_PickedMedia(name: name, bytes: bytes)));
             } catch (e) {
               if (mounted) setState(() => _error = e.toString());
             }
@@ -774,7 +809,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             decoration: InputDecoration(hintText: context.l10n.chatMessageHint),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(context.l10n.cancel)),
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(context.l10n.cancel)),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
               child: Text(context.l10n.chatSave),
@@ -785,7 +822,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
     ctrl.dispose();
     if (result == null || result.trim().isEmpty) return;
-    await CoreApi(config: cfg).editChatMessage(messageId: message.messageId, text: result.trim());
+    await CoreApi(config: cfg)
+        .editChatMessage(messageId: message.messageId, text: result.trim());
     await _loadMessages(reset: true);
   }
 
@@ -798,7 +836,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         title: Text(context.l10n.chatDeleteTitle),
         content: Text(context.l10n.chatDeleteHint),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(context.l10n.cancel)),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(context.l10n.cancel)),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(context.l10n.chatDelete),
@@ -836,10 +876,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
 
     if (result == 'leave') {
-      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha scelto di abbandonare la chat');
+      debugPrint(
+          '[DEBUG] _showNonOwnerOptions: Utente ha scelto di abbandonare la chat');
       await _leaveChat();
     } else if (result == 'archive') {
-      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha scelto di archiviare la chat');
+      debugPrint(
+          '[DEBUG] _showNonOwnerOptions: Utente ha scelto di archiviare la chat');
       await _archiveChat();
     } else {
       debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha annullato');
@@ -911,7 +953,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Future<void> _deleteChat() async {
     debugPrint('[DEBUG] _deleteChat: Avvio cancellazione chat');
     final cfg = widget.appState.config;
-    debugPrint('[DEBUG] _deleteChat: config = ${cfg != null ? 'presente' : 'null'}');
+    debugPrint(
+        '[DEBUG] _deleteChat: config = ${cfg != null ? 'presente' : 'null'}');
     if (cfg == null) {
       debugPrint('[DEBUG] _deleteChat: Configurazione null, esco');
       return;
@@ -924,7 +967,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         title: Text(context.l10n.chatDeleteThread),
         content: Text(context.l10n.chatDeleteThreadHint),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(context.l10n.cancel)),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(context.l10n.cancel)),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(context.l10n.chatDeleteThread),
@@ -941,7 +986,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     debugPrint('[DEBUG] _deleteChat: Chiamo CoreApi.deleteChatThread...');
     try {
       await CoreApi(config: cfg).deleteChatThread(threadId: widget.threadId);
-      debugPrint('[DEBUG] _deleteChat: deleteChatThread completato con successo');
+      debugPrint(
+          '[DEBUG] _deleteChat: deleteChatThread completato con successo');
     } catch (e, stackTrace) {
       debugPrint('[DEBUG] _deleteChat: ERRORE in deleteChatThread: $e');
       debugPrint('[DEBUG] _deleteChat: StackTrace: $stackTrace');
@@ -949,7 +995,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       // Controlla se l'errore è "not owner" (403)
       final errorMessage = e.toString();
       if (errorMessage.contains('403') && errorMessage.contains('not owner')) {
-        debugPrint('[DEBUG] _deleteChat: Utente non è owner, propongo alternative');
+        debugPrint(
+            '[DEBUG] _deleteChat: Utente non è owner, propongo alternative');
         if (mounted) {
           await _showNonOwnerOptions();
         }
@@ -968,7 +1015,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       debugPrint('[DEBUG] _deleteChat: Navigo indietro');
       Navigator.of(context).pop();
     } else {
-      debugPrint('[DEBUG] _deleteChat: Widget non più mounted, skip navigazione');
+      debugPrint(
+          '[DEBUG] _deleteChat: Widget non più mounted, skip navigazione');
     }
   }
 
@@ -984,12 +1032,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               else
                 CircleAvatar(
                   radius: 16,
-                  backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surfaceContainerHighest,
                   child: const Icon(Icons.groups, size: 16),
                 ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                child:
+                    Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
             ],
           ),
@@ -1011,7 +1061,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             else
               CircleAvatar(
                 radius: 16,
-                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                backgroundColor:
+                    Theme.of(context).colorScheme.surfaceContainerHighest,
                 child: const Icon(Icons.groups, size: 16),
               ),
             const SizedBox(width: 10),
@@ -1043,16 +1094,21 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem(value: 'members', child: Text(context.l10n.chatMembers)),
-              PopupMenuItem(value: 'rename', child: Text(context.l10n.chatRename)),
-              PopupMenuItem(value: 'leave', child: Text(context.l10n.chatLeaveThreadOption)),
+              PopupMenuItem(
+                  value: 'members', child: Text(context.l10n.chatMembers)),
+              PopupMenuItem(
+                  value: 'rename', child: Text(context.l10n.chatRename)),
+              PopupMenuItem(
+                  value: 'leave',
+                  child: Text(context.l10n.chatLeaveThreadOption)),
               PopupMenuItem(
                 value: _archived ? 'unarchive' : 'archive',
                 child: Text(_archived
                     ? context.l10n.chatUnarchiveThreadOption
                     : context.l10n.chatArchiveThreadOption),
               ),
-              PopupMenuItem(value: 'delete', child: Text(context.l10n.chatDeleteThread)),
+              PopupMenuItem(
+                  value: 'delete', child: Text(context.l10n.chatDeleteThread)),
             ],
           ),
         ],
@@ -1067,7 +1123,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   _typingLabel(context),
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(150), fontSize: 12),
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(150),
+                      fontSize: 12),
                 ),
               ),
             ),
@@ -1130,14 +1191,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         final text = _messageText(message);
         final attachments = payload?.attachments ?? const [];
         final replyId = payload?.replyTo;
-        final replyMsg = (replyId != null && replyId.isNotEmpty) ? _findMessageById(replyId) : null;
+        final replyMsg = (replyId != null && replyId.isNotEmpty)
+            ? _findMessageById(replyId)
+            : null;
         final when = DateTime.fromMillisecondsSinceEpoch(message.createdAtMs);
         final status = isSelf ? _statusMap[message.messageId] : null;
         final canDelete = isSelf && (status == null || status.seen == 0);
         final bubbleColor = isSelf
             ? Theme.of(context).colorScheme.primaryContainer
             : Theme.of(context).colorScheme.surfaceContainerHighest;
-        final align = isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+        final align =
+            isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start;
         final radius = BorderRadius.circular(16);
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -1166,64 +1230,72 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   onLongPress: () async {
                     await showModalBottomSheet<void>(
                       context: context,
-                    builder: (context) => SafeArea(
-                      child: Wrap(
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.emoji_emotions_outlined),
-                            title: Text(context.l10n.chatReact),
-                            onTap: () async {
-                              Navigator.of(context).pop();
-                              await _openReactionPicker(message);
-                            },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.reply),
-                            title: Text(context.l10n.chatReply),
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              setState(() => _replyTo = message);
-                            },
-                          ),
-                          if (isSelf)
+                      builder: (context) => SafeArea(
+                        child: Wrap(
+                          children: [
                             ListTile(
-                              leading: const Icon(Icons.edit),
-                              title: Text(context.l10n.chatEdit),
+                              leading:
+                                  const Icon(Icons.emoji_emotions_outlined),
+                              title: Text(context.l10n.chatReact),
                               onTap: () async {
                                 Navigator.of(context).pop();
-                                await _editMessage(message);
+                                await _openReactionPicker(message);
                               },
                             ),
-                          if (canDelete)
                             ListTile(
-                              leading: const Icon(Icons.delete),
-                              title: Text(context.l10n.chatDelete),
-                              onTap: () async {
+                              leading: const Icon(Icons.reply),
+                              title: Text(context.l10n.chatReply),
+                              onTap: () {
                                 Navigator.of(context).pop();
-                                await _deleteMessage(message);
+                                setState(() => _replyTo = message);
                               },
                             ),
-                        ],
+                            if (isSelf)
+                              ListTile(
+                                leading: const Icon(Icons.edit),
+                                title: Text(context.l10n.chatEdit),
+                                onTap: () async {
+                                  Navigator.of(context).pop();
+                                  await _editMessage(message);
+                                },
+                              ),
+                            if (canDelete)
+                              ListTile(
+                                leading: const Icon(Icons.delete),
+                                title: Text(context.l10n.chatDelete),
+                                onTap: () async {
+                                  Navigator.of(context).pop();
+                                  await _deleteMessage(message);
+                                },
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
                   child: Container(
-                    decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration:
+                        BoxDecoration(color: bubbleColor, borderRadius: radius),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     child: Column(
                       crossAxisAlignment: align,
                       children: [
                         if (replyId != null && replyId.isNotEmpty)
                           Container(
                             margin: const EdgeInsets.only(bottom: 6),
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
-                              replyMsg == null ? context.l10n.chatReplyUnknown : _replyPreview(replyMsg),
+                              replyMsg == null
+                                  ? context.l10n.chatReplyUnknown
+                                  : _replyPreview(replyMsg),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.labelSmall,
@@ -1249,7 +1321,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 child: Icon(
                                   status.icon,
                                   size: 14,
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -1285,7 +1359,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
   }
 
-  Widget _senderHeaderFromProfile(String actorId, ActorProfile? profile, bool isSelf) {
+  Widget _senderHeaderFromProfile(
+      String actorId, ActorProfile? profile, bool isSelf) {
     final name = profile?.displayName.trim().isNotEmpty == true
         ? profile!.displayName.trim()
         : _actorFallbackName(actorId, isSelf);
@@ -1304,7 +1379,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           const SizedBox(width: 6),
           Text(
             name,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -1357,10 +1435,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: r.me ? Theme.of(context).colorScheme.primary.withAlpha(30) : bg,
+                  color: r.me
+                      ? Theme.of(context).colorScheme.primary.withAlpha(30)
+                      : bg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: r.me ? Theme.of(context).colorScheme.primary : Colors.transparent,
+                    color: r.me
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.transparent,
                     width: 1,
                   ),
                 ),
@@ -1397,9 +1479,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 children: [
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
@@ -1411,7 +1496,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   ),
                   IconButton(
                     tooltip: context.l10n.chatReplyClear,
-                    onPressed: _sending ? null : () => setState(() => _replyTo = null),
+                    onPressed:
+                        _sending ? null : () => setState(() => _replyTo = null),
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -1426,8 +1512,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 children: [
                   for (var i = 0; i < _media.length; i++)
                     InputChip(
-                      label: Text(_media[i].name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      onDeleted: _sending ? null : () => setState(() => _media.removeAt(i)),
+                      label: Text(_media[i].name,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      onDeleted: _sending
+                          ? null
+                          : () => setState(() => _media.removeAt(i)),
                     ),
                 ],
               ),
@@ -1451,7 +1540,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               ),
               Expanded(
                 child: Focus(
-                  focusNode: _composerFocus,
                   onKeyEvent: (node, event) {
                     if (event is! KeyDownEvent) {
                       return KeyEventResult.ignored;
@@ -1468,11 +1556,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   },
                   child: TextField(
                     controller: _composerCtrl,
+                    focusNode: _composerFocus,
                     minLines: 1,
                     maxLines: 4,
                     decoration: InputDecoration(
                       hintText: context.l10n.chatMessageHint,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
                   ),
                 ),
@@ -1482,7 +1572,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 tooltip: context.l10n.chatSend,
                 onPressed: _sending ? null : _sendMessage,
                 icon: _sending
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.send),
               ),
             ],
@@ -1512,7 +1605,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (payload == null) return message.bodyJson;
     final text = payload.text?.trim();
     if (text != null && text.isNotEmpty) return text;
-    if (payload.attachments?.isNotEmpty ?? false) return context.l10n.chatReplyAttachment;
+    if (payload.attachments?.isNotEmpty ?? false) {
+      return context.l10n.chatReplyAttachment;
+    }
     return context.l10n.chatMessageEmpty;
   }
 
@@ -1524,8 +1619,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Widget _buildAttachments(List<ChatAttachment> attachments) {
-    final media = attachments.where((a) => _isMedia(a.mediaType, a.url)).toList();
-    final docs = attachments.where((a) => !_isMedia(a.mediaType, a.url)).toList();
+    final media =
+        attachments.where((a) => _isMedia(a.mediaType, a.url)).toList();
+    final docs =
+        attachments.where((a) => !_isMedia(a.mediaType, a.url)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1556,7 +1653,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               dense: true,
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.insert_drive_file),
-              title: Text(a.name ?? a.url, maxLines: 1, overflow: TextOverflow.ellipsis),
+              title: Text(a.name ?? a.url,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
               onTap: () => openUrlExternal(a.url),
             ),
         ],
@@ -1566,7 +1664,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   bool _isMedia(String mediaType, String url) {
     final mt = mediaType.toLowerCase();
-    if (mt.startsWith('image/') || mt.startsWith('video/') || mt.startsWith('audio/')) return true;
+    if (mt.startsWith('image/') ||
+        mt.startsWith('video/') ||
+        mt.startsWith('audio/')) {
+      return true;
+    }
     final u = url.toLowerCase();
     return u.endsWith('.png') ||
         u.endsWith('.jpg') ||
@@ -1581,7 +1683,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         u.endsWith('.wav');
   }
 
-  void _openMediaViewer(List<ChatAttachment> attachments, ChatAttachment focus) {
+  void _openMediaViewer(
+      List<ChatAttachment> attachments, ChatAttachment focus) {
     final items = attachments
         .where((a) => _isMedia(a.mediaType, a.url))
         .map((a) => NoteAttachment(url: a.url, mediaType: a.mediaType))
@@ -1687,7 +1790,15 @@ class _GifPickerState extends State<_GifPicker> {
   bool _missingKey = false;
   List<GifResult> _items = const [];
   Timer? _debounce;
-  final List<String> _suggestions = const ['funny', 'love', 'wow', 'party', 'sad', 'cat', 'dog'];
+  final List<String> _suggestions = const [
+    'funny',
+    'love',
+    'wow',
+    'party',
+    'sad',
+    'cat',
+    'dog'
+  ];
 
   @override
   void initState() {
@@ -1762,7 +1873,8 @@ class _GifPickerState extends State<_GifPicker> {
                       label: Text(s),
                       onPressed: () {
                         _search.text = s;
-                        _search.selection = TextSelection.collapsed(offset: s.length);
+                        _search.selection =
+                            TextSelection.collapsed(offset: s.length);
                         _load();
                       },
                     ),
@@ -1777,7 +1889,8 @@ class _GifPickerState extends State<_GifPicker> {
                       ? Center(child: Text(context.l10n.chatGifEmpty))
                       : GridView.builder(
                           padding: const EdgeInsets.all(12),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 3,
                             crossAxisSpacing: 8,
                             mainAxisSpacing: 8,
@@ -1794,8 +1907,11 @@ class _GifPickerState extends State<_GifPicker> {
                                   fit: BoxFit.cover,
                                   filterQuality: FilterQuality.low,
                                   errorBuilder: (_, __, ___) => Container(
-                                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                    child: const Icon(Icons.broken_image_outlined),
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    child:
+                                        const Icon(Icons.broken_image_outlined),
                                   ),
                                 ),
                               ),

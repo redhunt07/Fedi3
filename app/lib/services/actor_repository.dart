@@ -302,8 +302,9 @@ class ActorRepository {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     try {
-      final resp =
-          await _client.get(uri, headers: _acceptHeaders).timeout(requestTimeout);
+      final resp = await _client
+          .get(uri, headers: _acceptHeaders)
+          .timeout(requestTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final json = jsonDecode(resp.body);
       if (json is! Map) return null;
@@ -368,23 +369,46 @@ class ActorRepository {
 
   Future<List<dynamic>> fetchCollectionItems(String collectionUrl,
       {int limit = 20}) async {
+    final page = await fetchCollectionPage(collectionUrl, limit: limit);
+    return page.items;
+  }
+
+  Future<CollectionPage> fetchCollectionPage(
+    String collectionUrl, {
+    String? pageUrl,
+    int limit = 20,
+  }) async {
     final first = await _fetchJson(collectionUrl);
-    if (first == null) return const [];
+    if (first == null) return const CollectionPage(items: [], next: null);
 
     Map<String, dynamic>? page = first;
-    final firstLink = first['first'];
-    if (firstLink is String && firstLink.trim().isNotEmpty) {
-      page = await _fetchJson(firstLink.trim());
-    } else if (firstLink is Map) {
-      final href = (firstLink['id'] as String?)?.trim() ??
-          (firstLink['href'] as String?)?.trim() ??
-          '';
-      if (href.isNotEmpty) page = await _fetchJson(href);
+    if (pageUrl != null && pageUrl.trim().isNotEmpty) {
+      page = await _fetchJson(pageUrl.trim());
+    } else {
+      final firstLink = first['first'];
+      if (firstLink is String && firstLink.trim().isNotEmpty) {
+        page = await _fetchJson(firstLink.trim());
+      } else if (firstLink is Map) {
+        final href = (firstLink['id'] as String?)?.trim() ??
+            (firstLink['href'] as String?)?.trim() ??
+            '';
+        if (href.isNotEmpty) page = await _fetchJson(href);
+      }
     }
 
     final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
-    if (items.length <= limit) return items;
-    return items.take(limit).toList();
+    final out = items.take(limit).toList();
+    String? next;
+    final nextLink = page?['next'];
+    if (nextLink is String && nextLink.trim().isNotEmpty) {
+      next = nextLink.trim();
+    } else if (nextLink is Map) {
+      final href = (nextLink['id'] as String?)?.trim() ??
+          (nextLink['href'] as String?)?.trim() ??
+          '';
+      if (href.isNotEmpty) next = href;
+    }
+    return CollectionPage(items: out, next: next);
   }
 
   Future<int?> fetchCollectionCount(String collectionUrl) async {
@@ -400,8 +424,9 @@ class ActorRepository {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     try {
-      final resp =
-          await _client.get(uri, headers: _acceptHeaders).timeout(requestTimeout);
+      final resp = await _client
+          .get(uri, headers: _acceptHeaders)
+          .timeout(requestTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final json = jsonDecode(resp.body);
       if (json is! Map) return null;
@@ -424,5 +449,12 @@ class OutboxPage {
   const OutboxPage({required this.items, required this.next});
 
   final List<Map<String, dynamic>> items;
+  final String? next;
+}
+
+class CollectionPage {
+  const CollectionPage({required this.items, required this.next});
+
+  final List<dynamic> items;
   final String? next;
 }

@@ -18,6 +18,7 @@ import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../utils/open_url.dart';
+import 'profile_connections_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen(
@@ -373,6 +374,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onToggleFollow: () => _toggleFollow(api),
               followersCount: _followersCount,
               followingCount: _followingCount,
+              onOpenFollowers: () =>
+                  _openConnections(ProfileConnectionsMode.followers),
+              onOpenFollowing: () =>
+                  _openConnections(ProfileConnectionsMode.following),
             ),
           if (_profile != null) ...[
             const SizedBox(height: 12),
@@ -477,7 +482,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _refreshOutboxOnly({ActorProfile? profile, bool silent = false}) async {
+  Future<void> _refreshOutboxOnly(
+      {ActorProfile? profile, bool silent = false}) async {
     final p = profile ?? _profile;
     if (p == null || p.outbox.trim().isEmpty) return;
     if (_outboxLoading) return;
@@ -554,6 +560,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _followPoll?.cancel();
     _followPoll = null;
   }
+
+  void _openConnections(ProfileConnectionsMode mode) {
+    final profile = _profile;
+    if (profile == null) return;
+    final url = mode == ProfileConnectionsMode.followers
+        ? profile.followers
+        : profile.following;
+    if (url.trim().isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileConnectionsScreen(
+          appState: widget.appState,
+          collectionUrl: url,
+          mode: mode,
+        ),
+      ),
+    );
+  }
 }
 
 class _ProfileHeader extends StatelessWidget {
@@ -564,6 +588,8 @@ class _ProfileHeader extends StatelessWidget {
     required this.onToggleFollow,
     required this.followersCount,
     required this.followingCount,
+    required this.onOpenFollowers,
+    required this.onOpenFollowing,
   });
 
   final ActorProfile profile;
@@ -572,6 +598,8 @@ class _ProfileHeader extends StatelessWidget {
   final VoidCallback onToggleFollow;
   final int? followersCount;
   final int? followingCount;
+  final VoidCallback onOpenFollowers;
+  final VoidCallback onOpenFollowing;
 
   @override
   Widget build(BuildContext context) {
@@ -773,13 +801,15 @@ class _ProfileHeader extends StatelessWidget {
                         if (followersCount != null)
                           _StatChip(
                               label: context.l10n.profileFollowers,
-                              value: followersCount!),
+                              value: followersCount!,
+                              onTap: onOpenFollowers),
                         if (followersCount != null && followingCount != null)
                           const SizedBox(width: 6),
                         if (followingCount != null)
                           _StatChip(
                               label: context.l10n.profileFollowing,
-                              value: followingCount!),
+                              value: followingCount!,
+                              onTap: onOpenFollowing),
                       ],
                     ),
                   ],
@@ -855,27 +885,33 @@ class _ProfileHeader extends StatelessWidget {
 }
 
 class _StatChip extends StatelessWidget {
-  const _StatChip({required this.label, required this.value});
+  const _StatChip({required this.label, required this.value, this.onTap});
 
   final String label;
   final int value;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withAlpha(120),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
-      ),
-      child: Text(
-        '$label $value',
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Theme.of(context)
+              .colorScheme
+              .surfaceContainerHighest
+              .withAlpha(120),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color:
+                  Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
+        ),
+        child: Text(
+          '$label $value',
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }
