@@ -302,17 +302,79 @@ class ActorRepository {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     try {
-      final resp = await _client
-          .get(uri, headers: _acceptHeaders)
-          .timeout(requestTimeout);
-      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-      final json = jsonDecode(resp.body);
-      if (json is! Map) return null;
-      return ActorProfile.tryParse(json.cast<String, dynamic>());
+      final first = await _fetchJson(url);
+      if (first != null) {
+        final parsed = ActorProfile.tryParse(first);
+        if (parsed != null) return parsed;
+      }
+
+      // Mastodon/Pleroma profile URLs like /@user are often HTML pages;
+      // resolve to actor self URL through webfinger when direct fetch is non-AP.
+      final actorSelf = await _resolveActorSelfUrlViaWebfinger(uri);
+      if (actorSelf != null && actorSelf.trim().isNotEmpty) {
+        final second = await _fetchJson(actorSelf);
+        if (second != null) {
+          return ActorProfile.tryParse(second);
+        }
+      }
+      return null;
     } catch (_) {
       // Network/protocol/parse errors are non-fatal for UI.
       return null;
     }
+  }
+
+  Future<String?> _resolveActorSelfUrlViaWebfinger(Uri source) async {
+    final host = source.host.trim();
+    if (host.isEmpty) return null;
+    final username = _extractUsernameFromProfilePath(source.pathSegments);
+    if (username.isEmpty) return null;
+    final wfUri = Uri(
+      scheme: source.scheme.isEmpty ? 'https' : source.scheme,
+      host: host,
+      port: source.hasPort ? source.port : null,
+      path: '/.well-known/webfinger',
+      queryParameters: {'resource': 'acct:$username@$host'},
+    );
+    try {
+      final resp = await _client.get(wfUri, headers: const {
+        'Accept': 'application/jrd+json, application/json'
+      }).timeout(requestTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final raw = jsonDecode(resp.body);
+      if (raw is! Map) return null;
+      final json = raw.cast<String, dynamic>();
+      final links = json['links'];
+      if (links is! List) return null;
+      for (final link in links) {
+        if (link is! Map) continue;
+        final rel = (link['rel'] as String?)?.trim().toLowerCase() ?? '';
+        final typ = (link['type'] as String?)?.trim().toLowerCase() ?? '';
+        final href = (link['href'] as String?)?.trim() ?? '';
+        if (href.isEmpty) continue;
+        if (rel == 'self' &&
+            (typ.contains('activity+json') ||
+                typ.contains('activitystreams'))) {
+          return href;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  String _extractUsernameFromProfilePath(List<String> segments) {
+    if (segments.isEmpty) return '';
+    final first = segments.first.trim();
+    if (first.startsWith('@') && first.length > 1) {
+      return first.substring(1);
+    }
+    if (segments.length >= 2 && first.toLowerCase() == 'users') {
+      final user = segments[1].trim();
+      if (user.isNotEmpty) return user;
+    }
+    return '';
   }
 
   Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
