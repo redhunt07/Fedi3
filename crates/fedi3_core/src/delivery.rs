@@ -192,10 +192,6 @@ impl Delivery {
             "Accept",
             "application/activity+json".parse().expect("static header"),
         );
-        headers.insert(
-            "Content-Type",
-            "application/activity+json".parse().expect("static header"),
-        );
 
         sign_request_rsa_sha256(
             private_key_pem,
@@ -204,13 +200,10 @@ impl Delivery {
             &uri,
             &mut headers,
             body,
-            &["(request-target)", "host", "date", "digest", "content-type"],
+            &["(request-target)", "host", "date", "digest"],
         )?;
 
-        let mut req = self
-            .client
-            .post(inbox_url)
-            .header(ACCEPT, "application/activity+json");
+        let mut req = self.client.post(inbox_url);
         for (k, v) in headers.iter() {
             req = req.header(k.as_str(), v.to_str().unwrap_or_default());
         }
@@ -502,7 +495,7 @@ pub fn build_signed_post_relay_http_request(
         &uri,
         &mut headers,
         body,
-        &["(request-target)", "host", "date", "digest", "content-type"],
+        &["(request-target)", "host", "date", "digest"],
     )?;
 
     let path = uri.path().to_string();
