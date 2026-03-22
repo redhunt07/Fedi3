@@ -42,9 +42,11 @@ CREATE TABLE IF NOT EXISTS inbox_spool (
   headers_json TEXT NOT NULL,
   body_b64 TEXT NOT NULL,
   body_len BIGINT NOT NULL,
-  tries BIGINT NOT NULL DEFAULT 0
+  tries BIGINT NOT NULL DEFAULT 0,
+  activity_type TEXT NOT NULL DEFAULT ''
 );
 ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS tries BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS activity_type TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS inbox_spool_user_created ON inbox_spool(username, created_at_ms);
 CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
 

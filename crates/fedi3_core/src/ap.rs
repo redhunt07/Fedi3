@@ -6760,13 +6760,17 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         let actor = expected_actor.as_str();
         if ty == "Like" || ty == "Announce" || ty == "EmojiReact" {
             if let Some(obj_id) = extract_object_id(&activity) {
-                let content = activity
-                    .get("content")
+                let content_owned = reaction_content_from_value(&activity);
+                let content = content_owned.as_deref();
+                let reaction_id = activity
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .map(str::trim)
-                    .filter(|s| !s.is_empty());
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| synthetic_reaction_id(actor, ty, &obj_id, content));
                 let _ = state.social.upsert_reaction_with_content(
-                    &activity_id,
+                    &reaction_id,
                     ty,
                     actor,
                     &obj_id,
@@ -6785,17 +6789,17 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                         .unwrap_or("")
                         .trim();
                     if !object_id.is_empty() {
-                        let content = obj
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty());
+                        let content_owned = reaction_content_from_value(obj);
+                        let content = content_owned.as_deref();
                         let rid = obj
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .map(|s| s.to_string())
+                            .or_else(|| {
+                                Some(synthetic_reaction_id(actor, inner_ty, object_id, content))
+                            })
                             .or_else(|| {
                                 state
                                     .social
@@ -8030,6 +8034,44 @@ fn canonicalize_json(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+fn reaction_content_from_value(v: &serde_json::Value) -> Option<String> {
+    v.get("content")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("_misskey_reaction").and_then(|x| x.as_str()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn extract_reaction_object_id(v: &serde_json::Value) -> Option<String> {
+    v.get("object")
+        .and_then(|x| x.as_str())
+        .or_else(|| {
+            v.get("object")
+                .and_then(|x| x.get("id").and_then(|id| id.as_str()))
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn synthetic_reaction_id(
+    actor: &str,
+    reaction_type: &str,
+    object_id: &str,
+    content: Option<&str>,
+) -> String {
+    let content_norm = content.unwrap_or("").trim();
+    let seed = format!(
+        "{}|{}|{}|{}",
+        actor.trim(),
+        reaction_type.trim(),
+        object_id.trim(),
+        content_norm
+    );
+    format!("urn:fedi3:reaction:{}", short_hash(&seed))
+}
+
 pub(crate) async fn process_inbox_activity(
     state: &ApState,
     activity: &serde_json::Value,
@@ -8163,17 +8205,22 @@ pub(crate) async fn process_inbox_activity(
                             obj_id = Some(oid);
                         }
                         if let Some(obj_id) = obj_id {
-                            let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            if !act_id.is_empty() {
-                                let content = activity
-                                    .get("content")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::trim)
-                                    .filter(|s| !s.is_empty());
-                                let _ = state.social.upsert_reaction_with_content(
-                                    act_id, ty, actor, &obj_id, content,
-                                );
-                            }
+                            let content_owned = reaction_content_from_value(activity);
+                            let content = content_owned.as_deref();
+                            let reaction_id = activity
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| synthetic_reaction_id(actor, ty, &obj_id, content));
+                            let _ = state.social.upsert_reaction_with_content(
+                                &reaction_id,
+                                ty,
+                                actor,
+                                &obj_id,
+                                content,
+                            );
                             // Ensure we have the object locally.
                             let _ = fetch_and_store_object(state, &obj_id).await;
                         }
@@ -8428,24 +8475,16 @@ pub(crate) async fn process_inbox_activity(
                         return Ok(());
                     }
                     if !actor.is_empty() {
-                        let object_id = obj_val
-                            .get("object")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                obj_val
-                                    .get("object")
-                                    .and_then(|v| v.get("id").and_then(|v| v.as_str()))
-                            })
-                            .unwrap_or("");
-                        let content = obj_val
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty());
+                        let object_id = extract_reaction_object_id(&obj_val).unwrap_or_default();
+                        let content_owned = reaction_content_from_value(&obj_val);
+                        let content = content_owned.as_deref();
                         if !object_id.is_empty() {
+                            let synthetic_id =
+                                synthetic_reaction_id(actor, obj_type, &object_id, content);
+                            let _ = state.social.remove_reaction(&synthetic_id);
                             if let Ok(Some(rid)) = state
                                 .social
-                                .find_reaction_id(actor, obj_type, object_id, content)
+                                .find_reaction_id(actor, obj_type, &object_id, content)
                             {
                                 let _ = state.social.remove_reaction(&rid);
                             }

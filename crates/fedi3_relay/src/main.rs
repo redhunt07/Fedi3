@@ -212,6 +212,10 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     telemetry_push_fail_401_total: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    spool_flush_blocked_items_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outbox_readthrough_fetch_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_inflight: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_hot_path_queue_depth: Option<u64>,
@@ -342,6 +346,7 @@ struct SpoolItem {
     headers_json: String,
     body_b64: String,
     tries: i64,
+    activity_type: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,6 +490,13 @@ struct AppState {
     ap_signature_policy_by_peer_policy: Arc<Mutex<HashMap<String, u64>>>,
     ap_inbox_compat_accept_by_peer: Arc<Mutex<HashMap<String, u64>>>,
     ap_spool_deadletter_by_reason: Arc<Mutex<HashMap<String, u64>>>,
+    spool_forward_http_status_totals: Arc<Mutex<HashMap<String, u64>>>,
+    outbox_readthrough_fetch_by_result: Arc<Mutex<HashMap<String, u64>>>,
+    spool_flush_blocked_items_total: Arc<AtomicU64>,
+    ap_activity_in_by_type_peer: Arc<Mutex<HashMap<String, u64>>>,
+    ap_activity_forward_by_type_status: Arc<Mutex<HashMap<String, u64>>>,
+    ap_activity_spool_by_type_reason: Arc<Mutex<HashMap<String, u64>>>,
+    ap_activity_drop_by_type_reason: Arc<Mutex<HashMap<String, u64>>>,
     peer_software_cache: Arc<Mutex<HashMap<String, (String, i64)>>>,
     inbound_ap_dedupe: Arc<Mutex<HashMap<String, i64>>>,
     reconcile_last_run_ms: Arc<AtomicU64>,
@@ -1076,6 +1088,7 @@ struct RelayConfig {
     offline_cache_ttl_actor_ms: i64,
     offline_cache_ttl_collection_ms: i64,
     spool_ttl_secs: u64,
+    cleanup_worker_enabled: bool,
     move_notice_ttl_secs: u64,
     move_notice_fanout_interval_secs: u64,
     spool_max_rows_per_user: usize,
@@ -1727,6 +1740,13 @@ async fn main() {
         ap_signature_policy_by_peer_policy: Arc::new(Mutex::new(HashMap::new())),
         ap_inbox_compat_accept_by_peer: Arc::new(Mutex::new(HashMap::new())),
         ap_spool_deadletter_by_reason: Arc::new(Mutex::new(HashMap::new())),
+        spool_forward_http_status_totals: Arc::new(Mutex::new(HashMap::new())),
+        outbox_readthrough_fetch_by_result: Arc::new(Mutex::new(HashMap::new())),
+        spool_flush_blocked_items_total: Arc::new(AtomicU64::new(0)),
+        ap_activity_in_by_type_peer: Arc::new(Mutex::new(HashMap::new())),
+        ap_activity_forward_by_type_status: Arc::new(Mutex::new(HashMap::new())),
+        ap_activity_spool_by_type_reason: Arc::new(Mutex::new(HashMap::new())),
+        ap_activity_drop_by_type_reason: Arc::new(Mutex::new(HashMap::new())),
         peer_software_cache: Arc::new(Mutex::new(HashMap::new())),
         inbound_ap_dedupe: Arc::new(Mutex::new(HashMap::new())),
         reconcile_last_run_ms: Arc::new(AtomicU64::new(0)),
@@ -1779,48 +1799,55 @@ async fn main() {
         }
     });
 
-    let cleanup_state = state.clone();
-    let spool_ttl_secs = cleanup_state.cfg.spool_ttl_secs;
-    let peer_directory_ttl_days = cleanup_state.cfg.peer_directory_ttl_days;
-    let relay_media_ttl_secs = cleanup_state.cfg.relay_media_ttl_secs;
-    let relay_actor_ttl_secs = cleanup_state.cfg.relay_actor_ttl_secs;
-    let relay_reputation_ttl_secs = cleanup_state.cfg.relay_reputation_ttl_secs;
-    let legacy_projection_retention_days = cleanup_state.cfg.legacy_projection_retention_days;
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let db = cleanup_state.db.lock().await;
-            if let Err(e) = db.cleanup_spool(spool_ttl_secs) {
-                error!("spool cleanup failed: {e}");
-            }
-            if let Err(e) = db.cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs) {
-                error!("move_notices cleanup failed: {e}");
-            }
-            if let Err(e) = db.cleanup_relay_media(relay_media_ttl_secs) {
-                error!("relay_media cleanup failed: {e}");
-            }
-            if let Err(e) = db.cleanup_relay_actors(relay_actor_ttl_secs) {
-                error!("relay_actors cleanup failed: {e}");
-            }
-            if let Err(e) = db.cleanup_relay_reputation(relay_reputation_ttl_secs) {
-                error!("relay_reputation cleanup failed: {e}");
-            }
-            if let Err(e) = db.cleanup_legacy_projection(legacy_projection_retention_days) {
-                error!("legacy projection cleanup failed: {e}");
-            }
-            if peer_directory_ttl_days > 0 {
-                if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
-                    error!("peer_directory cleanup failed: {e}");
+    if state.cfg.cleanup_worker_enabled {
+        let cleanup_state = state.clone();
+        let spool_ttl_secs = cleanup_state.cfg.spool_ttl_secs;
+        let peer_directory_ttl_days = cleanup_state.cfg.peer_directory_ttl_days;
+        let relay_media_ttl_secs = cleanup_state.cfg.relay_media_ttl_secs;
+        let relay_actor_ttl_secs = cleanup_state.cfg.relay_actor_ttl_secs;
+        let relay_reputation_ttl_secs = cleanup_state.cfg.relay_reputation_ttl_secs;
+        let legacy_projection_retention_days = cleanup_state.cfg.legacy_projection_retention_days;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(60),
+                Duration::from_secs(60),
+            );
+            loop {
+                interval.tick().await;
+                let db = cleanup_state.db.lock().await;
+                if let Err(e) = db.cleanup_spool(spool_ttl_secs) {
+                    error!("spool cleanup failed: {e}");
+                }
+                if let Err(e) = db.cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs) {
+                    error!("move_notices cleanup failed: {e}");
+                }
+                if let Err(e) = db.cleanup_relay_media(relay_media_ttl_secs) {
+                    error!("relay_media cleanup failed: {e}");
+                }
+                if let Err(e) = db.cleanup_relay_actors(relay_actor_ttl_secs) {
+                    error!("relay_actors cleanup failed: {e}");
+                }
+                if let Err(e) = db.cleanup_relay_reputation(relay_reputation_ttl_secs) {
+                    error!("relay_reputation cleanup failed: {e}");
+                }
+                if let Err(e) = db.cleanup_legacy_projection(legacy_projection_retention_days) {
+                    error!("legacy projection cleanup failed: {e}");
+                }
+                if peer_directory_ttl_days > 0 {
+                    if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
+                        error!("peer_directory cleanup failed: {e}");
+                    }
+                }
+                if peer_directory_ttl_days > 0 {
+                    if let Err(e) = db.cleanup_peer_registry(peer_directory_ttl_days) {
+                        error!("peer_registry cleanup failed: {e}");
+                    }
                 }
             }
-            if peer_directory_ttl_days > 0 {
-                if let Err(e) = db.cleanup_peer_registry(peer_directory_ttl_days) {
-                    error!("peer_registry cleanup failed: {e}");
-                }
-            }
-        }
-    });
+        });
+    } else {
+        warn!("cleanup worker disabled by FEDI3_RELAY_ENABLE_CLEANUP_WORKER=false");
+    }
 
     // Periodic spool retry for online users: ensures Follow/Accept processing
     // doesn't stall if the first flush attempt happens before core is fully ready.
@@ -1959,6 +1986,10 @@ async fn main() {
         .route(
             "/_fedi3/relay/diagnostics/ap-consistency",
             get(relay_ap_consistency_diagnostics),
+        )
+        .route(
+            "/_fedi3/relay/diagnostics/ap-activity-matrix",
+            get(relay_ap_activity_matrix_diagnostics),
         )
         .route("/_fedi3/relay/search/notes", get(relay_search_notes))
         .route("/_fedi3/relay/search/users", get(relay_search_users))
@@ -2540,6 +2571,13 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(30 * 24 * 60 * 60);
+    let cleanup_worker_enabled = std::env::var("FEDI3_RELAY_ENABLE_CLEANUP_WORKER")
+        .ok()
+        .map(|v| {
+            let n = v.trim().to_ascii_lowercase();
+            n == "1" || n == "true" || n == "yes" || n == "on"
+        })
+        .unwrap_or(true);
     let move_notice_ttl_secs = std::env::var("FEDI3_RELAY_MOVE_NOTICE_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -2746,6 +2784,7 @@ fn load_config() -> RelayConfig {
         offline_cache_ttl_actor_ms,
         offline_cache_ttl_collection_ms,
         spool_ttl_secs,
+        cleanup_worker_enabled,
         move_notice_ttl_secs,
         move_notice_fanout_interval_secs,
         spool_max_rows_per_user,
@@ -3736,6 +3775,83 @@ async fn relay_metrics_prom(
             ));
         }
     }
+    out.push_str("# TYPE fedi3_relay_spool_forward_http_status_total counter\n");
+    {
+        let map = state.spool_forward_http_status_totals.lock().await;
+        for (status, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_spool_forward_http_status_total{{status=\"{}\"}} {}\n",
+                status, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_spool_flush_blocked_items_total counter\n");
+    out.push_str(&format!(
+        "fedi3_relay_spool_flush_blocked_items_total {}\n",
+        state.spool_flush_blocked_items_total.load(Ordering::Relaxed)
+    ));
+    out.push_str("# TYPE fedi3_relay_outbox_readthrough_fetch_total counter\n");
+    {
+        let map = state.outbox_readthrough_fetch_by_result.lock().await;
+        for (result, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_outbox_readthrough_fetch_total{{result=\"{}\"}} {}\n",
+                result, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_activity_in_total counter\n");
+    {
+        let map = state.ap_activity_in_by_type_peer.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let activity_type = parts.next().unwrap_or("Unknown");
+            let peer = parts.next().unwrap_or("unknown");
+            out.push_str(&format!(
+                "fedi3_relay_ap_activity_in_total{{type=\"{}\",peer=\"{}\"}} {}\n",
+                activity_type, peer, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_activity_forward_total counter\n");
+    {
+        let map = state.ap_activity_forward_by_type_status.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let activity_type = parts.next().unwrap_or("Unknown");
+            let status = parts.next().unwrap_or("0");
+            out.push_str(&format!(
+                "fedi3_relay_ap_activity_forward_total{{type=\"{}\",status=\"{}\"}} {}\n",
+                activity_type, status, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_activity_spool_total counter\n");
+    {
+        let map = state.ap_activity_spool_by_type_reason.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let activity_type = parts.next().unwrap_or("Unknown");
+            let reason = parts.next().unwrap_or("unknown");
+            out.push_str(&format!(
+                "fedi3_relay_ap_activity_spool_total{{type=\"{}\",reason=\"{}\"}} {}\n",
+                activity_type, reason, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_activity_drop_total counter\n");
+    {
+        let map = state.ap_activity_drop_by_type_reason.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let activity_type = parts.next().unwrap_or("Unknown");
+            let reason = parts.next().unwrap_or("unknown");
+            out.push_str(&format!(
+                "fedi3_relay_ap_activity_drop_total{{type=\"{}\",reason=\"{}\"}} {}\n",
+                activity_type, reason, v
+            ));
+        }
+    }
     if let Some(v) = telemetry.relay_hot_path_inflight {
         out.push_str("# TYPE fedi3_relay_hot_path_inflight gauge\n");
         out.push_str(&format!("fedi3_relay_hot_path_inflight {v}\n"));
@@ -4044,15 +4160,21 @@ async fn forward_user_rest(
         }
         let activity: serde_json::Value = match serde_json::from_slice(&body) {
             Ok(v) => v,
-            Err(_) => return (StatusCode::BAD_REQUEST, "invalid activity json").into_response(),
+            Err(_) => {
+                observe_ap_activity_drop(&state, "Unknown", "invalid_json").await;
+                return (StatusCode::BAD_REQUEST, "invalid activity json").into_response();
+            }
         };
+        let activity_type = normalize_activity_type(&activity);
         if activity.get("type").and_then(|v| v.as_str()).is_none() {
+            observe_ap_activity_drop(&state, &activity_type, "invalid_payload").await;
             return (StatusCode::BAD_REQUEST, "invalid activity payload").into_response();
         }
         let (actor_url, applied_policy) =
             match verify_ap_signature_with_policy(&state, &headers, &method, &uri, &body).await {
                 Ok(v) => v,
                 Err(_) => {
+                    observe_ap_activity_drop(&state, &activity_type, "invalid_signature").await;
                     state
                         .ap_inbox_reject_invalid_sig_total
                         .fetch_add(1, Ordering::Relaxed);
@@ -4060,6 +4182,7 @@ async fn forward_user_rest(
                 }
             };
         let peer_host = actor_host(&actor_url).unwrap_or_else(|| "unknown".to_string());
+        observe_ap_activity_in(&state, &activity_type, &peer_host).await;
         observe_signature_policy_applied(&state, applied_policy, &peer_host).await;
         if !matches!(applied_policy, ApSignaturePolicy::Strict) {
             state
@@ -4072,6 +4195,7 @@ async fn forward_user_rest(
 
         let dedupe_key = inbound_activity_dedupe_key(&user, &activity, &body);
         if is_duplicate_inbound_activity(&state, &dedupe_key, now_ms()).await {
+            observe_ap_activity_drop(&state, &activity_type, "duplicate").await;
             state
                 .ap_inbound_dedup_drop_total
                 .fetch_add(1, Ordering::Relaxed);
@@ -4080,16 +4204,18 @@ async fn forward_user_rest(
 
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if is_online {
+            let actor_inbox_path = format!("/users/{user}/inbox");
             let resp = forward_to_user(
                 state.clone(),
                 user.clone(),
                 Method::POST,
-                "/inbox",
+                &actor_inbox_path,
                 String::new(),
                 headers.clone(),
                 body.clone(),
             )
             .await;
+            observe_ap_activity_forward(&state, &activity_type, resp.status()).await;
             if resp.status().is_success() || resp.status().as_u16() == 202 {
                 state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
                 return (StatusCode::ACCEPTED, "accepted").into_response();
@@ -4104,20 +4230,23 @@ async fn forward_user_rest(
                 &state.cfg,
                 &user,
                 "POST",
-                "/inbox",
+                &format!("/users/{user}/inbox"),
                 "",
                 &headers_vec,
                 &body_b64,
                 body.len() as i64,
+                &activity_type,
             )
             .is_ok()
         {
+            observe_ap_activity_spool(&state, &activity_type, "offline_or_forward_failed").await;
             state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
             if state.tunnels.read().await.contains_key(&user) {
                 maybe_spawn_spool_flush_for_user(&state, &user).await;
             }
             return (StatusCode::ACCEPTED, "accepted").into_response();
         }
+        observe_ap_activity_drop(&state, &activity_type, "spool_unavailable").await;
         return (StatusCode::SERVICE_UNAVAILABLE, "spool unavailable").into_response();
     }
 
@@ -4415,6 +4544,96 @@ async fn observe_public_get_fallback(
     let mut m = state.ap_public_get_fallback_by_reason_route.lock().await;
     let cur = m.get(&key).copied().unwrap_or(0);
     m.insert(key, cur.saturating_add(1));
+}
+
+fn normalize_activity_type(activity: &serde_json::Value) -> String {
+    activity
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+fn normalize_activity_type_label(activity_type: &str) -> String {
+    let trimmed = activity_type.trim();
+    if trimmed.is_empty() {
+        return "Unknown".to_string();
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "Unknown".to_string()
+    } else {
+        out
+    }
+}
+
+async fn observe_ap_activity_in(state: &AppState, activity_type: &str, peer: &str) {
+    let mut m = state.ap_activity_in_by_type_peer.lock().await;
+    let key = format!(
+        "{}|{}",
+        normalize_activity_type_label(activity_type),
+        sanitize_metric_label(peer)
+    );
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_ap_activity_forward(state: &AppState, activity_type: &str, status: StatusCode) {
+    let mut m = state.ap_activity_forward_by_type_status.lock().await;
+    let key = format!(
+        "{}|{}",
+        normalize_activity_type_label(activity_type),
+        status.as_u16()
+    );
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_ap_activity_spool(state: &AppState, activity_type: &str, reason: &str) {
+    let mut m = state.ap_activity_spool_by_type_reason.lock().await;
+    let key = format!(
+        "{}|{}",
+        normalize_activity_type_label(activity_type),
+        sanitize_metric_label(reason)
+    );
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_ap_activity_drop(state: &AppState, activity_type: &str, reason: &str) {
+    let mut m = state.ap_activity_drop_by_type_reason.lock().await;
+    let key = format!(
+        "{}|{}",
+        normalize_activity_type_label(activity_type),
+        sanitize_metric_label(reason)
+    );
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+fn sanitize_metric_label(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ':' | '/') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
 }
 
 fn tunnel_negative_cache_key(user: &str, path: &str) -> Option<String> {
@@ -5040,8 +5259,41 @@ async fn local_outbox_read_model_response(
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, headers);
     let base = format!("{scheme}://{host}");
     let outbox = format!("{base}/users/{user}/outbox");
-    let db = state.db.lock().await;
-    let total = db.count_local_outbox_notes(user).ok()?;
+    let total = {
+        let db = state.db.lock().await;
+        db.count_local_outbox_notes(user).ok()?
+    };
+    let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
+
+    // Read-through path: if local read-model is empty but the user is online,
+    // fetch from tunnel once to avoid exposing stale-empty outbox to remotes.
+    if total == 0 && state.tunnels.read().await.contains_key(user) {
+        let path = format!("/users/{user}/outbox");
+        let mut forwarded = forward_to_user(
+            state.clone(),
+            user.to_string(),
+            Method::GET,
+            &path,
+            query.clone(),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .await;
+        let result = if forwarded.status().is_success() {
+            "success".to_string()
+        } else {
+            format!("http_{}", forwarded.status().as_u16())
+        };
+        {
+            let mut m = state.outbox_readthrough_fetch_by_result.lock().await;
+            let cur = m.get(&result).copied().unwrap_or(0);
+            m.insert(result, cur.saturating_add(1));
+        }
+        if forwarded.status().is_success() {
+            normalize_ap_response_content_type(headers, &mut forwarded);
+            return Some(forwarded);
+        }
+    }
 
     if !query_flag_true(raw_query, "page") {
         let body = serde_json::json!({
@@ -5063,7 +5315,10 @@ async fn local_outbox_read_model_response(
 
     let limit = parse_query_u32(raw_query, "limit").unwrap_or(20).clamp(1, 80);
     let cursor = parse_query_i64(raw_query, "cursor");
-    let page = db.list_local_outbox_notes(user, limit, cursor).ok()?;
+    let page = {
+        let db = state.db.lock().await;
+        db.list_local_outbox_notes(user, limit, cursor).ok()?
+    };
     let mut ordered_items = Vec::with_capacity(page.items.len());
     for (note_json, _ts) in page.items {
         if let Ok(note) = serde_json::from_str::<serde_json::Value>(&note_json) {
@@ -5440,19 +5695,28 @@ async fn shared_inbox(
 
     let users = match extract_users_from_activity(&body) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response(),
+        Err(e) => {
+            observe_ap_activity_drop(&state, "Unknown", "bad_json").await;
+            return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response();
+        }
     };
     let activity: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid activity json").into_response(),
+        Err(_) => {
+            observe_ap_activity_drop(&state, "Unknown", "invalid_json").await;
+            return (StatusCode::BAD_REQUEST, "invalid activity json").into_response();
+        }
     };
+    let activity_type = normalize_activity_type(&activity);
     if activity.get("type").and_then(|v| v.as_str()).is_none() {
+        observe_ap_activity_drop(&state, &activity_type, "invalid_payload").await;
         return (StatusCode::BAD_REQUEST, "invalid activity payload").into_response();
     }
     let (actor_url, applied_policy) =
         match verify_ap_signature_with_policy(&state, &headers, &method, &uri, &body).await {
             Ok(v) => v,
             Err(_) => {
+                observe_ap_activity_drop(&state, &activity_type, "invalid_signature").await;
                 state
                     .ap_inbox_reject_invalid_sig_total
                     .fetch_add(1, Ordering::Relaxed);
@@ -5460,6 +5724,7 @@ async fn shared_inbox(
             }
         };
     let peer_host = actor_host(&actor_url).unwrap_or_else(|| "unknown".to_string());
+    observe_ap_activity_in(&state, &activity_type, &peer_host).await;
     observe_signature_policy_applied(&state, applied_policy, &peer_host).await;
     if !matches!(applied_policy, ApSignaturePolicy::Strict) {
         state
@@ -5471,12 +5736,14 @@ async fn shared_inbox(
     }
     let dedupe_key = inbound_activity_dedupe_key("_shared", &activity, &body);
     if is_duplicate_inbound_activity(&state, &dedupe_key, now_ms()).await {
+        observe_ap_activity_drop(&state, &activity_type, "duplicate").await;
         state
             .ap_inbound_dedup_drop_total
             .fetch_add(1, Ordering::Relaxed);
         return (StatusCode::ACCEPTED, "accepted (duplicate)").into_response();
     }
     if users.len() > state.cfg.max_inbox_fanout {
+        observe_ap_activity_drop(&state, &activity_type, "too_many_recipients").await;
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many recipients").into_response();
     }
 
@@ -5491,6 +5758,7 @@ async fn shared_inbox(
         )
         .await
     {
+        observe_ap_activity_drop(&state, &activity_type, "rate_limited").await;
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
 
@@ -5506,6 +5774,7 @@ async fn shared_inbox(
     if users.is_empty() {
         // Interop: many legacy instances deliver to shared inbox even when this relay
         // has no concrete local recipients in `to/cc`. Accept and no-op instead of 400.
+        observe_ap_activity_drop(&state, &activity_type, "no_local_recipients").await;
         state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
         return (StatusCode::ACCEPTED, "accepted (no local recipients)").into_response();
     }
@@ -5524,6 +5793,7 @@ async fn shared_inbox(
                 body.clone(),
             )
             .await;
+            observe_ap_activity_forward(&state, &activity_type, resp.status()).await;
             if resp.status().is_success() || resp.status().as_u16() == 202 {
                 delivered += 1;
                 delivered_now = true;
@@ -5547,10 +5817,13 @@ async fn shared_inbox(
                         &headers_vec,
                         &body_b64,
                         body.len() as i64,
+                        &activity_type,
                     )
                     .is_ok()
                 {
                     spooled += 1;
+                    observe_ap_activity_spool(&state, &activity_type, "offline_or_forward_failed")
+                        .await;
                     queued_for_online_flush = is_online;
                 }
             }
@@ -5565,6 +5838,7 @@ async fn shared_inbox(
     if delivered == 0 && spooled == 0 {
         // Interop: shared inbox deliveries may legitimately target users that are
         // currently unknown/disabled locally. Accepting avoids upstream retry storms.
+        observe_ap_activity_drop(&state, &activity_type, "no_active_recipients").await;
         state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
         (StatusCode::ACCEPTED, "accepted (no active recipients)").into_response()
     } else {
@@ -5980,34 +6254,43 @@ async fn flush_spool_for_user(state: AppState, user: String) {
         let mut delivered_ids: Vec<i64> = Vec::new();
         let mut deadletter_ids: Vec<i64> = Vec::new();
         for item in &items {
+            let activity_type = if item.activity_type.trim().is_empty() {
+                "Unknown".to_string()
+            } else {
+                item.activity_type.clone()
+            };
             let headers_vec: Vec<(String, String)> =
                 serde_json::from_str(&item.headers_json).unwrap_or_default();
             let headers = vec_to_headers(&headers_vec);
             let body_bytes = B64.decode(item.body_b64.as_bytes()).unwrap_or_default();
             let method = item.method.parse::<Method>().unwrap_or(Method::POST);
-            let canonical_path = if item.path == format!("/users/{user}/inbox") {
-                "/inbox".to_string()
-            } else {
-                item.path.clone()
-            };
 
             let resp = forward_to_user(
                 state.clone(),
                 user.clone(),
                 method,
-                &canonical_path,
+                &item.path,
                 item.query.clone(),
                 headers,
                 Bytes::from(body_bytes),
             )
             .await;
+            let status = resp.status();
+            observe_ap_activity_forward(&state, &activity_type, status).await;
+            {
+                let mut m = state.spool_forward_http_status_totals.lock().await;
+                let key = format!("{}", status.as_u16());
+                let cur = m.get(&key).copied().unwrap_or(0);
+                m.insert(key, cur.saturating_add(1));
+            }
 
-            if resp.status().is_success() || resp.status().as_u16() == 202 {
+            if status.is_success() || status.as_u16() == 202 {
                 delivered_ids.push(item.id);
                 continue;
             }
-            if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+            if status == StatusCode::SERVICE_UNAVAILABLE {
                 // User went offline mid-flush.
+                observe_ap_activity_spool(&state, &activity_type, "user_offline_mid_flush").await;
                 break;
             }
             {
@@ -6020,12 +6303,45 @@ async fn flush_spool_for_user(state: AppState, user: String) {
                     .ap_spool_deadletter_total
                     .fetch_add(1, Ordering::Relaxed);
                 let mut m = state.ap_spool_deadletter_by_reason.lock().await;
-                let key = format!("http_{}", resp.status().as_u16());
+                let key = format!("http_{}", status.as_u16());
                 let cur = m.get(&key).copied().unwrap_or(0);
                 m.insert(key, cur.saturating_add(1));
+                observe_ap_activity_spool(&state, &activity_type, "deadletter_max_tries").await;
+                continue;
+            }
+            if matches!(
+                status,
+                StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                state
+                    .spool_flush_blocked_items_total
+                    .fetch_add(1, Ordering::Relaxed);
+                // Keep flushing next items to avoid head-of-line blocking on bad signatures.
+                if item.id % 25 == 0 {
+                    warn!(
+                        user = %user,
+                        spool_id = item.id,
+                        tries = item.tries.saturating_add(1),
+                        status = %status,
+                        activity_type = %activity_type,
+                        "spool item blocked by core validation"
+                    );
+                }
+                observe_ap_activity_drop(
+                    &state,
+                    &activity_type,
+                    &format!("blocked_http_{}", status.as_u16()),
+                )
+                .await;
                 continue;
             }
             // Any other error: keep remaining items for later to avoid a hot loop.
+            observe_ap_activity_spool(
+                &state,
+                &activity_type,
+                &format!("retry_http_{}", status.as_u16()),
+            )
+            .await;
             break;
         }
 
@@ -6058,9 +6374,48 @@ fn extract_users_from_activity(body: &Bytes) -> anyhow::Result<Vec<String>> {
     collect_users(&v, "cc", &mut out);
     collect_users(&v, "bcc", &mut out);
     collect_users(&v, "audience", &mut out);
+    collect_users_from_activity_object_refs(&v, &mut out);
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+fn collect_users_from_activity_object_refs(v: &serde_json::Value, out: &mut Vec<String>) {
+    let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("").trim();
+    match ty {
+        "Like" | "Announce" | "EmojiReact" => {
+            collect_users_from_activity_object(v.get("object"), out);
+        }
+        "Undo" => {
+            if let Some(obj) = v.get("object") {
+                // Undo can wrap Like/Announce/EmojiReact or contain an id string.
+                collect_users_from_activity_object(Some(obj), out);
+                if let Some(inner) = obj.as_object() {
+                    collect_users_from_activity_object(inner.get("object"), out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_users_from_activity_object(
+    object: Option<&serde_json::Value>,
+    out: &mut Vec<String>,
+) {
+    let Some(object) = object else { return };
+    match object {
+        serde_json::Value::String(s) => out.extend(extract_user_from_string(s)),
+        serde_json::Value::Object(map) => {
+            if let Some(id) = map.get("id").and_then(|x| x.as_str()) {
+                out.extend(extract_user_from_string(id));
+            }
+            if let Some(obj) = map.get("object") {
+                collect_users_from_activity_object(Some(obj), out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_users(v: &serde_json::Value, field: &str, out: &mut Vec<String>) {
@@ -6536,7 +6891,8 @@ impl Db {
               headers_json TEXT NOT NULL,
               body_b64 TEXT NOT NULL,
               body_len INTEGER NOT NULL,
-              tries INTEGER NOT NULL DEFAULT 0
+              tries INTEGER NOT NULL DEFAULT 0,
+              activity_type TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS inbox_spool_user_created ON inbox_spool(username, created_at_ms);
             CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
@@ -6805,6 +7161,10 @@ impl Db {
                     [],
                 );
                 let _ = conn.execute(
+                    "ALTER TABLE inbox_spool ADD COLUMN activity_type TEXT NOT NULL DEFAULT ''",
+                    [],
+                );
+                let _ = conn.execute(
                     "DELETE FROM users
                      WHERE rowid NOT IN (
                        SELECT MIN(rowid) FROM users GROUP BY lower(username)
@@ -6868,6 +7228,7 @@ impl Db {
                             )?;
                             conn.batch_execute(
                                 "ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS tries BIGINT NOT NULL DEFAULT 0;
+                                 ALTER TABLE inbox_spool ADD COLUMN IF NOT EXISTS activity_type TEXT NOT NULL DEFAULT '';
                                  CREATE INDEX IF NOT EXISTS inbox_spool_tries ON inbox_spool(username, tries, created_at_ms);
                                  CREATE TABLE IF NOT EXISTS ap_peer_compat_policy (
                                    host TEXT NOT NULL,
@@ -8153,6 +8514,7 @@ impl Db {
         headers: &[(String, String)],
         body_b64: &str,
         body_len: i64,
+        activity_type: &str,
     ) -> Result<()> {
         let headers_json = serde_json::to_string(headers).unwrap_or_else(|_| "[]".to_string());
         let now = now_ms();
@@ -8161,8 +8523,8 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)",
-                    params![username, now, method, path, query, headers_json, body_b64, body_len],
+                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries, activity_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
+                    params![username, now, method, path, query, headers_json, body_b64, body_len, activity_type],
                 )?;
 
                 let count: i64 = conn.query_row(
@@ -8182,8 +8544,8 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)",
-                    &[&username, &now, &method, &path, &query, &headers_json, &body_b64, &body_len],
+                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len, tries, activity_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9)",
+                    &[&username, &now, &method, &path, &query, &headers_json, &body_b64, &body_len, &activity_type],
                 )?;
                 let row = conn.query_one(
                     "SELECT COUNT(*) FROM inbox_spool WHERE username=$1",
@@ -8208,7 +8570,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT id, method, path, query, headers_json, body_b64, tries FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
+                    "SELECT id, method, path, query, headers_json, body_b64, tries, activity_type FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
                 )?;
                 let mut rows = stmt.query(params![username, limit])?;
                 let mut out = Vec::new();
@@ -8221,6 +8583,7 @@ impl Db {
                         headers_json: r.get(4)?,
                         body_b64: r.get(5)?,
                         tries: r.get(6)?,
+                        activity_type: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                     });
                 }
                 Ok(out)
@@ -8228,7 +8591,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT id, method, path, query, headers_json, body_b64, tries FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
+                    "SELECT id, method, path, query, headers_json, body_b64, tries, activity_type FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
                     &[&username, &limit],
                 )?;
                 let mut out = Vec::new();
@@ -8241,6 +8604,9 @@ impl Db {
                         headers_json: r.get(4),
                         body_b64: r.get(5),
                         tries: r.get(6),
+                        activity_type: r
+                            .get::<_, Option<String>>(7)
+                            .unwrap_or_default(),
                     });
                 }
                 Ok(out)
@@ -13032,11 +13398,47 @@ async fn relay_reconcile_status(
     let last_run_ms = state.reconcile_last_run_ms.load(Ordering::Relaxed);
     let last_ok = state.reconcile_last_ok.load(Ordering::Relaxed);
     let last_error = state.reconcile_last_error.lock().await.clone();
+    let users = {
+        let db = state.db.lock().await;
+        db.list_users(500, 0).unwrap_or_default()
+    };
+    let mut per_user = Vec::with_capacity(users.len());
+    for (username, _created_at_ms, disabled) in users {
+        if disabled != 0 {
+            continue;
+        }
+        let (followers_total, following_total, outbox_total) = {
+            let db = state.db.lock().await;
+            let followers = db.get_collection_cache(&username, "followers").ok().flatten();
+            let following = db.get_collection_cache(&username, "following").ok().flatten();
+            let outbox = db.get_collection_cache(&username, "outbox").ok().flatten();
+            let followers_total = followers
+                .as_deref()
+                .and_then(collection_total_items)
+                .unwrap_or_else(|| followers.as_deref().map(collection_items_len).unwrap_or(0));
+            let following_total = following
+                .as_deref()
+                .and_then(collection_total_items)
+                .unwrap_or_else(|| following.as_deref().map(collection_items_len).unwrap_or(0));
+            let outbox_total = outbox
+                .as_deref()
+                .and_then(collection_total_items)
+                .unwrap_or_else(|| outbox.as_deref().map(collection_items_len).unwrap_or(0));
+            (followers_total, following_total, outbox_total)
+        };
+        per_user.push(serde_json::json!({
+            "username": username,
+            "followers_total": followers_total,
+            "following_total": following_total,
+            "outbox_total": outbox_total
+        }));
+    }
     let body = serde_json::json!({
       "interval_secs": state.cfg.reconcile_interval_secs,
       "last_run_ms": if last_run_ms == 0 { serde_json::Value::Null } else { serde_json::json!(last_run_ms) },
       "last_ok": last_ok,
       "last_error": last_error,
+      "users": per_user,
     });
     let resp = axum::Json(body).into_response();
     let _ = state.db.lock().await.insert_admin_audit(
@@ -13247,6 +13649,45 @@ async fn relay_ap_consistency_diagnostics(
         &audit.meta,
     );
     resp
+}
+
+async fn relay_ap_activity_matrix_diagnostics(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let audit = match admin_guard(
+        &state,
+        &peer,
+        &headers,
+        "admin_ap_activity_matrix_diag",
+        None,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let in_map = state.ap_activity_in_by_type_peer.lock().await.clone();
+    let fwd_map = state.ap_activity_forward_by_type_status.lock().await.clone();
+    let spool_map = state.ap_activity_spool_by_type_reason.lock().await.clone();
+    let drop_map = state.ap_activity_drop_by_type_reason.lock().await.clone();
+    let body = serde_json::json!({
+      "ap_activity_in_total": in_map,
+      "ap_activity_forward_total": fwd_map,
+      "ap_activity_spool_total": spool_map,
+      "ap_activity_drop_total": drop_map
+    });
+    let _ = state.db.lock().await.insert_admin_audit(
+        "admin_ap_activity_matrix_diag",
+        None,
+        None,
+        Some(&audit.ip),
+        true,
+        None,
+        &audit.meta,
+    );
+    axum::Json(body).into_response()
 }
 
 async fn relay_list(
@@ -14668,6 +15109,13 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let telemetry_push_fail_401_total = state
         .telemetry_push_fail_401_total
         .load(Ordering::Relaxed);
+    let spool_flush_blocked_items_total = state
+        .spool_flush_blocked_items_total
+        .load(Ordering::Relaxed);
+    let outbox_readthrough_fetch_total = {
+        let map = state.outbox_readthrough_fetch_by_result.lock().await;
+        map.values().copied().sum::<u64>()
+    };
     let hot_path_available = state.hot_path_inflight.available_permits() as u64;
     let hot_path_capacity = state.cfg.max_hot_path_inflight as u64;
     let relay_hot_path_inflight = hot_path_capacity.saturating_sub(hot_path_available);
@@ -14736,6 +15184,8 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         telemetry_push_success_total: Some(telemetry_push_success_total),
         telemetry_push_fail_total: Some(telemetry_push_fail_total),
         telemetry_push_fail_401_total: Some(telemetry_push_fail_401_total),
+        spool_flush_blocked_items_total: Some(spool_flush_blocked_items_total),
+        outbox_readthrough_fetch_total: Some(outbox_readthrough_fetch_total),
         relay_hot_path_inflight: Some(relay_hot_path_inflight),
         relay_hot_path_queue_depth: Some(relay_hot_path_queue_depth),
         relay_async_job_inflight: Some(relay_async_job_inflight),
