@@ -2958,6 +2958,7 @@ async fn handle_tunnel(
     let cache_user = user.clone();
     tokio::spawn(async move {
         let _ = ensure_user_cached(&cache_state, &cache_user).await;
+        refresh_public_actor_state(&cache_state, &cache_user).await;
         let _ = index_outbox_for_user(&cache_state, &cache_user).await;
     });
 
@@ -5132,6 +5133,7 @@ async fn forward_to_user(
                 let db = state.db.lock().await;
                 if path == format!("/users/{user}") {
                     let _ = db.upsert_actor_cache(&user, &actor_json);
+                    refresh_user_aggregates_now(&db, &state.cfg, &user);
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
                         let actor_url = v
                             .get("id")
@@ -5158,6 +5160,7 @@ async fn forward_to_user(
                     // not overwrite root cache used by remote instances.
                     if query_is_empty {
                         let _ = db.upsert_collection_cache(&user, kind, &actor_json);
+                        refresh_user_aggregates_now(&db, &state.cfg, &user);
                     }
                     if kind == "outbox" {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
@@ -5186,6 +5189,15 @@ async fn forward_to_user(
             state
                 .ap_actor_resolve_404_total
                 .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    if upstream_status.is_success() || upstream_status == StatusCode::ACCEPTED {
+        if should_refresh_public_actor_state(path, &method) {
+            let refresh_state = state.clone();
+            let refresh_user = user.clone();
+            tokio::spawn(async move {
+                refresh_public_actor_state(&refresh_state, &refresh_user).await;
+            });
         }
     }
     out
@@ -6078,6 +6090,42 @@ async fn ensure_user_cached(state: &AppState, user: &str) -> Result<()> {
     let url = format!("{}/users/{user}", user_base_url(&state.cfg, user));
     let _ = fetch_json_url(state, &url).await;
     Ok(())
+}
+
+fn should_refresh_public_actor_state(path: &str, method: &Method) -> bool {
+    if *method == Method::GET {
+        return false;
+    }
+    path.ends_with("/outbox")
+        || path.ends_with("/inbox")
+        || path == "/inbox"
+        || path.contains("/collections/featured")
+}
+
+async fn refresh_public_actor_state(state: &AppState, user: &str) {
+    let base = relay_self_base(&state.cfg);
+    let paths = [
+        format!("{base}/users/{user}"),
+        format!("{base}/users/{user}/followers"),
+        format!("{base}/users/{user}/following"),
+        format!("{base}/users/{user}/outbox"),
+    ];
+    for url in paths {
+        let _ = state
+            .http
+            .get(&url)
+            .header(
+                header::ACCEPT,
+                "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+            )
+            .send()
+            .await;
+    }
+}
+
+fn refresh_user_aggregates_now(db: &Db, cfg: &RelayConfig, user: &str) {
+    let _ = reconcile_user_aggregates(db, cfg, user);
+    let _ = ensure_actor_minimum_fields(db, cfg, user);
 }
 
 fn outbox_first_page_url(state: &AppState, user: &str) -> String {
