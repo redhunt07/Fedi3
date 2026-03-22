@@ -14030,6 +14030,10 @@ async fn detect_peer_software_family(state: &AppState, host: &str) -> Option<Str
         .to_ascii_lowercase();
     let family = if software.contains("mastodon") {
         "mastodon"
+    } else if software.contains("akkoma") {
+        "akkoma"
+    } else if software.contains("pleroma") {
+        "pleroma"
     } else if software.contains("sharkey") {
         "sharkey"
     } else if software.contains("misskey") {
@@ -14064,6 +14068,13 @@ async fn resolve_ap_signature_policy(state: &AppState, actor_url: &str) -> ApSig
         .find(|r| r.host == host && r.family.is_none())
     {
         return row.policy;
+    }
+    if let Some(f) = family.as_deref() {
+        return match f {
+            "sharkey" | "misskey" | "akkoma" | "pleroma" => ApSignaturePolicy::CompatRelaxedHeaders,
+            "mastodon" => ApSignaturePolicy::CompatRelaxedDigest,
+            _ => ApSignaturePolicy::Strict,
+        };
     }
     ApSignaturePolicy::Strict
 }
@@ -14126,24 +14137,8 @@ async fn verify_webrtc_signature(
     let key_id = signature_key_id(headers).ok_or_else(|| anyhow::anyhow!("missing keyId"))?;
     let actor_url = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
 
-    // Date skew (5 minutes).
-    let date = headers
-        .get("Date")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if date.is_empty() {
-        return Err(anyhow::anyhow!("missing date"));
-    }
-    let ts = parse_http_date(date)?;
-    let now = std::time::SystemTime::now();
-    let diff = if now > ts {
-        now.duration_since(ts).unwrap_or_default()
-    } else {
-        ts.duration_since(now).unwrap_or_default()
-    };
-    if diff > Duration::from_secs(300) {
-        return Err(anyhow::anyhow!("date skew"));
-    }
+    let params = parse_signature_header(&sig_header)?;
+    verify_signature_time_window(headers, &params, true)?;
 
     // Digest check if present.
     if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
@@ -14160,8 +14155,7 @@ async fn verify_webrtc_signature(
         }
     }
 
-    let params = parse_signature_header(&sig_header)?;
-    let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+    let signing_string = build_signing_string(method, uri, headers, &params, &params.headers)?;
     let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
     if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
         return Err(anyhow::anyhow!("signature invalid"));
@@ -14187,25 +14181,8 @@ async fn verify_ap_signature_with_policy(
         ApSignaturePolicy::CompatRelaxedDigest | ApSignaturePolicy::CompatRelaxedHeaders
     );
 
-    if !is_relaxed_headers {
-        let date = headers
-            .get("Date")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if date.is_empty() {
-            return Err(anyhow::anyhow!("missing date"));
-        }
-        let ts = parse_http_date(date)?;
-        let now = std::time::SystemTime::now();
-        let diff = if now > ts {
-            now.duration_since(ts).unwrap_or_default()
-        } else {
-            ts.duration_since(now).unwrap_or_default()
-        };
-        if diff > Duration::from_secs(300) {
-            return Err(anyhow::anyhow!("date skew"));
-        }
-    }
+    let params = parse_signature_header(&sig_header)?;
+    verify_signature_time_window(headers, &params, !is_relaxed_headers)?;
 
     if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
         let Some((alg, value)) = d.split_once('=') else {
@@ -14213,8 +14190,8 @@ async fn verify_ap_signature_with_policy(
                 return Err(anyhow::anyhow!("bad digest"));
             }
             let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
-            let params = parse_signature_header(&sig_header)?;
-            let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+            let signing_string =
+                build_signing_string(method, uri, headers, &params, &params.headers)?;
             if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
                 return Err(anyhow::anyhow!("signature invalid"));
             }
@@ -14238,8 +14215,7 @@ async fn verify_ap_signature_with_policy(
         }
     }
 
-    let params = parse_signature_header(&sig_header)?;
-    let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
+    let signing_string = build_signing_string(method, uri, headers, &params, &params.headers)?;
     let pem = fetch_actor_public_key_pem(state, &actor_url).await?;
     if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
         return Err(anyhow::anyhow!("signature invalid"));
@@ -15765,6 +15741,8 @@ async fn fanout_pending_move_notices(state: &AppState) -> Result<()> {
 struct SignatureParams {
     headers: Vec<String>,
     signature: Vec<u8>,
+    created_unix: Option<i64>,
+    expires_unix: Option<i64>,
 }
 
 fn parse_signature_header(value: &str) -> Result<SignatureParams> {
@@ -15795,13 +15773,31 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
             .map(|s| s.to_ascii_lowercase())
             .collect(),
         signature,
+        created_unix: map.get("created").and_then(|v| parse_signature_unix_ts(v)),
+        expires_unix: map.get("expires").and_then(|v| parse_signature_unix_ts(v)),
     })
+}
+
+fn parse_signature_unix_ts(value: &str) -> Option<i64> {
+    let trimmed = value.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(v) = trimmed.parse::<i64>() {
+        return Some(v);
+    }
+    let v = trimmed.parse::<f64>().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
+    Some(v.floor() as i64)
 }
 
 fn build_signing_string(
     method: &Method,
     uri: &http::Uri,
     headers: &HeaderMap,
+    params: &SignatureParams,
     signed_headers: &[String],
 ) -> Result<String> {
     let mut out = String::new();
@@ -15819,6 +15815,22 @@ fn build_signing_string(
             out.push_str(&query);
             continue;
         }
+        if name == "(created)" {
+            let ts = params
+                .created_unix
+                .ok_or_else(|| anyhow::anyhow!("missing signed header: (created)"))?;
+            out.push_str("(created): ");
+            out.push_str(&ts.to_string());
+            continue;
+        }
+        if name == "(expires)" {
+            let ts = params
+                .expires_unix
+                .ok_or_else(|| anyhow::anyhow!("missing signed header: (expires)"))?;
+            out.push_str("(expires): ");
+            out.push_str(&ts.to_string());
+            continue;
+        }
         let header_name = HeaderName::from_bytes(name.as_bytes())?;
         let value = headers
             .get(&header_name)
@@ -15829,6 +15841,56 @@ fn build_signing_string(
         out.push_str(value.trim());
     }
     Ok(out)
+}
+
+fn verify_signature_time_window(
+    headers: &HeaderMap,
+    params: &SignatureParams,
+    require_time_hint: bool,
+) -> Result<()> {
+    let now = std::time::SystemTime::now();
+    let mut has_time_hint = false;
+
+    if let Some(date) = headers.get("Date").and_then(|v| v.to_str().ok()) {
+        if !date.trim().is_empty() {
+            let ts = parse_http_date(date)?;
+            let diff = if now > ts {
+                now.duration_since(ts).unwrap_or_default()
+            } else {
+                ts.duration_since(now).unwrap_or_default()
+            };
+            if diff > Duration::from_secs(300) {
+                return Err(anyhow::anyhow!("date skew"));
+            }
+            has_time_hint = true;
+        }
+    }
+
+    if let Some(created_unix) = params.created_unix {
+        let created_ts = std::time::UNIX_EPOCH + Duration::from_secs(created_unix.max(0) as u64);
+        let diff = if now > created_ts {
+            now.duration_since(created_ts).unwrap_or_default()
+        } else {
+            created_ts.duration_since(now).unwrap_or_default()
+        };
+        if diff > Duration::from_secs(300) {
+            return Err(anyhow::anyhow!("created skew"));
+        }
+        has_time_hint = true;
+    }
+
+    if let Some(expires_unix) = params.expires_unix {
+        let expires_ts = std::time::UNIX_EPOCH + Duration::from_secs(expires_unix.max(0) as u64);
+        if now > expires_ts + Duration::from_secs(5) {
+            return Err(anyhow::anyhow!("signature expired"));
+        }
+        has_time_hint = true;
+    }
+
+    if require_time_hint && !has_time_hint {
+        return Err(anyhow::anyhow!("missing date/created"));
+    }
+    Ok(())
 }
 
 fn verify_signature_rsa_sha256(
@@ -15911,7 +15973,7 @@ async fn verify_move_notice_signature(
 
     let params = parse_signature_header(sig)?;
     let uri: http::Uri = "/_fedi3/relay/move_notice".parse()?;
-    let signing_string = build_signing_string(&Method::POST, &uri, headers, &params.headers)?;
+    let signing_string = build_signing_string(&Method::POST, &uri, headers, &params, &params.headers)?;
 
     let mut pem = {
         let db = state.db.lock().await;
