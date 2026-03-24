@@ -2920,6 +2920,7 @@ async fn handle_tunnel(
         let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
         let db = state.db.lock().await;
         let _ = db.upsert_peer_directory(&stub_peer_id, &user, &actor_url);
+        drop(db);
         emit_presence_update(&state, &user, &actor_url, true).await;
     }
 
@@ -2943,6 +2944,7 @@ async fn handle_tunnel(
                 &hello.username,
                 &actor_url,
             );
+            drop(db);
             let stub = actor_stub_from_actor_url(
                 &hello.username,
                 &actor_url,
@@ -4231,7 +4233,7 @@ async fn forward_user_rest(
         let headers_vec = headers_to_vec(&headers);
         let body_b64 = B64.encode(&body);
         let db = state.db.lock().await;
-        if db
+        let enqueued = db
             .enqueue_spool(
                 &state.cfg,
                 &user,
@@ -4243,8 +4245,9 @@ async fn forward_user_rest(
                 body.len() as i64,
                 &activity_type,
             )
-            .is_ok()
-        {
+            .is_ok();
+        drop(db);
+        if enqueued {
             observe_ap_activity_spool(&state, &activity_type, "offline_or_forward_failed").await;
             state.ap_inbox_accept_total.fetch_add(1, Ordering::Relaxed);
             if state.tunnels.read().await.contains_key(&user) {
