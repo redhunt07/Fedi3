@@ -12093,19 +12093,36 @@ async fn relay_stats(
     )
     .await
     {
-        Ok(Ok(t)) => t,
+        Ok(Ok(t)) => {
+            *state.cached_self_telemetry.write().await = Some(t.clone());
+            t
+        }
         Ok(Err(e)) => {
-            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+            if let Some(cached) = state.cached_self_telemetry.read().await.clone() {
+                return axum::Json(cached).into_response();
+            }
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response();
         }
         Err(_) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "telemetry timeout: db busy",
-            )
-                .into_response()
+            if let Some(cached) = state.cached_self_telemetry.read().await.clone() {
+                return axum::Json(cached).into_response();
+            }
+            let online_users = state.tunnels.read().await.len() as u64;
+            return axum::Json(serde_json::json!({
+                "relay_url": state.cfg.public_url.clone().unwrap_or_default(),
+                "timestamp_ms": now_ms(),
+                "online_users": online_users,
+                "online_peers": online_users,
+                "total_users": 0,
+                "total_peers_seen": 0,
+                "peers_seen_window_ms": 30_i64 * 24 * 3600 * 1000,
+                "peers_seen_cutoff_ms": now_ms().saturating_sub(30_i64 * 24 * 3600 * 1000),
+                "base_domain": state.cfg.base_domain.clone(),
+                "relays": state.cfg.seed_relays.clone(),
+                "degraded": true,
+            })).into_response();
         }
     };
-    *state.cached_self_telemetry.write().await = Some(telemetry.clone());
     axum::Json(telemetry).into_response()
 }
 
