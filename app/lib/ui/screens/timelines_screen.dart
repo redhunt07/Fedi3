@@ -432,13 +432,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         return;
       }
       final ty = (ev.activityType ?? '').toLowerCase();
-      final forceRefresh = ty == 'update' ||
-          ty == 'delete' ||
-          ty == 'undo' ||
-          ty == 'like' ||
-          ty == 'emojireact' ||
-          ty == 'announce' ||
-          ty == 'create';
+      final forceRefresh = ty == 'delete';
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 250), () {
         for (final k in _listKeys) {
@@ -607,6 +601,7 @@ class _TimelineListState extends State<_TimelineList>
   Timer? _poll;
   Timer? _retry;
   bool _showScrollTop = false;
+  static const double _estimatedInsertedItemExtent = 220;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
 
@@ -632,7 +627,7 @@ class _TimelineListState extends State<_TimelineList>
   void refreshFromStream() {
     if (!mounted) return;
     if (!widget.appState.isRunning) return;
-    _refresh();
+    _pollNew();
   }
 
   @override
@@ -776,21 +771,37 @@ class _TimelineListState extends State<_TimelineList>
       }
       if (fresh.isEmpty) return;
 
-      final atTop = _scroll.hasClients ? _scroll.offset <= 80 : true;
-      setState(() {
-        _sortActivities(fresh);
-        if (atTop && fresh.length <= 3) {
-          _items.insertAll(0, fresh);
-          _pending.clear();
-          _sortActivities(_items);
-        } else {
-          _pending.addAll(fresh);
-          _sortActivities(_pending);
-        }
-      });
+      _insertFreshItems(fresh);
     } catch (_) {
       // best-effort auto refresh: ignore transient failures
     }
+  }
+
+  void _insertFreshItems(List<Map<String, dynamic>> fresh) {
+    if (fresh.isEmpty) return;
+    final atTop = _scroll.hasClients ? _scroll.offset <= 80 : true;
+    final previousOffset = _scroll.hasClients ? _scroll.offset : 0.0;
+    setState(() {
+      _sortActivities(fresh);
+      _items.insertAll(0, fresh);
+      _pending.clear();
+      _sortActivities(_items);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      if (atTop) {
+        _scroll.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      final delta = fresh.length * _estimatedInsertedItemExtent;
+      final target = previousOffset + delta;
+      final max = _scroll.position.maxScrollExtent;
+      _scroll.jumpTo(target.clamp(0, max));
+    });
   }
 
   void _applyPending() {
@@ -1198,13 +1209,16 @@ class _TimelineListState extends State<_TimelineList>
       if (host.isEmpty) return out;
       final path = uri.path.trim();
       out.add('https://$host${path.toLowerCase()}');
-      final segments =
-          uri.pathSegments.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      final segments = uri.pathSegments
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
       if (segments.length >= 2 && segments[0].toLowerCase() == 'users') {
         out.add('${segments[1].toLowerCase()}@$host');
       } else if (segments.isNotEmpty && segments[0].startsWith('@')) {
         out.add('${segments[0].substring(1).toLowerCase()}@$host');
-      } else if (segments.length >= 2 && segments[0].toLowerCase() == 'profile') {
+      } else if (segments.length >= 2 &&
+          segments[0].toLowerCase() == 'profile') {
         out.add('${segments[1].toLowerCase()}@$host');
       }
     } catch (_) {}
@@ -1342,7 +1356,7 @@ class _TimelineListState extends State<_TimelineList>
                       InlineComposer(
                         appState: widget.appState,
                         api: widget.api,
-                        onPosted: _refresh,
+                        onPosted: _pollNew,
                       ),
                       const SizedBox(height: 10),
                     ],
