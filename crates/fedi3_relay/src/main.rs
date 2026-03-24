@@ -469,6 +469,8 @@ struct AppState {
     relay_reputation: Arc<Mutex<HashMap<String, RelayReputation>>>,
     cfg: RelayConfig,
     db: Arc<Mutex<Db>>,
+    cached_self_telemetry: Arc<RwLock<Option<RelayTelemetry>>>,
+    cached_relays_payload: Arc<RwLock<Option<serde_json::Value>>>,
     limiter: Arc<RateLimiter>,
     http: reqwest::Client,
     search: Option<Arc<MeiliSearch>>,
@@ -1730,6 +1732,8 @@ async fn main() {
         relay_reputation: Arc::new(Mutex::new(HashMap::new())),
         cfg,
         db: Arc::new(Mutex::new(db)),
+        cached_self_telemetry: Arc::new(RwLock::new(None)),
+        cached_relays_payload: Arc::new(RwLock::new(None)),
         limiter,
         http,
         search,
@@ -12101,6 +12105,7 @@ async fn relay_stats(
                 .into_response()
         }
     };
+    *state.cached_self_telemetry.write().await = Some(telemetry.clone());
     axum::Json(telemetry).into_response()
 }
 
@@ -14111,6 +14116,9 @@ async fn relay_list(
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let Some(db) = try_db_clone(&state, "relay_list").await else {
+        if let Some(cached) = state.cached_relays_payload.read().await.clone() {
+            return axum::Json(cached).into_response();
+        }
         let mut relays = Vec::new();
         if let Some(self_url) = state.cfg.public_url.clone() {
             relays.push(serde_json::json!({ "relay_url": self_url }));
@@ -14118,11 +14126,7 @@ async fn relay_list(
         for relay_url in &state.cfg.seed_relays {
             relays.push(serde_json::json!({ "relay_url": relay_url }));
         }
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({ "relays": relays, "degraded": true })),
-        )
-            .into_response();
+        return axum::Json(serde_json::json!({ "relays": relays, "degraded": true })).into_response();
     };
     let rows = match db.list_relays(limit) {
         Ok(v) => v,
@@ -14143,7 +14147,9 @@ async fn relay_list(
           "telemetry": parsed,
         }));
     }
-    axum::Json(serde_json::json!({ "relays": relays })).into_response()
+    let payload = serde_json::json!({ "relays": relays });
+    *state.cached_relays_payload.write().await = Some(payload.clone());
+    axum::Json(payload).into_response()
 }
 
 async fn presence_snapshot(state: &AppState) -> Vec<PresenceItem> {
