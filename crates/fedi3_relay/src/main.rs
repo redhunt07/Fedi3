@@ -777,6 +777,7 @@ async fn sync_relay_list_once(state: &AppState) -> Result<()> {
                 entry.sign_pubkey_b64.clone(),
             );
         }
+        drop(db);
     }
 
     let mut changed = false;
