@@ -508,6 +508,8 @@ struct AppState {
     ap_public_get_fallback_by_reason_route: Arc<Mutex<HashMap<String, u64>>>,
     ap_public_get_requests_by_route: Arc<Mutex<HashMap<String, u64>>>,
     ap_public_get_cache_hits_by_route: Arc<Mutex<HashMap<String, u64>>>,
+    ap_cache_refresh_by_route_result: Arc<Mutex<HashMap<String, u64>>>,
+    search_meili_fallback_by_reason: Arc<Mutex<HashMap<String, u64>>>,
     ap_signature_policy_by_peer_policy: Arc<Mutex<HashMap<String, u64>>>,
     ap_inbox_compat_accept_by_peer: Arc<Mutex<HashMap<String, u64>>>,
     ap_spool_deadletter_by_reason: Arc<Mutex<HashMap<String, u64>>>,
@@ -1771,6 +1773,8 @@ async fn main() {
         ap_public_get_fallback_by_reason_route: Arc::new(Mutex::new(HashMap::new())),
         ap_public_get_requests_by_route: Arc::new(Mutex::new(HashMap::new())),
         ap_public_get_cache_hits_by_route: Arc::new(Mutex::new(HashMap::new())),
+        ap_cache_refresh_by_route_result: Arc::new(Mutex::new(HashMap::new())),
+        search_meili_fallback_by_reason: Arc::new(Mutex::new(HashMap::new())),
         ap_signature_policy_by_peer_policy: Arc::new(Mutex::new(HashMap::new())),
         ap_inbox_compat_accept_by_peer: Arc::new(Mutex::new(HashMap::new())),
         ap_spool_deadletter_by_reason: Arc::new(Mutex::new(HashMap::new())),
@@ -3774,10 +3778,36 @@ async fn relay_metrics_prom(
     out.push_str("# TYPE fedi3_relay_ap_public_get_cache_hits_total counter\n");
     {
         let map = state.ap_public_get_cache_hits_by_route.lock().await;
-        for (route, v) in map.iter() {
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let route = parts.next().unwrap_or("other");
+            let source = parts.next().unwrap_or("unknown");
             out.push_str(&format!(
-                "fedi3_relay_ap_public_get_cache_hits_total{{route=\"{}\"}} {}\n",
-                route, v
+                "fedi3_relay_ap_public_get_cache_hits_total{{route=\"{}\",source=\"{}\"}} {}\n",
+                route, source, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_ap_cache_refresh_total counter\n");
+    {
+        let map = state.ap_cache_refresh_by_route_result.lock().await;
+        for (k, v) in map.iter() {
+            let mut parts = k.split('|');
+            let route = parts.next().unwrap_or("other");
+            let result = parts.next().unwrap_or("unknown");
+            out.push_str(&format!(
+                "fedi3_relay_ap_cache_refresh_total{{route=\"{}\",result=\"{}\"}} {}\n",
+                route, result, v
+            ));
+        }
+    }
+    out.push_str("# TYPE fedi3_relay_search_meili_fallback_total counter\n");
+    {
+        let map = state.search_meili_fallback_by_reason.lock().await;
+        for (reason, v) in map.iter() {
+            out.push_str(&format!(
+                "fedi3_relay_search_meili_fallback_total{{reason=\"{}\"}} {}\n",
+                reason, v
             ));
         }
     }
@@ -4300,7 +4330,7 @@ async fn cached_user_response(
     user: &str,
     path: &str,
     headers: &HeaderMap,
-) -> Option<Response> {
+) -> Option<(Response, &'static str)> {
     let is_object_path = path.starts_with(&format!("/users/{user}/objects/"));
     let is_activity_path = path.starts_with(&format!("/users/{user}/activities/"));
     if path != format!("/users/{user}")
@@ -4311,6 +4341,26 @@ async fn cached_user_response(
         return None;
     }
 
+    if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+        if let Some(json) = redis_cache_get(state, &cache_key).await {
+            let body = if path == format!("/users/{user}") {
+                let online_status = online_status_for_user(state, user).await;
+                patch_actor_with_online_status(&json, online_status).unwrap_or(json)
+            } else {
+                json
+            };
+            return Some((
+                (
+                    StatusCode::OK,
+                    [("Content-Type", "application/activity+json; charset=utf-8")],
+                    body,
+                )
+                    .into_response(),
+                "redis",
+            ));
+        }
+    }
+
     let db = state.db.lock().await.clone();
     if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(user) {
         if path == format!("/users/{user}") {
@@ -4318,37 +4368,41 @@ async fn cached_user_response(
                 // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
                 if let Ok(Some(actor_json)) = db.get_actor_cache(user) {
                     if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to) {
-                        return Some(
+                        return Some((
                             (
                                 StatusCode::OK,
                                 [("Content-Type", "application/activity+json; charset=utf-8")],
                                 patched,
                             )
                                 .into_response(),
-                        );
+                            "db",
+                        ));
                     }
                 }
                 let stub = moved_actor_stub_json(&state.cfg, headers, user, &moved_to);
-                return Some(
+                return Some((
                     (
                         StatusCode::OK,
                         [("Content-Type", "application/activity+json; charset=utf-8")],
                         stub,
                     )
                         .into_response(),
-                );
+                    "db",
+                ));
             }
-            return Some(
+            return Some((
                 (StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "").into_response(),
-            );
+                "db",
+            ));
         }
 
         // For collections, redirect to the new actor URL + same suffix.
         let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
         let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
-        return Some(
+        return Some((
             (StatusCode::PERMANENT_REDIRECT, [("Location", location)], "").into_response(),
-        );
+            "db",
+        ));
     }
 
     if path == format!("/users/{user}") {
@@ -4356,25 +4410,32 @@ async fn cached_user_response(
         if let Some(actor_json) = actor_json {
             let online_status = online_status_for_user(state, user).await;
             let patched =
-                patch_actor_with_online_status(&actor_json, online_status).unwrap_or(actor_json);
-            return Some(
+                patch_actor_with_online_status(&actor_json, online_status).unwrap_or(actor_json.clone());
+            if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+                if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path) {
+                    let _ = redis_cache_set(state, &cache_key, &actor_json, ttl_secs).await;
+                }
+            }
+            return Some((
                 (
                     StatusCode::OK,
                     [("Content-Type", "application/activity+json; charset=utf-8")],
                     patched,
                 )
                     .into_response(),
-            );
+                "db",
+            ));
         }
         let stub = local_actor_stub_json(&state.cfg, headers, user);
-        return Some(
+        return Some((
             (
                 StatusCode::OK,
                 [("Content-Type", "application/activity+json; charset=utf-8")],
                 stub,
             )
                 .into_response(),
-        );
+            "stub",
+        ));
     } else if let Some(kind) = collection_kind_from_path(user, path) {
         if let Ok(Some(json)) = db.get_collection_cache(user, kind) {
             // Guard against cache pollution: a paged response must not be served
@@ -4388,52 +4449,66 @@ async fn cached_user_response(
                         .to_ascii_lowercase();
                     if ty.ends_with("page") {
                         let stub = collection_stub_json(user, kind, headers);
-                        return Some(
+                        return Some((
                             (
                                 StatusCode::OK,
                                 [("Content-Type", "application/activity+json; charset=utf-8")],
                                 stub,
                             )
                                 .into_response(),
-                        );
+                            "stub",
+                        ));
                     }
                 }
             }
-            return Some(
+            if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+                if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path) {
+                    let _ = redis_cache_set(state, &cache_key, &json, ttl_secs).await;
+                }
+            }
+            return Some((
                 (
                     StatusCode::OK,
                     [("Content-Type", "application/activity+json; charset=utf-8")],
                     json,
                 )
                     .into_response(),
-            );
+                "db",
+            ));
         }
         let stub = collection_stub_json(user, kind, headers);
-        return Some(
+        return Some((
             (
                 StatusCode::OK,
                 [("Content-Type", "application/activity+json; charset=utf-8")],
                 stub,
             )
                 .into_response(),
-        );
+            "stub",
+        ));
     } else if is_object_path {
         if let Some(object_id) = path
             .strip_prefix(&format!("/users/{user}/objects/"))
             .filter(|v| !v.is_empty() && !v.contains('/'))
         {
             if let Ok(Some(note_json)) = db.get_local_object_note_json(user, object_id) {
-                return Some(
+                if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+                    if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path) {
+                        let _ = redis_cache_set(state, &cache_key, &note_json, ttl_secs).await;
+                    }
+                }
+                return Some((
                     (
                         StatusCode::OK,
                         [("Content-Type", "application/activity+json; charset=utf-8")],
                         note_json,
                     )
                         .into_response(),
-                );
+                    "db",
+                ));
             }
         }
-        return Some((StatusCode::NOT_FOUND, "not found").into_response());
+        return Some(((StatusCode::NOT_FOUND, "not found").into_response(), "stub"));
     } else if is_activity_path {
         if let Some(activity_id) = path
             .strip_prefix(&format!("/users/{user}/activities/"))
@@ -4442,14 +4517,22 @@ async fn cached_user_response(
             if let Ok(Some(outbox_json)) = db.get_collection_cache(user, "outbox") {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&outbox_json) {
                     if let Some(found) = find_activity_in_value(&v, activity_id) {
-                        return Some(
+                        let out = found.to_string();
+                        if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+                            if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path)
+                            {
+                                let _ = redis_cache_set(state, &cache_key, &out, ttl_secs).await;
+                            }
+                        }
+                        return Some((
                             (
                                 StatusCode::OK,
                                 [("Content-Type", "application/activity+json; charset=utf-8")],
-                                found.to_string(),
+                                out,
                             )
                                 .into_response(),
-                        );
+                            "db",
+                        ));
                     }
                 }
             }
@@ -4464,24 +4547,33 @@ async fn cached_user_response(
                     &note_json,
                     actor_id_hint.as_deref(),
                 ) {
-                    return Some(
+                    if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
+                        if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path) {
+                            let _ = redis_cache_set(state, &cache_key, &synth, ttl_secs).await;
+                        }
+                    }
+                    return Some((
                         (
                             StatusCode::OK,
                             [("Content-Type", "application/activity+json; charset=utf-8")],
                             synth,
                         )
                             .into_response(),
-                    );
+                        "db",
+                    ));
                 }
             }
         }
-        return Some((StatusCode::NOT_FOUND, "not found").into_response());
+        return Some(((StatusCode::NOT_FOUND, "not found").into_response(), "stub"));
     }
 
     if path.starts_with(&format!("/users/{user}/_fedi3/")) {
-        return Some((StatusCode::NOT_FOUND, "not found").into_response());
+        return Some(((StatusCode::NOT_FOUND, "not found").into_response(), "stub"));
     }
-    Some((StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response())
+    Some((
+        (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response(),
+        "stub",
+    ))
 }
 
 fn classify_forward_route(user: &str, path: &str) -> ForwardRouteClass {
@@ -4555,13 +4647,107 @@ async fn observe_public_get_request(state: &AppState, user: &str, path: &str) {
 }
 
 async fn observe_public_get_cache_hit(state: &AppState, user: &str, path: &str) {
+    observe_public_get_cache_hit_with_source(state, user, path, "unknown").await;
+}
+
+async fn observe_public_get_cache_hit_with_source(
+    state: &AppState,
+    user: &str,
+    path: &str,
+    source: &str,
+) {
     let Some(route) = public_ap_route_label(user, path) else {
         return;
     };
     let mut m = state.ap_public_get_cache_hits_by_route.lock().await;
-    let key = route.to_string();
+    let key = format!("{}|{}", route, sanitize_metric_label(source));
     let cur = m.get(&key).copied().unwrap_or(0);
     m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_ap_cache_refresh(state: &AppState, user: &str, path: &str, result: &str) {
+    let Some(route) = public_ap_route_label(user, path) else {
+        return;
+    };
+    let mut m = state.ap_cache_refresh_by_route_result.lock().await;
+    let key = format!("{}|{}", route, sanitize_metric_label(result));
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+async fn observe_search_meili_fallback(state: &AppState, reason: &str) {
+    let mut m = state.search_meili_fallback_by_reason.lock().await;
+    let key = sanitize_metric_label(reason);
+    let cur = m.get(&key).copied().unwrap_or(0);
+    m.insert(key, cur.saturating_add(1));
+}
+
+fn redis_cache_ttl_secs_for_path(state: &AppState, user: &str, path: &str) -> Option<u64> {
+    if path == format!("/users/{user}") {
+        return Some((state.cfg.offline_cache_ttl_actor_ms.max(5_000) / 1000) as u64);
+    }
+    if collection_kind_from_path(user, path).is_some() {
+        return Some((state.cfg.offline_cache_ttl_collection_ms.max(5_000) / 1000) as u64);
+    }
+    if path.starts_with(&format!("/users/{user}/objects/"))
+        || path.starts_with(&format!("/users/{user}/activities/"))
+    {
+        return Some((state.cfg.offline_cache_ttl_collection_ms.max(5_000) / 1000) as u64);
+    }
+    None
+}
+
+fn redis_ap_cache_key(state: &AppState, user: &str, path: &str) -> Option<String> {
+    if !is_public_ap_get_path(user, path) {
+        return None;
+    }
+    Some(format!(
+        "{}:ap:{}:{}",
+        state.cfg.redis_prefix,
+        user,
+        path.trim_start_matches('/')
+    ))
+}
+
+fn redis_telemetry_cache_key(state: &AppState) -> String {
+    format!("{}:telemetry:self", state.cfg.redis_prefix)
+}
+
+fn redis_relay_list_cache_key(state: &AppState) -> String {
+    format!("{}:relay:list", state.cfg.redis_prefix)
+}
+
+fn redis_timeline_cache_key(
+    state: &AppState,
+    username: &str,
+    stream: &str,
+    cursor: Option<i64>,
+    since: Option<i64>,
+    limit: u32,
+) -> String {
+    format!(
+        "{}:timeline:{}:{}:cursor={:?}:since={:?}:limit={}",
+        state.cfg.redis_prefix, username, stream, cursor, since, limit
+    )
+}
+
+async fn redis_cache_get(state: &AppState, key: &str) -> Option<String> {
+    let redis = state.limiter.redis_handle()?;
+    let mut conn = redis.lock().await;
+    let val: redis::RedisResult<Option<String>> = conn.get(key).await;
+    val.ok().flatten()
+}
+
+async fn redis_cache_set(state: &AppState, key: &str, value: &str, ttl_secs: u64) -> bool {
+    let Some(redis) = state.limiter.redis_handle() else {
+        return false;
+    };
+    if ttl_secs == 0 {
+        return false;
+    }
+    let mut conn = redis.lock().await;
+    let set: redis::RedisResult<()> = conn.set_ex(key, value, ttl_secs).await;
+    set.is_ok()
 }
 
 async fn observe_public_get_fallback(
@@ -4920,8 +5106,9 @@ async fn offline_cached_response(
     path: &str,
     headers: &HeaderMap,
 ) -> Response {
-    if let Some(resp) = cached_user_response(state, user, path, headers).await {
-        observe_public_get_cache_hit(state, user, path).await;
+    if let Some((resp, source)) = cached_user_response(state, user, path, headers).await {
+        observe_public_get_cache_hit_with_source(state, user, path, source).await;
+        observe_ap_cache_refresh(state, user, path, &format!("hit_{source}")).await;
         state
             .relay_stale_cache_served
             .fetch_add(1, Ordering::Relaxed);
@@ -4971,9 +5158,11 @@ async fn forward_to_user(
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         // Serve cache immediately only when user is offline.
         // When online, prefer tunnel as source-of-truth and use cache as fallback.
-        if route_is_cached && !is_online {
-            if let Some(resp) = cached_user_response(&state, &user, path, &headers).await {
-                observe_public_get_cache_hit(&state, &user, path).await;
+        if route_is_cached {
+            if let Some((resp, source)) = cached_user_response(&state, &user, path, &headers).await
+            {
+                observe_public_get_cache_hit_with_source(&state, &user, path, source).await;
+                observe_ap_cache_refresh(&state, &user, path, &format!("hit_{source}")).await;
                 state
                     .relay_stale_cache_served
                     .fetch_add(1, Ordering::Relaxed);
@@ -4983,6 +5172,16 @@ async fn forward_to_user(
                     state
                         .ap_actor_resolve_404_total
                         .fetch_add(1, Ordering::Relaxed);
+                }
+                if is_online {
+                    let refresh_state = state.clone();
+                    let refresh_user = user.clone();
+                    let refresh_path = path.to_string();
+                    tokio::spawn(async move {
+                        observe_ap_cache_refresh(&refresh_state, &refresh_user, &refresh_path, "refresh_scheduled").await;
+                        refresh_public_actor_state(&refresh_state, &refresh_user).await;
+                        observe_ap_cache_refresh(&refresh_state, &refresh_user, &refresh_path, "refresh_done").await;
+                    });
                 }
                 return out;
             }
@@ -12087,6 +12286,7 @@ async fn relay_stats(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let _ = q;
+    let redis_key = redis_telemetry_cache_key(&state);
     let telemetry = match tokio::time::timeout(
         Duration::from_millis(DB_LOCK_TIMEOUT_MS * 2),
         build_self_telemetry(&state),
@@ -12095,17 +12295,30 @@ async fn relay_stats(
     {
         Ok(Ok(t)) => {
             *state.cached_self_telemetry.write().await = Some(t.clone());
+            if let Ok(raw) = serde_json::to_string(&t) {
+                let _ = redis_cache_set(&state, &redis_key, &raw, 120).await;
+            }
             t
         }
         Ok(Err(e)) => {
             if let Some(cached) = state.cached_self_telemetry.read().await.clone() {
                 return axum::Json(cached).into_response();
             }
+            if let Some(raw) = redis_cache_get(&state, &redis_key).await {
+                if let Ok(cached) = serde_json::from_str::<RelayTelemetry>(&raw) {
+                    return axum::Json(cached).into_response();
+                }
+            }
             return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response();
         }
         Err(_) => {
             if let Some(cached) = state.cached_self_telemetry.read().await.clone() {
                 return axum::Json(cached).into_response();
+            }
+            if let Some(raw) = redis_cache_get(&state, &redis_key).await {
+                if let Ok(cached) = serde_json::from_str::<RelayTelemetry>(&raw) {
+                    return axum::Json(cached).into_response();
+                }
             }
             let online_users = state.tunnels.read().await.len() as u64;
             return axum::Json(serde_json::json!({
@@ -12729,16 +12942,32 @@ async fn relay_search_notes(
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search
-            .search_notes(&query, &tag, limit, cursor, since)
-            .await
-        {
+        match search.search_notes(&query, &tag, limit, cursor, since).await {
             Ok(p) => p,
             Err(e) => {
-                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+                observe_search_meili_fallback(&state, "notes_error").await;
+                debug!("search notes meili fallback to db: {e}");
+                let db = state.db.lock().await;
+                match db.search_relay_notes(
+                    &query,
+                    &tag,
+                    limit,
+                    cursor,
+                    since,
+                    state.cfg.search_total_mode,
+                ) {
+                    Ok(p) => p,
+                    Err(db_e) => {
+                        return (StatusCode::BAD_GATEWAY, format!("db error: {db_e}"))
+                            .into_response()
+                    }
+                }
             }
         }
     } else {
+        if state.cfg.search_backend == "meili" {
+            observe_search_meili_fallback(&state, "notes_unavailable").await;
+        }
         let db = state.db.lock().await;
         match db.search_relay_notes(
             &query,
@@ -13159,6 +13388,19 @@ async fn relay_legacy_sync(
                 resp
             } else {
                 let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+                let cache_key = redis_timeline_cache_key(
+                    &state,
+                    &username,
+                    feed.as_str(),
+                    q.cursor,
+                    q.since,
+                    limit,
+                );
+                if let Some(raw) = redis_cache_get(&state, &cache_key).await {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        return json_or_gzip_response(&v, q.gzip.unwrap_or(false), None);
+                    }
+                }
                 let db = state.db.lock().await.clone();
                 let cursor = q.cursor;
                 let page = match list_legacy_feed_page(
@@ -13206,6 +13448,9 @@ async fn relay_legacy_sync(
                     "items": items,
                     "next": page.next,
                 });
+                if let Ok(raw) = serde_json::to_string(&body) {
+                    let _ = redis_cache_set(&state, &cache_key, &raw, 30).await;
+                }
                 json_or_gzip_response(&body, q.gzip.unwrap_or(false), None)
             }
         }
@@ -13265,6 +13510,23 @@ async fn relay_legacy_bootstrap(
                 resp
             } else {
                 let limit = q.limit.unwrap_or(3000).clamp(100, 3000);
+                let cache_key = redis_timeline_cache_key(
+                    &state,
+                    &username,
+                    &format!("bootstrap:{}", feed.as_str()),
+                    q.cursor,
+                    None,
+                    limit,
+                );
+                if let Some(raw) = redis_cache_get(&state, &cache_key).await {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        return json_or_gzip_response(
+                            &v,
+                            q.gzip.unwrap_or(true),
+                            Some("fedi3-legacy-bootstrap.json.gz"),
+                        );
+                    }
+                }
                 let db = state.db.lock().await.clone();
                 let cursor = q.cursor;
                 let page = match list_legacy_feed_page(
@@ -13312,6 +13574,9 @@ async fn relay_legacy_bootstrap(
                     "items": items,
                     "next": page.next,
                 });
+                if let Ok(raw) = serde_json::to_string(&body) {
+                    let _ = redis_cache_set(&state, &cache_key, &raw, 60).await;
+                }
                 json_or_gzip_response(
                     &body,
                     q.gzip.unwrap_or(true),
@@ -13367,16 +13632,31 @@ async fn relay_search_users(
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search
-            .search_users(&query, limit, cursor, &base_template)
-            .await
-        {
+        match search.search_users(&query, limit, cursor, &base_template).await {
             Ok(p) => p,
             Err(e) => {
-                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+                observe_search_meili_fallback(&state, "users_error").await;
+                debug!("search users meili fallback to db: {e}");
+                let db = state.db.lock().await;
+                match db.search_relay_users(
+                    &query,
+                    limit,
+                    cursor,
+                    &base_template,
+                    state.cfg.search_total_mode,
+                ) {
+                    Ok(p) => p,
+                    Err(db_e) => {
+                        return (StatusCode::BAD_GATEWAY, format!("db error: {db_e}"))
+                            .into_response()
+                    }
+                }
             }
         }
     } else {
+        if state.cfg.search_backend == "meili" {
+            observe_search_meili_fallback(&state, "users_unavailable").await;
+        }
         let db = state.db.lock().await;
         match db.search_relay_users(
             &query,
@@ -14132,9 +14412,15 @@ async fn relay_list(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
+    let redis_key = redis_relay_list_cache_key(&state);
     let Some(db) = try_db_clone(&state, "relay_list").await else {
         if let Some(cached) = state.cached_relays_payload.read().await.clone() {
             return axum::Json(cached).into_response();
+        }
+        if let Some(raw) = redis_cache_get(&state, &redis_key).await {
+            if let Ok(cached) = serde_json::from_str::<serde_json::Value>(&raw) {
+                return axum::Json(cached).into_response();
+            }
         }
         let mut relays = Vec::new();
         if let Some(self_url) = state.cfg.public_url.clone() {
@@ -14166,6 +14452,9 @@ async fn relay_list(
     }
     let payload = serde_json::json!({ "relays": relays });
     *state.cached_relays_payload.write().await = Some(payload.clone());
+    if let Ok(raw) = serde_json::to_string(&payload) {
+        let _ = redis_cache_set(&state, &redis_key, &raw, 120).await;
+    }
     axum::Json(payload).into_response()
 }
 
