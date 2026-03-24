@@ -6845,11 +6845,13 @@ impl Db {
     }
 
     fn apply_pragmas(&self, conn: &Connection) -> rusqlite::Result<()> {
-        let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        // Keep per-connection pragmas here. journal_mode is database-global and
+        // is configured during init; re-applying it on every short-lived
+        // connection can block readers behind an active writer on SQLite.
+        let _ = conn.busy_timeout(Duration::from_millis(self.db_busy_timeout_ms));
         let _ = conn.pragma_update(None, "synchronous", self.db_synchronous.as_str());
         let _ = conn.pragma_update(None, "temp_store", "MEMORY");
         let _ = conn.pragma_update(None, "cache_size", &self.db_cache_kb);
-        let _ = conn.busy_timeout(Duration::from_millis(self.db_busy_timeout_ms));
         Ok(())
     }
 
