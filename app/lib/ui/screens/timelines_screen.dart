@@ -727,6 +727,7 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
+          .where((m) => !_isSuppressedActivity(m))
           .where(_isTimelineCandidateActivity)
           .where(_matchesTooltipSemantics)
           .toList();
@@ -758,6 +759,7 @@ class _TimelineListState extends State<_TimelineList>
           .whereType<Map>()
           .map((m) => m.cast<String, dynamic>())
           .where((m) => !_isNoisyActivity(m))
+          .where((m) => !_isSuppressedActivity(m))
           .where(_isTimelineCandidateActivity)
           .where(_matchesTooltipSemantics)
           .toList();
@@ -896,6 +898,13 @@ class _TimelineListState extends State<_TimelineList>
     if (type != 'Announce') return false;
     final obj = activity['object'];
     return obj is String && obj.trim().isNotEmpty;
+  }
+
+  bool _isSuppressedActivity(Map<String, dynamic> activity) {
+    if (_isBlockedByActorPolicy(activity)) return true;
+    final kind = widget.kind.trim().toLowerCase();
+    if (kind == 'federated') return false;
+    return _isAnnounceProxyActivity(activity);
   }
 
   bool _isRenderableTimelineActivity(Map<String, dynamic> activity) {
@@ -1094,6 +1103,112 @@ class _TimelineListState extends State<_TimelineList>
       if (publicHost.isNotEmpty && host == publicHost) return true;
     } catch (_) {}
     return false;
+  }
+
+  bool _isBlockedByActorPolicy(Map<String, dynamic> activity) {
+    final blocked = widget.appState.config?.blockedActors ?? const <String>[];
+    if (blocked.isEmpty) return false;
+    final blockedSelectors = <String>{};
+    for (final raw in blocked) {
+      blockedSelectors.addAll(_actorSelectorsFromRaw(raw));
+    }
+    if (blockedSelectors.isEmpty) return false;
+    final activitySelectors = _activityActorSelectors(activity);
+    return activitySelectors.any(blockedSelectors.contains);
+  }
+
+  bool _isAnnounceProxyActivity(Map<String, dynamic> activity) {
+    final selectors = _activityActorSelectors(activity);
+    return selectors.any(_isAnnounceSelector);
+  }
+
+  bool _isAnnounceSelector(String selector) {
+    final normalized = selector.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    if (normalized == 'announce') return true;
+    final cfgDomain = widget.appState.config?.domain.trim().toLowerCase() ?? '';
+    final publicBase = widget.appState.config?.publicBaseUrl.trim() ?? '';
+    String publicHost = '';
+    if (publicBase.isNotEmpty) {
+      try {
+        publicHost = Uri.parse(publicBase).host.trim().toLowerCase();
+      } catch (_) {}
+    }
+    final handles = <String>{
+      if (cfgDomain.isNotEmpty) 'announce@$cfgDomain',
+      if (publicHost.isNotEmpty) 'announce@$publicHost',
+    };
+    if (handles.contains(normalized)) return true;
+    for (final host in [cfgDomain, publicHost]) {
+      if (host.isEmpty) continue;
+      if (normalized == 'https://$host/users/announce') return true;
+      if (normalized == 'https://$host/@announce') return true;
+      if (normalized == 'https://$host/profile/announce') return true;
+    }
+    return false;
+  }
+
+  Set<String> _activityActorSelectors(Map<String, dynamic> activity) {
+    final out = <String>{};
+    void collectString(String? value) {
+      if (value == null) return;
+      out.addAll(_actorSelectorsFromRaw(value));
+    }
+
+    collectString(activity['actor'] as String?);
+    final object = activity['object'];
+    if (object is Map) {
+      final map = object.cast<String, dynamic>();
+      collectString(map['attributedTo'] as String?);
+      collectString(map['url'] as String?);
+      collectString(map['id'] as String?);
+      final preferred = (map['preferredUsername'] as String?)?.trim();
+      if (preferred != null && preferred.isNotEmpty) {
+        try {
+          final host = Uri.parse((map['id'] as String?)?.trim() ?? '').host;
+          if (host.isNotEmpty) {
+            out.add('${preferred.toLowerCase()}@${host.toLowerCase()}');
+          }
+        } catch (_) {}
+      }
+      final inner = map['object'];
+      if (inner is Map) {
+        final innerMap = inner.cast<String, dynamic>();
+        collectString(innerMap['attributedTo'] as String?);
+        collectString(innerMap['url'] as String?);
+        collectString(innerMap['id'] as String?);
+      }
+    } else if (object is String) {
+      collectString(object);
+    }
+    return out;
+  }
+
+  Set<String> _actorSelectorsFromRaw(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return const <String>{};
+    final out = <String>{value.toLowerCase()};
+    final stripped = value.startsWith('@') ? value.substring(1) : value;
+    if (stripped.contains('@') && !stripped.contains('://')) {
+      out.add(stripped.toLowerCase());
+    }
+    try {
+      final uri = Uri.parse(value);
+      final host = uri.host.trim().toLowerCase();
+      if (host.isEmpty) return out;
+      final path = uri.path.trim();
+      out.add('https://$host${path.toLowerCase()}');
+      final segments =
+          uri.pathSegments.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      if (segments.length >= 2 && segments[0].toLowerCase() == 'users') {
+        out.add('${segments[1].toLowerCase()}@$host');
+      } else if (segments.isNotEmpty && segments[0].startsWith('@')) {
+        out.add('${segments[0].substring(1).toLowerCase()}@$host');
+      } else if (segments.length >= 2 && segments[0].toLowerCase() == 'profile') {
+        out.add('${segments[1].toLowerCase()}@$host');
+      }
+    } catch (_) {}
+    return out;
   }
 
   bool _matchesTooltipSemantics(Map<String, dynamic> activity) {
