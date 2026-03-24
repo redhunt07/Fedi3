@@ -1221,7 +1221,7 @@ class _TimelineListState extends State<_TimelineList>
       return localActor && isPublic;
     }
     if (kind == 'social') {
-      return !localActor && isPublic;
+      return isPublic;
     }
     if (kind == 'federated') {
       return !localActor && isPublic;

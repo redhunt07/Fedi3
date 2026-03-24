@@ -155,15 +155,15 @@ class CoreApi {
     final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
     if (!isSocial) return decoded;
 
-    final fallbackUri = _internal('/_fedi3/timeline/federated', query);
-    final fallback = await http.get(fallbackUri, headers: _internalHeaders);
-    if (fallback.statusCode < 200 || fallback.statusCode >= 300) return decoded;
-    final fed = jsonDecode(fallback.body) as Map<String, dynamic>;
+    final localUri = _internal('/_fedi3/timeline/local', query);
+    final localResp = await http.get(localUri, headers: _internalHeaders);
+    if (localResp.statusCode < 200 || localResp.statusCode >= 300) return decoded;
+    final local = jsonDecode(localResp.body) as Map<String, dynamic>;
     final dhtItems = ((decoded['items'] as List<dynamic>?) ?? const [])
         .whereType<Map>()
         .map((m) => m.cast<String, dynamic>())
         .toList();
-    final fedItems = ((fed['items'] as List<dynamic>?) ?? const [])
+    final localItems = ((local['items'] as List<dynamic>?) ?? const [])
         .whereType<Map>()
         .map((m) => m.cast<String, dynamic>())
         .toList();
@@ -187,8 +187,8 @@ class CoreApi {
       }
     }
 
+    addAll(localItems);
     addAll(dhtItems);
-    addAll(fedItems);
     merged.sort((a, b) => _timelineTimestampMs(b) - _timelineTimestampMs(a));
     if (merged.length > limit) {
       merged.removeRange(limit, merged.length);
@@ -197,7 +197,7 @@ class CoreApi {
     return <String, dynamic>{
       ...decoded,
       'items': merged,
-      'next': decoded['next'] ?? fed['next'],
+      'next': decoded['next'] ?? local['next'],
     };
   }
 

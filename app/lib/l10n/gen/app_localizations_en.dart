@@ -334,11 +334,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get timelineLocalTooltip =>
-      'Local timeline (Relay + Legacy). Shows public local posts from your instance/relay.';
+      'Local timeline (Relay + Legacy). Shows all public posts from users hosted on your relay.';
 
   @override
   String get timelineSocialTooltip =>
-      'Social timeline (Relay). Best-effort global feed via relay federation.';
+      'Social timeline (Relay Mesh). Shows the local relay plus public posts coming from the other relays in mesh.';
 
   @override
   String get timelineFederatedTooltip =>

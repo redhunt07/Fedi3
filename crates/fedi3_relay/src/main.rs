@@ -6029,11 +6029,14 @@ async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
                 Ok(Some(json)) => parse_following_actors(&json),
                 _ => HashSet::new(),
             };
+            let social_hosts =
+                collect_social_feed_hosts(&db, state.cfg.base_domain.as_deref(), None);
             for stream in streams {
                 let run = db.rebuild_legacy_feed_projection(
                     &username,
                     stream,
                     &following,
+                    &social_hosts,
                     state.cfg.base_domain.as_deref(),
                     batch_limit,
                 )?;
@@ -10099,6 +10102,7 @@ impl Db {
         username: &str,
         stream: LegacyFeedKind,
         following: &HashSet<String>,
+        social_hosts: &HashSet<String>,
         relay_host: Option<&str>,
         batch_limit: u32,
     ) -> Result<ProjectionApplyStats> {
@@ -10155,7 +10159,8 @@ impl Db {
                                     })
                             })
                             .unwrap_or_default();
-                        if !actor_matches_feed(&actor, stream, following, relay_host) {
+                        if !actor_matches_feed(&actor, stream, following, relay_host, social_hosts)
+                        {
                             continue;
                         }
                         pending.push((note_id, created_at_ms));
@@ -10236,7 +10241,8 @@ impl Db {
                                     })
                             })
                             .unwrap_or_default();
-                        if !actor_matches_feed(&actor, stream, following, relay_host) {
+                        if !actor_matches_feed(&actor, stream, following, relay_host, social_hosts)
+                        {
                             continue;
                         }
                         let changed = conn.execute(
@@ -10279,6 +10285,7 @@ impl Db {
         since: Option<i64>,
         cursor: Option<i64>,
         following: &HashSet<String>,
+        social_hosts: &HashSet<String>,
         relay_host: Option<&str>,
         projection_batch_size: u32,
     ) -> Result<CollectionPage<(String, i64)>> {
@@ -10286,6 +10293,7 @@ impl Db {
             username,
             stream,
             following,
+            social_hosts,
             relay_host,
             projection_batch_size,
         )?;
@@ -12921,6 +12929,7 @@ fn actor_matches_feed(
     feed: LegacyFeedKind,
     following: &HashSet<String>,
     relay_host: Option<&str>,
+    social_hosts: &HashSet<String>,
 ) -> bool {
     if actor.is_empty() {
         return false;
@@ -12943,17 +12952,43 @@ fn actor_matches_feed(
                 following.contains(actor)
             }
         }
-        // Social is the compatibility timeline and must not go empty when following
-        // cache is unavailable. In that case, fallback to local actors only
-        // to avoid flooding with unrelated federated content.
-        LegacyFeedKind::Social => {
-            if following_empty {
-                is_local
-            } else {
-                following.contains(actor) || is_local
+        LegacyFeedKind::Social => actor_host
+            .as_deref()
+            .map(|host| social_hosts.contains(host))
+            .unwrap_or(is_local),
+    }
+}
+
+fn collect_social_feed_hosts(
+    db: &Db,
+    relay_host: Option<&str>,
+    relay_base_domain: Option<&str>,
+) -> HashSet<String> {
+    let mut hosts = HashSet::new();
+    if let Some(host) = relay_host {
+        let host = host.trim();
+        if !host.is_empty() {
+            hosts.insert(normalize_host(host.to_string()));
+        }
+    }
+    if let Some(base) = relay_base_domain {
+        let base = base.trim();
+        if !base.is_empty() {
+            hosts.insert(normalize_host(base.to_string()));
+        }
+    }
+    for (relay_url, base_domain, _, _, _) in db.list_relays(500).unwrap_or_default() {
+        if let Some(host) = host_from_url(&relay_url) {
+            hosts.insert(host);
+        }
+        if let Some(base) = base_domain {
+            let base = base.trim();
+            if !base.is_empty() {
+                hosts.insert(normalize_host(base.to_string()));
             }
         }
     }
+    hosts
 }
 
 fn list_legacy_feed_page(
@@ -12971,6 +13006,7 @@ fn list_legacy_feed_page(
         Ok(Some(json)) => parse_following_actors(&json),
         _ => HashSet::new(),
     };
+    let social_hosts = collect_social_feed_hosts(db, relay_host, None);
     db.list_relay_notes_sync_for_user_stream(
         username,
         feed,
@@ -12978,6 +13014,7 @@ fn list_legacy_feed_page(
         since,
         cursor,
         &following,
+        &social_hosts,
         relay_host,
         projection_batch_size,
     )

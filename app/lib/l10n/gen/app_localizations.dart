@@ -725,13 +725,13 @@ abstract class AppLocalizations {
   /// No description provided for @timelineLocalTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Local timeline (Relay + Legacy). Shows public local posts from your instance/relay.'**
+  /// **'Local timeline (Relay + Legacy). Shows all public posts from users hosted on your relay.'**
   String get timelineLocalTooltip;
 
   /// No description provided for @timelineSocialTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Social timeline (Relay). Best-effort global feed via relay federation.'**
+  /// **'Social timeline (Relay Mesh). Shows the local relay plus public posts coming from the other relays in mesh.'**
   String get timelineSocialTooltip;
 
   /// No description provided for @timelineFederatedTooltip.
