@@ -95,6 +95,11 @@ async fn try_db_lock<'a>(
     }
 }
 
+async fn try_db_clone(state: &AppState, op: &'static str) -> Option<Db> {
+    let guard = try_db_lock(state, op).await?;
+    Some(guard.clone())
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct PeerHello {
     username: String,
@@ -2907,7 +2912,7 @@ async fn handle_tunnel(
     }
 
     // Auth / registration
-    let mut db = state.db.lock().await;
+    let mut db = state.db.lock().await.clone();
     match db.verify_or_register(&state.cfg, &user, &token) {
         Ok(()) => {}
         Err(e) => {
@@ -4302,7 +4307,7 @@ async fn cached_user_response(
         return None;
     }
 
-    let db = state.db.lock().await;
+    let db = state.db.lock().await.clone();
     if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(user) {
         if path == format!("/users/{user}") {
             if wants_activity_json(headers) {
@@ -4343,7 +4348,8 @@ async fn cached_user_response(
     }
 
     if path == format!("/users/{user}") {
-        if let Ok(Some(actor_json)) = db.get_actor_cache(user) {
+        let actor_json = db.get_actor_cache(user).ok().flatten();
+        if let Some(actor_json) = actor_json {
             let online_status = online_status_for_user(state, user).await;
             let patched =
                 patch_actor_with_online_status(&actor_json, online_status).unwrap_or(actor_json);
@@ -5852,7 +5858,8 @@ async fn shared_inbox(
         }
 
         let mut queued_for_online_flush = false;
-        let db = state.db.lock().await;
+        let mut spooled_now = false;
+        let db = state.db.lock().await.clone();
         match db.is_user_enabled(&user) {
             Ok(true) => {
                 if db
@@ -5870,15 +5877,16 @@ async fn shared_inbox(
                     .is_ok()
                 {
                     spooled += 1;
-                    observe_ap_activity_spool(&state, &activity_type, "offline_or_forward_failed")
-                        .await;
+                    spooled_now = true;
                     queued_for_online_flush = is_online;
                 }
             }
             Ok(false) => {}
             Err(e) => error!(%user, "db error: {e}"),
         }
-        drop(db);
+        if spooled_now {
+            observe_ap_activity_spool(&state, &activity_type, "offline_or_forward_failed").await;
+        }
         if queued_for_online_flush {
             maybe_spawn_spool_flush_for_user(&state, &user).await;
         }
@@ -5937,13 +5945,11 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
         debug!("outbox indexer skipped: async job slots saturated");
         return Ok(());
     };
+    let db = state.db.lock().await.clone();
     let mut offset = 0u32;
     let batch = 200u32;
     loop {
-        let users = {
-            let db = state.db.lock().await;
-            db.list_users(batch, offset).unwrap_or_default()
-        };
+        let users = db.list_users(batch, offset).unwrap_or_default();
         if users.is_empty() {
             break;
         }
@@ -5953,13 +5959,11 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
             }
             if let Err(e) = index_outbox_for_user(state, &user).await {
                 error!(%user, "outbox index error: {e:#}");
-                let db = state.db.lock().await;
                 let _ = db.upsert_outbox_index_state(&user, false);
             }
         }
         offset = offset.saturating_add(batch);
     }
-    let db = state.db.lock().await;
     let _ = db.relay_meta_set("search_index_last_ms", &now_ms().to_string());
     Ok(())
 }
@@ -6006,19 +6010,14 @@ async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
     ];
     let mut offset = 0u32;
 
-    {
-        let db = state.db.lock().await;
-        db.ensure_legacy_projection_tables()?;
-    }
+    let db = state.db.lock().await.clone();
+    db.ensure_legacy_projection_tables()?;
 
     loop {
         if processed_users >= max_users {
             break;
         }
-        let users = {
-            let db = state.db.lock().await;
-            db.list_enabled_usernames(page_size, offset)?
-        };
+        let users = db.list_enabled_usernames(page_size, offset)?;
         if users.is_empty() {
             break;
         }
@@ -6026,24 +6025,18 @@ async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
             if processed_users >= max_users {
                 break;
             }
-            let following = {
-                let db = state.db.lock().await;
-                match db.get_collection_cache(&username, "following") {
-                    Ok(Some(json)) => parse_following_actors(&json),
-                    _ => HashSet::new(),
-                }
+            let following = match db.get_collection_cache(&username, "following") {
+                Ok(Some(json)) => parse_following_actors(&json),
+                _ => HashSet::new(),
             };
             for stream in streams {
-                let run = {
-                    let db = state.db.lock().await;
-                    db.rebuild_legacy_feed_projection(
-                        &username,
-                        stream,
-                        &following,
-                        state.cfg.base_domain.as_deref(),
-                        batch_limit,
-                    )?
-                };
+                let run = db.rebuild_legacy_feed_projection(
+                    &username,
+                    stream,
+                    &following,
+                    state.cfg.base_domain.as_deref(),
+                    batch_limit,
+                )?;
                 inserted = inserted.saturating_add(run.inserted);
                 dedup = dedup.saturating_add(run.dedup_skipped);
             }
@@ -13107,7 +13100,7 @@ async fn relay_legacy_sync(
                 resp
             } else {
                 let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-                let db = state.db.lock().await;
+                let db = state.db.lock().await.clone();
                 let cursor = q.cursor;
                 let page = match list_legacy_feed_page(
                     &db,
@@ -13121,7 +13114,6 @@ async fn relay_legacy_sync(
                 ) {
                     Ok(v) => v,
                     Err(e) => {
-                        drop(db);
                         return legacy_v1_error(
                             StatusCode::BAD_GATEWAY,
                             "db_error",
@@ -13214,7 +13206,7 @@ async fn relay_legacy_bootstrap(
                 resp
             } else {
                 let limit = q.limit.unwrap_or(3000).clamp(100, 3000);
-                let db = state.db.lock().await;
+                let db = state.db.lock().await.clone();
                 let cursor = q.cursor;
                 let page = match list_legacy_feed_page(
                     &db,
@@ -13228,7 +13220,6 @@ async fn relay_legacy_bootstrap(
                 ) {
                     Ok(v) => v,
                     Err(e) => {
-                        drop(db);
                         return legacy_v1_error(
                             StatusCode::BAD_GATEWAY,
                             "db_error",
@@ -13610,13 +13601,11 @@ async fn run_reconciliation_once_with_mode(state: &AppState, full: bool) -> Resu
         debug!("reconcile skipped: async job slots saturated");
         return Ok(());
     };
+    let db = state.db.lock().await.clone();
     let mut offset = 0u32;
     let batch = 200u32;
     loop {
-        let users = {
-            let db = state.db.lock().await;
-            db.list_users(batch, offset).unwrap_or_default()
-        };
+        let users = db.list_users(batch, offset).unwrap_or_default();
         if users.is_empty() {
             break;
         }
@@ -13624,7 +13613,6 @@ async fn run_reconciliation_once_with_mode(state: &AppState, full: bool) -> Resu
             if disabled != 0 {
                 continue;
             }
-            let db = state.db.lock().await;
             reconcile_user_aggregates(&db, &state.cfg, &username)?;
             if full {
                 ensure_actor_minimum_fields(&db, &state.cfg, &username)?;
@@ -14085,7 +14073,7 @@ async fn relay_list(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
-    let Some(db) = try_db_lock(&state, "relay_list").await else {
+    let Some(db) = try_db_clone(&state, "relay_list").await else {
         let mut relays = Vec::new();
         if let Some(self_url) = state.cfg.public_url.clone() {
             relays.push(serde_json::json!({ "relay_url": self_url }));
@@ -15349,7 +15337,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         legacy_projection_feed_rows,
         legacy_projection_backlog_users,
         legacy_projection_lag_ms,
-    ) = if let Some(db) = try_db_lock(state, "build_self_telemetry").await {
+    ) = if let Some(db) = try_db_clone(state, "build_self_telemetry").await {
         let total_users = db.count_users_total().unwrap_or(0);
         let total_peers_seen = db.count_peers_seen_since(cutoff_ms).unwrap_or(0);
         let relays = db
@@ -15780,8 +15768,8 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
 
 async fn sync_relays_once(state: &AppState) -> Result<()> {
     let self_url = state.cfg.public_url.clone();
+    let db = state.db.lock().await.clone();
     let relays = {
-        let db = state.db.lock().await;
         let mut out = db
             .list_relays(500)
             .unwrap_or_default()
@@ -15817,13 +15805,12 @@ async fn sync_relays_once(state: &AppState) -> Result<()> {
 async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
     info!(relay_url = %relay_url, "relay http sync start");
     let key = format!("relay_sync_last_ms:{relay_url}");
-    let last_seen = {
-        let db = state.db.lock().await;
-        db.relay_meta_get(&key)
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<i64>().ok())
-    };
+    let db = state.db.lock().await.clone();
+    let last_seen = db
+        .relay_meta_get(&key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok());
     let limit = state.cfg.relay_sync_limit.min(200).max(1);
     let mut cursor = None;
     let mut since = last_seen;
@@ -15858,7 +15845,6 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
             break;
         }
         total_items += data.items.len();
-        let db = state.db.lock().await;
         for item in data.items {
             if item.created_at_ms > max_seen {
                 max_seen = item.created_at_ms;
@@ -15876,7 +15862,6 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
                 let _ = db.upsert_relay_actor(&actor_idx);
             }
         }
-        drop(db);
         pages += 1;
         if let Some(next) = data.next.and_then(|v| v.parse::<i64>().ok()) {
             cursor = Some(next);
@@ -15887,7 +15872,6 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
     }
 
     if max_seen > last_seen.unwrap_or(0) {
-        let db = state.db.lock().await;
         let _ = db.relay_meta_set(&key, &max_seen.to_string());
     }
     if total_items > 0 {
