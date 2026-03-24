@@ -4733,9 +4733,15 @@ fn redis_timeline_cache_key(
 
 async fn redis_cache_get(state: &AppState, key: &str) -> Option<String> {
     let redis = state.limiter.redis_handle()?;
-    let mut conn = redis.lock().await;
-    let val: redis::RedisResult<Option<String>> = conn.get(key).await;
-    val.ok().flatten()
+    let mut conn = match tokio::time::timeout(Duration::from_millis(250), redis.lock()).await {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let val = tokio::time::timeout(Duration::from_millis(250), conn.get(key)).await;
+    match val {
+        Ok(v) => v.ok().flatten(),
+        Err(_) => None,
+    }
 }
 
 async fn redis_cache_set(state: &AppState, key: &str, value: &str, ttl_secs: u64) -> bool {
@@ -4745,9 +4751,19 @@ async fn redis_cache_set(state: &AppState, key: &str, value: &str, ttl_secs: u64
     if ttl_secs == 0 {
         return false;
     }
-    let mut conn = redis.lock().await;
-    let set: redis::RedisResult<()> = conn.set_ex(key, value, ttl_secs).await;
-    set.is_ok()
+    let mut conn = match tokio::time::timeout(Duration::from_millis(250), redis.lock()).await {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let set = tokio::time::timeout(
+        Duration::from_millis(250),
+        conn.set_ex::<&str, &str, ()>(key, value, ttl_secs),
+    )
+    .await;
+    match set {
+        Ok(v) => v.is_ok(),
+        Err(_) => false,
+    }
 }
 
 async fn observe_public_get_fallback(

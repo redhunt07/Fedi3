@@ -134,6 +134,7 @@ function Install-CoreService {
   $configPath = Join-Path $configBase "Fedi3\config.json"
   $action = New-ScheduledTaskAction -Execute $coreServiceExe -Argument "--config `"$configPath`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew
   # PowerShell versions expose different enum names:
   # newer: InteractiveToken, older: Interactive.
   $principal = $null
@@ -144,7 +145,7 @@ function Install-CoreService {
   }
 
   try {
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName | Out-Null
     Write-Host "Core service scheduled task installed: $taskName"
   } catch {
