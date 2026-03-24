@@ -75,10 +75,24 @@ const DB_BATCH_DELETE_MAX: usize = 500;
 const WEBRTC_SIGNAL_TTL_SECS: i64 = 300;
 const WEBRTC_SIGNAL_MAX_PER_PEER: usize = 200;
 const WEBRTC_KEY_CACHE_TTL_SECS: i64 = 3600;
+const DB_LOCK_TIMEOUT_MS: u64 = 1500;
 
 fn next_request_id() -> String {
     let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
     format!("req-{id}")
+}
+
+async fn try_db_lock<'a>(
+    state: &'a AppState,
+    op: &'static str,
+) -> Option<tokio::sync::MutexGuard<'a, Db>> {
+    match tokio::time::timeout(Duration::from_millis(DB_LOCK_TIMEOUT_MS), state.db.lock()).await {
+        Ok(guard) => Some(guard),
+        Err(_) => {
+            warn!(operation = op, timeout_ms = DB_LOCK_TIMEOUT_MS, "db lock timeout");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -12068,10 +12082,22 @@ async fn relay_stats(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let _ = q;
-    let telemetry = match build_self_telemetry(&state).await {
-        Ok(t) => t,
-        Err(e) => {
+    let telemetry = match tokio::time::timeout(
+        Duration::from_millis(DB_LOCK_TIMEOUT_MS * 2),
+        build_self_telemetry(&state),
+    )
+    .await
+    {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
             return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "telemetry timeout: db busy",
+            )
+                .into_response()
         }
     };
     axum::Json(telemetry).into_response()
@@ -14059,7 +14085,20 @@ async fn relay_list(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
-    let db = state.db.lock().await;
+    let Some(db) = try_db_lock(&state, "relay_list").await else {
+        let mut relays = Vec::new();
+        if let Some(self_url) = state.cfg.public_url.clone() {
+            relays.push(serde_json::json!({ "relay_url": self_url }));
+        }
+        for relay_url in &state.cfg.seed_relays {
+            relays.push(serde_json::json!({ "relay_url": relay_url }));
+        }
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({ "relays": relays, "degraded": true })),
+        )
+            .into_response();
+    };
     let rows = match db.list_relays(limit) {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
@@ -15310,8 +15349,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         legacy_projection_feed_rows,
         legacy_projection_backlog_users,
         legacy_projection_lag_ms,
-    ) = {
-        let db = state.db.lock().await;
+    ) = if let Some(db) = try_db_lock(state, "build_self_telemetry").await {
         let total_users = db.count_users_total().unwrap_or(0);
         let total_peers_seen = db.count_peers_seen_since(cutoff_ms).unwrap_or(0);
         let relays = db
@@ -15384,6 +15422,28 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
             legacy_projection_feed_rows,
             legacy_projection_backlog_users,
             legacy_projection_lag_ms,
+        )
+    } else {
+        let mut relays = state.cfg.seed_relays.clone();
+        if let Some(self_url) = state.cfg.public_url.clone() {
+            relays.push(self_url);
+        }
+        relays.sort();
+        relays.dedup();
+        (
+            0,
+            0,
+            relays,
+            Vec::new(),
+            Vec::new(),
+            0,
+            None,
+            0,
+            0,
+            None,
+            0,
+            0,
+            0,
         )
     };
     let projection_runs = state.legacy_projection_stats.runs.load(Ordering::Relaxed);
