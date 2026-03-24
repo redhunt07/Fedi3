@@ -392,6 +392,11 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/social/follow/import/status") => {
             social_follow_import_status(state, req).await
         }
+        ("POST", "/_fedi3/social/follow/import/retry_last") => {
+            social_follow_import_retry_last(state, req).await
+        }
+        ("GET", "/_fedi3/social/follow/export") => social_follow_export(state, req).await,
+        ("GET", "/_fedi3/social/follow/audit") => social_follow_audit(state, req).await,
         ("POST", "/_fedi3/p2p/unfollow") => social_unfollow(state, req).await,
         ("POST", "/_fedi3/social/unfollow") => social_unfollow(state, req).await,
         ("GET", "/_fedi3/social/status") => social_follow_status_get(state, req).await,
@@ -2375,8 +2380,12 @@ struct MigrationStatusResp {
     did: Option<String>,
     domain: String,
     public_base_url: String,
+    username: String,
+    data_dir: String,
     followers_count: u64,
     following_count: u64,
+    following_pending_count: u64,
+    following_accepted_count: u64,
     legacy_followers_count: u64,
     also_known_as: Vec<String>,
     legacy_aliases: Vec<String>,
@@ -2405,6 +2414,14 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
         .social
         .list_following(0, None)
         .map(|p| p.total)
+        .unwrap_or(0);
+    let following_pending_count = state
+        .social
+        .count_following_by_status(FollowingStatus::Pending)
+        .unwrap_or(0);
+    let following_accepted_count = state
+        .social
+        .count_following_by_status(FollowingStatus::Accepted)
         .unwrap_or(0);
     let legacy_followers_count = state
         .social
@@ -2475,8 +2492,12 @@ async fn migration_status(state: &ApState, req: Request<Body>) -> Response<Body>
         did,
         domain: state.cfg.domain.clone(),
         public_base_url: base,
+        username: state.cfg.username.clone(),
+        data_dir: state.data_dir.display().to_string(),
         followers_count,
         following_count,
+        following_pending_count,
+        following_accepted_count,
         legacy_followers_count,
         also_known_as,
         legacy_aliases,
@@ -5588,6 +5609,14 @@ struct SocialFollowImportReq {
     pause_ms: Option<u64>,
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct SocialFollowImportRetryReq {
+    #[serde(default)]
+    batch_size: Option<usize>,
+    #[serde(default)]
+    pause_ms: Option<u64>,
+}
+
 fn parse_follow_import_csv(csv: &str) -> Vec<String> {
     let mut out = Vec::new();
     for raw_line in csv.lines() {
@@ -5664,8 +5693,7 @@ async fn resolve_follow_target_input(state: &ApState, input: &str) -> Option<Str
                         if let Ok(resp) = state.http.get(wf).send().await {
                             if resp.status().is_success() {
                                 if let Ok(v) = resp.json::<serde_json::Value>().await {
-                                    if let Some(links) = v.get("links").and_then(|x| x.as_array())
-                                    {
+                                    if let Some(links) = v.get("links").and_then(|x| x.as_array()) {
                                         for link in links {
                                             let rel = link
                                                 .get("rel")
@@ -5691,7 +5719,7 @@ async fn resolve_follow_target_input(state: &ApState, input: &str) -> Option<Str
                                                 || t.is_empty()
                                             {
                                                 return Some(
-                                                    href.trim_end_matches('/').to_string()
+                                                    href.trim_end_matches('/').to_string(),
                                                 );
                                             }
                                         }
@@ -5836,6 +5864,7 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
 
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
+    let mut already_present = Vec::new();
     let mut invalid = Vec::new();
     for raw in raw_targets {
         let trimmed = raw.trim();
@@ -5847,18 +5876,29 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
             continue;
         }
         if let Some(actor_url) = resolve_follow_target_input(state, trimmed).await {
-            normalized.push(actor_url);
+            if state
+                .social
+                .get_following_status(&actor_url)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                already_present.push(actor_url);
+            } else {
+                normalized.push(actor_url);
+            }
         } else {
             invalid.push(trimmed.to_string());
         }
     }
-    if normalized.is_empty() {
+    if normalized.is_empty() && already_present.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             [("Content-Type", "application/json; charset=utf-8")],
             serde_json::json!({
                 "ok": false,
                 "imported": 0,
+                "already_present": 0,
                 "skipped_invalid": invalid.len(),
                 "invalid": invalid,
             })
@@ -5875,8 +5915,10 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
                 "ok": true,
                 "dry_run": true,
                 "candidates": normalized.len(),
+                "already_present": already_present.len(),
                 "invalid": invalid,
                 "targets": normalized,
+                "already_present_targets": already_present,
             })
             .to_string(),
         )
@@ -5887,6 +5929,8 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
     let job_id = next_follow_import_job_id();
     let queued_detail = serde_json::json!({
         "invalid": invalid,
+        "targets": normalized,
+        "already_present": already_present,
     })
     .to_string();
     if let Err(err) = state.social.create_follow_import_job(
@@ -5927,6 +5971,7 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
             "job_id": job_id,
             "status": "queued",
             "total": total_targets,
+            "already_present": already_present.len(),
         })
         .to_string(),
     )
@@ -5992,6 +6037,22 @@ fn follow_import_job_status_json(job: &FollowImportJob) -> serde_json::Value {
         "updated_at_ms": job.updated_at_ms,
         "detail": detail,
     })
+}
+
+fn latest_follow_import_targets(job: &FollowImportJob) -> Vec<String> {
+    job.detail_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|v| v.get("targets").cloned())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| {
+            v.as_str()
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn next_follow_import_job_id() -> String {
@@ -6139,6 +6200,148 @@ async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> 
         }
         Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
     }
+}
+
+async fn social_follow_import_retry_last(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = axum::body::to_bytes(body, 16 * 1024)
+        .await
+        .map(|b| b.to_vec())
+        .unwrap_or_default();
+    let retry: SocialFollowImportRetryReq =
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| SocialFollowImportRetryReq::default());
+    let batch_size = retry.batch_size.unwrap_or(25).clamp(1, 200);
+    let pause_ms = retry.pause_ms.unwrap_or(500).clamp(0, 10_000);
+    let Some(job) = state.social.latest_follow_import_job().ok().flatten() else {
+        return simple(StatusCode::NOT_FOUND, "follow import job not found");
+    };
+    let targets = latest_follow_import_targets(&job);
+    if targets.is_empty() {
+        return simple(
+            StatusCode::BAD_REQUEST,
+            "latest follow import has no stored targets",
+        );
+    }
+    let job_id = next_follow_import_job_id();
+    let queued_detail = serde_json::json!({
+        "retry_of": job.job_id,
+        "targets": targets,
+        "invalid": [],
+        "already_present": [],
+    })
+    .to_string();
+    if let Err(err) = state.social.create_follow_import_job(
+        &job_id,
+        false,
+        targets.len() as i64,
+        0,
+        Some(&queued_detail),
+    ) {
+        return simple(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to create retry job: {err}"),
+        );
+    }
+    let state_cloned = state.clone();
+    tokio::spawn(async move {
+        run_follow_import_job(
+            state_cloned,
+            job_id,
+            targets,
+            0,
+            batch_size,
+            pause_ms,
+            queued_detail,
+        )
+        .await;
+    });
+    (
+        StatusCode::OK,
+        [("Content-Type", "application/json; charset=utf-8")],
+        serde_json::json!({"ok": true, "queued": true, "status": "queued"}).to_string(),
+    )
+        .into_response()
+}
+
+async fn social_follow_export(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let accepted = state
+        .social
+        .list_following_accepted_ids(10_000)
+        .unwrap_or_default();
+    let pending_page = state.social.list_following(10_000, None).ok();
+    let mut pending = Vec::new();
+    if let Some(page) = pending_page {
+        for actor in page.items {
+            if matches!(
+                state.social.get_following_status(&actor).ok().flatten(),
+                Some(FollowingStatus::Pending)
+            ) {
+                pending.push(actor);
+            }
+        }
+    }
+    let mut csv = String::from("Account address,Status\n");
+    for actor in accepted {
+        csv.push_str(&format!("\"{}\",accepted\n", actor.replace('"', "\"\"")));
+    }
+    for actor in pending {
+        csv.push_str(&format!("\"{}\",pending\n", actor.replace('"', "\"\"")));
+    }
+    let mut resp = Response::new(Body::from(csv));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    resp.into_response()
+}
+
+async fn social_follow_audit(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let followers_count = state.social.count_followers().unwrap_or(0);
+    let following_total = state
+        .social
+        .list_following(0, None)
+        .map(|p| p.total)
+        .unwrap_or(0);
+    let pending_count = state
+        .social
+        .count_following_by_status(FollowingStatus::Pending)
+        .unwrap_or(0);
+    let accepted_count = state
+        .social
+        .count_following_by_status(FollowingStatus::Accepted)
+        .unwrap_or(0);
+    let latest_job = state
+        .social
+        .latest_follow_import_job()
+        .ok()
+        .flatten()
+        .map(|job| follow_import_job_status_json(&job))
+        .unwrap_or_else(|| serde_json::json!(null));
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "username": state.cfg.username,
+        "actor": format!("{}/users/{}", state.cfg.public_base_url.trim_end_matches('/'), state.cfg.username),
+        "did": fedi3_did(state),
+        "data_dir": state.data_dir.display().to_string(),
+        "followers_count": followers_count,
+        "following_total": following_total,
+        "following_pending": pending_count,
+        "following_accepted": accepted_count,
+        "following_rejected": 0u64,
+        "latest_follow_import_job": latest_job,
+    }))
+    .into_response()
 }
 
 async fn social_follow_status_get(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -8296,7 +8499,9 @@ pub(crate) async fn process_inbox_activity(
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
                                 .map(|s| s.to_string())
-                                .unwrap_or_else(|| synthetic_reaction_id(actor, ty, &obj_id, content));
+                                .unwrap_or_else(|| {
+                                    synthetic_reaction_id(actor, ty, &obj_id, content)
+                                });
                             let _ = state.social.upsert_reaction_with_content(
                                 &reaction_id,
                                 ty,

@@ -256,7 +256,8 @@ impl NetMetrics {
     }
 
     pub fn transport_failover(&self, reason: &str) {
-        self.transport_failover_total.fetch_add(1, Ordering::Relaxed);
+        self.transport_failover_total
+            .fetch_add(1, Ordering::Relaxed);
         let reason = reason.trim().to_ascii_lowercase();
         if reason.contains("timeout") {
             self.transport_failover_timeout_total
@@ -279,7 +280,12 @@ impl NetMetrics {
         self.transport_recover_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn set_relay_preferred_state(&self, active_peers: u64, until_ms: u64, reason: Option<&str>) {
+    pub fn set_relay_preferred_state(
+        &self,
+        active_peers: u64,
+        until_ms: u64,
+        reason: Option<&str>,
+    ) {
         self.relay_preferred_active_peers
             .store(active_peers, Ordering::Relaxed);
         self.relay_preferred_until_ms

@@ -2608,6 +2608,16 @@ impl SocialDb {
         Ok(rows)
     }
 
+    pub fn count_following_by_status(&self, status: FollowingStatus) -> Result<u64> {
+        let conn = Connection::open(&self.path)?;
+        let total: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM following WHERE status=?1",
+            params![status as u32],
+            |r| r.get(0),
+        )?;
+        Ok(total)
+    }
+
     fn list_collection(
         &self,
         table: &str,

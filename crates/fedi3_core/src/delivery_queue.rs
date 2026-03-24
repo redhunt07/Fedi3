@@ -339,14 +339,14 @@ impl DeliveryQueue {
                     break;
                 }
                 let res = self
-                .process_one(
-                    &delivery,
-                    &net,
-                    &private_key_pem,
-                    &key_id,
-                    &settings,
-                    job,
-                    &ui_events,
+                    .process_one(
+                        &delivery,
+                        &net,
+                        &private_key_pem,
+                        &key_id,
+                        &settings,
+                        job,
+                        &ui_events,
                     )
                     .await;
                 if let Err(e) = res {
@@ -439,10 +439,7 @@ impl DeliveryQueue {
         if job.status != 3 {
             if settings.p2p_failover_aggressive {
                 if let Some(peer_id) = p2p_peer_id.as_deref() {
-                    if self
-                        .should_prefer_relay(peer_id, settings, net)
-                        .await
-                    {
+                    if self.should_prefer_relay(peer_id, settings, net).await {
                         self.deliver_via_relay(
                             &job,
                             private_key_pem,
@@ -600,7 +597,9 @@ impl DeliveryQueue {
         net: &Arc<NetMetrics>,
     ) -> bool {
         let now = now_ms();
-        let p2p_rtt = net.p2p_rtt_ema_ms.load(std::sync::atomic::Ordering::Relaxed);
+        let p2p_rtt = net
+            .p2p_rtt_ema_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
         if p2p_rtt > settings.p2p_latency_slo_p95_ms {
             self.activate_relay_preferred(peer_id, "p2p_rtt_over_slo", settings, net)
                 .await;

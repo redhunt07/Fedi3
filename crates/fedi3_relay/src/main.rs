@@ -1154,6 +1154,16 @@ struct Db {
     pg_pool: OnceLock<Pool>,
 }
 
+#[derive(Clone, Debug)]
+struct UserAggregateCache {
+    followers_total: u64,
+    following_total: u64,
+    outbox_total: u64,
+    source: String,
+    stale: bool,
+    updated_at_ms: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DbDriver {
     Sqlite,
@@ -3682,7 +3692,9 @@ async fn relay_metrics_prom(
     }
     if let Some(v) = telemetry.ap_follow_pending_over_5m_total {
         out.push_str("# TYPE fedi3_relay_ap_follow_pending_over_5m_total gauge\n");
-        out.push_str(&format!("fedi3_relay_ap_follow_pending_over_5m_total {v}\n"));
+        out.push_str(&format!(
+            "fedi3_relay_ap_follow_pending_over_5m_total {v}\n"
+        ));
     }
     if let Some(v) = telemetry.ap_signature_policy_applied_total {
         out.push_str("# TYPE fedi3_relay_ap_signature_policy_applied_total counter\n");
@@ -3789,7 +3801,9 @@ async fn relay_metrics_prom(
     out.push_str("# TYPE fedi3_relay_spool_flush_blocked_items_total counter\n");
     out.push_str(&format!(
         "fedi3_relay_spool_flush_blocked_items_total {}\n",
-        state.spool_flush_blocked_items_total.load(Ordering::Relaxed)
+        state
+            .spool_flush_blocked_items_total
+            .load(Ordering::Relaxed)
     ));
     out.push_str("# TYPE fedi3_relay_outbox_readthrough_fetch_total counter\n");
     {
@@ -4109,12 +4123,7 @@ async fn forward_user_rest(
     }
     if method == Method::GET && rest.starts_with("objects/") {
         if let Some(mut resp) = local_object_read_model_response(&state, &user, &rest).await {
-            observe_public_get_cache_hit(
-                &state,
-                &user,
-                &format!("/users/{user}/{rest}"),
-            )
-            .await;
+            observe_public_get_cache_hit(&state, &user, &format!("/users/{user}/{rest}")).await;
             normalize_ap_response_content_type(&headers, &mut resp);
             return resp;
         }
@@ -4127,12 +4136,7 @@ async fn forward_user_rest(
         if let Some(mut resp) =
             local_activity_read_model_response(&state, &headers, &user, &rest).await
         {
-            observe_public_get_cache_hit(
-                &state,
-                &user,
-                &format!("/users/{user}/{rest}"),
-            )
-            .await;
+            observe_public_get_cache_hit(&state, &user, &format!("/users/{user}/{rest}")).await;
             normalize_ap_response_content_type(&headers, &mut resp);
             return resp;
         }
@@ -4421,7 +4425,8 @@ async fn cached_user_response(
                     }
                 }
             }
-            if let Ok(Some((note_json, actor_id_hint))) = db.get_local_activity_note_json(user, activity_id)
+            if let Ok(Some((note_json, actor_id_hint))) =
+                db.get_local_activity_note_json(user, activity_id)
             {
                 if let Some(synth) = synthetic_create_activity_json(
                     &state.cfg,
@@ -4865,11 +4870,7 @@ fn inbound_activity_dedupe_key(user: &str, activity: &serde_json::Value, body: &
     format!("{user}:sha256:{}", B64.encode(digest))
 }
 
-async fn is_duplicate_inbound_activity(
-    state: &AppState,
-    dedupe_key: &str,
-    now_ms: i64,
-) -> bool {
+async fn is_duplicate_inbound_activity(state: &AppState, dedupe_key: &str, now_ms: i64) -> bool {
     if state.cfg.ap_inbound_dedupe_window_ms <= 0 {
         return false;
     }
@@ -5044,8 +5045,13 @@ async fn forward_to_user(
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
             if is_public_ap_get_path(&user, path) {
-                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Transport)
-                    .await;
+                observe_public_get_fallback(
+                    &state,
+                    &user,
+                    path,
+                    PublicGetFallbackReason::Transport,
+                )
+                .await;
             }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
@@ -5071,8 +5077,13 @@ async fn forward_to_user(
         tunnel_negative_cache_put(&state, &user, path, now_ms()).await;
         if method == Method::GET {
             if is_public_ap_get_path(&user, path) {
-                observe_public_get_fallback(&state, &user, path, PublicGetFallbackReason::Transport)
-                    .await;
+                observe_public_get_fallback(
+                    &state,
+                    &user,
+                    path,
+                    PublicGetFallbackReason::Transport,
+                )
+                .await;
             }
             return offline_cached_response(&state, &user, path, &headers).await;
         }
@@ -5325,7 +5336,9 @@ async fn local_outbox_read_model_response(
         );
     }
 
-    let limit = parse_query_u32(raw_query, "limit").unwrap_or(20).clamp(1, 80);
+    let limit = parse_query_u32(raw_query, "limit")
+        .unwrap_or(20)
+        .clamp(1, 80);
     let cursor = parse_query_i64(raw_query, "cursor");
     let page = {
         let db = state.db.lock().await;
@@ -5358,7 +5371,9 @@ async fn local_outbox_read_model_response(
             ordered_items.push(note);
         }
     }
-    let next = page.next.map(|c| format!("{outbox}?page=true&cursor={c}&limit={limit}"));
+    let next = page
+        .next
+        .map(|c| format!("{outbox}?page=true&cursor={c}&limit={limit}"));
     let body = serde_json::json!({
       "@context": "https://www.w3.org/ns/activitystreams",
       "id": format!("{outbox}?page=true"),
@@ -5387,7 +5402,10 @@ async fn local_object_read_model_response(
         return None;
     }
     let db = state.db.lock().await;
-    let note_json = db.get_local_object_note_json(user, object_id).ok().flatten()?;
+    let note_json = db
+        .get_local_object_note_json(user, object_id)
+        .ok()
+        .flatten()?;
     let note = serde_json::from_str::<serde_json::Value>(&note_json).ok()?;
     let note = ensure_activitystreams_context(note);
     Some(
@@ -5498,7 +5516,8 @@ async fn local_activity_read_model_response(
         }
     }
 
-    if let Ok(Some((note_json, actor_id_hint))) = db.get_local_activity_note_json(user, activity_id) {
+    if let Ok(Some((note_json, actor_id_hint))) = db.get_local_activity_note_json(user, activity_id)
+    {
         if let Some(synth) = synthetic_create_activity_json(
             &state.cfg,
             headers,
@@ -5560,8 +5579,7 @@ fn normalize_ap_response_content_type(req_headers: &HeaderMap, resp: &mut Respon
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if !(current.contains("application/activity+json") || current.contains("application/ld+json"))
-    {
+    if !(current.contains("application/activity+json") || current.contains("application/ld+json")) {
         return;
     }
     let preferred = preferred_ap_content_type(req_headers);
@@ -6447,10 +6465,7 @@ fn collect_users_from_activity_object_refs(v: &serde_json::Value, out: &mut Vec<
     }
 }
 
-fn collect_users_from_activity_object(
-    object: Option<&serde_json::Value>,
-    out: &mut Vec<String>,
-) {
+fn collect_users_from_activity_object(object: Option<&serde_json::Value>, out: &mut Vec<String>) {
     let Some(object) = object else { return };
     match object {
         serde_json::Value::String(s) => out.extend(extract_user_from_string(s)),
@@ -6928,6 +6943,15 @@ impl Db {
               json TEXT NOT NULL,
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY(username, kind)
+            );
+            CREATE TABLE IF NOT EXISTS user_aggregate_cache (
+              username TEXT PRIMARY KEY,
+              followers_total INTEGER NOT NULL DEFAULT 0,
+              following_total INTEGER NOT NULL DEFAULT 0,
+              outbox_total INTEGER NOT NULL DEFAULT 0,
+              source TEXT NOT NULL DEFAULT 'cache',
+              stale INTEGER NOT NULL DEFAULT 0,
+              updated_at_ms INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS inbox_spool (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -8652,9 +8676,7 @@ impl Db {
                         headers_json: r.get(4),
                         body_b64: r.get(5),
                         tries: r.get(6),
-                        activity_type: r
-                            .get::<_, Option<String>>(7)
-                            .unwrap_or_default(),
+                        activity_type: r.get::<_, Option<String>>(7).unwrap_or_default(),
                     });
                 }
                 Ok(out)
@@ -8694,7 +8716,8 @@ impl Db {
                 let mut out = Vec::new();
                 while let Some(r) = rows.next()? {
                     let policy_s: String = r.get(2)?;
-                    let policy = ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
+                    let policy =
+                        ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
                     out.push(ApCompatPolicyRow {
                         host: r.get(0)?,
                         family: r.get::<_, Option<String>>(1)?,
@@ -8713,7 +8736,8 @@ impl Db {
                 let mut out = Vec::new();
                 for r in rows {
                     let policy_s: String = r.get(2);
-                    let policy = ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
+                    let policy =
+                        ApSignaturePolicy::parse(&policy_s).unwrap_or(ApSignaturePolicy::Strict);
                     out.push(ApCompatPolicyRow {
                         host: r.get(0),
                         family: r.get(1),
@@ -9019,6 +9043,10 @@ impl Db {
 
     fn upsert_collection_cache(&self, username: &str, kind: &str, json: &str) -> Result<()> {
         let now = now_ms();
+        let maybe_total = match kind {
+            "followers" | "following" | "outbox" => Some(collection_total_or_len(json)),
+            _ => None,
+        };
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -9027,6 +9055,41 @@ impl Db {
              ON CONFLICT(username, kind) DO UPDATE SET json=excluded.json, updated_at_ms=excluded.updated_at_ms",
                     params![username, kind, json, now],
                 )?;
+                if let Some(total) = maybe_total {
+                    let current =
+                        self.get_user_aggregate_cache(username)?
+                            .unwrap_or(UserAggregateCache {
+                                followers_total: 0,
+                                following_total: 0,
+                                outbox_total: 0,
+                                source: "cache".to_string(),
+                                stale: false,
+                                updated_at_ms: 0,
+                            });
+                    let followers_total = if kind == "followers" {
+                        total
+                    } else {
+                        current.followers_total
+                    };
+                    let following_total = if kind == "following" {
+                        total
+                    } else {
+                        current.following_total
+                    };
+                    let outbox_total = if kind == "outbox" {
+                        total
+                    } else {
+                        current.outbox_total
+                    };
+                    self.upsert_user_aggregate_cache(
+                        username,
+                        followers_total,
+                        following_total,
+                        outbox_total,
+                        "cache",
+                        false,
+                    )?;
+                }
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -9036,6 +9099,41 @@ impl Db {
              ON CONFLICT(username, kind) DO UPDATE SET json=EXCLUDED.json, updated_at_ms=EXCLUDED.updated_at_ms",
                     &[&username, &kind, &json, &now],
                 )?;
+                if let Some(total) = maybe_total {
+                    let current =
+                        self.get_user_aggregate_cache(username)?
+                            .unwrap_or(UserAggregateCache {
+                                followers_total: 0,
+                                following_total: 0,
+                                outbox_total: 0,
+                                source: "cache".to_string(),
+                                stale: false,
+                                updated_at_ms: 0,
+                            });
+                    let followers_total = if kind == "followers" {
+                        total
+                    } else {
+                        current.followers_total
+                    };
+                    let following_total = if kind == "following" {
+                        total
+                    } else {
+                        current.following_total
+                    };
+                    let outbox_total = if kind == "outbox" {
+                        total
+                    } else {
+                        current.outbox_total
+                    };
+                    self.upsert_user_aggregate_cache(
+                        username,
+                        followers_total,
+                        following_total,
+                        outbox_total,
+                        "cache",
+                        false,
+                    )?;
+                }
                 Ok(())
             }
         }
@@ -9060,6 +9158,109 @@ impl Db {
                     &[&username, &kind],
                 )?;
                 Ok(row.map(|r| r.get(0)))
+            }
+        }
+    }
+
+    fn upsert_user_aggregate_cache(
+        &self,
+        username: &str,
+        followers_total: u64,
+        following_total: u64,
+        outbox_total: u64,
+        source: &str,
+        stale: bool,
+    ) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO user_aggregate_cache(username, followers_total, following_total, outbox_total, source, stale, updated_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(username) DO UPDATE SET
+                       followers_total=excluded.followers_total,
+                       following_total=excluded.following_total,
+                       outbox_total=excluded.outbox_total,
+                       source=excluded.source,
+                       stale=excluded.stale,
+                       updated_at_ms=excluded.updated_at_ms",
+                    params![
+                        username,
+                        followers_total as i64,
+                        following_total as i64,
+                        outbox_total as i64,
+                        source,
+                        if stale { 1 } else { 0 },
+                        now
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO user_aggregate_cache(username, followers_total, following_total, outbox_total, source, stale, updated_at_ms)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT(username) DO UPDATE SET
+                       followers_total=EXCLUDED.followers_total,
+                       following_total=EXCLUDED.following_total,
+                       outbox_total=EXCLUDED.outbox_total,
+                       source=EXCLUDED.source,
+                       stale=EXCLUDED.stale,
+                       updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[
+                        &username,
+                        &(followers_total as i64),
+                        &(following_total as i64),
+                        &(outbox_total as i64),
+                        &source,
+                        &stale,
+                        &now,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn get_user_aggregate_cache(&self, username: &str) -> Result<Option<UserAggregateCache>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.query_row(
+                    "SELECT followers_total, following_total, outbox_total, source, stale, updated_at_ms
+                     FROM user_aggregate_cache WHERE username=?1",
+                    params![username],
+                    |r| {
+                        Ok(UserAggregateCache {
+                            followers_total: r.get::<_, i64>(0)? as u64,
+                            following_total: r.get::<_, i64>(1)? as u64,
+                            outbox_total: r.get::<_, i64>(2)? as u64,
+                            source: r.get(3)?,
+                            stale: r.get::<_, i64>(4)? != 0,
+                            updated_at_ms: r.get(5)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT followers_total, following_total, outbox_total, source, stale, updated_at_ms
+                     FROM user_aggregate_cache WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(row.map(|r| UserAggregateCache {
+                    followers_total: r.get::<_, i64>(0) as u64,
+                    following_total: r.get::<_, i64>(1) as u64,
+                    outbox_total: r.get::<_, i64>(2) as u64,
+                    source: r.get(3),
+                    stale: r.get(4),
+                    updated_at_ms: r.get(5),
+                }))
             }
         }
     }
@@ -10192,7 +10393,8 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare("SELECT COUNT(*) FROM relay_notes WHERE note_id LIKE ?1")?;
+                let mut stmt =
+                    conn.prepare("SELECT COUNT(*) FROM relay_notes WHERE note_id LIKE ?1")?;
                 let total: i64 = stmt.query_row(params![like], |r| r.get(0))?;
                 Ok(total.max(0) as u64)
             }
@@ -10304,7 +10506,11 @@ impl Db {
         }
     }
 
-    fn get_local_object_note_json(&self, username: &str, object_id: &str) -> Result<Option<String>> {
+    fn get_local_object_note_json(
+        &self,
+        username: &str,
+        object_id: &str,
+    ) -> Result<Option<String>> {
         let suffix = format!("%/users/{username}/objects/{object_id}");
         match self.driver {
             DbDriver::Sqlite => {
@@ -10371,12 +10577,9 @@ impl Db {
                      LIMIT 1",
                     &[&suffix],
                 )?;
-                Ok(rows.first().map(|r| {
-                    (
-                        r.get::<usize, String>(0),
-                        r.get::<usize, Option<String>>(1),
-                    )
-                }))
+                Ok(rows
+                    .first()
+                    .map(|r| (r.get::<usize, String>(0), r.get::<usize, Option<String>>(1))))
             }
         }
     }
@@ -12151,6 +12354,7 @@ async fn user_show_response(
         .ok()
         .flatten();
     let outbox_json = db.get_collection_cache(&username, "outbox").ok().flatten();
+    let aggregate = db.get_user_aggregate_cache(&username).ok().flatten();
     drop(db);
 
     let actor_value = actor_cache
@@ -12244,18 +12448,33 @@ async fn user_show_response(
         })
         .unwrap_or_default();
 
-    let followers_count = followers_json
-        .as_deref()
-        .and_then(collection_total_items)
-        .unwrap_or(0);
-    let following_count = following_json
-        .as_deref()
-        .and_then(collection_total_items)
-        .unwrap_or(0);
-    let notes_count = outbox_json
-        .as_deref()
-        .and_then(collection_total_items)
-        .unwrap_or(0);
+    let followers_count = aggregate
+        .as_ref()
+        .map(|v| v.followers_total)
+        .unwrap_or_else(|| {
+            followers_json
+                .as_deref()
+                .map(collection_total_or_len)
+                .unwrap_or(0)
+        });
+    let following_count = aggregate
+        .as_ref()
+        .map(|v| v.following_total)
+        .unwrap_or_else(|| {
+            following_json
+                .as_deref()
+                .map(collection_total_or_len)
+                .unwrap_or(0)
+        });
+    let notes_count = aggregate
+        .as_ref()
+        .map(|v| v.outbox_total)
+        .unwrap_or_else(|| {
+            outbox_json
+                .as_deref()
+                .map(collection_total_or_len)
+                .unwrap_or(0)
+        });
 
     let online_status = online_status_for_user(state, &username).await;
     let host = relay_host_name(&state.cfg).unwrap_or_default();
@@ -13272,6 +13491,10 @@ fn collection_items_len(json: &str) -> u64 {
     0
 }
 
+fn collection_total_or_len(json: &str) -> u64 {
+    collection_total_items(json).unwrap_or_else(|| collection_items_len(json))
+}
+
 fn reconcile_user_aggregates(db: &Db, cfg: &RelayConfig, user: &str) -> Result<()> {
     let outbox_total = db.count_local_outbox_notes(user).unwrap_or(0);
     let outbox_json = db
@@ -13284,18 +13507,32 @@ fn reconcile_user_aggregates(db: &Db, cfg: &RelayConfig, user: &str) -> Result<(
         let existing = db.get_collection_cache(user, kind)?;
         let total = existing
             .as_deref()
-            .map(collection_items_len)
-            .unwrap_or(0)
-            .max(existing
-                .as_deref()
-                .and_then(collection_total_items)
-                .unwrap_or(0));
+            .map(collection_total_or_len)
+            .unwrap_or(0);
         let normalized = existing
             .as_deref()
             .and_then(|json| patch_collection_total_items(json, total))
             .unwrap_or_else(|| collection_root_json_for_reconcile(cfg, user, kind, total));
         db.upsert_collection_cache(user, kind, &normalized)?;
     }
+    let followers_total = db
+        .get_collection_cache(user, "followers")?
+        .as_deref()
+        .map(collection_total_or_len)
+        .unwrap_or(0);
+    let following_total = db
+        .get_collection_cache(user, "following")?
+        .as_deref()
+        .map(collection_total_or_len)
+        .unwrap_or(0);
+    db.upsert_user_aggregate_cache(
+        user,
+        followers_total,
+        following_total,
+        outbox_total,
+        "reconcile",
+        false,
+    )?;
     Ok(())
 }
 
@@ -13303,9 +13540,8 @@ fn ensure_actor_minimum_fields(db: &Db, cfg: &RelayConfig, user: &str) -> Result
     let Some(actor_json) = db.get_actor_cache(user)? else {
         return Ok(());
     };
-    let mut v: serde_json::Value = serde_json::from_str(&actor_json).unwrap_or_else(|_| {
-        actor_stub_json(user, &user_base_template(cfg))
-    });
+    let mut v: serde_json::Value = serde_json::from_str(&actor_json)
+        .unwrap_or_else(|_| actor_stub_json(user, &user_base_template(cfg)));
     let base = user_base_url(cfg, user);
     let id = format!("{base}/users/{user}");
     let inbox = format!("{base}/inbox");
@@ -13313,8 +13549,8 @@ fn ensure_actor_minimum_fields(db: &Db, cfg: &RelayConfig, user: &str) -> Result
     let followers = format!("{base}/users/{user}/followers");
     let following = format!("{base}/users/{user}/following");
     v["@context"] = serde_json::json!([
-      "https://www.w3.org/ns/activitystreams",
-      "https://w3id.org/security/v1"
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1"
     ]);
     v["id"] = serde_json::Value::String(id.clone());
     v["type"] = serde_json::Value::String("Person".to_string());
@@ -13376,6 +13612,42 @@ async fn run_reconciliation_once(state: &AppState) -> Result<()> {
     run_reconciliation_once_with_mode(state, false).await
 }
 
+async fn reconcile_snapshot(state: &AppState) -> Vec<serde_json::Value> {
+    let users = {
+        let db = state.db.lock().await;
+        db.list_users(500, 0).unwrap_or_default()
+    };
+    let mut per_user = Vec::new();
+    for (username, _created_at_ms, disabled) in users {
+        if disabled != 0 {
+            continue;
+        }
+        let db = state.db.lock().await;
+        if let Some(agg) = db.get_user_aggregate_cache(&username).ok().flatten() {
+            per_user.push(serde_json::json!({
+                "username": username,
+                "followers_total": agg.followers_total,
+                "following_total": agg.following_total,
+                "outbox_total": agg.outbox_total,
+                "source": agg.source,
+                "stale": agg.stale,
+                "updated_at_ms": agg.updated_at_ms,
+            }));
+        } else {
+            per_user.push(serde_json::json!({
+                "username": username,
+                "followers_total": 0,
+                "following_total": 0,
+                "outbox_total": 0,
+                "source": "missing",
+                "stale": true,
+                "updated_at_ms": 0,
+            }));
+        }
+    }
+    per_user
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct ReconcileRunQuery {
     sync: Option<bool>,
@@ -13393,8 +13665,14 @@ async fn relay_reconcile_run(
         Err(resp) => return resp,
     };
     if q.sync.unwrap_or(false) {
+        let before = reconcile_snapshot(&state).await;
         let resp = match run_reconciliation_once_with_mode(&state, q.full.unwrap_or(false)).await {
-            Ok(_) => (StatusCode::OK, "reconcile done").into_response(),
+            Ok(_) => axum::Json(serde_json::json!({
+                "ok": true,
+                "before": before,
+                "after": reconcile_snapshot(&state).await,
+            }))
+            .into_response(),
             Err(e) => {
                 state.reconcile_last_ok.store(false, Ordering::Relaxed);
                 *state.reconcile_last_error.lock().await = Some(e.to_string());
@@ -13455,30 +13733,51 @@ async fn relay_reconcile_status(
         if disabled != 0 {
             continue;
         }
-        let (followers_total, following_total, outbox_total) = {
+        let (followers_total, following_total, outbox_total, source, stale, updated_at_ms) = {
             let db = state.db.lock().await;
-            let followers = db.get_collection_cache(&username, "followers").ok().flatten();
-            let following = db.get_collection_cache(&username, "following").ok().flatten();
-            let outbox = db.get_collection_cache(&username, "outbox").ok().flatten();
-            let followers_total = followers
-                .as_deref()
-                .and_then(collection_total_items)
-                .unwrap_or_else(|| followers.as_deref().map(collection_items_len).unwrap_or(0));
-            let following_total = following
-                .as_deref()
-                .and_then(collection_total_items)
-                .unwrap_or_else(|| following.as_deref().map(collection_items_len).unwrap_or(0));
-            let outbox_total = outbox
-                .as_deref()
-                .and_then(collection_total_items)
-                .unwrap_or_else(|| outbox.as_deref().map(collection_items_len).unwrap_or(0));
-            (followers_total, following_total, outbox_total)
+            if let Some(agg) = db.get_user_aggregate_cache(&username).ok().flatten() {
+                (
+                    agg.followers_total,
+                    agg.following_total,
+                    agg.outbox_total,
+                    agg.source,
+                    agg.stale,
+                    agg.updated_at_ms,
+                )
+            } else {
+                let followers = db
+                    .get_collection_cache(&username, "followers")
+                    .ok()
+                    .flatten();
+                let following = db
+                    .get_collection_cache(&username, "following")
+                    .ok()
+                    .flatten();
+                let outbox = db.get_collection_cache(&username, "outbox").ok().flatten();
+                (
+                    followers
+                        .as_deref()
+                        .map(collection_total_or_len)
+                        .unwrap_or(0),
+                    following
+                        .as_deref()
+                        .map(collection_total_or_len)
+                        .unwrap_or(0),
+                    outbox.as_deref().map(collection_total_or_len).unwrap_or(0),
+                    "cache".to_string(),
+                    false,
+                    0,
+                )
+            }
         };
         per_user.push(serde_json::json!({
             "username": username,
             "followers_total": followers_total,
             "following_total": following_total,
-            "outbox_total": outbox_total
+            "outbox_total": outbox_total,
+            "source": source,
+            "stale": stale,
+            "updated_at_ms": updated_at_ms,
         }));
     }
     let body = serde_json::json!({
@@ -13560,11 +13859,7 @@ async fn relay_compat_policy_post(
         Ok(v) => v,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
-    let host = input
-        .host
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
+    let host = input.host.unwrap_or_default().trim().to_ascii_lowercase();
     if host.is_empty() {
         return (StatusCode::BAD_REQUEST, "host required").into_response();
     }
@@ -13609,7 +13904,8 @@ async fn relay_ap_consistency_diagnostics(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_ap_consistency_diag", None).await {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_ap_consistency_diag", None).await
+    {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -13631,8 +13927,14 @@ async fn relay_ap_consistency_diagnostics(
         let db = state.db.lock().await;
         let actor = db.get_actor_cache(&username).ok().flatten();
         let outbox = db.get_collection_cache(&username, "outbox").ok().flatten();
-        let followers = db.get_collection_cache(&username, "followers").ok().flatten();
-        let following = db.get_collection_cache(&username, "following").ok().flatten();
+        let followers = db
+            .get_collection_cache(&username, "followers")
+            .ok()
+            .flatten();
+        let following = db
+            .get_collection_cache(&username, "following")
+            .ok()
+            .flatten();
         drop(db);
         if actor.is_none() {
             actor_missing = actor_missing.saturating_add(1);
@@ -13647,7 +13949,11 @@ async fn relay_ap_consistency_diagnostics(
             following_missing = following_missing.saturating_add(1);
         }
         if let Some(actor_json) = actor.as_deref() {
-            let expected_id = format!("{}/users/{}", user_base_url(&state.cfg, &username), username);
+            let expected_id = format!(
+                "{}/users/{}",
+                user_base_url(&state.cfg, &username),
+                username
+            );
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(actor_json) {
                 let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("");
                 let inbox = v.get("inbox").and_then(|x| x.as_str()).unwrap_or("");
@@ -13717,7 +14023,11 @@ async fn relay_ap_activity_matrix_diagnostics(
         Err(resp) => return resp,
     };
     let in_map = state.ap_activity_in_by_type_peer.lock().await.clone();
-    let fwd_map = state.ap_activity_forward_by_type_status.lock().await.clone();
+    let fwd_map = state
+        .ap_activity_forward_by_type_status
+        .lock()
+        .await
+        .clone();
     let spool_map = state.ap_activity_spool_by_type_reason.lock().await.clone();
     let drop_map = state.ap_activity_drop_by_type_reason.lock().await.clone();
     let body = serde_json::json!({
@@ -14055,20 +14365,17 @@ async fn detect_peer_software_family(state: &AppState, host: &str) -> Option<Str
     let url = format!("https://{host}/.well-known/nodeinfo");
     let resp = state.http.get(&url).send().await.ok()?;
     let v = resp.json::<serde_json::Value>().await.ok()?;
-    let href = v
-        .get("links")
-        .and_then(|x| x.as_array())
-        .and_then(|arr| {
-            arr.iter().find_map(|item| {
-                let rel = item.get("rel").and_then(|x| x.as_str()).unwrap_or("");
-                let href = item.get("href").and_then(|x| x.as_str()).unwrap_or("");
-                if rel.contains("/2.0") && !href.is_empty() {
-                    Some(href.to_string())
-                } else {
-                    None
-                }
-            })
-        })?;
+    let href = v.get("links").and_then(|x| x.as_array()).and_then(|arr| {
+        arr.iter().find_map(|item| {
+            let rel = item.get("rel").and_then(|x| x.as_str()).unwrap_or("");
+            let href = item.get("href").and_then(|x| x.as_str()).unwrap_or("");
+            if rel.contains("/2.0") && !href.is_empty() {
+                Some(href.to_string())
+            } else {
+                None
+            }
+        })
+    })?;
     let resp2 = state.http.get(href).send().await.ok()?;
     let n = resp2.json::<serde_json::Value>().await.ok()?;
     let software = n
@@ -14111,10 +14418,7 @@ async fn resolve_ap_signature_policy(state: &AppState, actor_url: &str) -> ApSig
             return row.policy;
         }
     }
-    if let Some(row) = rows
-        .iter()
-        .find(|r| r.host == host && r.family.is_none())
-    {
+    if let Some(row) = rows.iter().find(|r| r.host == host && r.family.is_none()) {
         return row.policy;
     }
     if let Some(f) = family.as_deref() {
@@ -14127,11 +14431,7 @@ async fn resolve_ap_signature_policy(state: &AppState, actor_url: &str) -> ApSig
     ApSignaturePolicy::Strict
 }
 
-async fn observe_signature_policy_applied(
-    state: &AppState,
-    policy: ApSignaturePolicy,
-    peer: &str,
-) {
+async fn observe_signature_policy_applied(state: &AppState, policy: ApSignaturePolicy, peer: &str) {
     state
         .ap_signature_policy_applied_total
         .fetch_add(1, Ordering::Relaxed);
@@ -15122,17 +15422,11 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let ap_signature_policy_applied_total = state
         .ap_signature_policy_applied_total
         .load(Ordering::Relaxed);
-    let ap_inbox_compat_accept_total = state
-        .ap_inbox_compat_accept_total
-        .load(Ordering::Relaxed);
-    let ap_consistency_mismatch_total = state
-        .ap_consistency_mismatch_total
-        .load(Ordering::Relaxed);
+    let ap_inbox_compat_accept_total = state.ap_inbox_compat_accept_total.load(Ordering::Relaxed);
+    let ap_consistency_mismatch_total = state.ap_consistency_mismatch_total.load(Ordering::Relaxed);
     let telemetry_push_success_total = state.telemetry_push_success_total.load(Ordering::Relaxed);
     let telemetry_push_fail_total = state.telemetry_push_fail_total.load(Ordering::Relaxed);
-    let telemetry_push_fail_401_total = state
-        .telemetry_push_fail_401_total
-        .load(Ordering::Relaxed);
+    let telemetry_push_fail_401_total = state.telemetry_push_fail_401_total.load(Ordering::Relaxed);
     let spool_flush_blocked_items_total = state
         .spool_flush_blocked_items_total
         .load(Ordering::Relaxed);
@@ -16021,7 +16315,8 @@ async fn verify_move_notice_signature(
 
     let params = parse_signature_header(sig)?;
     let uri: http::Uri = "/_fedi3/relay/move_notice".parse()?;
-    let signing_string = build_signing_string(&Method::POST, &uri, headers, &params, &params.headers)?;
+    let signing_string =
+        build_signing_string(&Method::POST, &uri, headers, &params, &params.headers)?;
 
     let mut pem = {
         let db = state.db.lock().await;

@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS user_collection_cache (
   PRIMARY KEY(username, kind)
 );
 
+CREATE TABLE IF NOT EXISTS user_aggregate_cache (
+  username TEXT PRIMARY KEY,
+  followers_total BIGINT NOT NULL DEFAULT 0,
+  following_total BIGINT NOT NULL DEFAULT 0,
+  outbox_total BIGINT NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'cache',
+  stale BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at_ms BIGINT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS inbox_spool (
   id BIGSERIAL PRIMARY KEY,
   username TEXT NOT NULL,

@@ -1399,8 +1399,7 @@ class CoreApi {
       body: jsonEncode(payload),
     );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError(
-          'follow import failed: ${resp.statusCode} ${resp.body}');
+      throw StateError('follow import failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
@@ -1415,6 +1414,47 @@ class CoreApi {
           'follow import status failed: ${resp.statusCode} ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> retryLastFollowImport({
+    int batchSize = 25,
+    int pauseMs = 500,
+  }) async {
+    final uri = _internal('/_fedi3/social/follow/import/retry_last');
+    final resp = await http.post(
+      uri,
+      headers: {
+        ..._internalHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'batch_size': batchSize,
+        'pause_ms': pauseMs,
+      }),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError(
+          'follow import retry failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> fetchFollowAudit() async {
+    final uri = _internal('/_fedi3/social/follow/audit');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('follow audit failed: ${resp.statusCode} ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<String> exportFollowCsv() async {
+    final uri = _internal('/_fedi3/social/follow/export');
+    final resp = await http.get(uri, headers: _internalHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('follow export failed: ${resp.statusCode} ${resp.body}');
+    }
+    return resp.body;
   }
 
   Future<Map<String, dynamic>> fetchUpnpStatus() async {

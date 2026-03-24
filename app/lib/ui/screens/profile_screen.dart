@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
@@ -60,6 +61,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _followImportJobId;
   Timer? _followImportPoll;
   String? _followImportStatusLabel;
+  int? _followingPendingCount;
+  int? _followingAcceptedCount;
+  String? _activeDataDir;
+  String? _activeDid;
+  String? _activeUsername;
+  Map<String, dynamic>? _followAudit;
 
   @override
   void initState() {
@@ -365,6 +372,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onToggleFollow: () => _toggleFollow(api),
               followersCount: _followersCount,
               followingCount: _followingCount,
+              followingPendingCount: _followingPendingCount,
+              followingAcceptedCount: _followingAcceptedCount,
+              activeDataDir: _activeDataDir,
+              activeDid: _activeDid,
+              activeUsername: _activeUsername,
+              followAudit: _followAudit,
               onOpenFollowers: () =>
                   _openConnections(ProfileConnectionsMode.followers),
               onOpenFollowing: () =>
@@ -399,7 +412,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     tooltip: _followImportBusy
                         ? 'Import follow in corso'
                         : 'Importa follow da CSV',
-                    onPressed: _followImportBusy ? null : () => _pickFollowCsv(api),
+                    onPressed:
+                        _followImportBusy ? null : () => _pickFollowCsv(api),
                     icon: _followImportBusy
                         ? const SizedBox(
                             width: 18,
@@ -407,6 +421,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.upload_file),
+                  ),
+                if (_isLocalProfile())
+                  IconButton(
+                    tooltip: 'Reimporta ultimo CSV',
+                    onPressed: _followImportBusy
+                        ? null
+                        : () => _retryLastFollowImport(api),
+                    icon: const Icon(Icons.restart_alt),
+                  ),
+                if (_isLocalProfile())
+                  IconButton(
+                    tooltip: 'Esporta follow correnti',
+                    onPressed: () => _exportFollowCsv(api),
+                    icon: const Icon(Icons.download),
                   ),
               ],
             ),
@@ -539,9 +567,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final cfg = widget.appState.config;
       if (cfg != null) {
         try {
-          final status = await CoreApi(config: cfg).fetchMigrationStatus();
+          final api = CoreApi(config: cfg);
+          final status = await api.fetchMigrationStatus();
+          final audit = await api.fetchFollowAudit();
           _followersCount = (status['followers_count'] as num?)?.toInt();
           _followingCount = (status['following_count'] as num?)?.toInt();
+          _followingPendingCount =
+              (audit['following_pending'] as num?)?.toInt();
+          _followingAcceptedCount =
+              (audit['following_accepted'] as num?)?.toInt();
+          _activeDataDir = (audit['data_dir'] as String?)?.trim();
+          _activeDid = (audit['did'] as String?)?.trim();
+          _activeUsername = (audit['username'] as String?)?.trim();
+          _followAudit = audit;
           return;
         } catch (_) {
           // Fall through to public AP collection counts.
@@ -609,6 +647,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
       final bytes = await file.readAsBytes();
       final csv = utf8.decode(bytes, allowMalformed: true);
+      final dryRun = await api.importFollowCsv(csv: csv, dryRun: true);
+      final candidates = (dryRun['candidates'] as num?)?.toInt() ?? 0;
+      final alreadyPresent = (dryRun['already_present'] as num?)?.toInt() ?? 0;
+      final invalid = ((dryRun['invalid'] as List?)?.length) ?? 0;
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Ripristina follow da CSV'),
+              content: Text(
+                'Nuovi target: $candidates\nGia presenti: $alreadyPresent\nInvalidi: $invalid',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Annulla'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Importa'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed) {
+        setState(() {
+          _followImportBusy = false;
+          _followImportStatusLabel = 'Import follow annullato';
+        });
+        return;
+      }
       final result = await api.importFollowCsv(csv: csv);
       final jobId = result['job_id']?.toString().trim();
       if (!mounted) return;
@@ -625,6 +695,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Import follow fallito: $e')),
+      );
+    }
+  }
+
+  Future<void> _retryLastFollowImport(CoreApi api) async {
+    setState(() {
+      _followImportBusy = true;
+      _followImportStatusLabel = 'Reimport ultimo CSV in avvio...';
+    });
+    try {
+      final result = await api.retryLastFollowImport();
+      final jobId = result['job_id']?.toString().trim();
+      if (!mounted) return;
+      setState(() {
+        _followImportJobId = (jobId == null || jobId.isEmpty) ? null : jobId;
+        _followImportStatusLabel = 'Reimport queued';
+      });
+      _startFollowImportPoll(api);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _followImportBusy = false;
+        _followImportStatusLabel = 'Reimport follow fallito';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reimport follow fallito: $e')),
+      );
+    }
+  }
+
+  Future<void> _exportFollowCsv(CoreApi api) async {
+    try {
+      final csv = await api.exportFollowCsv();
+      final location = await getSaveLocation(
+        suggestedName:
+            'following-${DateTime.now().toIso8601String().replaceAll(':', '-')}.csv',
+      );
+      if (location == null || location.path.trim().isEmpty) return;
+      await File(location.path).writeAsString(csv);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('CSV follow salvato in ${location.path}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export follow fallito: $e')),
       );
     }
   }
@@ -706,6 +823,12 @@ class _ProfileHeader extends StatelessWidget {
     required this.onToggleFollow,
     required this.followersCount,
     required this.followingCount,
+    required this.followingPendingCount,
+    required this.followingAcceptedCount,
+    required this.activeDataDir,
+    required this.activeDid,
+    required this.activeUsername,
+    required this.followAudit,
     required this.onOpenFollowers,
     required this.onOpenFollowing,
   });
@@ -716,6 +839,12 @@ class _ProfileHeader extends StatelessWidget {
   final VoidCallback onToggleFollow;
   final int? followersCount;
   final int? followingCount;
+  final int? followingPendingCount;
+  final int? followingAcceptedCount;
+  final String? activeDataDir;
+  final String? activeDid;
+  final String? activeUsername;
+  final Map<String, dynamic>? followAudit;
   final VoidCallback onOpenFollowers;
   final VoidCallback onOpenFollowing;
 
@@ -728,6 +857,16 @@ class _ProfileHeader extends StatelessWidget {
         : (isFollowing
             ? context.l10n.settingsUnfollow
             : context.l10n.settingsFollow);
+    final lastImport = followAudit?['latest_follow_import_job'];
+    final importedBaseline = (lastImport is Map
+            ? (lastImport['imported'] as num?)?.toInt()
+            : null) ??
+        0;
+    final effectiveFollowing =
+        (followingCount ?? 0) + (followingPendingCount ?? 0);
+    final showDropWarning = followingCount != null &&
+        importedBaseline > 0 &&
+        effectiveFollowing < importedBaseline;
     final fields = profile.fields;
     final hasBanner = profile.imageUrl.trim().isNotEmpty;
     final acct = profile.preferredUsername.isNotEmpty
@@ -930,13 +1069,61 @@ class _ProfileHeader extends StatelessWidget {
                               onTap: onOpenFollowing),
                       ],
                     ),
+                    if (followingPendingCount != null &&
+                        followingPendingCount! > 0) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'In attesa: $followingPendingCount · Accettati: ${followingAcceptedCount ?? 0}',
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(180),
+                            fontSize: 12),
+                      ),
+                    ],
                   ],
                 ),
               ],
             ),
+            if (showDropWarning) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .errorContainer
+                      .withAlpha(160),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'Anomalia locale: seguiti attivi $effectiveFollowing, ultimo import noto $importedBaseline.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
             if (profile.summary.isNotEmpty) ...[
               const SizedBox(height: 10),
               HtmlWidget(profile.summary),
+            ],
+            if ((activeUsername?.isNotEmpty ?? false) ||
+                (activeDid?.isNotEmpty ?? false) ||
+                (activeDataDir?.isNotEmpty ?? false)) ...[
+              const SizedBox(height: 12),
+              const Text('Storage attivo',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              if (activeUsername?.isNotEmpty ?? false)
+                SelectableText('Username: $activeUsername'),
+              if (activeDid?.isNotEmpty ?? false)
+                SelectableText('DID: $activeDid'),
+              if (activeDataDir?.isNotEmpty ?? false)
+                SelectableText('Data dir: $activeDataDir'),
             ],
             if (profile.aliases.isNotEmpty) ...[
               const SizedBox(height: 10),
