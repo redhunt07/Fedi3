@@ -8,17 +8,22 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/backup_codec.dart';
 import '../../services/cloud_backup_service.dart';
+import '../../services/encryption_manager.dart';
 import '../../services/relay_verify.dart';
 import '../../state/app_state.dart';
 
 enum OnboardingMode { loginExisting, createNew }
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key, required this.appState, this.mode = OnboardingMode.createNew});
+  const OnboardingScreen(
+      {super.key,
+      required this.appState,
+      this.mode = OnboardingMode.createNew});
 
   final AppState appState;
   final OnboardingMode mode;
@@ -54,10 +59,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final isCreate = widget.mode == OnboardingMode.createNew;
     _username = TextEditingController(text: isCreate ? 'alice' : '');
     _domain = TextEditingController(text: isCreate ? 'example.invalid' : '');
-    _publicBaseUrl = TextEditingController(text: isCreate ? 'http://127.0.0.1:8787' : '');
-    _relayWs = TextEditingController(text: isCreate ? 'ws://127.0.0.1:8787' : '');
+    _publicBaseUrl =
+        TextEditingController(text: isCreate ? 'http://127.0.0.1:8787' : '');
+    _relayWs =
+        TextEditingController(text: isCreate ? 'ws://127.0.0.1:8787' : '');
     _relayToken = TextEditingController(text: CoreConfig.randomToken());
-    _bind = TextEditingController(text: isCreate ? '127.0.0.1:8788' : '127.0.0.1:8788');
+    _bind = TextEditingController(
+        text: isCreate ? '127.0.0.1:8788' : '127.0.0.1:8788');
     _internalToken = TextEditingController(text: CoreConfig.randomToken());
     _seedRelayOptions();
   }
@@ -79,14 +87,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.mode == OnboardingMode.createNew ? context.l10n.onboardingCreateTitle : context.l10n.onboardingLoginTitle,
+          widget.mode == OnboardingMode.createNew
+              ? context.l10n.onboardingCreateTitle
+              : context.l10n.onboardingLoginTitle,
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            widget.mode == OnboardingMode.createNew ? context.l10n.onboardingCreateIntro : context.l10n.onboardingLoginIntro,
+            widget.mode == OnboardingMode.createNew
+                ? context.l10n.onboardingCreateIntro
+                : context.l10n.onboardingLoginIntro,
           ),
           if (widget.mode == OnboardingMode.loginExisting) ...[
             const SizedBox(height: 12),
@@ -136,7 +148,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController controller, {int maxLines = 1}) {
+  Widget _field(String label, TextEditingController controller,
+      {int maxLines = 1}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
@@ -153,7 +166,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(context.l10n.onboardingRelaySelect, style: Theme.of(context).textTheme.labelLarge),
+          Text(context.l10n.onboardingRelaySelect,
+              style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -163,7 +177,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   items: _relayOptions
                       .map((r) => DropdownMenuItem(
                             value: r,
-                            child: Text(r.label, overflow: TextOverflow.ellipsis),
+                            child:
+                                Text(r.label, overflow: TextOverflow.ellipsis),
                           ))
                       .toList(),
                   onChanged: _discovering
@@ -182,15 +197,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               const SizedBox(width: 10),
               FilledButton.icon(
                 onPressed: _discovering ? null : _discoverRelays,
-                icon: _discovering ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.public),
-                label: Text(_discovering ? context.l10n.onboardingRelayDiscovering : context.l10n.onboardingRelayDiscover),
+                icon: _discovering
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.public),
+                label: Text(_discovering
+                    ? context.l10n.onboardingRelayDiscovering
+                    : context.l10n.onboardingRelayDiscover),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
             context.l10n.onboardingRelayListHint,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                fontSize: 12),
           ),
         ],
       ),
@@ -211,9 +235,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           OutlinedButton.icon(
             onPressed: _verifying ? null : _verifyRelay,
             icon: _verifying
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.verified),
-            label: Text(_verifying ? context.l10n.relayVerifyRunning : context.l10n.relayVerifyAction),
+            label: Text(_verifying
+                ? context.l10n.relayVerifyRunning
+                : context.l10n.relayVerifyAction),
           ),
           if (msg != null) ...[
             const SizedBox(height: 6),
@@ -249,13 +278,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
         final json = jsonDecode(resp.body);
         if (json is! Map) continue;
-        final relays = (json['relays'] is List) ? json['relays'] : json['items'];
+        final relays =
+            (json['relays'] is List) ? json['relays'] : json['items'];
         if (relays is! List) continue;
         for (final item in relays) {
           if (item is! Map) continue;
-          final base = (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])?.toString().trim();
+          final base =
+              (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])
+                  ?.toString()
+                  .trim();
           if (base == null || base.isEmpty) continue;
-          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])?.toString().trim();
+          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])
+              ?.toString()
+              .trim();
           final opt = _relayOptionFromParts(
             base,
             ws,
@@ -292,9 +327,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final publicUrl = uri
+        .replace(scheme: scheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final wsScheme = scheme == 'https' ? 'wss' : 'ws';
-    final wsUrl = uri.replace(scheme: wsScheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final wsUrl = uri
+        .replace(scheme: wsScheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,
@@ -308,10 +351,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final uri = Uri.tryParse(base);
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final publicUrl = uri
+        .replace(scheme: scheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final wsUrl = (ws != null && ws.trim().isNotEmpty)
         ? ws.trim().replaceAll(RegExp(r'/$'), '')
-        : (scheme == 'https' ? publicUrl.replaceFirst('https://', 'wss://') : publicUrl.replaceFirst('http://', 'ws://'));
+        : (scheme == 'https'
+            ? publicUrl.replaceFirst('https://', 'wss://')
+            : publicUrl.replaceFirst('http://', 'ws://'));
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,
@@ -326,19 +375,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final domain = _domain.text.trim();
     final announceHandle = domain.isNotEmpty ? '@announce@$domain' : '';
     final bootstrap = <String>[
-      if (username.toLowerCase() == 'announce')
-        ...const [
-          '@redhunt07@www.foxyhole.io',
-          '@engineering@newsmast.community',
-          '@mullvadnet@mastodon.online',
-          '@omgubuntu@floss.social',
-          '@tassoman@misskey.social',
-          '@informapirata@poliverso.org',
-          '@lealternative@mastodon.uno',
-          '@fsf@hostux.social',
-          '@informapirata@mastodon.uno',
-        ]
-      else if (announceHandle.isNotEmpty)
+      if (username.toLowerCase() == 'announce') ...const [
+        '@redhunt07@www.foxyhole.io',
+        '@engineering@newsmast.community',
+        '@mullvadnet@mastodon.online',
+        '@omgubuntu@floss.social',
+        '@tassoman@misskey.social',
+        '@informapirata@poliverso.org',
+        '@lealternative@mastodon.uno',
+        '@fsf@hostux.social',
+        '@informapirata@mastodon.uno',
+      ] else if (announceHandle.isNotEmpty)
         announceHandle,
     ];
     final publicBaseUrl = _publicBaseUrl.text.trim();
@@ -363,17 +410,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       imageUrl: '',
       imageMediaType: '',
       profileFields: const [],
-        manuallyApprovesFollowers: false,
-        blockedDomains: const [],
-        blockedActors: const [],
-        upnpPortRangeStart: null,
-        upnpPortRangeEnd: null,
-        upnpLeaseSecs: null,
-        upnpTimeoutSecs: null,
-        postDeliveryMode: null,
-        p2pRelayFallbackSecs: null,
-        p2pCacheTtlSecs: null,
-      );
+      manuallyApprovesFollowers: false,
+      blockedDomains: const [],
+      blockedActors: const [],
+      upnpPortRangeStart: null,
+      upnpPortRangeEnd: null,
+      upnpLeaseSecs: null,
+      upnpTimeoutSecs: null,
+      postDeliveryMode: null,
+      p2pRelayFallbackSecs: null,
+      p2pCacheTtlSecs: null,
+    );
   }
 
   Future<void> _save() async {
@@ -454,6 +501,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await widget.appState.stopCore();
       await widget.appState.saveConfig(bundle.config);
       await widget.appState.savePrefs(bundle.prefs);
+      await widget.appState.startCore();
+      if (bundle.coreBackup != null) {
+        await CoreApi(config: bundle.config).importBackup(bundle.coreBackup!);
+      }
+      if (bundle.encryptionKeys != null) {
+        await EncryptionManager().importKeys(bundle.encryptionKeys!);
+      }
+      await widget.appState.stopCore();
       await widget.appState.startCore();
 
       if (!mounted) return;

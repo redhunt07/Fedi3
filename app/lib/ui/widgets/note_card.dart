@@ -46,6 +46,7 @@ class NoteCard extends StatefulWidget {
     this.rawActivity,
     this.autoExpandThread = false,
     this.autoExpandReplies = false,
+    this.allowInlineReplies = true,
   });
 
   final AppState appState;
@@ -55,6 +56,7 @@ class NoteCard extends StatefulWidget {
   final Map<String, dynamic>? rawActivity;
   final bool autoExpandThread;
   final bool autoExpandReplies;
+  final bool allowInlineReplies;
 
   @override
   State<NoteCard> createState() => _NoteCardState();
@@ -753,30 +755,30 @@ class _NoteCardState extends State<NoteCard> {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  _InlineReplies(
-                    appState: widget.appState,
-                    noteId: note.id,
-                    show: _showReplies,
-                    loading: _repliesLoading,
-                    error: _repliesError,
-                    replies: _replies,
-                    onToggle: () async {
-                      final next = !_showReplies;
-                      setState(() => _showReplies = next);
-                      if (next &&
-                          _replies.isEmpty &&
-                          !_repliesLoading &&
-                          canAct) {
-                        await _loadReplies(api, note.id);
-                      }
-                    },
-                    onLoadMore: (_repliesCursor == null ||
-                            _repliesLoading ||
-                            !canAct)
-                        ? null
-                        : () async =>
-                            _loadReplies(api, note.id, cursor: _repliesCursor),
-                  ),
+                  if (widget.allowInlineReplies)
+                    _InlineReplies(
+                      appState: widget.appState,
+                      noteId: note.id,
+                      show: _showReplies,
+                      loading: _repliesLoading,
+                      error: _repliesError,
+                      replies: _replies,
+                      onToggle: () async {
+                        final next = !_showReplies;
+                        setState(() => _showReplies = next);
+                        if (next &&
+                            _replies.isEmpty &&
+                            !_repliesLoading &&
+                            canAct) {
+                          await _loadReplies(api, note.id);
+                        }
+                      },
+                      onLoadMore:
+                          (_repliesCursor == null || _repliesLoading || !canAct)
+                              ? null
+                              : () async => _loadReplies(api, note.id,
+                                  cursor: _repliesCursor),
+                    ),
                 ],
                 const SizedBox(height: 8),
                 Column(
@@ -2994,6 +2996,8 @@ class _InlineReplies extends StatelessWidget {
                 lineColor: line,
                 child: Padding(
                   padding: const EdgeInsets.only(top: 8),
+                  // Unsupported replies must not recurse on parent note id.
+                  // Use a stable derived id and disable nested inline replies.
                   child: NoteCard(
                     appState: appState,
                     item: TimelineItem.tryFromActivity(a) ??
@@ -3002,7 +3006,7 @@ class _InlineReplies extends StatelessWidget {
                           activityType: (a['type'] as String?)?.trim() ?? '',
                           actor: (a['actor'] as String?)?.trim() ?? '',
                           note: Note(
-                            id: noteId,
+                            id: _fallbackReplyNoteId(noteId, a),
                             attributedTo: '',
                             contentHtml: '',
                             summary: '',
@@ -3019,6 +3023,7 @@ class _InlineReplies extends StatelessWidget {
                         ),
                     showRawFallback: true,
                     rawActivity: a,
+                    allowInlineReplies: false,
                   ),
                 ),
               ),
@@ -3034,6 +3039,27 @@ class _InlineReplies extends StatelessWidget {
         ],
       ],
     );
+  }
+
+  String _fallbackReplyNoteId(
+      String parentNoteId, Map<String, dynamic> activity) {
+    String pickObjectId(dynamic obj) {
+      if (obj is String) return obj.trim();
+      if (obj is Map) {
+        final map = obj.cast<String, dynamic>();
+        final id = (map['id'] as String?)?.trim() ?? '';
+        if (id.isNotEmpty) return id;
+        final url = (map['url'] as String?)?.trim() ?? '';
+        if (url.isNotEmpty) return url;
+      }
+      return '';
+    }
+
+    final rawId = (activity['id'] as String?)?.trim() ?? '';
+    final objectId = pickObjectId(activity['object']);
+    final fallback = objectId.isNotEmpty ? objectId : rawId;
+    if (fallback.isNotEmpty && fallback != parentNoteId) return fallback;
+    return '$parentNoteId#reply-fallback';
   }
 }
 

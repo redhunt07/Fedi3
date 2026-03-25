@@ -77,6 +77,12 @@ class CloudBackupService {
       'uiPrefs': prefs.toJson(),
       'encryptionKeys': keys,
       'coreBackup': coreBackup,
+      'meta': {
+        'snapshot_kind': 'full_state',
+        'contains_chat': true,
+        'contains_follow_graph': true,
+        'db_b64_len': coreBackup['db_b64']?.toString().length ?? 0,
+      },
     };
     final plain = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
     final crypto = BackupCryptoService();
@@ -94,6 +100,8 @@ class CloudBackupService {
       'v': 1,
       'created_at_ms': payload['created_at_ms'],
       'size_bytes': plain.length,
+      'contains_chat': true,
+      'contains_follow_graph': true,
     });
     final uri = _relayUri('/_fedi3/backup', {'username': config.username});
     final resp = await http.put(
@@ -114,9 +122,11 @@ class CloudBackupService {
     final uri = _relayUri('/_fedi3/backup/blob', {'username': config.username});
     final resp = await http.get(uri, headers: _authHeaders());
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('backup download failed: ${resp.statusCode} ${resp.body}');
+      throw StateError(
+          'backup download failed: ${resp.statusCode} ${resp.body}');
     }
-    final envelope = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final envelope =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     final crypto = BackupCryptoService();
     final plain = crypto.decrypt(
       saltB64: envelope['salt_b64']?.toString() ?? '',

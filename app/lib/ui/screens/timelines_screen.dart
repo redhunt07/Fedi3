@@ -431,16 +431,10 @@ class _TimelinesScreenState extends State<TimelinesScreen>
       if (ev.kind != 'timeline' && ev.kind != 'inbox' && ev.kind != 'outbox') {
         return;
       }
-      final ty = (ev.activityType ?? '').toLowerCase();
-      final forceRefresh = ty == 'delete';
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 250), () {
         for (final k in _listKeys) {
-          if (forceRefresh) {
-            k.currentState?.refreshFromStream();
-          } else {
-            k.currentState?.pollNewFromStream();
-          }
+          k.currentState?.applyRealtimeEvent(ev);
         }
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
@@ -599,6 +593,7 @@ class _TimelineListState extends State<_TimelineList>
   final _stableUiKeys = <String, String>{};
   final _scroll = ScrollController();
   Timer? _poll;
+  Timer? _reconcile;
   Timer? _retry;
   bool _showScrollTop = false;
   static const double _estimatedInsertedItemExtent = 220;
@@ -624,10 +619,28 @@ class _TimelineListState extends State<_TimelineList>
     _pollNew();
   }
 
+  void applyRealtimeEvent(CoreEvent event) {
+    if (!mounted || !widget.appState.isRunning) return;
+    final op = (event.op ?? event.activityType ?? '').trim().toLowerCase();
+    final isMutation = op == 'delete' ||
+        op == 'undo' ||
+        op == 'update' ||
+        op == 'like' ||
+        op == 'react' ||
+        op == 'emojireact' ||
+        op == 'reply_add' ||
+        op == 'reply_del';
+    if (isMutation) {
+      _syncTopWindow(limit: 60);
+      return;
+    }
+    _pollNew();
+  }
+
   void refreshFromStream() {
     if (!mounted) return;
     if (!widget.appState.isRunning) return;
-    _pollNew();
+    _syncTopWindow();
   }
 
   @override
@@ -635,6 +648,8 @@ class _TimelineListState extends State<_TimelineList>
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 5), (_) => _pollNew());
+    _reconcile = Timer.periodic(
+        const Duration(seconds: 25), (_) => _syncTopWindow(limit: 80));
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -650,6 +665,7 @@ class _TimelineListState extends State<_TimelineList>
   @override
   void dispose() {
     _poll?.cancel();
+    _reconcile?.cancel();
     _retry?.cancel();
     widget.appState.removeListener(_appStateListener);
     _scroll.removeListener(_onScroll);
@@ -774,6 +790,46 @@ class _TimelineListState extends State<_TimelineList>
       _insertFreshItems(fresh);
     } catch (_) {
       // best-effort auto refresh: ignore transient failures
+    }
+  }
+
+  Future<void> _syncTopWindow({int limit = 80}) async {
+    if (!mounted) return;
+    if (_loading) return;
+    if (!widget.appState.isRunning) return;
+    try {
+      final resp = await widget.api.fetchTimeline(widget.kind, limit: limit);
+      final items = (resp['items'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .where((m) => !_isNoisyActivity(m))
+          .where((m) => !_isSuppressedActivity(m))
+          .where(_isTimelineCandidateActivity)
+          .where(_matchesTooltipSemantics)
+          .toList();
+      if (items.isEmpty) return;
+      final fresh = <Map<String, dynamic>>[];
+      var changed = false;
+      for (final it in items) {
+        if (_mergeExisting(it)) {
+          changed = true;
+          continue;
+        }
+        final id = _activityId(it);
+        final objectId = _activityObjectId(it);
+        if (id.isEmpty && objectId == null) continue;
+        _registerKnown(it);
+        fresh.add(it);
+      }
+      if (fresh.isNotEmpty) {
+        _insertFreshItems(fresh);
+      } else if (changed && mounted) {
+        setState(() {
+          _sortActivities(_items);
+        });
+      }
+    } catch (_) {
+      // best-effort: ignore transient failures
     }
   }
 

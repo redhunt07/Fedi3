@@ -10,9 +10,11 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../services/backup_codec.dart';
 import '../../services/cloud_backup_service.dart';
+import '../../services/encryption_manager.dart';
 import '../../state/app_state.dart';
 
 class BackupScreen extends StatefulWidget {
@@ -36,10 +38,30 @@ class _BackupScreenState extends State<BackupScreen> {
     uniformTypeIdentifiers: ['public.json'],
   );
 
-  String _buildBackupText() {
+  Future<String> _buildBackupText() async {
     final cfg = widget.appState.config;
     if (cfg == null) throw StateError('missing config');
-    return BackupCodec.encode(config: cfg, prefs: widget.appState.prefs);
+    if (!widget.appState.isRunning) {
+      await widget.appState.startCore();
+    }
+    final api = CoreApi(config: cfg);
+    final coreBackup = await api.exportBackup();
+    final encryptionKeys = await EncryptionManager().exportKeys();
+    final meta = <String, dynamic>{
+      'snapshot_kind': 'full_state',
+      'contains_chat': true,
+      'contains_follow_graph': true,
+      'created_at_ms': DateTime.now().millisecondsSinceEpoch,
+      'db_b64_len': coreBackup['db_b64']?.toString().length ?? 0,
+      'schema_version': coreBackup['version'],
+    };
+    return BackupCodec.encode(
+      config: cfg,
+      prefs: widget.appState.prefs,
+      coreBackup: coreBackup,
+      encryptionKeys: encryptionKeys,
+      meta: meta,
+    );
   }
 
   @override
@@ -60,10 +82,14 @@ class _BackupScreenState extends State<BackupScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 _status!,
-                style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
+                style: TextStyle(
+                    color: _status!.startsWith('OK')
+                        ? null
+                        : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.backupExportTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.backupExportTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           Text(context.l10n.backupExportHint),
           const SizedBox(height: 8),
@@ -84,7 +110,8 @@ class _BackupScreenState extends State<BackupScreen> {
             ],
           ),
           const SizedBox(height: 24),
-          Text(context.l10n.backupCloudTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.backupCloudTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           Text(context.l10n.backupCloudHint),
           const SizedBox(height: 8),
@@ -105,12 +132,14 @@ class _BackupScreenState extends State<BackupScreen> {
             ],
           ),
           const SizedBox(height: 24),
-          Text(context.l10n.backupImportTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.backupImportTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           TextField(
             controller: _import,
             maxLines: 10,
-            decoration: InputDecoration(hintText: context.l10n.backupImportHint),
+            decoration:
+                InputDecoration(hintText: context.l10n.backupImportHint),
           ),
           const SizedBox(height: 10),
           Wrap(
@@ -142,7 +171,7 @@ class _BackupScreenState extends State<BackupScreen> {
     try {
       // file_selector does not support save dialogs on Android/iOS; fallback to clipboard.
       if (Platform.isAndroid || Platform.isIOS) {
-        final text = _buildBackupText();
+        final text = await _buildBackupText();
         await Clipboard.setData(ClipboardData(text: text));
         if (!mounted) return;
         setState(() => _status = context.l10n.backupExportOk);
@@ -151,7 +180,7 @@ class _BackupScreenState extends State<BackupScreen> {
 
       final cfg = widget.appState.config;
       if (cfg == null) throw StateError('missing config');
-      final text = _buildBackupText();
+      final text = await _buildBackupText();
 
       final result = await getSaveLocation(
         acceptedTypeGroups: [_jsonTypeGroup],
@@ -160,7 +189,9 @@ class _BackupScreenState extends State<BackupScreen> {
       if (result == null) return;
 
       final bytes = Uint8List.fromList(utf8.encode(text));
-      final xf = XFile.fromData(bytes, mimeType: 'application/json', name: BackupCodec.suggestedFileName(cfg));
+      final xf = XFile.fromData(bytes,
+          mimeType: 'application/json',
+          name: BackupCodec.suggestedFileName(cfg));
       await xf.saveTo(result.path);
 
       if (!mounted) return;
@@ -178,7 +209,7 @@ class _BackupScreenState extends State<BackupScreen> {
       _status = null;
     });
     try {
-      final text = _buildBackupText();
+      final text = await _buildBackupText();
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       setState(() => _status = context.l10n.backupExportOk);
@@ -201,11 +232,21 @@ class _BackupScreenState extends State<BackupScreen> {
       await widget.appState.saveConfig(bundle.config);
       await widget.appState.savePrefs(bundle.prefs);
       await widget.appState.startCore();
+      if (bundle.coreBackup != null) {
+        final api = CoreApi(config: bundle.config);
+        await api.importBackup(bundle.coreBackup!);
+      }
+      if (bundle.encryptionKeys != null) {
+        await EncryptionManager().importKeys(bundle.encryptionKeys!);
+      }
+      await widget.appState.stopCore();
+      await widget.appState.startCore();
 
       if (!mounted) return;
       setState(() {
         _import.clear();
-        _status = context.l10n.backupImportOk;
+        _status =
+            '${context.l10n.backupImportOk} (chat/follow snapshot ripristinato)';
       });
     } catch (e) {
       setState(() => _status = context.l10n.backupErr(e.toString()));
@@ -229,11 +270,21 @@ class _BackupScreenState extends State<BackupScreen> {
       await widget.appState.saveConfig(bundle.config);
       await widget.appState.savePrefs(bundle.prefs);
       await widget.appState.startCore();
+      if (bundle.coreBackup != null) {
+        final api = CoreApi(config: bundle.config);
+        await api.importBackup(bundle.coreBackup!);
+      }
+      if (bundle.encryptionKeys != null) {
+        await EncryptionManager().importKeys(bundle.encryptionKeys!);
+      }
+      await widget.appState.stopCore();
+      await widget.appState.startCore();
 
       if (!mounted) return;
       setState(() {
         _import.clear();
-        _status = context.l10n.backupImportOk;
+        _status =
+            '${context.l10n.backupImportOk} (chat/follow snapshot ripristinato)';
       });
     } catch (e) {
       setState(() => _status = context.l10n.backupErr(e.toString()));

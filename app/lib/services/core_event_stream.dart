@@ -16,22 +16,47 @@ class CoreEvent {
     required this.tsMs,
     this.activityType,
     this.activityId,
+    this.objectId,
+    this.targetActivityId,
+    this.targetObjectId,
+    this.actorId,
+    this.kindScope,
+    this.op,
+    this.versionTs,
   });
 
   final String kind;
   final int tsMs;
   final String? activityType;
   final String? activityId;
+  final String? objectId;
+  final String? targetActivityId;
+  final String? targetObjectId;
+  final String? actorId;
+  final String? kindScope;
+  final String? op;
+  final int? versionTs;
 
   static CoreEvent? tryParse(Map<String, dynamic> json) {
     final kind = json['kind']?.toString().trim() ?? '';
     if (kind.isEmpty) return null;
-    final ts = (json['ts_ms'] is num) ? (json['ts_ms'] as num).toInt() : int.tryParse(json['ts_ms']?.toString() ?? '') ?? 0;
+    final ts = (json['ts_ms'] is num)
+        ? (json['ts_ms'] as num).toInt()
+        : int.tryParse(json['ts_ms']?.toString() ?? '') ?? 0;
     return CoreEvent(
       kind: kind,
       tsMs: ts,
       activityType: json['activity_type']?.toString(),
       activityId: json['activity_id']?.toString(),
+      objectId: json['object_id']?.toString(),
+      targetActivityId: json['target_activity_id']?.toString(),
+      targetObjectId: json['target_object_id']?.toString(),
+      actorId: json['actor_id']?.toString(),
+      kindScope: json['kind_scope']?.toString(),
+      op: json['op']?.toString(),
+      versionTs: (json['version_ts'] is num)
+          ? (json['version_ts'] as num).toInt()
+          : int.tryParse(json['version_ts']?.toString() ?? ''),
     );
   }
 }
@@ -64,7 +89,9 @@ class CoreEventStream {
       }
 
       var dataBuf = '';
-      await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+      await for (final line in resp.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())) {
         if (line.startsWith('data:')) {
           dataBuf += line.substring('data:'.length).trimLeft();
           continue;
@@ -86,4 +113,3 @@ class CoreEventStream {
     }
   }
 }
-

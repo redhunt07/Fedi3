@@ -5775,6 +5775,65 @@ async fn resolve_follow_target_input(state: &ApState, input: &str) -> Option<Str
     None
 }
 
+async fn remote_already_followed(
+    state: &ApState,
+    target_actor: &str,
+    me_actor: &str,
+) -> Option<bool> {
+    let actor_resp = state
+        .http
+        .get(target_actor)
+        .header(
+            "Accept",
+            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+        )
+        .send()
+        .await
+        .ok()?;
+    if !actor_resp.status().is_success() {
+        return None;
+    }
+    let actor_json: serde_json::Value = actor_resp.json().await.ok()?;
+    let followers = actor_json
+        .get("followers")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    let followers_page = format!("{followers}?page=true&limit=200");
+    let page_resp = state
+        .http
+        .get(&followers_page)
+        .header(
+            "Accept",
+            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json",
+        )
+        .send()
+        .await
+        .ok()?;
+    if !page_resp.status().is_success() {
+        return None;
+    }
+    let page: serde_json::Value = page_resp.json().await.ok()?;
+    let items = page
+        .get("orderedItems")
+        .or_else(|| page.get("items"))
+        .and_then(|v| v.as_array())?;
+    for item in items {
+        if let Some(id) = item.as_str() {
+            if id.trim_end_matches('/') == me_actor.trim_end_matches('/') {
+                return Some(true);
+            }
+            continue;
+        }
+        if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+            if id.trim_end_matches('/') == me_actor.trim_end_matches('/') {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
 async fn enqueue_follow_actor(state: &ApState, target_actor: &str) -> Result<(), String> {
     let target_actor = target_actor.trim().trim_end_matches('/');
     if target_actor.is_empty() {
@@ -5864,7 +5923,7 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
 
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
-    let mut already_present = Vec::new();
+    let mut already_followed = Vec::new();
     let mut invalid = Vec::new();
     for raw in raw_targets {
         let trimmed = raw.trim();
@@ -5883,7 +5942,7 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
                 .flatten()
                 .is_some()
             {
-                already_present.push(actor_url);
+                already_followed.push(actor_url);
             } else {
                 normalized.push(actor_url);
             }
@@ -5891,13 +5950,14 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
             invalid.push(trimmed.to_string());
         }
     }
-    if normalized.is_empty() && already_present.is_empty() {
+    if normalized.is_empty() && already_followed.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             [("Content-Type", "application/json; charset=utf-8")],
             serde_json::json!({
                 "ok": false,
                 "imported": 0,
+                "already_followed": 0,
                 "already_present": 0,
                 "skipped_invalid": invalid.len(),
                 "invalid": invalid,
@@ -5915,10 +5975,12 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
                 "ok": true,
                 "dry_run": true,
                 "candidates": normalized.len(),
-                "already_present": already_present.len(),
+                "already_followed": already_followed.len(),
+                "already_present": already_followed.len(),
                 "invalid": invalid,
                 "targets": normalized,
-                "already_present_targets": already_present,
+                "already_followed_targets": already_followed,
+                "already_present_targets": already_followed,
             })
             .to_string(),
         )
@@ -5930,7 +5992,7 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
     let queued_detail = serde_json::json!({
         "invalid": invalid,
         "targets": normalized,
-        "already_present": already_present,
+        "already_followed": already_followed,
     })
     .to_string();
     if let Err(err) = state.social.create_follow_import_job(
@@ -5971,7 +6033,8 @@ async fn social_follow_import(state: &ApState, req: Request<Body>) -> Response<B
             "job_id": job_id,
             "status": "queued",
             "total": total_targets,
-            "already_present": already_present.len(),
+            "already_followed": already_followed.len(),
+            "already_present": already_followed.len(),
         })
         .to_string(),
     )
@@ -6074,31 +6137,75 @@ async fn run_follow_import_job(
         return;
     }
     let mut imported = 0i64;
+    let mut aligned_remote = 0i64;
     let mut failed_count = 0i64;
     let mut failed_entries: Vec<serde_json::Value> = Vec::new();
+    let mut result_entries: Vec<serde_json::Value> = Vec::new();
     let resolved_targets = targets.len() as i64;
+    let me_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
     for chunk in targets.chunks(batch_size) {
         for actor in chunk {
+            let already_local = state
+                .social
+                .get_following_status(actor)
+                .ok()
+                .flatten()
+                .is_some();
+            if already_local {
+                if result_entries.len() < 500 {
+                    result_entries
+                        .push(serde_json::json!({"actor": actor, "status": "already_followed"}));
+                }
+                continue;
+            }
+            if matches!(
+                remote_already_followed(&state, actor, &me_actor).await,
+                Some(true)
+            ) {
+                let _ = state.social.set_following(actor, FollowingStatus::Accepted);
+                aligned_remote += 1;
+                if result_entries.len() < 500 {
+                    result_entries
+                        .push(serde_json::json!({"actor": actor, "status": "aligned_remote"}));
+                }
+                continue;
+            }
             match enqueue_follow_actor(&state, actor).await {
-                Ok(()) => imported += 1,
+                Ok(()) => {
+                    imported += 1;
+                    if result_entries.len() < 500 {
+                        result_entries
+                            .push(serde_json::json!({"actor": actor, "status": "enqueued_follow"}));
+                    }
+                }
                 Err(err) => {
                     failed_count += 1;
                     if failed_entries.len() < 200 {
-                        failed_entries.push(serde_json::json!({"actor": actor, "error": err}));
+                        failed_entries
+                            .push(serde_json::json!({"actor": actor, "error": err.clone()}));
+                    }
+                    if result_entries.len() < 500 {
+                        result_entries.push(serde_json::json!({
+                            "actor": actor,
+                            "status": "failed_delivery",
+                            "error": err,
+                        }));
                     }
                 }
             }
         }
-        let progress_detail = if failed_entries.is_empty() {
-            None
-        } else {
-            Some(
-                serde_json::json!({
-                    "failed": failed_entries,
-                })
-                .to_string(),
-            )
-        };
+        let progress_detail = Some(
+            serde_json::json!({
+                "failed": failed_entries,
+                "results": result_entries,
+                "aligned_remote": aligned_remote,
+            })
+            .to_string(),
+        );
         if let Err(err) = state.social.update_follow_import_job_progress(
             &job_id,
             resolved_targets,
@@ -6115,14 +6222,13 @@ async fn run_follow_import_job(
         }
     }
 
-    let detail = if failed_entries.is_empty() {
-        queued_detail
-    } else {
-        serde_json::json!({
-            "failed": failed_entries,
-        })
-        .to_string()
-    };
+    let detail = serde_json::json!({
+        "queued_detail": serde_json::from_str::<serde_json::Value>(&queued_detail).unwrap_or_else(|_| serde_json::json!({})),
+        "failed": failed_entries,
+        "results": result_entries,
+        "aligned_remote": aligned_remote,
+    })
+    .to_string();
     let final_status = if failed_count == 0 {
         "completed"
     } else if imported > 0 {
@@ -6230,7 +6336,7 @@ async fn social_follow_import_retry_last(state: &ApState, req: Request<Body>) ->
         "retry_of": job.job_id,
         "targets": targets,
         "invalid": [],
-        "already_present": [],
+        "already_followed": [],
     })
     .to_string();
     if let Err(err) = state.social.create_follow_import_job(
@@ -6271,28 +6377,49 @@ async fn social_follow_export(state: &ApState, req: Request<Body>) -> Response<B
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
     }
+    let mut statuses: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     let accepted = state
         .social
         .list_following_accepted_ids(10_000)
         .unwrap_or_default();
-    let pending_page = state.social.list_following(10_000, None).ok();
-    let mut pending = Vec::new();
-    if let Some(page) = pending_page {
+    for actor in accepted {
+        statuses.insert(actor, "accepted".to_string());
+    }
+    if let Ok(page) = state.social.list_following(10_000, None) {
         for actor in page.items {
             if matches!(
                 state.social.get_following_status(&actor).ok().flatten(),
                 Some(FollowingStatus::Pending)
             ) {
-                pending.push(actor);
+                statuses.insert(actor, "pending".to_string());
+            }
+        }
+    }
+    if let Ok(Some(job)) = state.social.latest_follow_import_job() {
+        if let Some(detail_raw) = job.detail_json {
+            if let Ok(detail) = serde_json::from_str::<serde_json::Value>(&detail_raw) {
+                if let Some(results) = detail.get("results").and_then(|v| v.as_array()) {
+                    for row in results {
+                        let Some(actor) = row.get("actor").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let Some(status) = row.get("status").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        if status == "aligned_remote" || status == "failed_delivery" {
+                            statuses
+                                .entry(actor.to_string())
+                                .or_insert_with(|| status.to_string());
+                        }
+                    }
+                }
             }
         }
     }
     let mut csv = String::from("Account address,Status\n");
-    for actor in accepted {
-        csv.push_str(&format!("\"{}\",accepted\n", actor.replace('"', "\"\"")));
-    }
-    for actor in pending {
-        csv.push_str(&format!("\"{}\",pending\n", actor.replace('"', "\"\"")));
+    for (actor, status) in statuses {
+        csv.push_str(&format!("\"{}\",{}\n", actor.replace('"', "\"\""), status));
     }
     let mut resp = Response::new(Body::from(csv));
     resp.headers_mut().insert(
@@ -7119,13 +7246,11 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         );
     }
 
-    let ty = activity
-        .get("type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let _ = state
-        .ui_events
-        .send(UiEvent::new("timeline", ty, Some(activity_id.clone())));
+    let _ = state.ui_events.send(timeline_ui_event_from_activity(
+        "timeline",
+        &activity,
+        Some(activity_id.clone()),
+    ));
 
     // Index replies for UI: if this Create Note is a reply (inReplyTo), link it to the parent note id.
     if activity.get("type").and_then(|v| v.as_str()) == Some("Create") {
@@ -8524,7 +8649,7 @@ pub(crate) async fn process_inbox_activity(
                 .filter(|s| !s.trim().is_empty());
             let _ = state
                 .ui_events
-                .send(UiEvent::new("inbox", Some(ty.to_string()), act_id));
+                .send(timeline_ui_event_from_activity("inbox", activity, act_id));
             Ok(())
         }
         "Follow" => {
@@ -8570,9 +8695,9 @@ pub(crate) async fn process_inbox_activity(
                 .queue
                 .enqueue_activity(bytes, vec![actor.to_string()])
                 .await?;
-            let _ = state.ui_events.send(UiEvent::new(
+            let _ = state.ui_events.send(timeline_ui_event_from_activity(
                 "timeline",
-                Some("Accept".to_string()),
+                &accept,
                 Some(accept_id.clone()),
             ));
             Ok(())
@@ -9411,6 +9536,82 @@ fn extract_object_id(activity: &serde_json::Value) -> Option<String> {
         }),
         _ => None,
     }
+}
+
+fn reducer_op_from_activity(activity: &serde_json::Value) -> Option<String> {
+    let ty = activity.get("type").and_then(|v| v.as_str())?;
+    let op = match ty {
+        "Create" => {
+            if activity
+                .get("object")
+                .and_then(|v| v.get("inReplyTo"))
+                .is_some()
+            {
+                "reply_add"
+            } else {
+                "create"
+            }
+        }
+        "Update" => "update",
+        "Delete" => "delete",
+        "Like" => "like",
+        "EmojiReact" => "react",
+        "Announce" => "announce",
+        "Undo" => "undo",
+        _ => return None,
+    };
+    Some(op.to_string())
+}
+
+fn reducer_targets_from_activity(
+    activity: &serde_json::Value,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let activity_id = activity
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let object_id = extract_object_id(activity)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let target_object_id = activity
+        .get("object")
+        .and_then(|v| v.get("object"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            activity
+                .get("object")
+                .and_then(|v| v.get("inReplyTo"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+    (activity_id, object_id, target_object_id)
+}
+
+fn timeline_ui_event_from_activity(
+    kind: &str,
+    activity: &serde_json::Value,
+    fallback_activity_id: Option<String>,
+) -> UiEvent {
+    let (activity_id, object_id, target_object_id) = reducer_targets_from_activity(activity);
+    let actor_id = extract_actor(activity)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let activity_type = activity
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    UiEvent::new(kind, activity_type, activity_id.or(fallback_activity_id)).with_reducer_fields(
+        object_id,
+        None,
+        target_object_id,
+        actor_id,
+        Some("timeline".to_string()),
+        reducer_op_from_activity(activity),
+    )
 }
 
 fn extract_object(activity: &serde_json::Value) -> Option<(String, Vec<u8>)> {

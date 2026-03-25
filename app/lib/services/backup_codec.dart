@@ -9,20 +9,38 @@ import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
 
 class BackupBundle {
-  BackupBundle({required this.config, required this.prefs});
+  BackupBundle({
+    required this.config,
+    required this.prefs,
+    this.coreBackup,
+    this.encryptionKeys,
+    this.meta,
+  });
 
   final CoreConfig config;
   final UiPrefs prefs;
+  final Map<String, dynamic>? coreBackup;
+  final Map<String, String>? encryptionKeys;
+  final Map<String, dynamic>? meta;
 }
 
 class BackupCodec {
-  static const int version = 1;
+  static const int version = 2;
 
-  static String encode({required CoreConfig config, required UiPrefs prefs}) {
+  static String encode({
+    required CoreConfig config,
+    required UiPrefs prefs,
+    Map<String, dynamic>? coreBackup,
+    Map<String, String>? encryptionKeys,
+    Map<String, dynamic>? meta,
+  }) {
     final data = {
       'v': version,
       'coreConfig': config.toJson(),
       'uiPrefs': prefs.toJson(),
+      if (coreBackup != null) 'coreBackup': coreBackup,
+      if (encryptionKeys != null) 'encryptionKeys': encryptionKeys,
+      if (meta != null) 'meta': meta,
     };
     return const JsonEncoder.withIndent('  ').convert(data);
   }
@@ -35,11 +53,22 @@ class BackupCodec {
 
     final cfgJson = (json['coreConfig'] as Map?)?.cast<String, dynamic>();
     final prefsJson = (json['uiPrefs'] as Map?)?.cast<String, dynamic>();
-    if (cfgJson == null || prefsJson == null) throw const FormatException('missing sections');
+    if (cfgJson == null || prefsJson == null) {
+      throw const FormatException('missing sections');
+    }
+    final coreBackup = (json['coreBackup'] as Map?)?.cast<String, dynamic>();
+    final rawKeys = (json['encryptionKeys'] as Map?)?.cast<String, dynamic>();
+    final encryptionKeys = rawKeys?.map(
+      (key, value) => MapEntry(key, value.toString()),
+    );
+    final meta = (json['meta'] as Map?)?.cast<String, dynamic>();
 
     return BackupBundle(
       config: CoreConfig.fromJson(cfgJson),
       prefs: UiPrefs.fromJson(prefsJson),
+      coreBackup: coreBackup,
+      encryptionKeys: encryptionKeys,
+      meta: meta,
     );
   }
 
@@ -54,4 +83,3 @@ class BackupCodec {
     return 'fedi3-backup-$user@$domain.json';
   }
 }
-
