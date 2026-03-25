@@ -89,7 +89,11 @@ async fn try_db_lock<'a>(
     match tokio::time::timeout(Duration::from_millis(DB_LOCK_TIMEOUT_MS), state.db.lock()).await {
         Ok(guard) => Some(guard),
         Err(_) => {
-            warn!(operation = op, timeout_ms = DB_LOCK_TIMEOUT_MS, "db lock timeout");
+            warn!(
+                operation = op,
+                timeout_ms = DB_LOCK_TIMEOUT_MS,
+                "db lock timeout"
+            );
             None
         }
     }
@@ -4409,8 +4413,8 @@ async fn cached_user_response(
         let actor_json = db.get_actor_cache(user).ok().flatten();
         if let Some(actor_json) = actor_json {
             let online_status = online_status_for_user(state, user).await;
-            let patched =
-                patch_actor_with_online_status(&actor_json, online_status).unwrap_or(actor_json.clone());
+            let patched = patch_actor_with_online_status(&actor_json, online_status)
+                .unwrap_or(actor_json.clone());
             if let Some(cache_key) = redis_ap_cache_key(state, user, path) {
                 if let Some(ttl_secs) = redis_cache_ttl_secs_for_path(state, user, path) {
                     let _ = redis_cache_set(state, &cache_key, &actor_json, ttl_secs).await;
@@ -5194,9 +5198,21 @@ async fn forward_to_user(
                     let refresh_user = user.clone();
                     let refresh_path = path.to_string();
                     tokio::spawn(async move {
-                        observe_ap_cache_refresh(&refresh_state, &refresh_user, &refresh_path, "refresh_scheduled").await;
+                        observe_ap_cache_refresh(
+                            &refresh_state,
+                            &refresh_user,
+                            &refresh_path,
+                            "refresh_scheduled",
+                        )
+                        .await;
                         refresh_public_actor_state(&refresh_state, &refresh_user).await;
-                        observe_ap_cache_refresh(&refresh_state, &refresh_user, &refresh_path, "refresh_done").await;
+                        observe_ap_cache_refresh(
+                            &refresh_state,
+                            &refresh_user,
+                            &refresh_path,
+                            "refresh_done",
+                        )
+                        .await;
                     });
                 }
                 return out;
@@ -12349,7 +12365,8 @@ async fn relay_stats(
                 "base_domain": state.cfg.base_domain.clone(),
                 "relays": state.cfg.seed_relays.clone(),
                 "degraded": true,
-            })).into_response();
+            }))
+            .into_response();
         }
     };
     axum::Json(telemetry).into_response()
@@ -12958,7 +12975,10 @@ async fn relay_search_notes(
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_notes(&query, &tag, limit, cursor, since).await {
+        match search
+            .search_notes(&query, &tag, limit, cursor, since)
+            .await
+        {
             Ok(p) => p,
             Err(e) => {
                 observe_search_meili_fallback(&state, "notes_error").await;
@@ -13648,7 +13668,10 @@ async fn relay_search_users(
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_users(&query, limit, cursor, &base_template).await {
+        match search
+            .search_users(&query, limit, cursor, &base_template)
+            .await
+        {
             Ok(p) => p,
             Err(e) => {
                 observe_search_meili_fallback(&state, "users_error").await;
@@ -14445,7 +14468,8 @@ async fn relay_list(
         for relay_url in &state.cfg.seed_relays {
             relays.push(serde_json::json!({ "relay_url": relay_url }));
         }
-        return axum::Json(serde_json::json!({ "relays": relays, "degraded": true })).into_response();
+        return axum::Json(serde_json::json!({ "relays": relays, "degraded": true }))
+            .into_response();
     };
     let rows = match db.list_relays(limit) {
         Ok(v) => v,
