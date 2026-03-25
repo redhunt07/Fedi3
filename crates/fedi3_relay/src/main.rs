@@ -3540,14 +3540,9 @@ async fn enforce_ip_policy(
     if !is_ip_allowed(&state.cfg, ip) {
         return (StatusCode::FORBIDDEN, "ip blocked").into_response();
     }
-    // Keep public read endpoints available even when the noisy limiter is tripped by
-    // other routes. This avoids UX regressions in Relay screen polling.
-    if method == Method::GET
-        && matches!(
-            path.as_str(),
-            "/_fedi3/relay/stats" | "/_fedi3/relay/relays" | "/_fedi3/relay/peers"
-        )
-    {
+    // Keep relay read endpoints available even when the noisy limiter is tripped by
+    // other routes. This avoids UX regressions in Relay screen polling/discovery.
+    if method == Method::GET && path.starts_with("/_fedi3/relay/") {
         return next.run(req).await;
     }
     if let Some(retry_secs) = state.limiter.noisy_block_remaining(&ip.to_string()).await {
@@ -4127,18 +4122,20 @@ async fn forward_user_root(
         return resp.into_response();
     }
 
-    if !state
-        .limiter
-        .check(
-            client_ip(&state.cfg, &peer, &headers),
-            "forward",
-            state.cfg.rate_limit_forward_per_min,
-        )
-        .await
+    let path = format!("/users/{user}");
+    let is_public_get = method == Method::GET && is_public_ap_get_path(&user, &path);
+    if !is_public_get
+        && !state
+            .limiter
+            .check(
+                client_ip(&state.cfg, &peer, &headers),
+                "forward",
+                state.cfg.rate_limit_forward_per_min,
+            )
+            .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
-    let path = format!("/users/{user}");
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
     forward_to_user(state, user, method, &path, query, headers, body).await
 }
@@ -4163,20 +4160,22 @@ async fn forward_user_rest(
         return resp.into_response();
     }
 
-    if !state
-        .limiter
-        .check(
-            client_ip(&state.cfg, &peer, &headers),
-            "forward",
-            state.cfg.rate_limit_forward_per_min,
-        )
-        .await
+    let full_path = format!("/users/{user}/{rest}");
+    let is_public_get = method == Method::GET && is_public_ap_get_path(&user, &full_path);
+    if !is_public_get
+        && !state
+            .limiter
+            .check(
+                client_ip(&state.cfg, &peer, &headers),
+                "forward",
+                state.cfg.rate_limit_forward_per_min,
+            )
+            .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
 
     if method == Method::GET {
-        let full_path = format!("/users/{user}/{rest}");
         if is_public_ap_get_path(&user, &full_path) {
             observe_public_get_request(&state, &user, &full_path).await;
         }
@@ -4492,7 +4491,18 @@ async fn cached_user_response(
                 "db",
             ));
         }
-        let stub = collection_stub_json(user, kind, headers);
+        let aggregate_total = db
+            .get_user_aggregate_cache(user)
+            .ok()
+            .flatten()
+            .map(|agg| match kind {
+                "followers" => agg.followers_total,
+                "following" => agg.following_total,
+                "outbox" => agg.outbox_total,
+                _ => 0,
+            })
+            .unwrap_or(0);
+        let stub = collection_stub_json_with_total(user, kind, headers, aggregate_total);
         return Some((
             (
                 StatusCode::OK,
@@ -5506,6 +5516,15 @@ fn collection_kind_from_path<'a>(user: &str, path: &'a str) -> Option<&'a str> {
 }
 
 fn collection_stub_json(user: &str, kind: &str, headers: &HeaderMap) -> String {
+    collection_stub_json_with_total(user, kind, headers, 0)
+}
+
+fn collection_stub_json_with_total(
+    user: &str,
+    kind: &str,
+    headers: &HeaderMap,
+    total_items: u64,
+) -> String {
     let host = host_only(headers);
     let scheme = scheme_from_headers(headers);
     let id = format!("{scheme}://{host}/users/{user}/{kind}");
@@ -5513,7 +5532,7 @@ fn collection_stub_json(user: &str, kind: &str, headers: &HeaderMap) -> String {
       "@context": "https://www.w3.org/ns/activitystreams",
       "id": id,
       "type": "OrderedCollection",
-      "totalItems": 0,
+      "totalItems": total_items,
       "first": format!("{id}?page=true")
     })
     .to_string()
