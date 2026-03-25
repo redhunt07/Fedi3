@@ -14581,10 +14581,36 @@ async fn relay_peers(
             .map(|u| u.to_lowercase())
             .collect::<std::collections::HashSet<String>>()
     };
-    let db = state.db.lock().await;
+    let Some(db) = try_db_clone(&state, "relay_peers").await else {
+        let mut merged = Vec::new();
+        for user in online_users {
+            let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
+            merged.push(serde_json::json!({
+              "peer_id": format!("user:{user}"),
+              "username": user,
+              "actor_url": actor_url,
+              "online": true,
+            }));
+        }
+        return axum::Json(serde_json::json!({ "items": merged, "degraded": true }))
+            .into_response();
+    };
     let rows = match db.list_peer_directory(&query, limit, None) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+        Err(_) => {
+            let mut merged = Vec::new();
+            for user in online_users {
+                let actor_url = format!("{}/users/{}", user_base_url(&state.cfg, &user), user);
+                merged.push(serde_json::json!({
+                  "peer_id": format!("user:{user}"),
+                  "username": user,
+                  "actor_url": actor_url,
+                  "online": true,
+                }));
+            }
+            return axum::Json(serde_json::json!({ "items": merged, "degraded": true }))
+                .into_response();
+        }
     };
     let items: Vec<serde_json::Value> = rows
         .into_iter()

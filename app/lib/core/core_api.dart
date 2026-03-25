@@ -1213,7 +1213,7 @@ class CoreApi {
   Future<Map<String, dynamic>> fetchRelayList() async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final uri = base.replace(path: '/_fedi3/relay/relays');
-    final resp = await http.get(uri);
+    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('relay list failed: ${resp.statusCode} ${resp.body}');
     }
@@ -1223,7 +1223,7 @@ class CoreApi {
   Future<Map<String, dynamic>> fetchRelayStats() async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final uri = base.replace(path: '/_fedi3/relay/stats');
-    final resp = await http.get(uri);
+    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('relay stats failed: ${resp.statusCode} ${resp.body}');
     }
@@ -1236,12 +1236,14 @@ class CoreApi {
       path: '/_fedi3/relay/search/coverage',
       queryParameters: {'username': config.username.trim()},
     );
-    final resp = await http.get(
+    final resp = await http
+        .get(
       uri,
       headers: {
         'Authorization': 'Bearer ${config.relayToken.trim()}',
       },
-    );
+    )
+        .timeout(const Duration(seconds: 10));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError(
           'relay coverage failed: ${resp.statusCode} ${resp.body}');
@@ -1258,7 +1260,7 @@ class CoreApi {
     }
     final uri =
         base.replace(path: '/_fedi3/relay/peers', queryParameters: params);
-    final resp = await http.get(uri);
+    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('relay peers failed: ${resp.statusCode} ${resp.body}');
     }

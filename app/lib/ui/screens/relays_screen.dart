@@ -77,23 +77,45 @@ class _RelaysScreenState extends State<RelaysScreen> {
       _loading = true;
       _error = null;
     });
+    final errors = <String>[];
     try {
-      final stats = await api.fetchRelayStats();
-      final list = await api.fetchRelayList();
-      final coverage = await api.fetchRelayCoverage();
-      final peers = await api.fetchRelayPeers(query: _peerQuery);
-      final relays = (list['relays'] as List<dynamic>? ?? []);
+      Map<String, dynamic>? stats;
+      Map<String, dynamic>? list;
+      Map<String, dynamic>? coverage;
+      Map<String, dynamic>? peers;
+      try {
+        stats = await api.fetchRelayStats();
+      } catch (e) {
+        errors.add(e.toString());
+      }
+      try {
+        list = await api.fetchRelayList();
+      } catch (e) {
+        errors.add(e.toString());
+      }
+      try {
+        coverage = await api.fetchRelayCoverage();
+      } catch (_) {
+        // optional in relay screen
+      }
+      try {
+        peers = await api.fetchRelayPeers(query: _peerQuery);
+      } catch (_) {
+        // keep previous peers list if this call fails
+      }
+      final relays = (list?['relays'] as List<dynamic>? ?? _relays ?? const []);
       final latency = await _measureRelayLatency(relays);
       if (!mounted) return;
       setState(() {
-        _stats = stats;
+        _stats = stats ?? _stats;
         _relays = relays;
-        _coverage = coverage;
-        _peers = (peers['items'] as List<dynamic>? ?? []);
+        _coverage = coverage ?? _coverage;
+        _peers = (peers?['items'] as List<dynamic>? ?? _peers ?? const []);
         _relayLatencyMs
           ..clear()
           ..addAll(latency);
         _recommendedRelay = _pickRecommendedRelay(latency);
+        _error = errors.isEmpty ? null : errors.join(' | ');
       });
     } catch (e) {
       if (!mounted) return;
@@ -171,7 +193,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
           const SizedBox(height: 10),
           Text(context.l10n.relaysKnown, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          if (_loading) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+          if (_loading && (_relays == null || _relays!.isEmpty))
+            const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
           for (final r in (_relays ?? const [])) _relayTile(context, r),
           const SizedBox(height: 16),
           Text(context.l10n.relaysPeersTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -189,7 +212,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
             },
           ),
           const SizedBox(height: 8),
-          if (_loading || _loadingPeers)
+          if ((_loading && (_peers == null || _peers!.isEmpty)) || _loadingPeers)
             const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
           if (!_loading && !_loadingPeers && (_peers == null || _peers!.isEmpty))
             Padding(
