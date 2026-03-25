@@ -1669,6 +1669,8 @@ async fn main() {
         pg_pool: OnceLock::new(),
     };
     db.init().expect("db init");
+    db.ensure_legacy_projection_tables()
+        .expect("legacy projection tables init");
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(cfg.http_timeout_secs))
         .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
@@ -6277,7 +6279,6 @@ async fn run_legacy_projection_once(state: &AppState) -> Result<()> {
     let mut offset = 0u32;
 
     let db = state.db.lock().await.clone();
-    db.ensure_legacy_projection_tables()?;
 
     loop {
         if processed_users >= max_users {
@@ -13319,7 +13320,6 @@ fn list_legacy_feed_page(
     relay_host: Option<&str>,
     projection_batch_size: u32,
 ) -> Result<CollectionPage<(String, i64)>> {
-    db.ensure_legacy_projection_tables()?;
     let following = match db.get_collection_cache(username, "following") {
         Ok(Some(json)) => parse_following_actors(&json),
         _ => HashSet::new(),
