@@ -3534,9 +3534,21 @@ async fn enforce_ip_policy(
     req: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
     let ip = client_ip_addr(&state.cfg, &peer, req.headers());
     if !is_ip_allowed(&state.cfg, ip) {
         return (StatusCode::FORBIDDEN, "ip blocked").into_response();
+    }
+    // Keep public read endpoints available even when the noisy limiter is tripped by
+    // other routes. This avoids UX regressions in Relay screen polling.
+    if method == Method::GET
+        && matches!(
+            path.as_str(),
+            "/_fedi3/relay/stats" | "/_fedi3/relay/relays" | "/_fedi3/relay/peers"
+        )
+    {
+        return next.run(req).await;
     }
     if let Some(retry_secs) = state.limiter.noisy_block_remaining(&ip.to_string()).await {
         let mut resp = (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
