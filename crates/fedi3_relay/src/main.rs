@@ -3542,9 +3542,19 @@ async fn enforce_ip_policy(
     if !is_ip_allowed(&state.cfg, ip) {
         return (StatusCode::FORBIDDEN, "ip blocked").into_response();
     }
-    // Keep relay read endpoints available even when the noisy limiter is tripped by
-    // other routes. This avoids UX regressions in Relay screen polling/discovery.
-    if method == Method::GET && path.starts_with("/_fedi3/relay/") {
+    // Keep read paths and tunnel handshake available even when the noisy limiter
+    // is tripped by other routes. This avoids reconnect starvation and Relay UX
+    // regressions caused by unrelated burst traffic.
+    if path.starts_with("/tunnel/") {
+        return next.run(req).await;
+    }
+    if method == Method::GET
+        && (path.starts_with("/_fedi3/relay/")
+            || path.starts_with("/users/")
+            || path == "/.well-known/nodeinfo"
+            || path == "/nodeinfo/2.0"
+            || path == "/.well-known/webfinger")
+    {
         return next.run(req).await;
     }
     if let Some(retry_secs) = state.limiter.noisy_block_remaining(&ip.to_string()).await {
