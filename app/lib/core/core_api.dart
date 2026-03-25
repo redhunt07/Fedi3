@@ -4,9 +4,11 @@
  */
 
 import 'dart:convert';
+import 'dart:io' show HttpClient;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:mime/mime.dart';
 import '../model/core_config.dart';
 
@@ -1213,21 +1215,31 @@ class CoreApi {
   Future<Map<String, dynamic>> fetchRelayList() async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final uri = base.replace(path: '/_fedi3/relay/relays');
-    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay list failed: ${resp.statusCode} ${resp.body}');
+    final client = _createHttpClient();
+    try {
+      final resp = await client.get(uri).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw StateError('relay list failed: ${resp.statusCode} ${resp.body}');
+      }
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } finally {
+      client.close();
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> fetchRelayStats() async {
     final base = Uri.parse(config.publicBaseUrl.trim());
     final uri = base.replace(path: '/_fedi3/relay/stats');
-    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay stats failed: ${resp.statusCode} ${resp.body}');
+    final client = _createHttpClient();
+    try {
+      final resp = await client.get(uri).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw StateError('relay stats failed: ${resp.statusCode} ${resp.body}');
+      }
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } finally {
+      client.close();
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> fetchRelayCoverage() async {
@@ -1236,19 +1248,24 @@ class CoreApi {
       path: '/_fedi3/relay/search/coverage',
       queryParameters: {'username': config.username.trim()},
     );
-    final resp = await http
-        .get(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${config.relayToken.trim()}',
-      },
-    )
-        .timeout(const Duration(seconds: 10));
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError(
-          'relay coverage failed: ${resp.statusCode} ${resp.body}');
+    final client = _createHttpClient();
+    try {
+      final resp = await client
+          .get(
+            uri,
+            headers: {
+              'Authorization': 'Bearer ${config.relayToken.trim()}',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw StateError(
+            'relay coverage failed: ${resp.statusCode} ${resp.body}');
+      }
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } finally {
+      client.close();
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> fetchRelayPeers(
@@ -1260,11 +1277,16 @@ class CoreApi {
     }
     final uri =
         base.replace(path: '/_fedi3/relay/peers', queryParameters: params);
-    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay peers failed: ${resp.statusCode} ${resp.body}');
+    final client = _createHttpClient();
+    try {
+      final resp = await client.get(uri).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw StateError('relay peers failed: ${resp.statusCode} ${resp.body}');
+      }
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } finally {
+      client.close();
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Stream<Map<String, dynamic>> relayPresenceStream() async* {
@@ -1487,6 +1509,14 @@ class CoreApi {
   }
 
   http.Client _createHttpClient() {
+    HttpClient buildHttpClient() {
+      final io = HttpClient();
+      // Avoid inheriting broken system/env proxy settings for relay/core calls.
+      io.findProxy = (_) => 'DIRECT';
+      io.connectionTimeout = const Duration(seconds: 10);
+      return io;
+    }
+
     final client = http.Client();
 
     // Standard anonymous User-Agent
@@ -1509,7 +1539,7 @@ class CoreApi {
     }
 
     // Return regular client with anonymous User-Agent
-    return UserAgentClient(userAgent, client);
+    return UserAgentClient(userAgent, IOClient(buildHttpClient()));
   }
 }
 
