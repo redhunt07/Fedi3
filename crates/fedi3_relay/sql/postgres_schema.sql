@@ -233,6 +233,101 @@ CREATE TABLE IF NOT EXISTS relay_legacy_feed_state (
   PRIMARY KEY(username, stream)
 );
 
+CREATE TABLE IF NOT EXISTS relay_event_log (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  stream TEXT NOT NULL,
+  event_kind TEXT NOT NULL,
+  activity_type TEXT NOT NULL,
+  actor_id TEXT NULL,
+  object_id TEXT NULL,
+  activity_id TEXT NULL,
+  dedupe_key TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_event_log_user_id
+  ON relay_event_log(username, id DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_event_log_user_created
+  ON relay_event_log(username, created_at_ms DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_event_log_user_dedupe
+  ON relay_event_log(username, dedupe_key);
+
+CREATE TABLE IF NOT EXISTS relay_notifications (
+  username TEXT NOT NULL,
+  event_id BIGINT NOT NULL,
+  notification_kind TEXT NOT NULL,
+  activity_type TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY(username, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relay_notifications_user_event
+  ON relay_notifications(username, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_notifications_user_created
+  ON relay_notifications(username, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_object_state (
+  object_id TEXT PRIMARY KEY,
+  actor_id TEXT NULL,
+  object_json TEXT NOT NULL,
+  tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+  version_ms BIGINT NOT NULL,
+  last_event_id BIGINT NULL,
+  updated_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_object_state_actor
+  ON relay_object_state(actor_id);
+CREATE INDEX IF NOT EXISTS idx_relay_object_state_updated
+  ON relay_object_state(updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_chat_envelopes (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  sender_actor TEXT NOT NULL,
+  sender_user TEXT NULL,
+  envelope_json TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  delivery_state TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_id
+  ON relay_chat_envelopes(username, id DESC);
+CREATE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_thread
+  ON relay_chat_envelopes(username, thread_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_dedupe
+  ON relay_chat_envelopes(username, dedupe_key);
+
+CREATE TABLE IF NOT EXISTS relay_chat_device_acks (
+  username TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  acked_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(username, device_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relay_chat_device_acks_user_message
+  ON relay_chat_device_acks(username, message_id, acked_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_chat_deleted_messages (
+  username TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  deleted_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(username, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relay_chat_deleted_messages_user_deleted
+  ON relay_chat_deleted_messages(username, deleted_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS relay_chat_deleted_threads (
+  username TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  deleted_at_ms BIGINT NOT NULL,
+  PRIMARY KEY(username, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relay_chat_deleted_threads_user_deleted
+  ON relay_chat_deleted_threads(username, deleted_at_ms DESC);
+
 CREATE OR REPLACE FUNCTION relay_tag_counts_insert() RETURNS trigger AS $$
 BEGIN
   INSERT INTO relay_tag_counts(tag, count) VALUES (NEW.tag, 1)

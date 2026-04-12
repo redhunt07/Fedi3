@@ -75,33 +75,40 @@ const DB_BATCH_DELETE_MAX: usize = 500;
 const WEBRTC_SIGNAL_TTL_SECS: i64 = 300;
 const WEBRTC_SIGNAL_MAX_PER_PEER: usize = 200;
 const WEBRTC_KEY_CACHE_TTL_SECS: i64 = 3600;
-const DB_LOCK_TIMEOUT_MS: u64 = 1500;
+const DB_LOCK_TIMEOUT_MS: u64 = 20000;
 
 fn next_request_id() -> String {
     let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
     format!("req-{id}")
 }
 
-async fn try_db_lock<'a>(
-    state: &'a AppState,
-    op: &'static str,
-) -> Option<tokio::sync::MutexGuard<'a, Db>> {
-    match tokio::time::timeout(Duration::from_millis(DB_LOCK_TIMEOUT_MS), state.db.lock()).await {
-        Ok(guard) => Some(guard),
-        Err(_) => {
-            warn!(
-                operation = op,
-                timeout_ms = DB_LOCK_TIMEOUT_MS,
-                "db lock timeout"
-            );
-            None
-        }
-    }
+fn short_hash(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    let digest = h.finalize();
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn try_db_clone(state: &AppState, op: &'static str) -> Option<Db> {
-    let guard = try_db_lock(state, op).await?;
-    Some(guard.clone())
+    let _ = op;
+    Some(state.db_fast.clone())
+}
+
+fn service_unavailable_retry(message: &str, retry_after_secs: u64) -> Response<Body> {
+    let mut resp = simple(StatusCode::SERVICE_UNAVAILABLE, message);
+    if let Ok(v) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        resp.headers_mut().insert("Retry-After", v);
+    }
+    resp
+}
+
+fn db_busy_retry(state: &AppState, op: &'static str) -> Response<Body> {
+    state.relay_db_busy_total.fetch_add(1, Ordering::Relaxed);
+    warn!(operation = op, "db busy");
+    service_unavailable_retry("db busy", 1)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -126,6 +133,15 @@ struct PresenceSnapshot {
 #[derive(Debug, Clone)]
 enum PresenceEvent {
     Update(PresenceItem),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SyncStreamEvent {
+    event_id: i64,
+    kind: String,
+    username: String,
+    ts_ms: i64,
+    payload: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +262,8 @@ struct RelayTelemetry {
     relay_async_job_inflight: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_async_job_queue_depth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_db_busy_total: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -452,6 +470,40 @@ struct CollectionPage<T> {
     next: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct RelayEventRow {
+    id: i64,
+    stream: String,
+    event_kind: String,
+    activity_type: String,
+    actor_id: Option<String>,
+    object_id: Option<String>,
+    activity_id: Option<String>,
+    created_at_ms: i64,
+    payload_json: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RelayNotificationRow {
+    event_id: i64,
+    notification_kind: String,
+    activity_type: String,
+    created_at_ms: i64,
+    payload_json: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RelayChatEnvelopeRow {
+    id: i64,
+    thread_id: String,
+    message_id: String,
+    sender_actor: String,
+    sender_user: Option<String>,
+    envelope_json: String,
+    created_at_ms: i64,
+    delivery_state: String,
+}
+
 #[derive(Default, Clone, Copy)]
 struct ProjectionApplyStats {
     inserted: u64,
@@ -465,6 +517,7 @@ struct AppState {
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
     relay_mesh_peer_id: Arc<RwLock<Option<String>>>,
     presence_tx: broadcast::Sender<PresenceEvent>,
+    sync_stream_tx: broadcast::Sender<SyncStreamEvent>,
     presence_last_seen: Arc<Mutex<HashMap<String, i64>>>,
     github_issues: Option<Arc<GithubIssueReporter>>,
     telemetry_dedupe: Arc<Mutex<HashMap<String, i64>>>,
@@ -472,6 +525,7 @@ struct AppState {
     webrtc_key_cache: Arc<Mutex<HashMap<String, (String, i64)>>>,
     relay_reputation: Arc<Mutex<HashMap<String, RelayReputation>>>,
     cfg: RelayConfig,
+    db_fast: Db,
     db: Arc<Mutex<Db>>,
     cached_self_telemetry: Arc<RwLock<Option<RelayTelemetry>>>,
     cached_relays_payload: Arc<RwLock<Option<serde_json::Value>>>,
@@ -487,6 +541,8 @@ struct AppState {
     legacy_sync_delta_latency: Arc<LegacyApiLatencyStats>,
     legacy_bootstrap_latency: Arc<LegacyApiLatencyStats>,
     tunnel_negative_cache: Arc<Mutex<HashMap<String, i64>>>,
+    tunnel_unknown_user_cache: Arc<Mutex<HashMap<String, i64>>>,
+    tunnel_unknown_ip_quarantine: Arc<Mutex<HashMap<String, i64>>>,
     forward_retry_budget: Arc<Mutex<HashMap<String, ForwardRetryBudget>>>,
     recent_forward_requests: Arc<Mutex<HashMap<String, i64>>>,
     relay_negative_cache_hits: Arc<AtomicU64>,
@@ -496,6 +552,7 @@ struct AppState {
     relay_circuit_state_transitions: Arc<AtomicU64>,
     relay_stale_cache_served: Arc<AtomicU64>,
     relay_tunnel_success_served: Arc<AtomicU64>,
+    relay_db_busy_total: Arc<AtomicU64>,
     ap_inbox_accept_total: Arc<AtomicU64>,
     ap_inbox_reject_invalid_sig_total: Arc<AtomicU64>,
     ap_actor_resolve_404_total: Arc<AtomicU64>,
@@ -1067,10 +1124,12 @@ struct RelayConfig {
     tunnel_timeout_secs: u64,
     rate_limit_register_per_min: u32,
     rate_limit_tunnel_per_min: u32,
+    rate_limit_tunnel_unknown_user_per_min: u32,
     rate_limit_inbox_per_min: u32,
     rate_limit_forward_per_min: u32,
     rate_limit_admin_per_min: u32,
     rate_limit_client_telemetry_per_min: u32,
+    rate_limit_sync_per_min: u32,
     search_backend: String,
     search_total_mode: SearchTotalMode,
     search_cache_ttl_secs: u64,
@@ -1147,6 +1206,8 @@ struct RelayConfig {
     telemetry_peers_limit: u32,
     relay_sync_interval_secs: u64,
     relay_sync_limit: u32,
+    tunnel_unknown_user_cache_secs: u64,
+    tunnel_unknown_user_quarantine_secs: u64,
     relay_media_ttl_secs: u64,
     relay_actor_ttl_secs: u64,
     relay_reputation_ttl_secs: u64,
@@ -1290,6 +1351,37 @@ struct RelaySyncNotesQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct RelaySyncCursorQuery {
+    username: String,
+    limit: Option<u32>,
+    since: Option<i64>,
+    cursor: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelaySyncEventQuery {
+    username: String,
+    limit: Option<u32>,
+    since_id: Option<i64>,
+    cursor_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelaySyncStreamQuery {
+    username: String,
+    since_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelaySyncBootstrapQuery {
+    username: String,
+    timeline_limit: Option<u32>,
+    notification_limit: Option<u32>,
+    event_limit: Option<u32>,
+    chat_limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RelayLegacyQuery {
     v: Option<u32>,
     username: Option<String>,
@@ -1309,6 +1401,47 @@ struct RegisterRequest {
 #[derive(Debug, serde::Serialize)]
 struct AdminRotateResponse {
     token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayChatEnvelopeInput {
+    username: String,
+    thread_id: String,
+    message_id: String,
+    sender_actor: String,
+    #[serde(default)]
+    sender_user: Option<String>,
+    #[serde(default)]
+    recipient_users: Vec<String>,
+    envelope: serde_json::Value,
+    #[serde(default)]
+    created_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayChatAckInput {
+    username: String,
+    device_id: String,
+    message_id: String,
+    #[serde(default)]
+    acked_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayChatDeleteInput {
+    username: String,
+    thread_id: String,
+    message_id: String,
+    #[serde(default)]
+    deleted_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayChatThreadDeleteInput {
+    username: String,
+    thread_id: String,
+    #[serde(default)]
+    deleted_at_ms: Option<i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -1351,9 +1484,12 @@ struct NodeInfoUsage {
     users: NodeInfoUsers,
 }
 
+#[allow(non_snake_case)]
 #[derive(serde::Serialize)]
 struct NodeInfoUsers {
     total: u64,
+    activeHalfyear: u64,
+    activeMonth: u64,
 }
 
 impl MeiliSearch {
@@ -1651,6 +1787,7 @@ async fn main() {
         .init();
 
     let cfg = load_config();
+    validate_production_config(&cfg).expect("invalid production relay configuration");
     let db_path = std::env::var("FEDI3_RELAY_DB").unwrap_or_else(|_| "fedi3_relay.db".to_string());
     let db = Db {
         driver: cfg.db_driver,
@@ -1724,6 +1861,7 @@ async fn main() {
         .await,
     );
 
+    let sync_stream_tx = broadcast::channel(2048).0;
     let max_hot_path_inflight = cfg.max_hot_path_inflight;
     let max_async_jobs = cfg.max_async_jobs;
     let state = AppState {
@@ -1732,6 +1870,7 @@ async fn main() {
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
         relay_mesh_peer_id: Arc::new(RwLock::new(None)),
         presence_tx: broadcast::channel(256).0,
+        sync_stream_tx,
         presence_last_seen: Arc::new(Mutex::new(HashMap::new())),
         github_issues: spawn_github_issues(&cfg, http.clone()),
         telemetry_dedupe: Arc::new(Mutex::new(HashMap::new())),
@@ -1739,6 +1878,7 @@ async fn main() {
         webrtc_key_cache: Arc::new(Mutex::new(HashMap::new())),
         relay_reputation: Arc::new(Mutex::new(HashMap::new())),
         cfg,
+        db_fast: db.clone(),
         db: Arc::new(Mutex::new(db)),
         cached_self_telemetry: Arc::new(RwLock::new(None)),
         cached_relays_payload: Arc::new(RwLock::new(None)),
@@ -1754,6 +1894,8 @@ async fn main() {
         legacy_sync_delta_latency: Arc::new(LegacyApiLatencyStats::new()),
         legacy_bootstrap_latency: Arc::new(LegacyApiLatencyStats::new()),
         tunnel_negative_cache: Arc::new(Mutex::new(HashMap::new())),
+        tunnel_unknown_user_cache: Arc::new(Mutex::new(HashMap::new())),
+        tunnel_unknown_ip_quarantine: Arc::new(Mutex::new(HashMap::new())),
         forward_retry_budget: Arc::new(Mutex::new(HashMap::new())),
         recent_forward_requests: Arc::new(Mutex::new(HashMap::new())),
         relay_negative_cache_hits: Arc::new(AtomicU64::new(0)),
@@ -1763,6 +1905,7 @@ async fn main() {
         relay_circuit_state_transitions: Arc::new(AtomicU64::new(0)),
         relay_stale_cache_served: Arc::new(AtomicU64::new(0)),
         relay_tunnel_success_served: Arc::new(AtomicU64::new(0)),
+        relay_db_busy_total: Arc::new(AtomicU64::new(0)),
         ap_inbox_accept_total: Arc::new(AtomicU64::new(0)),
         ap_inbox_reject_invalid_sig_total: Arc::new(AtomicU64::new(0)),
         ap_actor_resolve_404_total: Arc::new(AtomicU64::new(0)),
@@ -1858,7 +2001,7 @@ async fn main() {
             );
             loop {
                 interval.tick().await;
-                let db = cleanup_state.db.lock().await;
+                let db = cleanup_state.db.lock().await.clone();
                 if let Err(e) = db.cleanup_spool(spool_ttl_secs) {
                     error!("spool cleanup failed: {e}");
                 }
@@ -1877,12 +2020,15 @@ async fn main() {
                 if let Err(e) = db.cleanup_legacy_projection(legacy_projection_retention_days) {
                     error!("legacy projection cleanup failed: {e}");
                 }
+                drop(db);
                 if peer_directory_ttl_days > 0 {
+                    let db = cleanup_state.db.lock().await.clone();
                     if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
                         error!("peer_directory cleanup failed: {e}");
                     }
                 }
                 if peer_directory_ttl_days > 0 {
+                    let db = cleanup_state.db.lock().await.clone();
                     if let Err(e) = db.cleanup_peer_registry(peer_directory_ttl_days) {
                         error!("peer_registry cleanup failed: {e}");
                     }
@@ -2002,9 +2148,20 @@ async fn main() {
         .route("/readyz", get(readyz))
         .route("/.well-known/host-meta", get(host_meta))
         .route("/.well-known/nodeinfo", get(nodeinfo_links))
+        .route("/nodeinfo/2.1", get(nodeinfo_21))
         .route("/nodeinfo/2.0", get(nodeinfo_2))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/inbox", post(shared_inbox))
+        .route("/sync/bootstrap", get(relay_sync_bootstrap))
+        .route("/sync/events", get(relay_sync_events))
+        .route("/sync/stream", get(relay_sync_stream))
+        .route("/sync/timeline/home", get(relay_sync_timeline_home))
+        .route("/sync/notifications", get(relay_sync_notifications))
+        .route("/sync/chat", get(relay_sync_chat))
+        .route("/sync/chat/envelope", post(relay_chat_envelope_post))
+        .route("/sync/chat/ack", post(relay_chat_ack_post))
+        .route("/sync/chat/delete", post(relay_chat_delete_post))
+        .route("/sync/chat/thread/delete", post(relay_chat_thread_delete_post))
         .route("/admin/users", get(admin_list_users))
         .route(
             "/admin/users/:user",
@@ -2136,6 +2293,40 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+fn validate_production_config(cfg: &RelayConfig) -> Result<()> {
+    let exposed = !cfg.bind.ip().is_loopback() || cfg.public_url.is_some();
+    if !exposed {
+        return Ok(());
+    }
+    let admin = cfg
+        .admin_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("FEDI3_RELAY_ADMIN_TOKEN is required for non-local deployments")
+        })?;
+    if admin.len() < 16 {
+        anyhow::bail!("FEDI3_RELAY_ADMIN_TOKEN must be at least 16 characters");
+    }
+    let lowered = admin.to_ascii_lowercase();
+    if lowered.contains("change_me") || lowered.contains("example") || lowered == "admin" {
+        anyhow::bail!("FEDI3_RELAY_ADMIN_TOKEN looks like a placeholder");
+    }
+    if cfg.public_url.is_none() {
+        anyhow::bail!("FEDI3_RELAY_PUBLIC_URL is required for non-local deployments");
+    }
+    if cfg.db_driver != DbDriver::Postgres {
+        anyhow::bail!(
+            "FEDI3_RELAY_DB_DRIVER must be postgres for non-local deployments (sqlite is not allowed)"
+        );
+    }
+    if cfg.allow_self_register {
+        anyhow::bail!("FEDI3_RELAY_ALLOW_SELF_REGISTER must be false for non-local deployments");
+    }
+    Ok(())
 }
 
 fn load_config() -> RelayConfig {
@@ -2369,6 +2560,11 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(600);
+    let rate_limit_tunnel_unknown_user_per_min =
+        std::env::var("FEDI3_RELAY_RL_TUNNEL_UNKNOWN_USER_PER_MIN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(30);
     let rate_limit_inbox_per_min = std::env::var("FEDI3_RELAY_RL_INBOX_PER_MIN")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -2386,6 +2582,10 @@ fn load_config() -> RelayConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(30);
+    let rate_limit_sync_per_min = std::env::var("FEDI3_RELAY_RL_SYNC_PER_MIN")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(1200);
     let search_backend = std::env::var("FEDI3_RELAY_SEARCH_BACKEND")
         .ok()
         .map(|v| v.trim().to_ascii_lowercase())
@@ -2701,6 +2901,18 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(200);
+    let tunnel_unknown_user_cache_secs =
+        std::env::var("FEDI3_RELAY_TUNNEL_UNKNOWN_USER_CACHE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60)
+            .clamp(5, 600);
+    let tunnel_unknown_user_quarantine_secs =
+        std::env::var("FEDI3_RELAY_TUNNEL_UNKNOWN_USER_QUARANTINE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600)
+            .clamp(30, 3600);
     let relay_media_ttl_secs = std::env::var("FEDI3_RELAY_MEDIA_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -2779,10 +2991,12 @@ fn load_config() -> RelayConfig {
         tunnel_timeout_secs,
         rate_limit_register_per_min,
         rate_limit_tunnel_per_min,
+        rate_limit_tunnel_unknown_user_per_min,
         rate_limit_inbox_per_min,
         rate_limit_forward_per_min,
         rate_limit_admin_per_min,
         rate_limit_client_telemetry_per_min,
+        rate_limit_sync_per_min,
         search_backend,
         search_total_mode,
         search_cache_ttl_secs,
@@ -2859,6 +3073,8 @@ fn load_config() -> RelayConfig {
         telemetry_peers_limit,
         relay_sync_interval_secs,
         relay_sync_limit,
+        tunnel_unknown_user_cache_secs,
+        tunnel_unknown_user_quarantine_secs,
         relay_media_ttl_secs,
         relay_actor_ttl_secs,
         relay_reputation_ttl_secs,
@@ -2883,6 +3099,7 @@ async fn get_user_semaphore(state: &AppState, user: &str) -> Arc<Semaphore> {
 async fn tunnel_ws(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(user): Path<String>,
     Query(q): Query<TunnelQuery>,
     ws: WebSocketUpgrade,
@@ -2890,12 +3107,13 @@ async fn tunnel_ws(
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
-    ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, q.token, socket))
+    let tunnel_client_ip = client_ip(&state.cfg, &peer, &headers);
+    ws.on_upgrade(move |socket| handle_tunnel(state, tunnel_client_ip, user, q.token, socket))
 }
 
 async fn handle_tunnel(
     state: AppState,
-    peer: SocketAddr,
+    peer_ip: String,
     user: String,
     token: Option<String>,
     socket: WebSocket,
@@ -2915,7 +3133,7 @@ async fn handle_tunnel(
     if !state
         .limiter
         .check(
-            peer_ip(&peer),
+            peer_ip.clone(),
             "tunnel",
             state.cfg.rate_limit_tunnel_per_min,
         )
@@ -2925,12 +3143,49 @@ async fn handle_tunnel(
         return;
     }
 
+    if tunnel_unknown_ip_quarantine_hit(&state, &peer_ip, now_ms()).await {
+        error!(%user, ip = %peer_ip, "tunnel rejected: ip quarantine");
+        return;
+    }
+
+    if !state.cfg.allow_self_register
+        && tunnel_unknown_user_cache_hit(&state, &peer_ip, &user, now_ms()).await
+    {
+        let _ = state
+            .limiter
+            .check(
+                peer_ip.clone(),
+                "tunnel_unknown_user",
+                state.cfg.rate_limit_tunnel_unknown_user_per_min,
+            )
+            .await;
+        error!(%user, ip = %peer_ip, "tunnel rejected: unknown user cooldown");
+        return;
+    }
+
     // Auth / registration
     let mut db = state.db.lock().await.clone();
     match db.verify_or_register(&state.cfg, &user, &token) {
         Ok(()) => {}
         Err(e) => {
-            error!(%user, "tunnel rejected: {e}");
+            let reason = e.to_string();
+            if !state.cfg.allow_self_register
+                && reason.contains("unknown user (registration disabled)")
+            {
+                tunnel_unknown_user_cache_put(&state, &peer_ip, &user, now_ms()).await;
+                let _ = state
+                    .limiter
+                    .check(
+                        peer_ip.clone(),
+                        "tunnel_unknown_user",
+                        state.cfg.rate_limit_tunnel_unknown_user_per_min,
+                    )
+                    .await;
+                tunnel_unknown_ip_quarantine_put(&state, &peer_ip, now_ms()).await;
+                error!(%user, ip = %peer_ip, "tunnel rejected: unknown user");
+                return;
+            }
+            error!(%user, ip = %peer_ip, "tunnel rejected: {reason}");
             return;
         }
     }
@@ -3122,13 +3377,23 @@ async fn webfinger(
 
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
     let actor_url = format!("{scheme}://{host}/users/{user}");
+    if !matches_webfinger_resource(&resource, &user, &host, &actor_url) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
     let body = serde_json::json!({
       "subject": format!("acct:{user}@{host}"),
-      "links": [{
-        "rel": "self",
-        "type": "application/activity+json",
-        "href": actor_url
-      }]
+      "links": [
+        {
+          "rel": "self",
+          "type": "application/activity+json",
+          "href": actor_url
+        },
+        {
+          "rel": "http://webfinger.net/rel/profile-page",
+          "type": "text/html",
+          "href": format!("{scheme}://{host}/users/{user}")
+        }
+      ]
     });
 
     (
@@ -3552,6 +3817,7 @@ async fn enforce_ip_policy(
         && (path.starts_with("/_fedi3/relay/")
             || path.starts_with("/users/")
             || path == "/.well-known/nodeinfo"
+            || path == "/nodeinfo/2.1"
             || path == "/nodeinfo/2.0"
             || path == "/.well-known/webfinger")
     {
@@ -3962,6 +4228,10 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_async_job_queue_depth gauge\n");
         out.push_str(&format!("fedi3_relay_async_job_queue_depth {v}\n"));
     }
+    if let Some(v) = telemetry.relay_db_busy_total {
+        out.push_str("# TYPE fedi3_relay_db_busy_total counter\n");
+        out.push_str(&format!("fedi3_relay_db_busy_total {v}\n"));
+    }
     if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
         out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
         out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
@@ -4007,7 +4277,7 @@ async fn host_meta(State(state): State<AppState>, headers: HeaderMap) -> impl In
     let body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">
-  <Link rel="lrdd" type="application/xrd+xml" template="{template}"/>
+  <Link rel="lrdd" type="application/jrd+json" template="{template}"/>
 </XRD>
 "#
     );
@@ -4030,24 +4300,26 @@ async fn nodeinfo_links(State(state): State<AppState>, headers: HeaderMap) -> im
         return resp.into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
-    let href = format!("{scheme}://{host}/nodeinfo/2.0");
+    let href_21 = format!("{scheme}://{host}/nodeinfo/2.1");
+    let href_20 = format!("{scheme}://{host}/nodeinfo/2.0");
     axum::Json(NodeInfoLinks {
-        links: vec![NodeInfoLink {
-            rel: "http://nodeinfo.diaspora.software/ns/schema/2.0".to_string(),
-            href,
-        }],
+        links: vec![
+            NodeInfoLink {
+                rel: "http://nodeinfo.diaspora.software/ns/schema/2.1".to_string(),
+                href: href_21,
+            },
+            NodeInfoLink {
+                rel: "http://nodeinfo.diaspora.software/ns/schema/2.0".to_string(),
+                href: href_20,
+            },
+        ],
     })
     .into_response()
 }
 
-async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
-    let total_users = {
-        let db = state.db.lock().await;
-        db.count_users().unwrap_or(0)
-    };
-
-    axum::Json(NodeInfo2 {
-        version: "2.0".to_string(),
+fn nodeinfo_document(state: &AppState, version: &str, total_users: u64) -> NodeInfo2 {
+    NodeInfo2 {
+        version: version.to_string(),
         software: NodeInfoSoftware {
             name: "fedi3-relay".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -4059,10 +4331,34 @@ async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
         },
         openRegistrations: state.cfg.allow_self_register,
         usage: NodeInfoUsage {
-            users: NodeInfoUsers { total: total_users },
+            users: NodeInfoUsers {
+                total: total_users,
+                activeHalfyear: total_users,
+                activeMonth: total_users,
+            },
         },
-        metadata: serde_json::json!({}),
-    })
+        metadata: serde_json::json!({
+            "nodeName": "Fedi3 Relay",
+            "nodeDescription": "Fedi3 ActivityPub relay",
+            "relayUrl": relay_self_base(&state.cfg),
+        }),
+    }
+}
+
+async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
+    let total_users = {
+        let db = state.db.lock().await;
+        db.count_users().unwrap_or(0)
+    };
+    axum::Json(nodeinfo_document(&state, "2.0", total_users))
+}
+
+async fn nodeinfo_21(State(state): State<AppState>) -> impl IntoResponse {
+    let total_users = {
+        let db = state.db.lock().await;
+        db.count_users().unwrap_or(0)
+    };
+    axum::Json(nodeinfo_document(&state, "2.1", total_users))
 }
 
 async fn forward_host_any(
@@ -4959,6 +5255,85 @@ async fn tunnel_negative_cache_put(state: &AppState, user: &str, path: &str, now
     }
     let mut cache = state.tunnel_negative_cache.lock().await;
     cache.insert(key, now.saturating_add(ttl_ms));
+}
+
+fn tunnel_unknown_user_cache_key(ip: &str, user: &str) -> String {
+    format!("{ip}:{user}")
+}
+
+async fn tunnel_unknown_user_cache_hit(state: &AppState, ip: &str, user: &str, now: i64) -> bool {
+    let key = tunnel_unknown_user_cache_key(ip, user);
+    let mut cache = state.tunnel_unknown_user_cache.lock().await;
+    if let Some(until) = cache.get(&key).copied() {
+        if until > now {
+            return true;
+        }
+    }
+    cache.remove(&key);
+    false
+}
+
+async fn tunnel_unknown_user_cache_put(state: &AppState, ip: &str, user: &str, now: i64) {
+    let ttl_ms = (state.cfg.tunnel_unknown_user_cache_secs as i64).saturating_mul(1000);
+    if ttl_ms <= 0 {
+        return;
+    }
+    let mut cache = state.tunnel_unknown_user_cache.lock().await;
+    if cache.len() > 20_000 {
+        cache.retain(|_, until| *until > now);
+    }
+    let key = tunnel_unknown_user_cache_key(ip, user);
+    cache.insert(key, now.saturating_add(ttl_ms));
+}
+
+async fn tunnel_unknown_ip_quarantine_hit(state: &AppState, ip: &str, now: i64) -> bool {
+    let mut cache = state.tunnel_unknown_ip_quarantine.lock().await;
+    if let Some(until) = cache.get(ip).copied() {
+        if until > now {
+            return true;
+        }
+    }
+    cache.remove(ip);
+    false
+}
+
+async fn tunnel_unknown_ip_quarantine_put(state: &AppState, ip: &str, now: i64) {
+    let ttl_ms = (state.cfg.tunnel_unknown_user_quarantine_secs as i64).saturating_mul(1000);
+    if ttl_ms <= 0 {
+        return;
+    }
+    let mut cache = state.tunnel_unknown_ip_quarantine.lock().await;
+    if cache.len() > 20_000 {
+        cache.retain(|_, until| *until > now);
+    }
+    cache.insert(ip.to_string(), now.saturating_add(ttl_ms));
+}
+
+fn sync_stream_event_to_sse(ev: &SyncStreamEvent) -> Event {
+    let payload = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
+    Event::default()
+        .id(ev.event_id.to_string())
+        .event("sync")
+        .data(payload)
+}
+
+async fn publish_sync_stream_event(
+    state: &AppState,
+    username: &str,
+    event_id: i64,
+    kind: &str,
+    payload: serde_json::Value,
+) {
+    if event_id <= 0 {
+        return;
+    }
+    let _ = state.sync_stream_tx.send(SyncStreamEvent {
+        event_id,
+        kind: kind.to_string(),
+        username: username.to_string(),
+        ts_ms: now_ms(),
+        payload,
+    });
 }
 
 fn forward_retry_budget_key(user: &str, path: &str) -> Option<String> {
@@ -5930,6 +6305,13 @@ fn local_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str) -> 
       "outbox": format!("{base}/users/{user}/outbox"),
       "followers": format!("{base}/users/{user}/followers"),
       "following": format!("{base}/users/{user}/following"),
+      "endpoints": {
+        "sharedInbox": format!("{base}/inbox")
+      },
+      "featured": format!("{base}/users/{user}/collections/featured"),
+      "featuredTags": format!("{base}/users/{user}/collections/featuredTags"),
+      "discoverable": true,
+      "indexable": true,
       "publicKey": {
         "id": format!("{base}/users/{user}#main-key"),
         "owner": format!("{base}/users/{user}"),
@@ -6140,6 +6522,8 @@ async fn shared_inbox(
         let db = state.db.lock().await.clone();
         match db.is_user_enabled(&user) {
             Ok(true) => {
+                project_inbound_activity_for_user(&state, &user, &activity, &actor_url, &body)
+                    .await;
                 if db
                     .enqueue_spool(
                         &state.cfg,
@@ -6921,18 +7305,27 @@ fn vec_to_headers(v: &[(String, String)]) -> HeaderMap {
 
 // (intentionally left out; was used for forward-webfinger)
 
+fn constant_time_eq(expected: &str, candidate: &str) -> bool {
+    let a = expected.as_bytes();
+    let b = candidate.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in a.iter().zip(b.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
 fn is_authorized_admin(cfg: &RelayConfig, headers: &HeaderMap) -> bool {
     let Some(expected) = &cfg.admin_token else {
         return false;
     };
-    let auth = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let Some(token) = auth.strip_prefix("Bearer ") else {
+    let Some(token) = bearer_token(headers) else {
         return false;
     };
-    token == expected
+    constant_time_eq(expected.trim(), &token)
 }
 
 fn is_valid_username(user: &str) -> bool {
@@ -7081,13 +7474,14 @@ async fn require_user_or_admin(
     let Some(tok) = bearer_token(headers) else {
         return Err(simple(StatusCode::UNAUTHORIZED, "missing bearer token"));
     };
-    let db = state.db.lock().await;
+    let Some(db) = try_db_clone(state, "require_user_or_admin").await else {
+        return Err(db_busy_retry(state, "require_user_or_admin"));
+    };
     let authorized = if is_authorized_admin(&state.cfg, headers) {
         true
     } else {
         db.verify_token(username, &tok).unwrap_or(false)
     };
-    drop(db);
     if !authorized {
         return Err(simple(
             StatusCode::UNAUTHORIZED,
@@ -7095,6 +7489,25 @@ async fn require_user_or_admin(
         ));
     }
     Ok(())
+}
+
+async fn enforce_sync_rate_limit(
+    state: &AppState,
+    peer: &SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response<Body>> {
+    let ip = client_ip(&state.cfg, peer, headers);
+    if state
+        .limiter
+        .check(ip, "sync", state.cfg.rate_limit_sync_per_min)
+        .await
+    {
+        return Ok(());
+    }
+    let mut resp = simple(StatusCode::TOO_MANY_REQUESTS, "rate limited");
+    resp.headers_mut()
+        .insert("Retry-After", HeaderValue::from_static("5"));
+    Err(resp)
 }
 
 fn user_from_host(cfg: &RelayConfig, headers: &HeaderMap) -> Option<String> {
@@ -7444,6 +7857,101 @@ impl Db {
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY(username, stream)
             );
+
+            CREATE TABLE IF NOT EXISTS relay_event_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              stream TEXT NOT NULL,
+              event_kind TEXT NOT NULL,
+              activity_type TEXT NOT NULL,
+              actor_id TEXT NULL,
+              object_id TEXT NULL,
+              activity_id TEXT NULL,
+              dedupe_key TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_event_log_user_id
+              ON relay_event_log(username, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_event_log_user_created
+              ON relay_event_log(username, created_at_ms DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_event_log_user_dedupe
+              ON relay_event_log(username, dedupe_key);
+
+            CREATE TABLE IF NOT EXISTS relay_notifications (
+              username TEXT NOT NULL,
+              event_id INTEGER NOT NULL,
+              notification_kind TEXT NOT NULL,
+              activity_type TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              payload_json TEXT NOT NULL,
+              PRIMARY KEY(username, event_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_notifications_user_event
+              ON relay_notifications(username, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_notifications_user_created
+              ON relay_notifications(username, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_object_state (
+              object_id TEXT PRIMARY KEY,
+              actor_id TEXT NULL,
+              object_json TEXT NOT NULL,
+              tombstone INTEGER NOT NULL DEFAULT 0,
+              version_ms INTEGER NOT NULL,
+              last_event_id INTEGER NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_object_state_actor
+              ON relay_object_state(actor_id);
+            CREATE INDEX IF NOT EXISTS idx_relay_object_state_updated
+              ON relay_object_state(updated_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_chat_envelopes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              thread_id TEXT NOT NULL,
+              message_id TEXT NOT NULL,
+              sender_actor TEXT NOT NULL,
+              sender_user TEXT NULL,
+              envelope_json TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              delivery_state TEXT NOT NULL,
+              dedupe_key TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_id
+              ON relay_chat_envelopes(username, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_thread
+              ON relay_chat_envelopes(username, thread_id, id DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_chat_envelopes_user_dedupe
+              ON relay_chat_envelopes(username, dedupe_key);
+
+            CREATE TABLE IF NOT EXISTS relay_chat_device_acks (
+              username TEXT NOT NULL,
+              device_id TEXT NOT NULL,
+              message_id TEXT NOT NULL,
+              acked_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, device_id, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_chat_device_acks_user_message
+              ON relay_chat_device_acks(username, message_id, acked_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_chat_deleted_messages (
+              username TEXT NOT NULL,
+              message_id TEXT NOT NULL,
+              deleted_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_chat_deleted_messages_user_deleted
+              ON relay_chat_deleted_messages(username, deleted_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS relay_chat_deleted_threads (
+              username TEXT NOT NULL,
+              thread_id TEXT NOT NULL,
+              deleted_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, thread_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_relay_chat_deleted_threads_user_deleted
+              ON relay_chat_deleted_threads(username, deleted_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS relay_media (
               media_url TEXT PRIMARY KEY,
@@ -8449,7 +8957,7 @@ impl Db {
                 if disabled != 0 {
                     return Ok(false);
                 }
-                Ok(stored == token_hash_hex(token))
+                Ok(constant_time_eq(&stored, &token_hash_hex(token)))
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -8463,7 +8971,7 @@ impl Db {
                 if disabled {
                     return Ok(false);
                 }
-                Ok(stored == token_hash_hex(token))
+                Ok(constant_time_eq(&stored, &token_hash_hex(token)))
             }
         }
     }
@@ -10370,6 +10878,790 @@ impl Db {
                     items,
                     next,
                 })
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_relay_event(
+        &self,
+        username: &str,
+        stream: &str,
+        event_kind: &str,
+        activity_type: &str,
+        actor_id: Option<&str>,
+        object_id: Option<&str>,
+        activity_id: Option<&str>,
+        dedupe_key: &str,
+        payload_json: &str,
+        created_at_ms: i64,
+    ) -> Result<i64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO relay_event_log(username, stream, event_kind, activity_type, actor_id, object_id, activity_id, dedupe_key, payload_json, created_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        username,
+                        stream,
+                        event_kind,
+                        activity_type,
+                        actor_id,
+                        object_id,
+                        activity_id,
+                        dedupe_key,
+                        payload_json,
+                        created_at_ms
+                    ],
+                )?;
+                let id = conn.query_row(
+                    "SELECT id FROM relay_event_log WHERE username=?1 AND dedupe_key=?2",
+                    params![username, dedupe_key],
+                    |r| r.get(0),
+                )?;
+                Ok(id)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "INSERT INTO relay_event_log(username, stream, event_kind, activity_type, actor_id, object_id, activity_id, dedupe_key, payload_json, created_at_ms)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     ON CONFLICT(username, dedupe_key) DO UPDATE SET
+                       payload_json = relay_event_log.payload_json,
+                       created_at_ms = relay_event_log.created_at_ms
+                     RETURNING id",
+                    &[
+                        &username,
+                        &stream,
+                        &event_kind,
+                        &activity_type,
+                        &actor_id,
+                        &object_id,
+                        &activity_id,
+                        &dedupe_key,
+                        &payload_json,
+                        &created_at_ms,
+                    ],
+                )?;
+                Ok(row.get(0))
+            }
+        }
+    }
+
+    fn list_relay_events(
+        &self,
+        username: &str,
+        limit: u32,
+        since_id: Option<i64>,
+        cursor_id: Option<i64>,
+    ) -> Result<CollectionPage<RelayEventRow>> {
+        let limit = limit.clamp(1, 500) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since_id) = since_id {
+                    stmt = conn.prepare(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=?1 AND id > ?2
+                         ORDER BY id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, since_id, limit])?;
+                } else if let Some(cursor_id) = cursor_id {
+                    stmt = conn.prepare(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=?1 AND id < ?2
+                         ORDER BY id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, cursor_id, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=?1
+                         ORDER BY id DESC
+                         LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![username, limit])?;
+                }
+                let mut items = Vec::new();
+                let mut next = None;
+                while let Some(row) = rows.next()? {
+                    let item = RelayEventRow {
+                        id: row.get(0)?,
+                        stream: row.get(1)?,
+                        event_kind: row.get(2)?,
+                        activity_type: row.get(3)?,
+                        actor_id: row.get(4)?,
+                        object_id: row.get(5)?,
+                        activity_id: row.get(6)?,
+                        created_at_ms: row.get(7)?,
+                        payload_json: row.get(8)?,
+                    };
+                    next = Some(item.id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since_id) = since_id {
+                    conn.query(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=$1 AND id > $2
+                         ORDER BY id DESC
+                         LIMIT $3",
+                        &[&username, &since_id, &limit],
+                    )?
+                } else if let Some(cursor_id) = cursor_id {
+                    conn.query(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=$1 AND id < $2
+                         ORDER BY id DESC
+                         LIMIT $3",
+                        &[&username, &cursor_id, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT id, stream, event_kind, activity_type, actor_id, object_id, activity_id, created_at_ms, payload_json
+                         FROM relay_event_log
+                         WHERE username=$1
+                         ORDER BY id DESC
+                         LIMIT $2",
+                        &[&username, &limit],
+                    )?
+                };
+                let mut items = Vec::new();
+                let mut next = None;
+                for row in rows {
+                    let item = RelayEventRow {
+                        id: row.get(0),
+                        stream: row.get(1),
+                        event_kind: row.get(2),
+                        activity_type: row.get(3),
+                        actor_id: row.get(4),
+                        object_id: row.get(5),
+                        activity_id: row.get(6),
+                        created_at_ms: row.get(7),
+                        payload_json: row.get(8),
+                    };
+                    next = Some(item.id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn get_latest_relay_event_id(&self, username: &str) -> Result<i64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let id = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(id), 0) FROM relay_event_log WHERE username=?1",
+                        params![username],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok(id)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "SELECT COALESCE(MAX(id), 0) FROM relay_event_log WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(row.get::<_, i64>(0))
+            }
+        }
+    }
+
+    fn upsert_relay_notification(
+        &self,
+        username: &str,
+        event_id: i64,
+        notification_kind: &str,
+        activity_type: &str,
+        created_at_ms: i64,
+        payload_json: &str,
+    ) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_notifications(username, event_id, notification_kind, activity_type, created_at_ms, payload_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(username, event_id) DO UPDATE SET
+                       notification_kind=excluded.notification_kind,
+                       activity_type=excluded.activity_type,
+                       created_at_ms=excluded.created_at_ms,
+                       payload_json=excluded.payload_json",
+                    params![
+                        username,
+                        event_id,
+                        notification_kind,
+                        activity_type,
+                        created_at_ms,
+                        payload_json
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_notifications(username, event_id, notification_kind, activity_type, created_at_ms, payload_json)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT(username, event_id) DO UPDATE SET
+                       notification_kind=EXCLUDED.notification_kind,
+                       activity_type=EXCLUDED.activity_type,
+                       created_at_ms=EXCLUDED.created_at_ms,
+                       payload_json=EXCLUDED.payload_json",
+                    &[
+                        &username,
+                        &event_id,
+                        &notification_kind,
+                        &activity_type,
+                        &created_at_ms,
+                        &payload_json,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_relay_notifications(
+        &self,
+        username: &str,
+        limit: u32,
+        since_id: Option<i64>,
+        cursor_id: Option<i64>,
+    ) -> Result<CollectionPage<RelayNotificationRow>> {
+        let limit = limit.clamp(1, 500) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since_id) = since_id {
+                    stmt = conn.prepare(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=?1 AND event_id > ?2
+                         ORDER BY event_id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, since_id, limit])?;
+                } else if let Some(cursor_id) = cursor_id {
+                    stmt = conn.prepare(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=?1 AND event_id < ?2
+                         ORDER BY event_id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, cursor_id, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=?1
+                         ORDER BY event_id DESC
+                         LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![username, limit])?;
+                }
+                let mut items = Vec::new();
+                let mut next = None;
+                while let Some(row) = rows.next()? {
+                    let item = RelayNotificationRow {
+                        event_id: row.get(0)?,
+                        notification_kind: row.get(1)?,
+                        activity_type: row.get(2)?,
+                        created_at_ms: row.get(3)?,
+                        payload_json: row.get(4)?,
+                    };
+                    next = Some(item.event_id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since_id) = since_id {
+                    conn.query(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=$1 AND event_id > $2
+                         ORDER BY event_id DESC
+                         LIMIT $3",
+                        &[&username, &since_id, &limit],
+                    )?
+                } else if let Some(cursor_id) = cursor_id {
+                    conn.query(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=$1 AND event_id < $2
+                         ORDER BY event_id DESC
+                         LIMIT $3",
+                        &[&username, &cursor_id, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT event_id, notification_kind, activity_type, created_at_ms, payload_json
+                         FROM relay_notifications
+                         WHERE username=$1
+                         ORDER BY event_id DESC
+                         LIMIT $2",
+                        &[&username, &limit],
+                    )?
+                };
+                let mut items = Vec::new();
+                let mut next = None;
+                for row in rows {
+                    let item = RelayNotificationRow {
+                        event_id: row.get(0),
+                        notification_kind: row.get(1),
+                        activity_type: row.get(2),
+                        created_at_ms: row.get(3),
+                        payload_json: row.get(4),
+                    };
+                    next = Some(item.event_id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn upsert_relay_object_state(
+        &self,
+        object_id: &str,
+        actor_id: Option<&str>,
+        object_json: &str,
+        tombstone: bool,
+        version_ms: i64,
+        last_event_id: Option<i64>,
+    ) -> Result<()> {
+        let updated_at_ms = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_object_state(object_id, actor_id, object_json, tombstone, version_ms, last_event_id, updated_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(object_id) DO UPDATE SET
+                       actor_id=excluded.actor_id,
+                       object_json=excluded.object_json,
+                       tombstone=excluded.tombstone,
+                       version_ms=excluded.version_ms,
+                       last_event_id=excluded.last_event_id,
+                       updated_at_ms=excluded.updated_at_ms",
+                    params![
+                        object_id,
+                        actor_id,
+                        object_json,
+                        tombstone as i64,
+                        version_ms,
+                        last_event_id,
+                        updated_at_ms
+                    ],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_object_state(object_id, actor_id, object_json, tombstone, version_ms, last_event_id, updated_at_ms)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT(object_id) DO UPDATE SET
+                       actor_id=EXCLUDED.actor_id,
+                       object_json=EXCLUDED.object_json,
+                       tombstone=EXCLUDED.tombstone,
+                       version_ms=EXCLUDED.version_ms,
+                       last_event_id=EXCLUDED.last_event_id,
+                       updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[
+                        &object_id,
+                        &actor_id,
+                        &object_json,
+                        &tombstone,
+                        &version_ms,
+                        &last_event_id,
+                        &updated_at_ms,
+                    ],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn append_chat_envelope(
+        &self,
+        username: &str,
+        thread_id: &str,
+        message_id: &str,
+        sender_actor: &str,
+        sender_user: Option<&str>,
+        envelope_json: &str,
+        created_at_ms: i64,
+        delivery_state: &str,
+        dedupe_key: &str,
+    ) -> Result<i64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO relay_chat_envelopes(username, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state, dedupe_key)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        username,
+                        thread_id,
+                        message_id,
+                        sender_actor,
+                        sender_user,
+                        envelope_json,
+                        created_at_ms,
+                        delivery_state,
+                        dedupe_key
+                    ],
+                )?;
+                let id = conn.query_row(
+                    "SELECT id FROM relay_chat_envelopes WHERE username=?1 AND dedupe_key=?2",
+                    params![username, dedupe_key],
+                    |r| r.get(0),
+                )?;
+                Ok(id)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "INSERT INTO relay_chat_envelopes(username, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state, dedupe_key)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     ON CONFLICT(username, dedupe_key) DO UPDATE SET
+                       envelope_json=relay_chat_envelopes.envelope_json,
+                       delivery_state=relay_chat_envelopes.delivery_state
+                     RETURNING id",
+                    &[
+                        &username,
+                        &thread_id,
+                        &message_id,
+                        &sender_actor,
+                        &sender_user,
+                        &envelope_json,
+                        &created_at_ms,
+                        &delivery_state,
+                        &dedupe_key,
+                    ],
+                )?;
+                Ok(row.get(0))
+            }
+        }
+    }
+
+    fn list_chat_envelopes(
+        &self,
+        username: &str,
+        limit: u32,
+        since_id: Option<i64>,
+        cursor_id: Option<i64>,
+    ) -> Result<CollectionPage<RelayChatEnvelopeRow>> {
+        let limit = limit.clamp(1, 500) as i64;
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt;
+                let mut rows;
+                if let Some(since_id) = since_id {
+                    stmt = conn.prepare(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=?1 AND id > ?2
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=?1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=?1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, since_id, limit])?;
+                } else if let Some(cursor_id) = cursor_id {
+                    stmt = conn.prepare(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=?1 AND id < ?2
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=?1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=?1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT ?3",
+                    )?;
+                    rows = stmt.query(params![username, cursor_id, limit])?;
+                } else {
+                    stmt = conn.prepare(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=?1
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=?1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=?1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT ?2",
+                    )?;
+                    rows = stmt.query(params![username, limit])?;
+                }
+                let mut items = Vec::new();
+                let mut next = None;
+                while let Some(row) = rows.next()? {
+                    let item = RelayChatEnvelopeRow {
+                        id: row.get(0)?,
+                        thread_id: row.get(1)?,
+                        message_id: row.get(2)?,
+                        sender_actor: row.get(3)?,
+                        sender_user: row.get(4)?,
+                        envelope_json: row.get(5)?,
+                        created_at_ms: row.get(6)?,
+                        delivery_state: row.get(7)?,
+                    };
+                    next = Some(item.id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = if let Some(since_id) = since_id {
+                    conn.query(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=$1 AND id > $2
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=$1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=$1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT $3",
+                        &[&username, &since_id, &limit],
+                    )?
+                } else if let Some(cursor_id) = cursor_id {
+                    conn.query(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=$1 AND id < $2
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=$1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=$1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT $3",
+                        &[&username, &cursor_id, &limit],
+                    )?
+                } else {
+                    conn.query(
+                        "SELECT id, thread_id, message_id, sender_actor, sender_user, envelope_json, created_at_ms, delivery_state
+                         FROM relay_chat_envelopes
+                         WHERE username=$1
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_threads t
+                             WHERE t.username=$1 AND t.thread_id=relay_chat_envelopes.thread_id
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM relay_chat_deleted_messages m
+                             WHERE m.username=$1 AND m.message_id=relay_chat_envelopes.message_id
+                           )
+                         ORDER BY id DESC
+                         LIMIT $2",
+                        &[&username, &limit],
+                    )?
+                };
+                let mut items = Vec::new();
+                let mut next = None;
+                for row in rows {
+                    let item = RelayChatEnvelopeRow {
+                        id: row.get(0),
+                        thread_id: row.get(1),
+                        message_id: row.get(2),
+                        sender_actor: row.get(3),
+                        sender_user: row.get(4),
+                        envelope_json: row.get(5),
+                        created_at_ms: row.get(6),
+                        delivery_state: row.get(7),
+                    };
+                    next = Some(item.id.to_string());
+                    items.push(item);
+                }
+                if items.len() < limit as usize {
+                    next = None;
+                }
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
+            }
+        }
+    }
+
+    fn ack_chat_message_device(
+        &self,
+        username: &str,
+        device_id: &str,
+        message_id: &str,
+        acked_at_ms: i64,
+    ) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_device_acks(username, device_id, message_id, acked_at_ms)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(username, device_id, message_id) DO UPDATE SET
+                       acked_at_ms=excluded.acked_at_ms",
+                    params![username, device_id, message_id, acked_at_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_device_acks(username, device_id, message_id, acked_at_ms)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT(username, device_id, message_id) DO UPDATE SET
+                       acked_at_ms=EXCLUDED.acked_at_ms",
+                    &[&username, &device_id, &message_id, &acked_at_ms],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn mark_chat_message_deleted_for_user(
+        &self,
+        username: &str,
+        message_id: &str,
+        deleted_at_ms: i64,
+    ) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_deleted_messages(username, message_id, deleted_at_ms)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(username, message_id) DO UPDATE SET
+                       deleted_at_ms=excluded.deleted_at_ms",
+                    params![username, message_id, deleted_at_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_deleted_messages(username, message_id, deleted_at_ms)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT(username, message_id) DO UPDATE SET
+                       deleted_at_ms=EXCLUDED.deleted_at_ms",
+                    &[&username, &message_id, &deleted_at_ms],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn mark_chat_thread_deleted_for_user(
+        &self,
+        username: &str,
+        thread_id: &str,
+        deleted_at_ms: i64,
+    ) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_deleted_threads(username, thread_id, deleted_at_ms)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(username, thread_id) DO UPDATE SET
+                       deleted_at_ms=excluded.deleted_at_ms",
+                    params![username, thread_id, deleted_at_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_chat_deleted_threads(username, thread_id, deleted_at_ms)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT(username, thread_id) DO UPDATE SET
+                       deleted_at_ms=EXCLUDED.deleted_at_ms",
+                    &[&username, &thread_id, &deleted_at_ms],
+                )?;
+                Ok(())
             }
         }
     }
@@ -13348,6 +14640,287 @@ fn list_legacy_feed_page(
     )
 }
 
+fn activity_published_ms(v: &serde_json::Value) -> Option<i64> {
+    let published = v
+        .get("published")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("updated").and_then(|x| x.as_str()))?;
+    chrono::DateTime::parse_from_rfc3339(published)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn relay_sync_payload_json(v: &serde_json::Value, fallback: &[u8]) -> String {
+    serde_json::to_string(v)
+        .ok()
+        .or_else(|| String::from_utf8(fallback.to_vec()).ok())
+        .unwrap_or_else(|| "{}".to_string())
+}
+
+fn projection_activity_id(v: &serde_json::Value, fallback_body: &[u8]) -> String {
+    if let Some(id) = v.get("id").and_then(|x| x.as_str()).map(str::trim) {
+        if !id.is_empty() {
+            return id.to_string();
+        }
+    }
+    format!("urn:fedi3:relay:event:{:x}", Sha256::digest(fallback_body))
+}
+
+fn projection_object_id(v: &serde_json::Value) -> Option<String> {
+    let object = v.get("object")?;
+    match object {
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        serde_json::Value::Object(map) => map
+            .get("id")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                map.get("object")
+                    .and_then(|o| o.get("id"))
+                    .and_then(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            }),
+        _ => None,
+    }
+}
+
+fn notification_kind_for_activity_type(activity_type: &str) -> Option<&'static str> {
+    match activity_type {
+        "Follow" => Some("follow"),
+        "Accept" => Some("follow_accept"),
+        "Reject" => Some("follow_reject"),
+        "Like" => Some("like"),
+        "Announce" => Some("announce"),
+        "EmojiReact" => Some("reaction"),
+        "Create" => Some("create"),
+        "Update" => Some("update"),
+        "Delete" => Some("delete"),
+        "Undo" => Some("undo"),
+        _ => None,
+    }
+}
+
+fn extract_embedded_object_for_state(
+    activity: &serde_json::Value,
+) -> Option<(String, String, bool)> {
+    let ty = normalize_activity_type(activity);
+    match ty.as_str() {
+        "Create" | "Update" => {
+            let object = activity.get("object")?.as_object()?;
+            let object_id = object
+                .get("id")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?
+                .to_string();
+            let object_json =
+                serde_json::to_string(&serde_json::Value::Object(object.clone())).ok()?;
+            Some((object_id, object_json, false))
+        }
+        "Delete" => {
+            let object_id = projection_object_id(activity)?;
+            let tombstone = serde_json::json!({
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": object_id,
+                "type": "Tombstone"
+            });
+            Some((object_id, tombstone.to_string(), true))
+        }
+        _ => None,
+    }
+}
+
+fn relay_event_row_to_json(row: RelayEventRow) -> serde_json::Value {
+    let payload =
+        serde_json::from_str::<serde_json::Value>(&row.payload_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "raw": row.payload_json,
+            })
+        });
+    serde_json::json!({
+        "event_id": row.id,
+        "stream": row.stream,
+        "event_kind": row.event_kind,
+        "activity_type": row.activity_type,
+        "actor_id": row.actor_id,
+        "object_id": row.object_id,
+        "activity_id": row.activity_id,
+        "created_at_ms": row.created_at_ms,
+        "payload": payload,
+    })
+}
+
+fn relay_notification_row_to_json(row: RelayNotificationRow) -> serde_json::Value {
+    let payload =
+        serde_json::from_str::<serde_json::Value>(&row.payload_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "raw": row.payload_json,
+            })
+        });
+    serde_json::json!({
+        "event_id": row.event_id,
+        "notification_kind": row.notification_kind,
+        "activity_type": row.activity_type,
+        "created_at_ms": row.created_at_ms,
+        "payload": payload,
+    })
+}
+
+fn relay_chat_row_to_json(row: RelayChatEnvelopeRow) -> serde_json::Value {
+    let envelope =
+        serde_json::from_str::<serde_json::Value>(&row.envelope_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "raw": row.envelope_json,
+            })
+        });
+    serde_json::json!({
+        "event_id": row.id,
+        "thread_id": row.thread_id,
+        "message_id": row.message_id,
+        "sender_actor": row.sender_actor,
+        "sender_user": row.sender_user,
+        "created_at_ms": row.created_at_ms,
+        "delivery_state": row.delivery_state,
+        "envelope": envelope,
+    })
+}
+
+async fn project_inbound_activity_for_user(
+    state: &AppState,
+    username: &str,
+    activity: &serde_json::Value,
+    actor_id: &str,
+    body: &[u8],
+) {
+    let payload_json = relay_sync_payload_json(activity, body);
+    let activity_type = normalize_activity_type(activity);
+    let object_id = projection_object_id(activity);
+    let activity_id = projection_activity_id(activity, body);
+    let created_at_ms = activity_published_ms(activity).unwrap_or_else(now_ms);
+    let dedupe_key = format!(
+        "ap:{}:{}",
+        username,
+        short_hash(&format!(
+            "{}|{}|{}",
+            activity_type,
+            activity_id,
+            object_id.clone().unwrap_or_default()
+        ))
+    );
+
+    let db = match try_db_clone(state, "project_inbound_activity").await {
+        Some(db) => db,
+        None => return,
+    };
+    let event_id = match db.append_relay_event(
+        username,
+        "events",
+        "activity",
+        &activity_type,
+        Some(actor_id),
+        object_id.as_deref(),
+        Some(&activity_id),
+        &dedupe_key,
+        &payload_json,
+        created_at_ms,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(%username, "relay event projection failed: {e:#}");
+            return;
+        }
+    };
+    publish_sync_stream_event(
+        state,
+        username,
+        event_id,
+        "events",
+        serde_json::json!({
+            "stream": "events",
+            "activity_type": activity_type.clone(),
+            "event_id": event_id,
+        }),
+    )
+    .await;
+    if matches!(
+        activity_type.as_str(),
+        "Create" | "Update" | "Delete" | "Undo" | "Like" | "EmojiReact" | "Announce"
+    ) {
+        publish_sync_stream_event(
+            state,
+            username,
+            event_id,
+            "timeline.home",
+            serde_json::json!({
+                "event_id": event_id,
+                "activity_type": activity_type.clone(),
+                "created_at_ms": created_at_ms,
+            }),
+        )
+        .await;
+    }
+
+    if let Some(kind) = notification_kind_for_activity_type(&activity_type) {
+        let _ = db.upsert_relay_notification(
+            username,
+            event_id,
+            kind,
+            &activity_type,
+            created_at_ms,
+            &payload_json,
+        );
+        publish_sync_stream_event(
+            state,
+            username,
+            event_id,
+            "notifications",
+            serde_json::json!({
+                "event_id": event_id,
+                "notification_kind": kind,
+                "activity_type": activity_type.clone(),
+            }),
+        )
+        .await;
+    }
+
+    if let Some((object_id, object_json, tombstone)) = extract_embedded_object_for_state(activity) {
+        let _ = db.upsert_relay_object_state(
+            &object_id,
+            Some(actor_id),
+            &object_json,
+            tombstone,
+            created_at_ms,
+            Some(event_id),
+        );
+        publish_sync_stream_event(
+            state,
+            username,
+            event_id,
+            if tombstone {
+                "object.delete"
+            } else {
+                "object.update"
+            },
+            serde_json::json!({
+                "event_id": event_id,
+                "object_id": object_id,
+            }),
+        )
+        .await;
+    }
+}
+
 fn json_or_gzip_response(
     value: &serde_json::Value,
     gzip: bool,
@@ -13666,6 +15239,671 @@ async fn relay_legacy_bootstrap(
         .legacy_bootstrap_latency
         .observe(started.elapsed().as_millis() as u64);
     resp
+}
+
+async fn relay_sync_bootstrap(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncBootstrapQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+
+    let db = match try_db_clone(&state, "relay_sync_bootstrap").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_bootstrap"),
+    };
+
+    let event_limit = q.event_limit.unwrap_or(100).clamp(1, 250);
+    let notification_limit = q.notification_limit.unwrap_or(100).clamp(1, 250);
+    let timeline_limit = q.timeline_limit.unwrap_or(100).clamp(1, 250);
+    let chat_limit = q.chat_limit.unwrap_or(100).clamp(1, 250);
+
+    let events = match db.list_relay_events(&username, event_limit, None, None) {
+        Ok(v) => v
+            .items
+            .into_iter()
+            .map(relay_event_row_to_json)
+            .collect::<Vec<_>>(),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let notifications = match db.list_relay_notifications(&username, notification_limit, None, None)
+    {
+        Ok(v) => v
+            .items
+            .into_iter()
+            .map(relay_notification_row_to_json)
+            .collect::<Vec<_>>(),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let chat = match db.list_chat_envelopes(&username, chat_limit, None, None) {
+        Ok(v) => v
+            .items
+            .into_iter()
+            .map(relay_chat_row_to_json)
+            .collect::<Vec<_>>(),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let home = match list_legacy_feed_page(
+        &db,
+        &username,
+        LegacyFeedKind::Home,
+        timeline_limit,
+        None,
+        None,
+        state.cfg.base_domain.as_deref(),
+        state.cfg.legacy_projection_batch_size,
+    ) {
+        Ok(v) => v
+            .items
+            .into_iter()
+            .filter_map(|(note_json, cursor)| {
+                serde_json::from_str::<serde_json::Value>(&note_json)
+                    .ok()
+                    .map(|note| {
+                        serde_json::json!({
+                            "cursor": cursor,
+                            "created_at_ms": cursor,
+                            "note": note,
+                        })
+                    })
+            })
+            .collect::<Vec<_>>(),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let latest_event_id = db.get_latest_relay_event_id(&username).unwrap_or(0);
+
+    axum::Json(serde_json::json!({
+        "schema_version": "1",
+        "mode": "bootstrap",
+        "username": username,
+        "generated_at_ms": now_ms(),
+        "cursors": {
+            "events": latest_event_id,
+            "notifications": notifications.first().and_then(|v| v.get("event_id")).and_then(|v| v.as_i64()).unwrap_or(0),
+            "chat": chat.first().and_then(|v| v.get("event_id")).and_then(|v| v.as_i64()).unwrap_or(0),
+            "timeline_home": home.first().and_then(|v| v.get("cursor")).and_then(|v| v.as_i64()).unwrap_or(0),
+        },
+        "events": events,
+        "notifications": notifications,
+        "chat": chat,
+        "timeline": {
+            "home": home,
+        }
+    }))
+    .into_response()
+}
+
+async fn relay_sync_events(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncEventQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    let db = match try_db_clone(&state, "relay_sync_events").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_events"),
+    };
+    let page =
+        match db.list_relay_events(&username, q.limit.unwrap_or(200), q.since_id, q.cursor_id) {
+            Ok(v) => v,
+            Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+        };
+    let latest_event_id = db.get_latest_relay_event_id(&username).unwrap_or(0);
+    axum::Json(serde_json::json!({
+        "username": username,
+        "latest_event_id": latest_event_id,
+        "items": page.items.into_iter().map(relay_event_row_to_json).collect::<Vec<_>>(),
+        "next": page.next,
+    }))
+    .into_response()
+}
+
+fn parse_last_event_id(headers: &HeaderMap) -> Option<i64> {
+    headers
+        .get("Last-Event-ID")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+}
+
+async fn relay_sync_stream(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncStreamQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    let since_id = q
+        .since_id
+        .or_else(|| parse_last_event_id(&headers))
+        .unwrap_or(0)
+        .max(0);
+    let db = match try_db_clone(&state, "relay_sync_stream").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_stream").into_response(),
+    };
+    let latest_event_id = db.get_latest_relay_event_id(&username).unwrap_or(0).max(0);
+    let replay_rows = if since_id > 0 {
+        db.list_relay_events(&username, 200, Some(since_id), None)
+            .map(|page| page.items)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let cursors = serde_json::json!({
+        "events": db.get_latest_relay_event_id(&username).unwrap_or(0),
+        "notifications": db.list_relay_notifications(&username, 1, None, None)
+            .ok()
+            .and_then(|v| v.items.into_iter().next())
+            .map(|row| row.event_id)
+            .unwrap_or(0),
+        "chat": db.list_chat_envelopes(&username, 1, None, None)
+            .ok()
+            .and_then(|v| v.items.into_iter().next())
+            .map(|row| row.id)
+            .unwrap_or(0),
+    });
+    let mut initial_events: Vec<Result<Event, Infallible>> = Vec::new();
+    initial_events.push(Ok(sync_stream_event_to_sse(&SyncStreamEvent {
+        event_id: latest_event_id,
+        kind: "snapshot".to_string(),
+        username: username.clone(),
+        ts_ms: now_ms(),
+        payload: serde_json::json!({"cursors": cursors}),
+    })));
+    for row in replay_rows {
+        initial_events.push(Ok(sync_stream_event_to_sse(&SyncStreamEvent {
+            event_id: row.id,
+            kind: "events".to_string(),
+            username: username.clone(),
+            ts_ms: row.created_at_ms,
+            payload: relay_event_row_to_json(row),
+        })));
+    }
+    let rx = state.sync_stream_tx.subscribe();
+    let stream = stream::iter(initial_events).chain(stream::unfold(
+        (state.clone(), rx, username.clone(), since_id),
+        |(state, mut rx, username, mut cursor)| async move {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => {
+                        if ev.username != username || ev.event_id <= cursor {
+                            continue;
+                        }
+                        cursor = ev.event_id;
+                        return Some((
+                            Ok(sync_stream_event_to_sse(&ev)),
+                            (state, rx, username, cursor),
+                        ));
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        let ev = SyncStreamEvent {
+                            event_id: cursor,
+                            kind: "resync".to_string(),
+                            username: username.clone(),
+                            ts_ms: now_ms(),
+                            payload: serde_json::json!({
+                                "reason": "lagged",
+                                "skipped": skipped,
+                            }),
+                        };
+                        return Some((
+                            Ok(sync_stream_event_to_sse(&ev)),
+                            (state, rx, username, cursor),
+                        ));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    ));
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(10)))
+        .into_response()
+}
+
+async fn relay_sync_timeline_home(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncCursorQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    let db = match try_db_clone(&state, "relay_sync_timeline_home").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_timeline_home"),
+    };
+    let page = match list_legacy_feed_page(
+        &db,
+        &username,
+        LegacyFeedKind::Home,
+        q.limit.unwrap_or(200),
+        q.since,
+        q.cursor,
+        state.cfg.base_domain.as_deref(),
+        state.cfg.legacy_projection_batch_size,
+    ) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    axum::Json(serde_json::json!({
+        "username": username,
+        "items": page.items.into_iter().filter_map(|(note_json, cursor)| {
+            serde_json::from_str::<serde_json::Value>(&note_json).ok().map(|note| {
+                serde_json::json!({
+                    "cursor": cursor,
+                    "created_at_ms": cursor,
+                    "note": note,
+                })
+            })
+        }).collect::<Vec<_>>(),
+        "next": page.next,
+    }))
+    .into_response()
+}
+
+async fn relay_sync_notifications(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncEventQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    let db = match try_db_clone(&state, "relay_sync_notifications").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_notifications"),
+    };
+    let page = match db.list_relay_notifications(
+        &username,
+        q.limit.unwrap_or(200),
+        q.since_id,
+        q.cursor_id,
+    ) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    axum::Json(serde_json::json!({
+        "username": username,
+        "items": page.items.into_iter().map(relay_notification_row_to_json).collect::<Vec<_>>(),
+        "next": page.next,
+    }))
+    .into_response()
+}
+
+async fn relay_sync_chat(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySyncEventQuery>,
+) -> impl IntoResponse {
+    let username = q.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    let db = match try_db_clone(&state, "relay_sync_chat").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_sync_chat"),
+    };
+    let page =
+        match db.list_chat_envelopes(&username, q.limit.unwrap_or(200), q.since_id, q.cursor_id) {
+            Ok(v) => v,
+            Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+        };
+    axum::Json(serde_json::json!({
+        "username": username,
+        "items": page.items.into_iter().map(relay_chat_row_to_json).collect::<Vec<_>>(),
+        "next": page.next,
+    }))
+    .into_response()
+}
+
+async fn relay_chat_envelope_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<RelayChatEnvelopeInput>,
+) -> impl IntoResponse {
+    let username = input.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    if input.thread_id.trim().is_empty()
+        || input.message_id.trim().is_empty()
+        || input.sender_actor.trim().is_empty()
+    {
+        return (StatusCode::BAD_REQUEST, "missing chat fields").into_response();
+    }
+    let created_at_ms = input.created_at_ms.unwrap_or_else(now_ms);
+    let envelope_json = match serde_json::to_string(&input.envelope) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid envelope").into_response(),
+    };
+
+    let mut target_users = vec![username.clone()];
+    for user in input.recipient_users {
+        let normalized = user.trim().to_ascii_lowercase();
+        if is_valid_username(&normalized) {
+            target_users.push(normalized);
+        }
+    }
+    target_users.sort();
+    target_users.dedup();
+
+    let db = match try_db_clone(&state, "relay_chat_envelope_post").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_chat_envelope_post"),
+    };
+    let mut stored = Vec::new();
+    for user in target_users {
+        if db.is_user_enabled(&user).unwrap_or(false) {
+            let dedupe_key = format!("chat:{}:{}", user, input.message_id.trim());
+            match db.append_chat_envelope(
+                &user,
+                input.thread_id.trim(),
+                input.message_id.trim(),
+                input.sender_actor.trim(),
+                input.sender_user.as_deref(),
+                &envelope_json,
+                created_at_ms,
+                "stored",
+                &dedupe_key,
+            ) {
+                Ok(event_id) => {
+                    let relay_event_id = db
+                        .append_relay_event(
+                            &user,
+                            "chat",
+                            "chat.message",
+                            "ChatMessage",
+                            Some(input.sender_actor.trim()),
+                            Some(input.thread_id.trim()),
+                            Some(input.message_id.trim()),
+                            &format!("chat-event:{}:{}", user, input.message_id.trim()),
+                            &envelope_json,
+                            created_at_ms,
+                        )
+                        .unwrap_or(0);
+                    publish_sync_stream_event(
+                        &state,
+                        &user,
+                        relay_event_id,
+                        "chat.envelope",
+                        serde_json::json!({
+                            "thread_id": input.thread_id.trim(),
+                            "message_id": input.message_id.trim(),
+                            "chat_event_id": event_id,
+                            "relay_event_id": relay_event_id,
+                        }),
+                    )
+                    .await;
+                    stored.push(serde_json::json!({
+                        "username": user,
+                        "event_id": event_id,
+                    }));
+                }
+                Err(e) => warn!("chat envelope store failed for {user}: {e:#}"),
+            }
+        }
+    }
+
+    axum::Json(serde_json::json!({
+        "stored": stored,
+        "created_at_ms": created_at_ms,
+    }))
+    .into_response()
+}
+
+async fn relay_chat_ack_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<RelayChatAckInput>,
+) -> impl IntoResponse {
+    let username = input.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    if input.device_id.trim().is_empty() || input.message_id.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing ack fields").into_response();
+    }
+    let acked_at_ms = input.acked_at_ms.unwrap_or_else(now_ms);
+    let db = match try_db_clone(&state, "relay_chat_ack_post").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_chat_ack_post"),
+    };
+    if let Err(e) = db.ack_chat_message_device(
+        &username,
+        input.device_id.trim(),
+        input.message_id.trim(),
+        acked_at_ms,
+    ) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let payload = serde_json::json!({
+        "device_id": input.device_id.trim(),
+        "message_id": input.message_id.trim(),
+        "acked_at_ms": acked_at_ms,
+    });
+    let relay_event_id = db
+        .append_relay_event(
+            &username,
+            "chat",
+            "chat.ack",
+            "ChatAck",
+            None,
+            None,
+            Some(input.message_id.trim()),
+            &format!(
+                "chat-ack:{}:{}:{}",
+                username,
+                input.device_id.trim(),
+                input.message_id.trim()
+            ),
+            &payload.to_string(),
+            acked_at_ms,
+        )
+        .unwrap_or(0);
+    publish_sync_stream_event(&state, &username, relay_event_id, "chat.ack", payload).await;
+    (StatusCode::OK, "ok").into_response()
+}
+
+async fn relay_chat_delete_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<RelayChatDeleteInput>,
+) -> impl IntoResponse {
+    let username = input.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    if input.thread_id.trim().is_empty() || input.message_id.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing delete fields").into_response();
+    }
+    let deleted_at_ms = input.deleted_at_ms.unwrap_or_else(now_ms);
+    let db = match try_db_clone(&state, "relay_chat_delete_post").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_chat_delete_post"),
+    };
+    if let Err(e) = db.mark_chat_message_deleted_for_user(
+        &username,
+        input.message_id.trim(),
+        deleted_at_ms,
+    ) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let payload = serde_json::json!({
+        "thread_id": input.thread_id.trim(),
+        "message_id": input.message_id.trim(),
+        "deleted_at_ms": deleted_at_ms,
+        "scope": "user",
+    });
+    let relay_event_id = db
+        .append_relay_event(
+            &username,
+            "chat",
+            "chat.message.deleted",
+            "ChatDelete",
+            None,
+            Some(input.thread_id.trim()),
+            Some(input.message_id.trim()),
+            &format!("chat-delete:{}:{}", username, input.message_id.trim()),
+            &payload.to_string(),
+            deleted_at_ms,
+        )
+        .unwrap_or(0);
+    publish_sync_stream_event(
+        &state,
+        &username,
+        relay_event_id,
+        "chat.message.deleted",
+        payload,
+    )
+    .await;
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "username": username,
+        "message_id": input.message_id.trim(),
+        "thread_id": input.thread_id.trim(),
+        "deleted_at_ms": deleted_at_ms,
+    }))
+    .into_response()
+}
+
+async fn relay_chat_thread_delete_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<RelayChatThreadDeleteInput>,
+) -> impl IntoResponse {
+    let username = input.username.trim().to_ascii_lowercase();
+    if !is_valid_username(&username) {
+        return (StatusCode::BAD_REQUEST, "invalid username").into_response();
+    }
+    if let Err(resp) = enforce_sync_rate_limit(&state, &peer, &headers).await {
+        return resp;
+    }
+    if let Err(resp) = require_user_or_admin(&state, &headers, &username).await {
+        return resp;
+    }
+    if input.thread_id.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing delete fields").into_response();
+    }
+    let deleted_at_ms = input.deleted_at_ms.unwrap_or_else(now_ms);
+    let db = match try_db_clone(&state, "relay_chat_thread_delete_post").await {
+        Some(db) => db,
+        None => return db_busy_retry(&state, "relay_chat_thread_delete_post"),
+    };
+    if let Err(e) =
+        db.mark_chat_thread_deleted_for_user(&username, input.thread_id.trim(), deleted_at_ms)
+    {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let payload = serde_json::json!({
+        "thread_id": input.thread_id.trim(),
+        "deleted_at_ms": deleted_at_ms,
+        "scope": "user",
+    });
+    let relay_event_id = db
+        .append_relay_event(
+            &username,
+            "chat",
+            "chat.thread.deleted",
+            "ChatThreadDelete",
+            None,
+            Some(input.thread_id.trim()),
+            Some(input.thread_id.trim()),
+            &format!("chat-thread-delete:{}:{}", username, input.thread_id.trim()),
+            &payload.to_string(),
+            deleted_at_ms,
+        )
+        .unwrap_or(0);
+    publish_sync_stream_event(
+        &state,
+        &username,
+        relay_event_id,
+        "chat.thread.deleted",
+        payload,
+    )
+    .await;
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "username": username,
+        "thread_id": input.thread_id.trim(),
+        "deleted_at_ms": deleted_at_ms,
+    }))
+    .into_response()
 }
 
 async fn relay_search_users(
@@ -14975,6 +17213,7 @@ async fn verify_webrtc_signature(
     let actor_url = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
 
     let params = parse_signature_header(&sig_header)?;
+    ensure_supported_signature_algorithm(&params)?;
     verify_signature_time_window(headers, &params, true)?;
 
     // Digest check if present.
@@ -15019,6 +17258,7 @@ async fn verify_ap_signature_with_policy(
     );
 
     let params = parse_signature_header(&sig_header)?;
+    ensure_supported_signature_algorithm(&params)?;
     verify_signature_time_window(headers, &params, !is_relaxed_headers)?;
 
     if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
@@ -15331,12 +17571,7 @@ async fn relay_move_post(
         return (StatusCode::BAD_REQUEST, "invalid moved_to_actor").into_response();
     }
 
-    let bearer = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let bearer = bearer_token(&headers);
 
     let db = state.db.lock().await;
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
@@ -15378,12 +17613,7 @@ async fn relay_move_delete(
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
     }
 
-    let bearer = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let bearer = bearer_token(&headers);
 
     let db = state.db.lock().await;
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
@@ -15441,12 +17671,7 @@ async fn relay_move_notice_post(
         return (StatusCode::OK, "ok").into_response();
     }
 
-    let bearer = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let bearer = bearer_token(&headers);
 
     let sig_ok = match verify_move_notice_signature(&state, &headers, &user, &body).await {
         Ok(v) => v,
@@ -15952,6 +18177,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let async_capacity = state.cfg.max_async_jobs as u64;
     let relay_async_job_inflight = async_capacity.saturating_sub(async_available);
     let relay_async_job_queue_depth = relay_async_job_inflight;
+    let relay_db_busy_total = state.relay_db_busy_total.load(Ordering::Relaxed);
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -16018,6 +18244,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         relay_hot_path_queue_depth: Some(relay_hot_path_queue_depth),
         relay_async_job_inflight: Some(relay_async_job_inflight),
         relay_async_job_queue_depth: Some(relay_async_job_queue_depth),
+        relay_db_busy_total: Some(relay_db_busy_total),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,
@@ -16378,15 +18605,39 @@ fn actor_stub_json(username: &str, base_template: &str) -> serde_json::Value {
     } else {
         format!("{base}/users/{username}")
     };
-    let inbox = format!("{base}/inbox");
-    let outbox = format!("{base}/users/{username}/outbox");
+    let shared_base = id
+        .parse::<http::Uri>()
+        .ok()
+        .and_then(|uri| {
+            Some(format!(
+                "{}://{}",
+                uri.scheme_str()?,
+                uri.authority()?.as_str()
+            ))
+        })
+        .unwrap_or_else(|| base.clone());
+    let inbox = format!("{shared_base}/inbox");
+    let outbox = format!("{id}/outbox");
     serde_json::json!({
-      "@context": "https://www.w3.org/ns/activitystreams",
+      "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        "http://joinmastodon.org/ns#"
+      ],
       "id": id,
       "type": "Person",
       "preferredUsername": username,
       "inbox": inbox,
       "outbox": outbox,
+      "followers": format!("{id}/followers"),
+      "following": format!("{id}/following"),
+      "endpoints": {
+        "sharedInbox": format!("{shared_base}/inbox")
+      },
+      "featured": format!("{id}/collections/featured"),
+      "featuredTags": format!("{id}/collections/featuredTags"),
+      "discoverable": true,
+      "indexable": true,
     })
 }
 
@@ -16398,12 +18649,52 @@ fn actor_stub_from_actor_url(
     if actor_url.trim().is_empty() {
         return actor_stub_json(username, fallback_base);
     }
+    let id = actor_url.trim().trim_end_matches('/').to_string();
+    let shared_base = id
+        .parse::<http::Uri>()
+        .ok()
+        .and_then(|uri| {
+            Some(format!(
+                "{}://{}",
+                uri.scheme_str()?,
+                uri.authority()?.as_str()
+            ))
+        })
+        .unwrap_or_else(|| fallback_base.trim_end_matches('/').to_string());
     serde_json::json!({
-      "@context": "https://www.w3.org/ns/activitystreams",
-      "id": actor_url.trim(),
+      "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        "http://joinmastodon.org/ns#"
+      ],
+      "id": id,
       "type": "Person",
       "preferredUsername": username,
+      "inbox": format!("{shared_base}/inbox"),
+      "outbox": format!("{id}/outbox"),
+      "followers": format!("{id}/followers"),
+      "following": format!("{id}/following"),
+      "endpoints": {
+        "sharedInbox": format!("{shared_base}/inbox")
+      },
+      "featured": format!("{id}/collections/featured"),
+      "featuredTags": format!("{id}/collections/featuredTags"),
+      "discoverable": true,
+      "indexable": true,
     })
+}
+
+fn matches_webfinger_resource(resource: &str, user: &str, host: &str, actor_url: &str) -> bool {
+    if resource == actor_url {
+        return true;
+    }
+    let Some(rest) = resource.strip_prefix("acct:") else {
+        return false;
+    };
+    let Some((acct_user, acct_host)) = rest.split_once('@') else {
+        return false;
+    };
+    acct_user == user && acct_host.eq_ignore_ascii_case(host)
 }
 
 fn origin_for_links_with_cfg(cfg: &RelayConfig, headers: &HeaderMap) -> (String, String) {
@@ -16587,6 +18878,7 @@ async fn fanout_pending_move_notices(state: &AppState) -> Result<()> {
 
 #[derive(Debug)]
 struct SignatureParams {
+    algorithm: Option<String>,
     headers: Vec<String>,
     signature: Vec<u8>,
     created_unix: Option<i64>,
@@ -16609,6 +18901,7 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
         .get("headers")
         .cloned()
         .unwrap_or_else(|| "date".to_string());
+    let algorithm = map.get("algorithm").cloned();
     let signature_b64 = map
         .get("signature")
         .cloned()
@@ -16616,6 +18909,7 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
 
     let signature = B64.decode(signature_b64.as_bytes())?;
     Ok(SignatureParams {
+        algorithm,
         headers: headers
             .split_whitespace()
             .map(|s| s.to_ascii_lowercase())
@@ -16624,6 +18918,17 @@ fn parse_signature_header(value: &str) -> Result<SignatureParams> {
         created_unix: map.get("created").and_then(|v| parse_signature_unix_ts(v)),
         expires_unix: map.get("expires").and_then(|v| parse_signature_unix_ts(v)),
     })
+}
+
+fn ensure_supported_signature_algorithm(params: &SignatureParams) -> Result<()> {
+    let Some(alg) = params.algorithm.as_deref() else {
+        return Ok(());
+    };
+    let alg = alg.trim().to_ascii_lowercase();
+    if alg.is_empty() || alg == "rsa-sha256" || alg == "hs2019" {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!("unsupported signature algorithm: {alg}"))
 }
 
 fn parse_signature_unix_ts(value: &str) -> Option<i64> {
@@ -16785,25 +19090,6 @@ async fn verify_move_notice_signature(
         return Ok(false);
     }
 
-    // Date skew (5 minutes).
-    let date = headers
-        .get("Date")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if date.is_empty() {
-        return Ok(false);
-    }
-    let ts = parse_http_date(date)?;
-    let now = std::time::SystemTime::now();
-    let diff = if now > ts {
-        now.duration_since(ts).unwrap_or_default()
-    } else {
-        ts.duration_since(now).unwrap_or_default()
-    };
-    if diff > Duration::from_secs(300) {
-        return Ok(false);
-    }
-
     // Digest check if present.
     if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
         let Some((alg, value)) = d.split_once('=') else {
@@ -16820,6 +19106,12 @@ async fn verify_move_notice_signature(
     }
 
     let params = parse_signature_header(sig)?;
+    if ensure_supported_signature_algorithm(&params).is_err() {
+        return Ok(false);
+    }
+    if verify_signature_time_window(headers, &params, true).is_err() {
+        return Ok(false);
+    }
     let uri: http::Uri = "/_fedi3/relay/move_notice".parse()?;
     let signing_string =
         build_signing_string(&Method::POST, &uri, headers, &params, &params.headers)?;
@@ -16882,5 +19174,82 @@ mod tests {
         }
         assert_eq!(stats.calls(), 100);
         assert_eq!(stats.p95_ms(), 100);
+    }
+
+    #[test]
+    fn webfinger_resource_requires_matching_host_or_actor_url() {
+        assert!(matches_webfinger_resource(
+            "acct:alice@relay.fedi3.com",
+            "alice",
+            "relay.fedi3.com",
+            "https://relay.fedi3.com/users/alice"
+        ));
+        assert!(!matches_webfinger_resource(
+            "acct:alice@wrong.example",
+            "alice",
+            "relay.fedi3.com",
+            "https://relay.fedi3.com/users/alice"
+        ));
+    }
+
+    #[test]
+    fn actor_stub_from_actor_url_contains_expected_collections() {
+        let actor = actor_stub_from_actor_url(
+            "alice",
+            "https://relay.fedi3.com/users/alice",
+            "https://relay.fedi3.com/users/{user}",
+        );
+        assert_eq!(
+            actor.get("followers").and_then(|v| v.as_str()),
+            Some("https://relay.fedi3.com/users/alice/followers")
+        );
+        assert_eq!(
+            actor.get("featuredTags").and_then(|v| v.as_str()),
+            Some("https://relay.fedi3.com/users/alice/collections/featuredTags")
+        );
+        assert_eq!(
+            actor
+                .pointer("/endpoints/sharedInbox")
+                .and_then(|v| v.as_str()),
+            Some("https://relay.fedi3.com/inbox")
+        );
+    }
+
+    #[test]
+    fn notification_kind_maps_core_activity_types() {
+        assert_eq!(
+            notification_kind_for_activity_type("Follow"),
+            Some("follow")
+        );
+        assert_eq!(
+            notification_kind_for_activity_type("EmojiReact"),
+            Some("reaction")
+        );
+        assert_eq!(notification_kind_for_activity_type("Undo"), Some("undo"));
+        assert_eq!(notification_kind_for_activity_type("Unknown"), None);
+    }
+
+    #[test]
+    fn embedded_object_state_handles_create_and_delete() {
+        let create = serde_json::json!({
+            "type": "Create",
+            "object": {
+                "id": "https://relay.fedi3.com/users/alice/objects/1",
+                "type": "Note",
+                "content": "hello"
+            }
+        });
+        let delete = serde_json::json!({
+            "type": "Delete",
+            "object": "https://relay.fedi3.com/users/alice/objects/1"
+        });
+        let (id, _, tombstone) = extract_embedded_object_for_state(&create).expect("create state");
+        assert_eq!(id, "https://relay.fedi3.com/users/alice/objects/1");
+        assert!(!tombstone);
+        let (id, json, tombstone) =
+            extract_embedded_object_for_state(&delete).expect("delete state");
+        assert_eq!(id, "https://relay.fedi3.com/users/alice/objects/1");
+        assert!(tombstone);
+        assert!(json.contains("Tombstone"));
     }
 }

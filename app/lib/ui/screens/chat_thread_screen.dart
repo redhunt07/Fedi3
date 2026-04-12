@@ -19,6 +19,7 @@ import '../../model/ui_prefs.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../services/gif_service.dart';
+import '../../services/relay_sync_api.dart';
 import '../../state/app_state.dart';
 import '../utils/time_ago.dart';
 import '../utils/open_url.dart';
@@ -847,12 +848,28 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       ),
     );
     if (ok != true) return;
-    await CoreApi(config: cfg).deleteChatMessage(messageId: message.messageId);
+    final relay = RelaySyncApi(
+      config: cfg,
+      fallbackTokens: [
+        cfg.previousRelayToken ?? '',
+        widget.appState.prefs.relayAdminToken,
+      ],
+    );
+    await relay.deleteChatMessage(
+      threadId: widget.threadId,
+      messageId: message.messageId,
+    );
+    await widget.appState.applyRelayChatMessageDeleted(
+      threadId: widget.threadId,
+      messageId: message.messageId,
+    );
+    try {
+      await CoreApi(config: cfg).deleteChatMessage(messageId: message.messageId);
+    } catch (_) {}
     await _loadMessages(reset: true);
   }
 
   Future<void> _showNonOwnerOptions() async {
-    debugPrint('[DEBUG] _showNonOwnerOptions: Mostro opzioni per non-owner');
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -876,20 +893,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
 
     if (result == 'leave') {
-      debugPrint(
-          '[DEBUG] _showNonOwnerOptions: Utente ha scelto di abbandonare la chat');
       await _leaveChat();
     } else if (result == 'archive') {
-      debugPrint(
-          '[DEBUG] _showNonOwnerOptions: Utente ha scelto di archiviare la chat');
       await _archiveChat();
-    } else {
-      debugPrint('[DEBUG] _showNonOwnerOptions: Utente ha annullato');
     }
   }
 
   Future<void> _leaveChat() async {
-    debugPrint('[DEBUG] _leaveChat: Abbandono chat...');
     final cfg = widget.appState.config;
     if (cfg == null) {
       return;
@@ -912,7 +922,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _archiveChat({bool archived = true}) async {
-    debugPrint('[DEBUG] _archiveChat: Archivio chat...');
     final cfg = widget.appState.config;
     if (cfg == null) {
       return;
@@ -951,16 +960,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _deleteChat() async {
-    debugPrint('[DEBUG] _deleteChat: Avvio cancellazione chat');
     final cfg = widget.appState.config;
-    debugPrint(
-        '[DEBUG] _deleteChat: config = ${cfg != null ? 'presente' : 'null'}');
     if (cfg == null) {
-      debugPrint('[DEBUG] _deleteChat: Configurazione null, esco');
       return;
     }
 
-    debugPrint('[DEBUG] _deleteChat: threadId = ${widget.threadId}');
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -977,46 +981,33 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ],
       ),
     );
-    debugPrint('[DEBUG] _deleteChat: Dialog result = $ok');
     if (ok != true) {
-      debugPrint('[DEBUG] _deleteChat: Cancellazione annullata dall\'utente');
       return;
     }
 
-    debugPrint('[DEBUG] _deleteChat: Chiamo CoreApi.deleteChatThread...');
+    final relay = RelaySyncApi(
+      config: cfg,
+      fallbackTokens: [
+        cfg.previousRelayToken ?? '',
+        widget.appState.prefs.relayAdminToken,
+      ],
+    );
+    await relay.deleteChatThread(threadId: widget.threadId);
+    await widget.appState.applyRelayChatThreadDeleted(threadId: widget.threadId);
     try {
       await CoreApi(config: cfg).deleteChatThread(threadId: widget.threadId);
-      debugPrint(
-          '[DEBUG] _deleteChat: deleteChatThread completato con successo');
-    } catch (e, stackTrace) {
-      debugPrint('[DEBUG] _deleteChat: ERRORE in deleteChatThread: $e');
-      debugPrint('[DEBUG] _deleteChat: StackTrace: $stackTrace');
-
-      // Controlla se l'errore è "not owner" (403)
+    } catch (e) {
       final errorMessage = e.toString();
       if (errorMessage.contains('403') && errorMessage.contains('not owner')) {
-        debugPrint(
-            '[DEBUG] _deleteChat: Utente non è owner, propongo alternative');
         if (mounted) {
           await _showNonOwnerOptions();
         }
         return;
       }
-
-      // Per altri errori, mostra il messaggio di errore normale
-      if (mounted) {
-        setState(() => _error = e.toString());
-      }
-      return;
     }
 
-    debugPrint('[DEBUG] _deleteChat: Controllo se mounted = $mounted');
     if (mounted) {
-      debugPrint('[DEBUG] _deleteChat: Navigo indietro');
       Navigator.of(context).pop();
-    } else {
-      debugPrint(
-          '[DEBUG] _deleteChat: Widget non più mounted, skip navigazione');
     }
   }
 

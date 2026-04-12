@@ -194,7 +194,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatDeleteTitle => 'Elimina messaggio';
 
   @override
-  String get chatDeleteHint => 'Questo rimuoverà il messaggio per tutti.';
+  String get chatDeleteHint => 'Questo rimuoverà il messaggio dalla tua vista.';
 
   @override
   String get chatSave => 'Salva';
@@ -277,7 +277,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get chatDeleteThreadHint =>
-      'Questo eliminerà l\'intera chat per tutti. Solo il creatore può eliminare la chat.';
+      'Questo rimuoverà l\'intera chat dalla tua vista.';
 
   @override
   String get chatLeaveThreadOption => 'Abbandona chat';
