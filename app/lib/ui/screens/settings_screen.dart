@@ -16,6 +16,7 @@ import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'profile_edit_screen.dart';
+import 'relays_screen.dart';
 import 'security_settings_screen.dart';
 import 'translation_settings_screen.dart';
 import 'ui_settings_screen.dart';
@@ -177,6 +178,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       MaterialPageRoute(
                         builder: (_) =>
                             UiSettingsScreen(appState: widget.appState),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              Card(
+                child: ListTile(
+                  title: Text(context.l10n.relaysTitle),
+                  subtitle: const Text('Relay, mesh, telemetria e diagnostica'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => RelaysScreen(appState: widget.appState),
                       ),
                     );
                   },

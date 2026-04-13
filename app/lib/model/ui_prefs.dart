@@ -219,6 +219,44 @@ class UiPrefs {
         'proxyType': proxyType,
       };
 
+  Map<String, dynamic> toSanitizedJson() => {
+        'themeMode': themeMode.name,
+        'density': density.name,
+        'accent': accent,
+        'textScale': textScale,
+        'localeTag': localeTag,
+        'lastNotificationsSeenMs': lastNotificationsSeenMs,
+        'lastChatSeenMs': lastChatSeenMs,
+        'chatThreadSeenMs': chatThreadSeenMs,
+        'pinnedChatThreads': pinnedChatThreads,
+        'desktopUseColumns': desktopUseColumns,
+        'mediaAutoplay': mediaAutoplay,
+        'mediaMuted': mediaMuted,
+        'emojiPickerScale': emojiPickerScale,
+        'emojiPickerColumns': emojiPickerColumns,
+        'emojiPickerStyle': emojiPickerStyle.name,
+        'gifApiKey': gifApiKey,
+        'translationProvider': translationProvider.name,
+        'translationUsePro': translationUsePro,
+        'translationTimeoutMs': translationTimeoutMs,
+        'translationDeepLxUrl': translationDeepLxUrl,
+        'telemetryEnabled': telemetryEnabled,
+        'clientMonitoringEnabled': clientMonitoringEnabled,
+        'notifyChat': notifyChat,
+        'notifyDirect': notifyDirect,
+        'notifyMutedUntilMs': notifyMutedUntilMs,
+        'useTor': useTor,
+        'proxyHost': proxyHost,
+        'proxyPort': proxyPort,
+        'proxyType': proxyType,
+      };
+
+  Map<String, dynamic> toBackupJson() => {
+        ...toSanitizedJson(),
+        'translationAuthKeyPresent': translationAuthKey.trim().isNotEmpty,
+        'relayAdminTokenPresent': relayAdminToken.trim().isNotEmpty,
+      };
+
   Map<String, dynamic> get json => toJson();
 
   static UiPrefs fromJson(Map<String, dynamic> raw) {

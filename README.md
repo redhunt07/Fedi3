@@ -16,6 +16,11 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Note:
+- `.env.example` is a development-safe template; replace all secret values before public deployment.
+- The primary production target in this repo is `relay + Linux desktop`.
+- Android is not considered release-ready until dedicated signing and mobile release pipeline are defined.
+
 ## Installazione client Linux (Debian/Ubuntu)
 
 Install (build + setup):

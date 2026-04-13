@@ -16,14 +16,24 @@ class PrefsStore {
     return File('${dir.path}${Platform.pathSeparator}ui_prefs.json');
   }
 
-  static Future<UiPrefs> read() async {
+  static Future<Map<String, dynamic>?> readRaw() async {
     try {
       final f = await _file();
-      if (!await f.exists()) return UiPrefs.defaults();
+      if (!await f.exists()) return null;
       final txt = await f.readAsString();
       final json = jsonDecode(txt);
-      if (json is! Map) return UiPrefs.defaults();
-      return UiPrefs.fromJson(json.cast<String, dynamic>());
+      if (json is! Map) return null;
+      return json.cast<String, dynamic>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<UiPrefs> read() async {
+    try {
+      final json = await readRaw();
+      if (json == null) return UiPrefs.defaults();
+      return UiPrefs.fromJson(json);
     } catch (_) {
       return UiPrefs.defaults();
     }
@@ -35,4 +45,3 @@ class PrefsStore {
     await f.writeAsString(jsonEncode(prefs.toJson()));
   }
 }
-

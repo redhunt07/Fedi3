@@ -36,8 +36,8 @@ class BackupCodec {
   }) {
     final data = {
       'v': version,
-      'coreConfig': config.toJson(),
-      'uiPrefs': prefs.toJson(),
+      'coreConfig': config.toBackupJson(),
+      'uiPrefs': prefs.toBackupJson(),
       if (coreBackup != null) 'coreBackup': coreBackup,
       if (encryptionKeys != null) 'encryptionKeys': encryptionKeys,
       if (meta != null) 'meta': meta,

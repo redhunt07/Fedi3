@@ -497,13 +497,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (file == null) return;
       final raw = await file.readAsString();
       final bundle = BackupCodec.decode(raw);
+      final mergedPrefs = bundle.prefs.copyWith(
+        relayAdminToken: bundle.prefs.relayAdminToken.isNotEmpty
+            ? bundle.prefs.relayAdminToken
+            : widget.appState.prefs.relayAdminToken,
+        translationAuthKey: bundle.prefs.translationAuthKey.isNotEmpty
+            ? bundle.prefs.translationAuthKey
+            : widget.appState.prefs.translationAuthKey,
+      );
+      final currentCfg = widget.appState.config;
+      final mergedConfig = bundle.config.copyWith(
+        relayToken: bundle.config.relayToken.isNotEmpty
+            ? bundle.config.relayToken
+            : (currentCfg?.relayToken ?? ''),
+        internalToken: bundle.config.internalToken.isNotEmpty
+            ? bundle.config.internalToken
+            : (currentCfg?.internalToken ?? CoreConfig.randomToken()),
+        previousRelayToken: bundle.config.previousRelayToken ?? currentCfg?.previousRelayToken,
+      );
 
       await widget.appState.stopCore();
-      await widget.appState.saveConfig(bundle.config);
-      await widget.appState.savePrefs(bundle.prefs);
+      await widget.appState.saveConfig(mergedConfig);
+      await widget.appState.savePrefs(mergedPrefs);
       await widget.appState.startCore();
       if (bundle.coreBackup != null) {
-        await CoreApi(config: bundle.config).importBackup(bundle.coreBackup!);
+        await CoreApi(config: mergedConfig).importBackup(bundle.coreBackup!);
       }
       if (bundle.encryptionKeys != null) {
         await EncryptionManager().importKeys(bundle.encryptionKeys!);
@@ -539,13 +557,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       final cfg = _buildConfig();
       final service = CloudBackupService(config: cfg);
       final pkg = await service.download();
+      final mergedPrefs = pkg.prefs.copyWith(
+        relayAdminToken: widget.appState.prefs.relayAdminToken,
+        translationAuthKey: widget.appState.prefs.translationAuthKey,
+      );
+      final mergedConfig = pkg.config.copyWith(
+        relayToken: cfg.relayToken,
+        internalToken: cfg.internalToken,
+        previousRelayToken: pkg.config.previousRelayToken ?? cfg.previousRelayToken,
+      );
 
       await widget.appState.stopCore();
-      await widget.appState.saveConfig(pkg.config);
-      await widget.appState.savePrefs(pkg.prefs);
+      await widget.appState.saveConfig(mergedConfig);
+      await widget.appState.savePrefs(mergedPrefs);
       await widget.appState.startCore();
 
-      final restoreService = CloudBackupService(config: pkg.config);
+      final restoreService = CloudBackupService(config: mergedConfig);
       await restoreService.restore(pkg);
       await widget.appState.stopCore();
       await widget.appState.startCore();

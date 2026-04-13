@@ -109,13 +109,15 @@ class _ClientVersionBadgeState extends State<ClientVersionBadge> {
   Future<void> _runUpdate(UpdateInfo info) async {
     if (_busy) return;
     setState(() => _busy = true);
+    final l10n = context.l10n;
+    final messenger = ScaffoldMessenger.maybeOf(context);
     try {
       await UpdateService.instance.launchManualUpdateAndExit(info: info);
     } catch (e) {
       if (!mounted) return;
       await _showManualFallback(info);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.updateFailed(e.toString()))),
+      messenger?.showSnackBar(
+        SnackBar(content: Text(l10n.updateFailed(e.toString()))),
       );
     } finally {
       if (mounted) setState(() => _busy = false);

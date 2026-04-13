@@ -20,6 +20,10 @@ Compila i campi essenziali:
   - `FEDI3_RELAY_MESH_LISTEN=` (opzionale, default auto)
   - `FEDI3_RELAY_MESH_BOOTSTRAP=` (opzionale, default: p2p_infra)
 
+Note operative:
+- `.env.example` e' un template per sviluppo/infrastruttura iniziale: sostituisci sempre token, password DB e credenziali TURN prima di esporre il relay su Internet.
+- Il relay ora rifiuta l'avvio con combinazioni note come insicure su deploy non locali, ad esempio token admin mancante/corto o self-register abilitato.
+
 ## 2) Avvio
 
 ```

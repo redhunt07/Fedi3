@@ -169,17 +169,11 @@ clone_or_update_repo() {
   if [[ -d "$REPO_DIR/.git" ]]; then
     sudo_cmd git -C "$REPO_DIR" fetch --all --prune
     if ! sudo_cmd git -C "$REPO_DIR" pull --ff-only; then
-      if [[ "${FEDI3_FORCE_UPDATE:-}" == "1" ]]; then
-        sudo_cmd git -C "$REPO_DIR" fetch origin main
-        sudo_cmd git -C "$REPO_DIR" reset --hard origin/main
-      else
-        echo "Errore: branch divergi. Esegui:"
-        echo "  git -C \"$REPO_DIR\" merge --no-ff"
-        echo "  oppure git -C \"$REPO_DIR\" rebase"
-        echo "Se vuoi forzare l'update (perdi modifiche locali), riesegui con:"
-        echo "  FEDI3_FORCE_UPDATE=1 curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash -s -- --update-only"
-        exit 1
-      fi
+      echo "Errore: branch divergi. Esegui manualmente uno di questi comandi:"
+      echo "  git -C \"$REPO_DIR\" merge --no-ff"
+      echo "  git -C \"$REPO_DIR\" rebase"
+      echo "Per hardening dell'installer non viene piu' eseguito reset distruttivo automatico."
+      exit 1
     fi
   else
     sudo_cmd git clone "$REPO_URL" "$REPO_DIR"

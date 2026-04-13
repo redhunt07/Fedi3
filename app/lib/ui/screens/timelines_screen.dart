@@ -77,27 +77,16 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         final useColumns = isWide && widget.appState.prefs.desktopUseColumns;
         final showInlineComposer = !isWide;
 
-        if (!widget.appState.isRunning) {
-          return Scaffold(
-            appBar: AppBar(
-              title: Text(context.l10n.timelineTitle),
-            ),
-            body: CoreNotRunningCard(
-              appState: widget.appState,
-              hint: context.l10n.timelineRefreshHint,
-              onStarted: () {
-                if (!mounted) return;
-                for (final k in _listKeys) {
-                  k.currentState?.refreshFromStream();
-                }
-              },
-            ),
-          );
-        }
-
-        final syncReady = (_syncStatus?['ready'] == true);
-        final syncBlocked = _syncStatusLoading || !syncReady;
-        final syncStale = _isSyncStale(_syncStatus);
+        final syncReady =
+            widget.appState.relaySyncReady || (_syncStatus?['ready'] == true);
+        final syncBlocked = widget.appState.relaySyncReady
+            ? false
+            : (_syncStatusLoading || !syncReady);
+        final syncStale = widget.appState.relaySyncLastSuccessMs > 0
+            ? (DateTime.now().millisecondsSinceEpoch -
+                    widget.appState.relaySyncLastSuccessMs >
+                const Duration(minutes: 3).inMilliseconds)
+            : _isSyncStale(_syncStatus);
 
         final timelineBody = isWide
             ? (useColumns
@@ -331,7 +320,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
           body: Column(
             children: [
               const RssTicker(),
-              if (syncBlocked || syncStale || _syncStatusError != null)
+              if (syncBlocked || syncStale || _shouldShowCoreSyncError())
                 _buildSyncInlineBanner(
                   context,
                   syncBlocked: syncBlocked,
@@ -351,12 +340,12 @@ class _TimelinesScreenState extends State<TimelinesScreen>
     required bool syncStale,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    final hasCoreError =
-        _syncStatusError != null && _syncStatusError!.trim().isNotEmpty;
-    final relayError =
-        ((_syncStatus?['last_error'] as String?)?.trim().isNotEmpty == true)
+    final hasCoreError = _shouldShowCoreSyncError();
+    final relayError = widget.appState.relaySyncError?.trim().isNotEmpty == true
+        ? widget.appState.relaySyncError!.trim()
+        : (((_syncStatus?['last_error'] as String?)?.trim().isNotEmpty == true)
             ? (_syncStatus?['last_error'] as String).trim()
-            : '';
+            : '');
     final title = syncBlocked
         ? 'Timeline in sincronizzazione'
         : (syncStale ? 'Sync timeline in ritardo' : 'Sync timeline');
@@ -390,7 +379,12 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                     style: const TextStyle(fontWeight: FontWeight.w700)),
               ),
               OutlinedButton.icon(
-                onPressed: () => _pollSyncStatus(forceLegacySync: true),
+                onPressed: () async {
+                  await widget.appState.refreshRelaySync(forceBootstrap: true);
+                  if (mounted) {
+                    await _pollSyncStatus(forceLegacySync: true);
+                  }
+                },
                 icon: const Icon(Icons.refresh, size: 16),
                 label: Text(syncStale ? 'Recovery' : 'Aggiorna'),
               ),
@@ -457,13 +451,19 @@ class _TimelinesScreenState extends State<TimelinesScreen>
   void _startSyncStatusPolling() {
     _syncStatusPoll?.cancel();
     _syncStatusPoll =
-        Timer.periodic(const Duration(seconds: 3), (_) => _pollSyncStatus());
+        Timer.periodic(const Duration(seconds: 10), (_) => _pollSyncStatus());
     _pollSyncStatus();
   }
 
   Future<void> _pollSyncStatus({bool forceLegacySync = false}) async {
     if (!mounted) return;
-    if (!widget.appState.isRunning) return;
+    if (!widget.appState.isRunning) {
+      setState(() {
+        _syncStatusLoading = false;
+        _syncStatusError = null;
+      });
+      return;
+    }
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
@@ -489,6 +489,20 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         _syncStatusError = e.toString();
       });
     }
+  }
+
+  bool _shouldShowCoreSyncError() {
+    final raw = _syncStatusError?.trim();
+    if (raw == null || raw.isEmpty) return false;
+    if (!widget.appState.relaySyncReady) return true;
+    final lower = raw.toLowerCase();
+    if (lower.contains('connection refused') ||
+        lower.contains('socketexception') ||
+        lower.contains('/djs/sync/status') ||
+        lower.contains('127.0.0.1:8788')) {
+      return false;
+    }
+    return true;
   }
 
   String _syncPhaseText(Map<String, dynamic>? status) {
@@ -582,6 +596,7 @@ class _TimelineList extends StatefulWidget {
 
 class _TimelineListState extends State<_TimelineList>
     with AutomaticKeepAliveClientMixin {
+  bool get _usesRelayHome => widget.kind.trim().toLowerCase() == 'unified';
   String? _cursor;
   bool _loading = false;
   bool _syncing = false;
@@ -595,6 +610,8 @@ class _TimelineListState extends State<_TimelineList>
   Timer? _poll;
   Timer? _reconcile;
   Timer? _retry;
+  Duration? _pollEvery;
+  Duration? _reconcileEvery;
   bool _showScrollTop = false;
   static const double _estimatedInsertedItemExtent = 220;
   late bool _lastRunning;
@@ -615,12 +632,12 @@ class _TimelineListState extends State<_TimelineList>
 
   void pollNewFromStream() {
     if (!mounted) return;
-    if (!widget.appState.isRunning) return;
+    if (!_usesRelayHome && !widget.appState.isRunning) return;
     _pollNew();
   }
 
   void applyRealtimeEvent(CoreEvent event) {
-    if (!mounted || !widget.appState.isRunning) return;
+    if (!mounted || (!_usesRelayHome && !widget.appState.isRunning)) return;
     final op = (event.op ?? event.activityType ?? '').trim().toLowerCase();
     final isMutation = op == 'delete' ||
         op == 'undo' ||
@@ -639,7 +656,7 @@ class _TimelineListState extends State<_TimelineList>
 
   void refreshFromStream() {
     if (!mounted) return;
-    if (!widget.appState.isRunning) return;
+    if (!_usesRelayHome && !widget.appState.isRunning) return;
     _syncTopWindow();
   }
 
@@ -647,12 +664,15 @@ class _TimelineListState extends State<_TimelineList>
   void initState() {
     super.initState();
     _refresh();
-    _poll = Timer.periodic(const Duration(seconds: 5), (_) => _pollNew());
-    _reconcile = Timer.periodic(
-        const Duration(seconds: 25), (_) => _syncTopWindow(limit: 80));
+    _restartCadenceTimers();
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
+      if (_usesRelayHome) {
+        _replaceFromRelayHome();
+        _refreshCadenceIfNeeded();
+        return;
+      }
       final running = widget.appState.isRunning;
       if (running && !_lastRunning) {
         if (mounted) _refresh();
@@ -681,7 +701,47 @@ class _TimelineListState extends State<_TimelineList>
     }
   }
 
+  Duration _targetPollEvery() {
+    if (!_usesRelayHome) return const Duration(seconds: 15);
+    return widget.appState.relaySyncStreamConnected
+        ? const Duration(seconds: 60)
+        : const Duration(seconds: 20);
+  }
+
+  Duration _targetReconcileEvery() {
+    if (!_usesRelayHome) return const Duration(seconds: 45);
+    return widget.appState.relaySyncStreamConnected
+        ? const Duration(minutes: 3)
+        : const Duration(seconds: 60);
+  }
+
+  void _restartCadenceTimers() {
+    _poll?.cancel();
+    _reconcile?.cancel();
+    _pollEvery = _targetPollEvery();
+    _reconcileEvery = _targetReconcileEvery();
+    _poll = Timer.periodic(_pollEvery!, (_) => _pollNew());
+    _reconcile = Timer.periodic(
+      _reconcileEvery!,
+      (_) => _syncTopWindow(limit: 80),
+    );
+  }
+
+  void _refreshCadenceIfNeeded() {
+    final nextPoll = _targetPollEvery();
+    final nextReconcile = _targetReconcileEvery();
+    if (_pollEvery == nextPoll && _reconcileEvery == nextReconcile) {
+      return;
+    }
+    _restartCadenceTimers();
+  }
+
   Future<void> _refresh() async {
+    if (_usesRelayHome) {
+      await widget.appState.refreshRelaySync();
+      _replaceFromRelayHome();
+      return;
+    }
     setState(() {
       _cursor = null;
       _items.clear();
@@ -693,7 +753,38 @@ class _TimelineListState extends State<_TimelineList>
     await _loadMore();
   }
 
+  void _replaceFromRelayHome() {
+    if (!mounted) return;
+    final items = widget.appState.relayTimelineHome
+        .where((m) => !_isSuppressedActivity(m))
+        .where(_isTimelineCandidateActivity)
+        .toList();
+    setState(() {
+      _cursor = null;
+      _error = widget.appState.relaySyncError;
+      _items
+        ..clear()
+        ..addAll(items);
+      _knownIds
+        ..clear()
+        ..addAll(items.map(_activityId).where((id) => id.isNotEmpty));
+      _knownObjectIds
+        ..clear()
+        ..addAll(items
+            .map(_activityObjectId)
+            .whereType<String>()
+            .where((id) => id.isNotEmpty));
+      _pending.clear();
+      _sortActivities(_items);
+    });
+  }
+
   Future<void> _forceSyncAndRefresh() async {
+    if (_usesRelayHome) {
+      await widget.appState.refreshRelaySync(forceBootstrap: true);
+      _replaceFromRelayHome();
+      return;
+    }
     if (_syncing) return;
     setState(() {
       _syncing = true;
@@ -727,6 +818,10 @@ class _TimelineListState extends State<_TimelineList>
 
   Future<void> _loadMore() async {
     if (_loading) return;
+    if (_usesRelayHome) {
+      _replaceFromRelayHome();
+      return;
+    }
     if (!widget.appState.isRunning) return;
     setState(() {
       _loading = true;
@@ -763,6 +858,11 @@ class _TimelineListState extends State<_TimelineList>
   Future<void> _pollNew() async {
     if (!mounted) return;
     if (_loading) return;
+    if (_usesRelayHome) {
+      await widget.appState.refreshRelaySync();
+      _replaceFromRelayHome();
+      return;
+    }
     if (!widget.appState.isRunning) return;
     try {
       final resp = await widget.api.fetchTimeline(widget.kind, limit: 20);
@@ -796,6 +896,11 @@ class _TimelineListState extends State<_TimelineList>
   Future<void> _syncTopWindow({int limit = 80}) async {
     if (!mounted) return;
     if (_loading) return;
+    if (_usesRelayHome) {
+      await widget.appState.refreshRelaySync();
+      _replaceFromRelayHome();
+      return;
+    }
     if (!widget.appState.isRunning) return;
     try {
       final resp = await widget.api.fetchTimeline(widget.kind, limit: limit);
@@ -878,6 +983,10 @@ class _TimelineListState extends State<_TimelineList>
 
   void _scheduleRetryIfOffline(String msg) {
     if (!mounted) return;
+    if (_usesRelayHome) {
+      _replaceFromRelayHome();
+      return;
+    }
     if (!widget.appState.isRunning) return;
     final lower = msg.toLowerCase();
     final shouldRetry = lower.contains('socketexception') ||
@@ -1302,6 +1411,16 @@ class _TimelineListState extends State<_TimelineList>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    if (!_usesRelayHome && !widget.appState.isRunning) {
+      return CoreNotRunningCard(
+        appState: widget.appState,
+        hint: context.l10n.timelineRefreshHint,
+        onStarted: () {
+          if (!mounted) return;
+          _refresh();
+        },
+      );
+    }
     final filtered = _items;
     final timelineCache = <Map<String, dynamic>, TimelineItem?>{};
     final notesById = <String, TimelineItem>{};
@@ -1389,10 +1508,11 @@ class _TimelineListState extends State<_TimelineList>
                               const Spacer(),
                               IconButton(
                                 tooltip: context.l10n.timelineRefreshHint,
-                                onPressed:
-                                    widget.appState.isRunning && !_syncing
-                                        ? _forceSyncAndRefresh
-                                        : null,
+                                onPressed: (_usesRelayHome ||
+                                            widget.appState.isRunning) &&
+                                        !_syncing
+                                    ? _forceSyncAndRefresh
+                                    : null,
                                 icon: _syncing
                                     ? const SizedBox(
                                         width: 18,

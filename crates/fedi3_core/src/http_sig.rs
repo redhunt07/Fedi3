@@ -157,8 +157,11 @@ pub struct ActorSummary {
 #[derive(Debug)]
 pub struct SignatureParams {
     pub key_id: String,
+    pub algorithm: Option<String>,
     pub headers: Vec<String>,
     pub signature: Vec<u8>,
+    pub created_unix: Option<i64>,
+    pub expires_unix: Option<i64>,
 }
 
 pub fn parse_signature_header(value: &str) -> Result<SignatureParams> {
@@ -177,6 +180,7 @@ pub fn parse_signature_header(value: &str) -> Result<SignatureParams> {
         .get("keyId")
         .cloned()
         .ok_or_else(|| anyhow!("Signature missing keyId"))?;
+    let algorithm = map.get("algorithm").cloned();
     let headers = map
         .get("headers")
         .cloned()
@@ -192,12 +196,41 @@ pub fn parse_signature_header(value: &str) -> Result<SignatureParams> {
 
     Ok(SignatureParams {
         key_id,
+        algorithm,
         headers: headers
             .split_whitespace()
             .map(|s| s.to_ascii_lowercase())
             .collect(),
         signature,
+        created_unix: map.get("created").and_then(|v| parse_signature_unix_ts(v)),
+        expires_unix: map.get("expires").and_then(|v| parse_signature_unix_ts(v)),
     })
+}
+
+fn parse_signature_unix_ts(value: &str) -> Option<i64> {
+    let trimmed = value.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(v) = trimmed.parse::<i64>() {
+        return Some(v);
+    }
+    let v = trimmed.parse::<f64>().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
+    Some(v.floor() as i64)
+}
+
+pub fn ensure_supported_signature_algorithm(params: &SignatureParams) -> Result<()> {
+    let Some(alg) = params.algorithm.as_deref() else {
+        return Ok(());
+    };
+    let alg = alg.trim().to_ascii_lowercase();
+    if alg.is_empty() || alg == "rsa-sha256" || alg == "hs2019" {
+        return Ok(());
+    }
+    Err(anyhow!("unsupported signature algorithm: {alg}"))
 }
 
 pub fn build_signing_string(
@@ -273,6 +306,49 @@ pub fn verify_date(headers: &HeaderMap, max_skew: Duration) -> Result<()> {
     };
     if diff > max_skew {
         return Err(anyhow!("Date skew too large: {}s", diff.as_secs()));
+    }
+    Ok(())
+}
+
+pub fn verify_signature_time_window(
+    headers: &HeaderMap,
+    params: &SignatureParams,
+    max_skew: Duration,
+    require_time_hint: bool,
+) -> Result<()> {
+    let now = std::time::SystemTime::now();
+    let mut has_time_hint = false;
+
+    if let Some(date) = headers.get("Date").and_then(|v| v.to_str().ok()) {
+        if !date.trim().is_empty() {
+            verify_date(headers, max_skew)?;
+            has_time_hint = true;
+        }
+    }
+
+    if let Some(created_unix) = params.created_unix {
+        let created_ts = std::time::UNIX_EPOCH + Duration::from_secs(created_unix.max(0) as u64);
+        let diff = if now > created_ts {
+            now.duration_since(created_ts).unwrap_or_default()
+        } else {
+            created_ts.duration_since(now).unwrap_or_default()
+        };
+        if diff > max_skew {
+            return Err(anyhow!("created skew too large: {}s", diff.as_secs()));
+        }
+        has_time_hint = true;
+    }
+
+    if let Some(expires_unix) = params.expires_unix {
+        let expires_ts = std::time::UNIX_EPOCH + Duration::from_secs(expires_unix.max(0) as u64);
+        if now > expires_ts + Duration::from_secs(5) {
+            return Err(anyhow!("signature expired"));
+        }
+        has_time_hint = true;
+    }
+
+    if require_time_hint && !has_time_hint {
+        return Err(anyhow!("missing Date/(created)"));
     }
     Ok(())
 }
@@ -376,6 +452,32 @@ struct ActorDoc {
     endpoints: Option<ActorEndpoints>,
     #[serde(rename = "fedi3PeerId")]
     fedi3_peer_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_signature_header_supports_hs2019_and_time_params() {
+        let params = parse_signature_header(
+            r#"keyId="https://example.com/users/alice#main-key",algorithm="hs2019",headers="(request-target) host date (created) (expires)",created="1710000000",expires="1710000300",signature="ZmFrZQ==""#,
+        )
+        .expect("signature params");
+        assert_eq!(params.algorithm.as_deref(), Some("hs2019"));
+        assert_eq!(params.created_unix, Some(1_710_000_000));
+        assert_eq!(params.expires_unix, Some(1_710_000_300));
+        assert_eq!(params.headers[0], "(request-target)");
+    }
+
+    #[test]
+    fn unsupported_signature_algorithm_is_rejected() {
+        let params = parse_signature_header(
+            r#"keyId="https://example.com/users/alice#main-key",algorithm="ed25519",headers="date",signature="ZmFrZQ==""#,
+        )
+        .expect("signature params");
+        assert!(ensure_supported_signature_algorithm(&params).is_err());
+    }
 }
 
 #[derive(Debug, Deserialize)]

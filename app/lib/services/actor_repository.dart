@@ -389,21 +389,35 @@ class ActorRepository {
     if (root == null) return const OutboxPage(items: [], next: null);
 
     Map<String, dynamic>? page = root;
+    var pageBaseUrl = outboxUrl.trim();
     if (pageUrl != null && pageUrl.trim().isNotEmpty) {
-      page = await _fetchJson(pageUrl.trim());
+      final resolved = _resolveCollectionLink(outboxUrl, pageUrl.trim());
+      page = await _fetchJson(resolved);
+      pageBaseUrl = resolved;
     } else {
       final firstLink = root['first'];
       if (firstLink is String && firstLink.trim().isNotEmpty) {
-        page = await _fetchJson(firstLink.trim());
+        final resolved = _resolveCollectionLink(outboxUrl, firstLink.trim());
+        page = await _fetchJson(resolved);
+        pageBaseUrl = resolved;
       } else if (firstLink is Map) {
         final href = (firstLink['id'] as String?)?.trim() ??
             (firstLink['href'] as String?)?.trim() ??
             '';
-        if (href.isNotEmpty) page = await _fetchJson(href);
+        if (href.isNotEmpty) {
+          final resolved = _resolveCollectionLink(outboxUrl, href);
+          page = await _fetchJson(resolved);
+          pageBaseUrl = resolved;
+        }
       }
     }
+    page ??= root;
+    final pageId = (page['id'] as String?)?.trim() ?? '';
+    if (pageId.isNotEmpty) {
+      pageBaseUrl = _resolveCollectionLink(pageBaseUrl, pageId);
+    }
 
-    final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
+    final items = _readCollectionItems(page);
     final out = <Map<String, dynamic>>[];
     for (final it in items) {
       if (it is Map) {
@@ -416,14 +430,16 @@ class ActorRepository {
     }
 
     String? next;
-    final nextLink = page?['next'];
+    final nextLink = page['next'];
     if (nextLink is String && nextLink.trim().isNotEmpty) {
-      next = nextLink.trim();
+      next = _resolveCollectionLink(pageBaseUrl, nextLink.trim());
     } else if (nextLink is Map) {
       final href = (nextLink['id'] as String?)?.trim() ??
           (nextLink['href'] as String?)?.trim() ??
           '';
-      if (href.isNotEmpty) next = href;
+      if (href.isNotEmpty) {
+        next = _resolveCollectionLink(pageBaseUrl, href);
+      }
     }
 
     return OutboxPage(items: out, next: next);
@@ -444,31 +460,48 @@ class ActorRepository {
     if (first == null) return const CollectionPage(items: [], next: null);
 
     Map<String, dynamic>? page = first;
+    var pageBaseUrl = collectionUrl.trim();
     if (pageUrl != null && pageUrl.trim().isNotEmpty) {
-      page = await _fetchJson(pageUrl.trim());
+      final resolved = _resolveCollectionLink(collectionUrl, pageUrl.trim());
+      page = await _fetchJson(resolved);
+      pageBaseUrl = resolved;
     } else {
       final firstLink = first['first'];
       if (firstLink is String && firstLink.trim().isNotEmpty) {
-        page = await _fetchJson(firstLink.trim());
+        final resolved =
+            _resolveCollectionLink(collectionUrl, firstLink.trim());
+        page = await _fetchJson(resolved);
+        pageBaseUrl = resolved;
       } else if (firstLink is Map) {
         final href = (firstLink['id'] as String?)?.trim() ??
             (firstLink['href'] as String?)?.trim() ??
             '';
-        if (href.isNotEmpty) page = await _fetchJson(href);
+        if (href.isNotEmpty) {
+          final resolved = _resolveCollectionLink(collectionUrl, href);
+          page = await _fetchJson(resolved);
+          pageBaseUrl = resolved;
+        }
       }
     }
+    page ??= first;
+    final pageId = (page['id'] as String?)?.trim() ?? '';
+    if (pageId.isNotEmpty) {
+      pageBaseUrl = _resolveCollectionLink(pageBaseUrl, pageId);
+    }
 
-    final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
+    final items = _readCollectionItems(page);
     final out = items.take(limit).toList();
     String? next;
-    final nextLink = page?['next'];
+    final nextLink = page['next'];
     if (nextLink is String && nextLink.trim().isNotEmpty) {
-      next = nextLink.trim();
+      next = _resolveCollectionLink(pageBaseUrl, nextLink.trim());
     } else if (nextLink is Map) {
       final href = (nextLink['id'] as String?)?.trim() ??
           (nextLink['href'] as String?)?.trim() ??
           '';
-      if (href.isNotEmpty) next = href;
+      if (href.isNotEmpty) {
+        next = _resolveCollectionLink(pageBaseUrl, href);
+      }
     }
     return CollectionPage(items: out, next: next);
   }
@@ -504,6 +537,30 @@ class ActorRepository {
     while (_cache.length > maxCacheEntries) {
       _cache.remove(_cache.keys.first);
     }
+  }
+
+  List<dynamic> _readCollectionItems(Map<String, dynamic>? page) {
+    if (page == null) return const [];
+    final ordered = page['orderedItems'];
+    if (ordered is List && ordered.isNotEmpty) return ordered;
+    final plain = page['items'];
+    if (plain is List && plain.isNotEmpty) return plain;
+    return const [];
+  }
+
+  String _resolveCollectionLink(String baseUrl, String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return raw;
+    final parsed = Uri.tryParse(raw);
+    if (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty) {
+      return parsed.toString();
+    }
+    final base = Uri.tryParse(baseUrl.trim());
+    if (base == null || base.host.isEmpty) return raw;
+    if (raw.startsWith('//')) {
+      return '${base.scheme}:$raw';
+    }
+    return base.resolve(raw).toString();
   }
 }
 

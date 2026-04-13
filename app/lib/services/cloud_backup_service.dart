@@ -73,8 +73,8 @@ class CloudBackupService {
     final payload = {
       'v': 1,
       'created_at_ms': DateTime.now().millisecondsSinceEpoch,
-      'config': config.toJson(),
-      'uiPrefs': prefs.toJson(),
+      'config': config.toBackupJson(),
+      'uiPrefs': prefs.toBackupJson(),
       'encryptionKeys': keys,
       'coreBackup': coreBackup,
       'meta': {
@@ -149,7 +149,7 @@ class CloudBackupService {
   }
 
   Future<void> restore(CloudBackupPackage pkg) async {
-    final api = CoreApi(config: pkg.config);
+    final api = CoreApi(config: config);
     await api.importBackup(pkg.coreBackup);
     await EncryptionManager().importKeys(pkg.encryptionKeys);
   }

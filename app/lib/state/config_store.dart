@@ -18,6 +18,10 @@ class ConfigStore {
   }
 
   static Map<String, dynamic>? readConfig() {
+    return readConfigRaw();
+  }
+
+  static Map<String, dynamic>? readConfigRaw() {
     final f = configFile();
     if (!f.existsSync()) return null;
     try {
@@ -60,4 +64,3 @@ class ConfigStore {
     return parts.join(sep);
   }
 }
-

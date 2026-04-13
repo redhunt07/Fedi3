@@ -229,18 +229,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   bool _isProfileActivity(Map<String, dynamic> activity) {
     final type = (activity['type'] as String?)?.trim() ?? '';
-    if (type != 'Create' &&
+    if (!_isNoteLikeType(type) &&
+        type != 'Create' &&
         type != 'Update' &&
-        type != 'Announce' &&
-        type != 'Note' &&
-        type != 'Article' &&
-        type != 'Question') {
+        type != 'Announce') {
       return false;
     }
 
-    final actorUrl = _profile?.id.trim() ?? '';
-    final actor = (activity['actor'] as String?)?.trim() ?? '';
-    if (actorUrl.isNotEmpty && actor.isNotEmpty && actor != actorUrl) {
+    if (!_matchesProfileActor(activity)) {
       return false;
     }
 
@@ -263,25 +259,94 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!_isNoteLikeType(objType)) {
       return false;
     }
+    final actorUrl = _profile?.id.trim() ?? '';
     if (actorUrl.isEmpty) {
       return true;
     }
-    final attributedTo = (map['attributedTo'] as String?)?.trim() ??
-        ((map['object'] is Map)
-            ? ((((map['object'] as Map).cast<String, dynamic>())['attributedTo']
-                        as String?)
-                    ?.trim() ??
-                '')
-            : '');
-    if (attributedTo.isNotEmpty) {
-      return attributedTo == actorUrl;
+    final attributed = _readActorRefs(map['attributedTo']);
+    if (attributed.contains(actorUrl)) {
+      return true;
     }
+    if (map['object'] is Map) {
+      final nested = (map['object'] as Map).cast<String, dynamic>();
+      final nestedAttributed = _readActorRefs(nested['attributedTo']);
+      if (nestedAttributed.contains(actorUrl)) {
+        return true;
+      }
+    }
+    final actor = _readActorRef(activity['actor']);
     return actor.isEmpty || actor == actorUrl;
   }
 
   bool _isNoteLikeType(String type) {
     final t = type.trim();
     return t == 'Note' || t == 'Article' || t == 'Question' || t == 'Page';
+  }
+
+  bool _matchesProfileActor(Map<String, dynamic> activity) {
+    final actorUrl = _profile?.id.trim() ?? '';
+    if (actorUrl.isEmpty) return true;
+    final actor = _readActorRef(activity['actor']);
+    if (actor.isNotEmpty && actor == actorUrl) return true;
+    final obj = activity['object'];
+    if (obj is Map) {
+      final map = obj.cast<String, dynamic>();
+      final attributed = _readActorRefs(map['attributedTo']);
+      if (attributed.contains(actorUrl)) return true;
+      final nested = map['object'];
+      if (nested is Map) {
+        final nestedAttributed =
+            _readActorRefs((nested.cast<String, dynamic>())['attributedTo']);
+        if (nestedAttributed.contains(actorUrl)) return true;
+      }
+    }
+    return actor.isEmpty;
+  }
+
+  String _readActorRef(dynamic raw) {
+    if (raw is String) return raw.trim();
+    if (raw is Map) {
+      final map = raw.cast<String, dynamic>();
+      final id = map['id'];
+      if (id is String && id.trim().isNotEmpty) return id.trim();
+      final url = map['url'];
+      if (url is String && url.trim().isNotEmpty) return url.trim();
+      if (url is Map) {
+        final href = (url['href'] as String?)?.trim() ?? '';
+        if (href.isNotEmpty) return href;
+      }
+      final href = (map['href'] as String?)?.trim() ?? '';
+      if (href.isNotEmpty) return href;
+      return '';
+    }
+    if (raw is List) {
+      for (final item in raw) {
+        final value = _readActorRef(item);
+        if (value.isNotEmpty) return value;
+      }
+    }
+    return '';
+  }
+
+  Set<String> _readActorRefs(dynamic raw) {
+    final out = <String>{};
+    if (raw is String) {
+      final v = raw.trim();
+      if (v.isNotEmpty) out.add(v);
+      return out;
+    }
+    if (raw is Map) {
+      final v = _readActorRef(raw);
+      if (v.isNotEmpty) out.add(v);
+      return out;
+    }
+    if (raw is List) {
+      for (final item in raw) {
+        final v = _readActorRef(item);
+        if (v.isNotEmpty) out.add(v);
+      }
+    }
+    return out;
   }
 
   Map<String, dynamic>? _normalizeFeaturedItem(dynamic item) {
@@ -545,10 +610,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final page =
           await ActorRepository.instance.fetchOutboxPage(p.outbox, limit: 20);
+      var usedFallback = false;
+      var items = page.items.where(_isProfileActivity).toList();
+      if (items.isEmpty) {
+        final fallback =
+            await _fallbackProfileActivities(p, limit: 20);
+        if (fallback.isNotEmpty) {
+          items = fallback;
+          usedFallback = true;
+        }
+      }
       if (!mounted) return;
       setState(() {
-        _outbox = page.items.where(_isProfileActivity).toList();
-        _outboxNext = page.next;
+        _outbox = items;
+        _outboxNext = (items.isEmpty || usedFallback) ? null : page.next;
         _outboxLoaded = true;
       });
     } catch (e) {
@@ -560,6 +635,107 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _outboxLoading = false);
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _fallbackProfileActivities(
+    ActorProfile profile, {
+    int limit = 20,
+  }) async {
+    final actorUrl = profile.id.trim();
+    if (actorUrl.isEmpty) return const [];
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void addItems(Iterable<Map<String, dynamic>> source) {
+      for (final item in source) {
+        if (!_isProfileActivity(item)) continue;
+        final key = _activityIdentity(item);
+        if (!seen.add(key)) continue;
+        merged.add(item);
+        if (merged.length >= limit) return;
+      }
+    }
+
+    addItems(widget.appState.relayTimelineHome);
+    if (merged.length < limit) {
+      addItems(_activitiesFromRelayEvents(widget.appState.relayEvents));
+    }
+    if (merged.length < limit && widget.appState.isRunning) {
+      try {
+        final cfg = widget.appState.config;
+        if (cfg != null) {
+          final api = CoreApi(config: cfg);
+          final federated = await api.fetchTimeline('federated', limit: 120);
+          final raw = federated['items'];
+          if (raw is List) {
+            final fromCore = raw
+                .whereType<Map>()
+                .map((v) => v.cast<String, dynamic>());
+            addItems(fromCore);
+          }
+        }
+      } catch (_) {
+        // Best effort fallback.
+      }
+    }
+    merged.sort((a, b) => _activityTimestampMs(b).compareTo(_activityTimestampMs(a)));
+    if (merged.length > limit) {
+      merged.removeRange(limit, merged.length);
+    }
+    return merged;
+  }
+
+  List<Map<String, dynamic>> _activitiesFromRelayEvents(
+      List<Map<String, dynamic>> rows) {
+    final out = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final activity = row['activity'];
+      if (activity is Map) {
+        out.add(activity.cast<String, dynamic>());
+        continue;
+      }
+      final payload = row['payload'];
+      if (payload is Map) {
+        final payloadMap = payload.cast<String, dynamic>();
+        final nested = payloadMap['activity'];
+        if (nested is Map) {
+          out.add(nested.cast<String, dynamic>());
+        }
+      }
+    }
+    return out;
+  }
+
+  String _activityIdentity(Map<String, dynamic> activity) {
+    final id = (activity['id'] as String?)?.trim() ?? '';
+    if (id.isNotEmpty) return id;
+    final obj = activity['object'];
+    if (obj is String && obj.trim().isNotEmpty) return obj.trim();
+    if (obj is Map) {
+      final map = obj.cast<String, dynamic>();
+      final objId = (map['id'] as String?)?.trim() ?? '';
+      if (objId.isNotEmpty) return objId;
+    }
+    return '${activity['type']}-${activity['actor']}-${activity['published']}-${activity['created_at_ms']}';
+  }
+
+  int _activityTimestampMs(Map<String, dynamic> activity) {
+    final published = (activity['published'] as String?)?.trim() ?? '';
+    if (published.isNotEmpty) {
+      final dt = DateTime.tryParse(published);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    final updated = (activity['updated'] as String?)?.trim() ?? '';
+    if (updated.isNotEmpty) {
+      final dt = DateTime.tryParse(updated);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    final created = activity['created_at_ms'];
+    if (created is num) return created.toInt();
+    if (created is String) return int.tryParse(created.trim()) ?? 0;
+    final cursor = activity['cursor'];
+    if (cursor is num) return cursor.toInt();
+    if (cursor is String) return int.tryParse(cursor.trim()) ?? 0;
+    return 0;
   }
 
   Future<void> _refreshProfileCounts(ActorProfile profile) async {

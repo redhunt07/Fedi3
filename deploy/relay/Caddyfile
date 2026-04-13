@@ -1,7 +1,15 @@
-# Dominio relay in produzione
+# Reverse proxy ufficiale per il relay in produzione.
+# Caddy gestisce TLS/ACME e applica header di sicurezza sul traffico pubblico.
 {$FEDI3_DOMAIN} {
   request_body {
     max_size 64MB
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+    -Server
   }
 
   @media path /users/*/media/*

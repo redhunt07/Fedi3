@@ -159,7 +159,9 @@ class CoreApi {
 
     final localUri = _internal('/_fedi3/timeline/local', query);
     final localResp = await http.get(localUri, headers: _internalHeaders);
-    if (localResp.statusCode < 200 || localResp.statusCode >= 300) return decoded;
+    if (localResp.statusCode < 200 || localResp.statusCode >= 300) {
+      return decoded;
+    }
     final local = jsonDecode(localResp.body) as Map<String, dynamic>;
     final dhtItems = ((decoded['items'] as List<dynamic>?) ?? const [])
         .whereType<Map>()
@@ -506,28 +508,17 @@ class CoreApi {
   }
 
   Future<void> deleteChatThread({required String threadId}) async {
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: threadId = $threadId');
     final uri = _internal('/_fedi3/chat/thread/delete');
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: URI = $uri');
     final body = jsonEncode({'thread_id': threadId});
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: body = $body');
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: headers = $_internalHeaders');
     final resp = await http.post(
       uri,
       headers: {..._internalHeaders, 'Content-Type': 'application/json'},
       body: body,
     );
-    debugPrint(
-        '[DEBUG] CoreApi.deleteChatThread: response status = ${resp.statusCode}');
-    debugPrint(
-        '[DEBUG] CoreApi.deleteChatThread: response body = ${resp.body}');
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      debugPrint(
-          '[DEBUG] CoreApi.deleteChatThread: ERRORE - sollevando eccezione');
       throw StateError(
           'chat thread delete failed: ${resp.statusCode} ${resp.body}');
     }
-    debugPrint('[DEBUG] CoreApi.deleteChatThread: successo');
   }
 
   Future<void> leaveChatThread({required String threadId}) async {
@@ -1250,14 +1241,12 @@ class CoreApi {
     );
     final client = _createHttpClient();
     try {
-      final resp = await client
-          .get(
-            uri,
-            headers: {
-              'Authorization': 'Bearer ${config.relayToken.trim()}',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
+      final resp = await client.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer ${config.relayToken.trim()}',
+        },
+      ).timeout(const Duration(seconds: 10));
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         throw StateError(
             'relay coverage failed: ${resp.statusCode} ${resp.body}');

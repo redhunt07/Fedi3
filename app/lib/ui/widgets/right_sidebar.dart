@@ -13,7 +13,6 @@ import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
-import '../../services/notification_archive_store.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
@@ -54,7 +53,7 @@ class _RightSidebarState extends State<RightSidebar> {
   @override
   void initState() {
     super.initState();
-    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) => _refresh());
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -126,27 +125,19 @@ class _RightSidebarState extends State<RightSidebar> {
     if (_loading) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    if (!widget.appState.isRunning) return;
     setState(() => _loading = true);
     try {
-      final api = CoreApi(config: cfg);
-      final resp =
-          await api.fetchNotifications(limit: _maxSidebarNotifications);
-      final items = (resp['items'] as List<dynamic>? ?? const [])
-          .whereType<Map>()
-          .map((m) => m.cast<String, dynamic>())
-          .toList();
-      final archive =
-          await NotificationArchiveStore.instance.mergeAndPersist(items);
+      await widget.appState.refreshRelaySync();
       unawaited(_loadHotTags());
       if (!mounted) return;
-      setState(() =>
-          _items = NotificationArchiveStore.instance.sidebarQueue(archive));
+      setState(() => _items = widget.appState.relayNotifications
+          .take(_maxSidebarNotifications)
+          .toList());
     } catch (_) {
-      final archive = await NotificationArchiveStore.instance.readArchive();
       if (!mounted) return;
-      setState(() =>
-          _items = NotificationArchiveStore.instance.sidebarQueue(archive));
+      setState(() => _items = widget.appState.relayNotifications
+          .take(_maxSidebarNotifications)
+          .toList());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -302,15 +293,7 @@ class _RightSidebarState extends State<RightSidebar> {
                       ],
                     ),
                     const SizedBox(height: UiTokens.gapSm),
-                    if (!widget.appState.isRunning)
-                      Text(context.l10n.notificationsCoreNotRunning,
-                          style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withAlpha(179),
-                              fontSize: 12))
-                    else if (_items.isEmpty)
+                    if (_items.isEmpty)
                       Text(context.l10n.notificationsEmpty,
                           style: TextStyle(
                               color: Theme.of(context)
@@ -363,8 +346,12 @@ class _RightSidebarState extends State<RightSidebar> {
             const SizedBox(height: UiTokens.gapMd),
             Card(
               child: ListTile(
-                title: Text(context.l10n.relaysTitle),
-                subtitle: Text(cfg?.publicBaseUrl ?? ''),
+                title: const Text('Relay-first sync'),
+                subtitle: Text(
+                  widget.appState.relaySyncLastSuccessMs > 0
+                      ? 'Online • ${cfg?.publicBaseUrl ?? ''}'
+                      : (cfg?.publicBaseUrl ?? ''),
+                ),
               ),
             ),
             if (_hotTags.isNotEmpty) ...[
@@ -575,9 +562,9 @@ class _SidebarNotificationRowState extends State<_SidebarNotificationRow> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final ts = (item['ts'] is num)
-        ? (item['ts'] as num).toInt()
-        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final ts = (item['created_at_ms'] is num)
+        ? (item['created_at_ms'] as num).toInt()
+        : int.tryParse(item['created_at_ms']?.toString() ?? '') ?? 0;
     final activity = (item['activity'] is Map)
         ? (item['activity'] as Map).cast<String, dynamic>()
         : const <String, dynamic>{};

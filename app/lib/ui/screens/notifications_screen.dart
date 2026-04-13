@@ -9,15 +9,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
-import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
-import '../../services/core_event_stream.dart';
-import '../../services/notification_archive_store.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
-import '../utils/error_humanizer.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
@@ -35,105 +31,40 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _loading = false;
   String? _error;
-  String? _cursor;
   final _items = <Map<String, dynamic>>[];
-  bool _coreUnreachable = false;
   String _filter = 'all';
-  late bool _lastRunning;
   late final VoidCallback _appStateListener;
-  StreamSubscription<CoreEvent>? _streamSub;
-  Timer? _streamDebounce;
-  Timer? _streamRetry;
-  Timer? _loadRetry;
-  CoreConfig? _streamConfig;
 
   @override
   void initState() {
     super.initState();
     widget.appState.clearUnreadNotifications();
-    _lastRunning = widget.appState.isRunning;
-    _appStateListener = () {
-      final running = widget.appState.isRunning;
-      final cfg = widget.appState.config;
-      final configChanged = !identical(_streamConfig, cfg);
-      if (!running) {
-        _stopStream();
-      }
-      if (running && (!_lastRunning || configChanged)) {
-        _coreUnreachable = false;
-        if (mounted) _refresh();
-        _startStream();
-      }
-      _lastRunning = running;
-    };
+    _appStateListener = _syncFromAppState;
     widget.appState.addListener(_appStateListener);
-
-    if (widget.appState.isRunning) {
-      _refresh();
-      _startStream();
-    }
+    _syncFromAppState();
+    unawaited(_refresh());
   }
 
   @override
   void dispose() {
-    _streamDebounce?.cancel();
-    _streamRetry?.cancel();
-    _loadRetry?.cancel();
-    _streamSub?.cancel();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
   }
 
-  void _startStream() {
-    if (!widget.appState.isRunning) return;
-    final cfg = widget.appState.config;
-    if (cfg == null) return;
-    if (identical(_streamConfig, cfg) && _streamSub != null) return;
-    _streamConfig = cfg;
-    _streamSub?.cancel();
-    _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
-      if (!mounted) return;
-      if (ev.kind != 'notification' && ev.kind != 'inbox') return;
-      // Debounce refresh bursts.
-      _streamDebounce?.cancel();
-      _streamDebounce = Timer(const Duration(milliseconds: 350), () {
-        if (!mounted) return;
-        if (widget.appState.isRunning) _refresh();
-        widget.appState.incrementUnreadNotifications();
-      });
-    }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
-  }
-
-  void _stopStream() {
-    _streamRetry?.cancel();
-    _streamSub?.cancel();
-    _streamSub = null;
-  }
-
-  void _scheduleStreamRetry() {
+  void _syncFromAppState() {
     if (!mounted) return;
-    _streamSub = null;
-    if (!widget.appState.isRunning) return;
-    _streamRetry?.cancel();
-    _streamRetry = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      _startStream();
+    setState(() {
+      _items
+        ..clear()
+        ..addAll(widget.appState.relayNotifications);
+      _loading = widget.appState.relaySyncBusy && _items.isEmpty;
+      _error = widget.appState.relaySyncError;
     });
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _items.clear();
-      _cursor = null;
-      _coreUnreachable = false;
-    });
-    final archived = await NotificationArchiveStore.instance.readArchive();
-    if (mounted && archived.isNotEmpty) {
-      setState(() {
-        _items.addAll(archived);
-      });
-    }
-    await _loadMore();
+    await widget.appState.refreshRelaySync();
+    _syncFromAppState();
     await _markSeenNow();
     widget.appState.clearUnreadNotifications();
   }
@@ -143,76 +74,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final prefs = widget.appState.prefs;
     await widget.appState
         .savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
-  }
-
-  Future<void> _loadMore() async {
-    if (_loading) return;
-    if (!widget.appState.isRunning) return;
-    final cfg = widget.appState.config!;
-    final api = CoreApi(config: cfg);
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final resp = await api.fetchNotifications(cursor: _cursor, limit: 50);
-      final items = (resp['items'] as List<dynamic>? ?? const [])
-          .whereType<Map>()
-          .map((m) => m.cast<String, dynamic>())
-          .toList();
-      final next = (resp['next'] as String?)?.trim();
-      final merged =
-          await NotificationArchiveStore.instance.mergeAndPersist(items);
-      if (!mounted) return;
-      setState(() {
-        _items
-          ..clear()
-          ..addAll(merged);
-        _cursor = (next != null && next.isNotEmpty) ? next : null;
-      });
-    } catch (e) {
-      final msg = e.toString();
-      if (msg.contains('SocketException') ||
-          msg.contains('Connection refused') ||
-          msg.contains('errno = 1225')) {
-        final archive = await NotificationArchiveStore.instance.readArchive();
-        if (mounted) {
-          setState(() {
-            _coreUnreachable = true;
-            _error = msg;
-            if (archive.isNotEmpty) {
-              _items
-                ..clear()
-                ..addAll(archive);
-            }
-          });
-        }
-        _scheduleRetryIfOffline(msg);
-        return;
-      }
-      if (!mounted) return;
-      setState(() => _error = msg);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  void _scheduleRetryIfOffline(String msg) {
-    if (!mounted) return;
-    if (!widget.appState.isRunning) return;
-    final lower = msg.toLowerCase();
-    final shouldRetry = lower.contains('socketexception') ||
-        lower.contains('connection refused') ||
-        lower.contains('errno = 111') ||
-        lower.contains('errno=111') ||
-        lower.contains('errno = 1225');
-    if (!shouldRetry) return;
-    if (_loadRetry != null && _loadRetry!.isActive) return;
-    _loadRetry = Timer(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      if (!widget.appState.isRunning) return;
-      _refresh();
-    });
   }
 
   bool _matchesFilter(Map<String, dynamic> item) {
@@ -236,42 +97,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return AnimatedBuilder(
       animation: widget.appState,
       builder: (context, _) {
-        if (!widget.appState.isRunning || _coreUnreachable) {
-          return Scaffold(
-            appBar: AppBar(title: Text(context.l10n.notificationsTitle)),
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(context.l10n.notificationsCoreNotRunning,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 12),
-                        Text(context.l10n.settingsCoreServiceHint),
-                        if (_error != null) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            humanizeError(context, _error!),
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }
-
-        final canLoadMore = _cursor != null && !_loading;
         final filtered = _items.where(_matchesFilter).toList(growable: false);
         final panelBorder =
             Theme.of(context).colorScheme.outlineVariant.withAlpha(90);
@@ -364,10 +189,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     child: _loading
                         ? const CircularProgressIndicator()
                         : OutlinedButton(
-                            onPressed: canLoadMore ? _loadMore : null,
-                            child: Text(canLoadMore
-                                ? context.l10n.listLoadMore
-                                : context.l10n.listEnd),
+                            onPressed: null,
+                            child: Text(context.l10n.listEnd),
                           ),
                   ),
                 ),
@@ -442,9 +265,9 @@ class _NotificationItemState extends State<_NotificationItem> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final ts = (item['ts'] is num)
-        ? (item['ts'] as num).toInt()
-        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final ts = (item['created_at_ms'] is num)
+        ? (item['created_at_ms'] as num).toInt()
+        : int.tryParse(item['created_at_ms']?.toString() ?? '') ?? 0;
     final activity = (item['activity'] is Map)
         ? (item['activity'] as Map).cast<String, dynamic>()
         : const <String, dynamic>{};

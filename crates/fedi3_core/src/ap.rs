@@ -31,8 +31,9 @@ use crate::delivery::{extract_recipients, is_public_activity, Delivery};
 use crate::delivery_queue::{DeliveryQueue, PostDeliveryMode};
 use crate::http_retry::send_with_retry_metrics;
 use crate::http_sig::{
-    build_signing_string, parse_signature_header, sign_request_rsa_sha256, verify_date,
-    verify_digest_if_present, verify_signature_rsa_sha256, KeyResolver,
+    build_signing_string, ensure_supported_signature_algorithm, parse_signature_header,
+    sign_request_rsa_sha256, verify_digest_if_present, verify_signature_rsa_sha256,
+    verify_signature_time_window, KeyResolver,
 };
 use crate::media_backend as media_store;
 use crate::nat::UpnpController;
@@ -56,6 +57,27 @@ const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
 static CHAT_BUNDLE_INFLIGHT: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FOLLOW_IMPORT_JOB_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn constant_time_eq(expected: &str, candidate: &str) -> bool {
+    let a = expected.as_bytes();
+    let b = candidate.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in a.iter().zip(b.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+fn internal_header_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("X-Fedi3-Internal")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
 
 enum PathLatencyKind {
     Chat,
@@ -281,6 +303,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/readyz") => readyz_get(state),
         // NodeInfo/host-meta (compat).
         ("GET", "/.well-known/nodeinfo") => nodeinfo_links(&state.cfg),
+        ("GET", "/nodeinfo/2.1") => nodeinfo_2_1(&state.cfg),
         ("GET", "/nodeinfo/2.0") => nodeinfo_2_0(&state.cfg),
         ("GET", "/.well-known/host-meta") => host_meta(&state.cfg),
         ("GET", "/.well-known/host-meta.json") => host_meta_json(&state.cfg),
@@ -696,31 +719,20 @@ async fn verify_signature_if_present(
         return Ok(());
     };
 
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        return Err(simple(
-            StatusCode::UNAUTHORIZED,
-            &format!("date invalid: {e}"),
-        ));
-    }
-
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
-        Err(e) => {
-            return Err(simple(
-                StatusCode::UNAUTHORIZED,
-                &format!("bad Signature: {e}"),
-            ))
-        }
+        Err(_) => return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature")),
     };
+    if ensure_supported_signature_algorithm(&sig).is_err() {
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
+    };
+    if verify_signature_time_window(&parts.headers, &sig, state.max_date_skew, true).is_err() {
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
+    }
     let signing_string =
         match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
             Ok(s) => s,
-            Err(e) => {
-                return Err(simple(
-                    StatusCode::UNAUTHORIZED,
-                    &format!("bad signed headers: {e}"),
-                ))
-            }
+            Err(_) => return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature")),
         };
     let summary = match state
         .key_resolver
@@ -728,20 +740,12 @@ async fn verify_signature_if_present(
         .await
     {
         Ok(s) => s,
-        Err(e) => {
-            return Err(simple(
-                StatusCode::UNAUTHORIZED,
-                &format!("key resolve failed: {e}"),
-            ))
-        }
+        Err(_) => return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature")),
     };
-    if let Err(e) =
-        verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature)
+    if verify_signature_rsa_sha256(&summary.public_key_pem, &signing_string, &sig.signature)
+        .is_err()
     {
-        return Err(simple(
-            StatusCode::UNAUTHORIZED,
-            &format!("signature invalid: {e}"),
-        ));
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
     }
     Ok(())
 }
@@ -749,10 +753,16 @@ async fn verify_signature_if_present(
 fn nodeinfo_links(cfg: &ApConfig) -> Response<Body> {
     let base = cfg.public_base_url.trim_end_matches('/');
     let body = serde_json::json!({
-      "links": [{
-        "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
-        "href": format!("{base}/nodeinfo/2.0")
-      }]
+      "links": [
+        {
+          "rel": "http://nodeinfo.diaspora.software/ns/schema/2.1",
+          "href": format!("{base}/nodeinfo/2.1")
+        },
+        {
+          "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
+          "href": format!("{base}/nodeinfo/2.0")
+        }
+      ]
     });
     (
         StatusCode::OK,
@@ -765,20 +775,44 @@ fn nodeinfo_links(cfg: &ApConfig) -> Response<Body> {
         .into_response()
 }
 
-fn nodeinfo_2_0(cfg: &ApConfig) -> Response<Body> {
+fn nodeinfo_body(cfg: &ApConfig, version: &str) -> serde_json::Value {
     let base = cfg.public_base_url.trim_end_matches('/');
-    let body = serde_json::json!({
-      "version": "2.0",
+    serde_json::json!({
+      "version": version,
       "software": { "name": "fedi3", "version": env!("CARGO_PKG_VERSION") },
       "protocols": ["activitypub"],
       "services": { "inbound": [], "outbound": [] },
       "openRegistrations": false,
-      "usage": { "users": { "total": 1 } },
+      "usage": {
+        "users": {
+          "total": 1,
+          "activeHalfyear": 1,
+          "activeMonth": 1
+        }
+      },
       "metadata": {
         "nodeName": "Fedi3",
+        "nodeDescription": "Fedi3 ActivityPub node",
         "actor": format!("{base}/users/{}", cfg.username),
       }
-    });
+    })
+}
+
+fn nodeinfo_2_0(cfg: &ApConfig) -> Response<Body> {
+    let body = nodeinfo_body(cfg, "2.0");
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+fn nodeinfo_2_1(cfg: &ApConfig) -> Response<Body> {
+    let body = nodeinfo_body(cfg, "2.1");
     (
         StatusCode::OK,
         [
@@ -844,6 +878,10 @@ fn well_known_links(cfg: &ApConfig) -> Response<Body> {
           "rel": "self",
           "type": "application/activity+json",
           "href": actor
+        },
+        {
+          "rel": "http://nodeinfo.diaspora.software/ns/schema/2.1",
+          "href": format!("{base}/nodeinfo/2.1")
         },
         {
           "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
@@ -1656,12 +1694,8 @@ async fn send_profile_update(state: &ApState) -> anyhow::Result<u64> {
 async fn global_ingest(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (parts, body) = req.into_parts();
     if !state.internal_token.is_empty() {
-        let token = parts
-            .headers
-            .get("X-Fedi3-Internal")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if token != state.internal_token {
+        let token = internal_header_token(&parts.headers).unwrap_or("");
+        if !constant_time_eq(&state.internal_token, token) {
             return simple(StatusCode::FORBIDDEN, "forbidden");
         }
     }
@@ -1754,10 +1788,8 @@ fn is_internal(state: &ApState, headers: &HeaderMap) -> bool {
     if state.internal_token.is_empty() {
         return true;
     }
-    headers
-        .get("X-Fedi3-Internal")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == state.internal_token)
+    internal_header_token(headers)
+        .map(|v| constant_time_eq(&state.internal_token, v))
         .unwrap_or(false)
 }
 
@@ -2589,11 +2621,8 @@ fn require_internal(
     if state.internal_token.is_empty() {
         return Ok(());
     }
-    let token = headers
-        .get("X-Fedi3-Internal")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if token != state.internal_token {
+    let token = internal_header_token(headers).unwrap_or("");
+    if !constant_time_eq(&state.internal_token, token) {
         state.net.auth_failure();
         let _ = state.social.insert_audit_event(
             "internal_auth",
@@ -2801,36 +2830,26 @@ fn verify_device_signature(
             &format!("bad Digest: {e}"),
         ));
     }
-    if let Err(e) = verify_date(&parts.headers, Duration::from_secs(300)) {
-        return Err(simple(StatusCode::UNAUTHORIZED, &format!("bad Date: {e}")));
-    }
-
     let params = match parse_signature_header(sig) {
         Ok(v) => v,
-        Err(e) => {
-            return Err(simple(
-                StatusCode::UNAUTHORIZED,
-                &format!("bad Signature: {e}"),
-            ))
-        }
+        Err(_) => return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature")),
+    };
+    if ensure_supported_signature_algorithm(&params).is_err() {
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
+    }
+    if verify_signature_time_window(&parts.headers, &params, Duration::from_secs(300), true)
+        .is_err()
+    {
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
     };
     let signing =
         match build_signing_string(&parts.method, &parts.uri, &parts.headers, &params.headers) {
             Ok(v) => v,
-            Err(e) => {
-                return Err(simple(
-                    StatusCode::UNAUTHORIZED,
-                    &format!("bad signing string: {e}"),
-                ))
-            }
+            Err(_) => return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature")),
         };
-    if let Err(e) =
-        verify_signature_rsa_sha256(&state.cfg.public_key_pem, &signing, &params.signature)
+    if verify_signature_rsa_sha256(&state.cfg.public_key_pem, &signing, &params.signature).is_err()
     {
-        return Err(simple(
-            StatusCode::UNAUTHORIZED,
-            &format!("signature verify failed: {e}"),
-        ));
+        return Err(simple(StatusCode::UNAUTHORIZED, "invalid signature"));
     }
     Ok(())
 }
@@ -6518,21 +6537,23 @@ fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
         cfg.username
     );
     let expected_acct = format!("acct:{}@{}", cfg.username, cfg.domain);
+    let strict_domain = should_enforce_strict_webfinger_domain(cfg);
 
     if resource.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing resource");
     }
 
-    // Respond only for our local user; tolerate `acct:` with different domain in dev,
-    // but always require matching username.
+    // Production mode requires an exact acct:user@domain match. Development-ish
+    // local URLs keep the historical tolerance for alternate local domains.
     let mut ok = false;
     if resource == expected_acct {
         ok = true;
     } else if resource == actor_url {
         ok = true;
     } else if let Some(rest) = resource.strip_prefix("acct:") {
-        if let Some((user, _domain)) = rest.split_once('@') {
-            ok = user == cfg.username;
+        if let Some((user, domain)) = rest.split_once('@') {
+            ok = user == cfg.username
+                && (!strict_domain || domain.eq_ignore_ascii_case(&cfg.domain));
         }
     }
     if !ok {
@@ -6560,6 +6581,46 @@ fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
     };
 
     jrd(StatusCode::OK, &body)
+}
+
+fn should_enforce_strict_webfinger_domain(cfg: &ApConfig) -> bool {
+    let base_host = cfg
+        .public_base_url
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(str::to_string))
+        .unwrap_or_default();
+    !is_local_development_host(&cfg.domain) && !is_local_development_host(&base_host)
+}
+
+fn is_local_development_host(host: &str) -> bool {
+    let host = host.trim().trim_matches('[').trim_matches(']');
+    if host.is_empty() {
+        return true;
+    }
+    let lower = host.to_ascii_lowercase();
+    if matches!(lower.as_str(), "localhost" | "::1") {
+        return true;
+    }
+    if lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+        || lower.ends_with(".invalid")
+        || lower.ends_with(".test")
+        || lower.ends_with(".example")
+    {
+        return true;
+    }
+    if lower.starts_with("127.") || lower.starts_with("10.") || lower.starts_with("192.168.") {
+        return true;
+    }
+    if let Some(rest) = lower.strip_prefix("172.") {
+        if let Some((octet, _)) = rest.split_once('.') {
+            if let Ok(v) = octet.parse::<u8>() {
+                return (16..=31).contains(&v);
+            }
+        }
+    }
+    false
 }
 
 fn build_local_actor(cfg: &ApConfig) -> Actor {
@@ -7760,19 +7821,6 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        let _ = state.social.insert_audit_event(
-            "inbox",
-            None,
-            None,
-            None,
-            false,
-            Some("401"),
-            Some("date invalid"),
-        );
-        return simple(StatusCode::UNAUTHORIZED, &format!("date invalid: {e}"));
-    }
-
     let sig_header = parts
         .headers
         .get("Signature")
@@ -7794,7 +7842,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
             let _ = state.social.insert_audit_event(
                 "inbox",
                 None,
@@ -7804,9 +7852,33 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
                 Some("401"),
                 Some("bad Signature"),
             );
-            return simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"));
+            return simple(StatusCode::UNAUTHORIZED, "invalid signature");
         }
     };
+    if ensure_supported_signature_algorithm(&sig).is_err() {
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("unsupported algorithm"),
+        );
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
+    }
+    if verify_signature_time_window(&parts.headers, &sig, state.max_date_skew, true).is_err() {
+        let _ = state.social.insert_audit_event(
+            "inbox",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("date invalid"),
+        );
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
+    }
 
     // Temp blocks (best-effort anti-abuse) on keyId, before expensive key resolution.
     if let Ok(Some(_until)) = state
@@ -7833,12 +7905,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
     let signing_string =
         match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
             Ok(s) => s,
-            Err(e) => {
-                return simple(
-                    StatusCode::UNAUTHORIZED,
-                    &format!("bad signed headers: {e}"),
-                )
-            }
+            Err(e) => return simple(StatusCode::UNAUTHORIZED, "invalid signature"),
         };
 
     let summary = match state
@@ -7860,10 +7927,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
                 Some("401"),
                 Some("key resolve failed"),
             );
-            return simple(
-                StatusCode::UNAUTHORIZED,
-                &format!("key resolve failed: {e}"),
-            );
+            return simple(StatusCode::UNAUTHORIZED, "invalid signature");
         }
     };
     let pem = summary.public_key_pem.clone();
@@ -7884,7 +7948,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
             Some("401"),
             Some("signature invalid"),
         );
-        return simple(StatusCode::UNAUTHORIZED, &format!("signature invalid: {e}"));
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
     }
 
     // Post-auth temp block on actor id.
@@ -8081,19 +8145,6 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
-        let _ = state.social.insert_audit_event(
-            "receipt",
-            None,
-            None,
-            None,
-            false,
-            Some("401"),
-            Some("date invalid"),
-        );
-        return simple(StatusCode::UNAUTHORIZED, &format!("date invalid: {e}"));
-    }
-
     let sig_header = parts
         .headers
         .get("Signature")
@@ -8115,7 +8166,7 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     let sig = match parse_signature_header(sig_header) {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
             let _ = state.social.insert_audit_event(
                 "receipt",
                 None,
@@ -8125,9 +8176,33 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 Some("401"),
                 Some("bad Signature"),
             );
-            return simple(StatusCode::UNAUTHORIZED, &format!("bad Signature: {e}"));
+            return simple(StatusCode::UNAUTHORIZED, "invalid signature");
         }
     };
+    if ensure_supported_signature_algorithm(&sig).is_err() {
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("unsupported algorithm"),
+        );
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
+    }
+    if verify_signature_time_window(&parts.headers, &sig, state.max_date_skew, true).is_err() {
+        let _ = state.social.insert_audit_event(
+            "receipt",
+            None,
+            Some(&sig.key_id),
+            None,
+            false,
+            Some("401"),
+            Some("date invalid"),
+        );
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
+    }
 
     if let Ok(Some(_until)) = state
         .social
@@ -8148,12 +8223,7 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let signing_string =
         match build_signing_string(&parts.method, &parts.uri, &parts.headers, &sig.headers) {
             Ok(s) => s,
-            Err(e) => {
-                return simple(
-                    StatusCode::UNAUTHORIZED,
-                    &format!("bad signed headers: {e}"),
-                )
-            }
+            Err(e) => return simple(StatusCode::UNAUTHORIZED, "invalid signature"),
         };
 
     let summary = match state
@@ -8175,10 +8245,7 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 Some("401"),
                 Some("key resolve failed"),
             );
-            return simple(
-                StatusCode::UNAUTHORIZED,
-                &format!("key resolve failed: {e}"),
-            );
+            return simple(StatusCode::UNAUTHORIZED, "invalid signature");
         }
     };
 
@@ -8200,7 +8267,7 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             Some("401"),
             Some("signature invalid"),
         );
-        return simple(StatusCode::UNAUTHORIZED, &format!("signature invalid: {e}"));
+        return simple(StatusCode::UNAUTHORIZED, "invalid signature");
     }
 
     if let Ok(Some(_until)) = state
@@ -10380,5 +10447,121 @@ fn from_hex(c: u8) -> Option<u8> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cfg(domain: &str, public_base_url: &str) -> ApConfig {
+        ApConfig {
+            username: "alice".to_string(),
+            domain: domain.to_string(),
+            public_base_url: public_base_url.to_string(),
+            relay_base_url: None,
+            relay_token: None,
+            public_key_pem: String::new(),
+            also_known_as: Vec::new(),
+            p2p_peer_id: None,
+            p2p_peer_addrs: Vec::new(),
+            display_name: None,
+            summary: None,
+            icon_url: None,
+            icon_media_type: None,
+            image_url: None,
+            image_media_type: None,
+            profile_fields: Vec::new(),
+            manually_approves_followers: false,
+            published_ms: None,
+            blocked_domains: Vec::new(),
+            blocked_actors: Vec::new(),
+            p2p_cache_ttl_secs: 3600,
+        }
+    }
+
+    #[test]
+    fn webfinger_is_strict_in_production_mode() {
+        let cfg = test_cfg("relay.fedi3.com", "https://relay.fedi3.com");
+        let req = Request::builder()
+            .uri("/.well-known/webfinger?resource=acct:alice@wrong.example")
+            .body(Body::empty())
+            .unwrap();
+        let resp = webfinger(&cfg, req);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn webfinger_keeps_dev_domain_tolerance_for_local_urls() {
+        let cfg = test_cfg("example.invalid", "http://127.0.0.1:8787");
+        let req = Request::builder()
+            .uri("/.well-known/webfinger?resource=acct:alice@local.dev")
+            .body(Body::empty())
+            .unwrap();
+        let resp = webfinger(&cfg, req);
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nodeinfo_links_include_21_and_20() {
+        let cfg = test_cfg("relay.fedi3.com", "https://relay.fedi3.com");
+        let resp = nodeinfo_links(&cfg);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.contains("/nodeinfo/2.1"));
+        assert!(body.contains("/nodeinfo/2.0"));
+    }
+
+    #[test]
+    fn activity_add_cc_and_has_recipient_support_public_followers_semantics() {
+        let followers = "https://relay.fedi3.com/users/alice/followers";
+        let mut activity = serde_json::json!({
+            "type": "Create",
+            "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        });
+        assert!(!activity_has_recipient(&activity, followers));
+        activity_add_cc(&mut activity, followers);
+        assert!(activity_has_recipient(&activity, followers));
+    }
+
+    #[test]
+    fn extract_recipients_dedups_and_filters_public_actor() {
+        let followers = "https://relay.fedi3.com/users/alice/followers";
+        let activity = serde_json::json!({
+            "to": [
+                "https://www.w3.org/ns/activitystreams#Public",
+                "https://remote.example/users/bob",
+                "https://remote.example/users/bob"
+            ],
+            "cc": [
+                followers,
+                "https://www.w3.org/ns/activitystreams#Public"
+            ]
+        });
+        let recipients = extract_recipients(&activity);
+        assert_eq!(
+            recipients,
+            vec![
+                followers.to_string(),
+                "https://remote.example/users/bob".to_string()
+            ]
+        );
+        assert!(!recipients
+            .iter()
+            .any(|r| r == "https://www.w3.org/ns/activitystreams#Public"));
+    }
+
+    #[test]
+    fn is_public_activity_detects_to_or_cc() {
+        let public = "https://www.w3.org/ns/activitystreams#Public";
+        let to_public = serde_json::json!({ "to": [public] });
+        let cc_public = serde_json::json!({ "cc": [public] });
+        let private =
+            serde_json::json!({ "to": ["https://relay.fedi3.com/users/alice/followers"] });
+        assert!(is_public_activity(&to_public));
+        assert!(is_public_activity(&cc_public));
+        assert!(!is_public_activity(&private));
     }
 }

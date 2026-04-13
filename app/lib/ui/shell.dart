@@ -10,14 +10,11 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
-import '../core/core_api.dart';
 import '../services/core_event_stream.dart';
 import '../services/actor_repository.dart';
-import '../services/notification_service.dart';
 import '../services/update_service.dart';
 import '../services/rss_feed_service.dart';
 import 'screens/notifications_screen.dart';
-import 'screens/relays_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/timelines_screen.dart';
@@ -37,25 +34,8 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  static const Set<String> _directNotifTypes = {
-    'Create',
-    'Announce',
-    'Like',
-    'EmojiReact',
-    'Follow',
-    'Accept',
-    'Reject',
-  };
   int _index = 0;
   late final List<Widget> _pages;
-  StreamSubscription<CoreEvent>? _chatStream;
-  Timer? _chatDebounce;
-  Timer? _chatRetry;
-  CoreConfig? _chatStreamConfig;
-  StreamSubscription<CoreEvent>? _notifStream;
-  Timer? _notifDebounce;
-  Timer? _notifRetry;
-  CoreConfig? _notifStreamConfig;
   StreamSubscription<CoreEvent>? _profileStream;
   Timer? _profileRetry;
   CoreConfig? _profileStreamConfig;
@@ -70,31 +50,22 @@ class _ShellState extends State<Shell> {
       SearchScreen(appState: widget.appState),
       ChatScreen(appState: widget.appState),
       NotificationsScreen(appState: widget.appState),
-      RelaysScreen(appState: widget.appState),
       SettingsScreen(appState: widget.appState),
     ];
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
       final cfg = widget.appState.config;
-      final configChanged = !identical(_chatStreamConfig, cfg) ||
-          !identical(_notifStreamConfig, cfg) ||
-          !identical(_profileStreamConfig, cfg);
+      final configChanged = !identical(_profileStreamConfig, cfg);
       if (!running) {
-        _stopChatStream();
-        _stopNotifStream();
         _stopProfileStream();
       } else if (running && (!_lastRunning || configChanged)) {
-        _startChatStream();
-        _startNotifStream();
         _startProfileStream();
       }
       _lastRunning = running;
     };
     widget.appState.addListener(_appStateListener);
     if (widget.appState.isRunning) {
-      _startChatStream();
-      _startNotifStream();
       _startProfileStream();
     }
     UpdateService.instance.start();
@@ -103,93 +74,12 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
-    _chatStream?.cancel();
-    _chatDebounce?.cancel();
-    _chatRetry?.cancel();
-    _notifStream?.cancel();
-    _notifDebounce?.cancel();
-    _notifRetry?.cancel();
     _profileStream?.cancel();
     _profileRetry?.cancel();
     UpdateService.instance.stop();
     RssFeedService.instance.stop();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
-  }
-
-  void _startChatStream() {
-    if (!widget.appState.isRunning) return;
-    final cfg = widget.appState.config;
-    if (cfg == null) return;
-    if (identical(_chatStreamConfig, cfg) && _chatStream != null) return;
-    _chatStreamConfig = cfg;
-    _chatStream?.cancel();
-    _chatStream =
-        CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
-      if (!mounted) return;
-      if (ev.kind != 'chat') return;
-      final lastSeen = widget.appState.prefs.lastChatSeenMs;
-      if (ev.tsMs <= lastSeen) return;
-      _chatDebounce?.cancel();
-      _chatDebounce = Timer(const Duration(milliseconds: 350), () {
-        if (!mounted) return;
-        final onChatTab = _index == 2;
-        if (!onChatTab) {
-          widget.appState.incrementUnreadChats();
-          _showChatSnack();
-          if (widget.appState.prefs.notifyChat && !_notificationsMuted()) {
-            NotificationService.showChatNotification(
-              title: context.l10n.chatTitle,
-              body: context.l10n.chatNewMessageBody,
-            );
-          }
-        }
-      });
-    }, onError: (_) => _scheduleChatRetry(), onDone: _scheduleChatRetry);
-  }
-
-  void _stopChatStream() {
-    _chatRetry?.cancel();
-    _chatStream?.cancel();
-    _chatStream = null;
-  }
-
-  void _startNotifStream() {
-    if (!widget.appState.isRunning) return;
-    final cfg = widget.appState.config;
-    if (cfg == null) return;
-    if (identical(_notifStreamConfig, cfg) && _notifStream != null) return;
-    _notifStreamConfig = cfg;
-    _notifStream?.cancel();
-    _notifStream = CoreEventStream(config: cfg).stream().listen((ev) {
-      if (!mounted) return;
-      if (ev.kind != 'notification' && ev.kind != 'inbox') return;
-      final lastSeen = widget.appState.prefs.lastNotificationsSeenMs;
-      if (ev.tsMs <= lastSeen) return;
-      _notifDebounce?.cancel();
-      _notifDebounce = Timer(const Duration(milliseconds: 350), () async {
-        if (!mounted) return;
-        final notificationTitle = context.l10n.notificationsTitle;
-        final notificationBody = context.l10n.notificationsNewActivity;
-        if (!await _isDirectInteraction(ev)) return;
-        final onNotifTab = _index == 3;
-        if (!onNotifTab) {
-          widget.appState.incrementUnreadNotifications();
-          if (widget.appState.prefs.notifyDirect && !_notificationsMuted()) {
-            NotificationService.showGeneralNotification(
-              title: notificationTitle,
-              body: notificationBody,
-            );
-          }
-        }
-      });
-    }, onError: (_) => _scheduleNotifRetry(), onDone: _scheduleNotifRetry);
-  }
-
-  void _stopNotifStream() {
-    _notifRetry?.cancel();
-    _notifStream?.cancel();
-    _notifStream = null;
   }
 
   void _startProfileStream() {
@@ -214,28 +104,6 @@ class _ShellState extends State<Shell> {
     _profileStream = null;
   }
 
-  void _scheduleNotifRetry() {
-    if (!mounted) return;
-    _notifStream = null;
-    if (!widget.appState.isRunning) return;
-    _notifRetry?.cancel();
-    _notifRetry = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      _startNotifStream();
-    });
-  }
-
-  void _scheduleChatRetry() {
-    if (!mounted) return;
-    _chatStream = null;
-    if (!widget.appState.isRunning) return;
-    _chatRetry?.cancel();
-    _chatRetry = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      _startChatStream();
-    });
-  }
-
   void _scheduleProfileRetry() {
     if (!mounted) return;
     _profileStream = null;
@@ -245,43 +113,6 @@ class _ShellState extends State<Shell> {
       if (!mounted) return;
       _startProfileStream();
     });
-  }
-
-  Future<bool> _isDirectInteraction(CoreEvent ev) async {
-    final ty = ev.activityType?.trim() ?? '';
-    if (ty.isEmpty) return false;
-    if (ev.kind == 'notification') {
-      return _directNotifTypes.contains(ty);
-    }
-    if (ev.kind != 'inbox') return false;
-    if (!widget.appState.prefs.notifyDirect) return false;
-    if (!_directNotifTypes.contains(ty)) return false;
-    final id = ev.activityId?.trim() ?? '';
-    if (id.isEmpty) return false;
-    final cfg = widget.appState.config;
-    if (cfg == null) return false;
-    try {
-      final api = CoreApi(config: cfg);
-      final resp = await api.fetchNotifications(limit: 20);
-      final items = (resp['items'] as List<dynamic>? ?? const [])
-          .whereType<Map>()
-          .map((m) => m.cast<String, dynamic>());
-      for (final item in items) {
-        final activity = item['activity'];
-        if (activity is! Map) continue;
-        final actId = (activity['id'] as String?)?.trim() ?? '';
-        if (actId == id) return true;
-      }
-    } catch (_) {
-      // best-effort
-    }
-    return false;
-  }
-
-  bool _notificationsMuted() {
-    final until = widget.appState.prefs.notifyMutedUntilMs;
-    if (until <= 0) return false;
-    return DateTime.now().millisecondsSinceEpoch < until;
   }
 
   @override
@@ -325,8 +156,6 @@ class _ShellState extends State<Shell> {
                     icon: _badge(Icons.notifications, unread),
                     label: context.l10n.navNotifications),
                 NavigationDestination(
-                    icon: const Icon(Icons.hub), label: context.l10n.navRelays),
-                NavigationDestination(
                     icon: const Icon(Icons.settings),
                     label: context.l10n.navSettings),
               ],
@@ -358,9 +187,6 @@ class _ShellState extends State<Shell> {
                   NavigationRailDestination(
                       icon: _badge(Icons.notifications, unread),
                       label: Text(context.l10n.navNotifications)),
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.hub),
-                      label: Text(context.l10n.navRelays)),
                   NavigationRailDestination(
                       icon: const Icon(Icons.settings),
                       label: Text(context.l10n.navSettings)),
@@ -407,21 +233,6 @@ class _ShellState extends State<Shell> {
     return Badge(
       label: Text('$count'),
       child: Icon(icon),
-    );
-  }
-
-  void _showChatSnack() {
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger.clearSnackBars();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(context.l10n.chatNewMessage),
-        action: SnackBarAction(
-          label: context.l10n.chatOpen,
-          onPressed: () => setState(() => _index = 2),
-        ),
-      ),
     );
   }
 }

@@ -86,10 +86,10 @@ class TelemetryService {
     final event = TelemetryEvent(
       ts: jitteredTs,
       type: type,
-      message: message.trim(),
+      message: _sanitizeText(message),
       data: {
         'mode': kReleaseMode ? 'release' : 'debug',
-        if (data != null) ...data,
+        if (data != null) ..._sanitizeData(data),
       },
     );
     _pushBuffer(event);
@@ -196,6 +196,51 @@ class TelemetryService {
     return lines.join('\n');
   }
 
+  static Map<String, dynamic> _sanitizeData(Map<String, dynamic> raw) {
+    final out = <String, dynamic>{};
+    for (final entry in raw.entries) {
+      final key = entry.key.toLowerCase();
+      if (key.contains('token') ||
+          key.contains('secret') ||
+          key.contains('password') ||
+          key.contains('auth')) {
+        out[entry.key] = '<redacted>';
+        continue;
+      }
+      out[entry.key] = _sanitizeValue(entry.value);
+    }
+    return out;
+  }
+
+  static dynamic _sanitizeValue(dynamic value) {
+    if (value is String) {
+      return _sanitizeText(value);
+    }
+    if (value is Map) {
+      return _sanitizeData(value.map((k, v) => MapEntry(k.toString(), v)));
+    }
+    if (value is List) {
+      return value.map(_sanitizeValue).toList(growable: false);
+    }
+    return value;
+  }
+
+  static String _sanitizeText(String input) {
+    var out = input.trim();
+    if (out.isEmpty) return out;
+    out = out.replaceAll(RegExp(r'Bearer\s+[^\s]+', caseSensitive: false), 'Bearer <redacted>');
+    out = out.replaceAll(
+      RegExp(r'\b(token|secret|password|api[_-]?key|auth)\s*[=:]\s*[^\s,;]+', caseSensitive: false),
+      r'$1=<redacted>',
+    );
+    out = out.replaceAll(RegExp(r'([A-Za-z]:\\[^\\\s]+(?:\\[^\\\s]+)*)'), '<path>');
+    out = out.replaceAll(RegExp(r'/(home|Users|var|tmp|private)/[^\s]+'), '<path>');
+    if (out.length > 500) {
+      out = '${out.substring(0, 497)}...';
+    }
+    return out;
+  }
+
   static Future<void> _sendRemote(TelemetryEvent event) async {
     final cfg = _configGetter?.call();
     if (cfg == null) return;
@@ -205,7 +250,7 @@ class TelemetryService {
     final payload = <String, dynamic>{
       'username': cfg.username.trim(),
       'type': event.type,
-      'message': event.message,
+      'message': _sanitizeText(event.message),
       'stack': _sanitizeStack(event.data?['stack']?.toString()),
       'mode': event.data?['mode']?.toString() ?? (kReleaseMode ? 'release' : 'debug'),
       'ts': event.ts.toIso8601String(),

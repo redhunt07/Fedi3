@@ -461,7 +461,7 @@ abstract class AppLocalizations {
   /// No description provided for @chatDeleteHint.
   ///
   /// In en, this message translates to:
-  /// **'This will remove the message for everyone.'**
+  /// **'This will remove the message from your view.'**
   String get chatDeleteHint;
 
   /// No description provided for @chatSave.
@@ -623,7 +623,7 @@ abstract class AppLocalizations {
   /// No description provided for @chatDeleteThreadHint.
   ///
   /// In en, this message translates to:
-  /// **'This will delete the entire chat thread for everyone.'**
+  /// **'This will remove the entire chat thread from your view.'**
   String get chatDeleteThreadHint;
 
   /// No description provided for @chatLeaveThreadOption.

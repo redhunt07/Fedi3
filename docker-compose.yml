@@ -23,12 +23,14 @@ services:
       - FEDI3_RELAY_MESH_KEY=/data/fedi3_relay_mesh_keypair.pb
       - FEDI3_RELAY_TRUST_PROXY_HEADERS=true
       - FEDI3_RELAY_ALLOW_SELF_REGISTER=${FEDI3_RELAY_ALLOW_SELF_REGISTER:-false}
-      - FEDI3_RELAY_ADMIN_TOKEN=${FEDI3_RELAY_ADMIN_TOKEN}
-      - FEDI3_RELAY_TELEMETRY_TOKEN=${FEDI3_RELAY_TELEMETRY_TOKEN}
+      - FEDI3_RELAY_ADMIN_TOKEN=${FEDI3_RELAY_ADMIN_TOKEN:?set in .env}
+      - FEDI3_RELAY_TELEMETRY_TOKEN=${FEDI3_RELAY_TELEMETRY_TOKEN:-}
       - FEDI3_RELAY_HSTS_MAX_AGE_SECS=31536000
       - FEDI3_RELAY_RL_ADMIN_PER_MIN=${FEDI3_RELAY_RL_ADMIN_PER_MIN:-60}
       - FEDI3_RELAY_RL_REGISTER_PER_MIN=${FEDI3_RELAY_RL_REGISTER_PER_MIN:-20}
       - FEDI3_RELAY_RL_TUNNEL_PER_MIN=${FEDI3_RELAY_RL_TUNNEL_PER_MIN:-60}
+      - FEDI3_RELAY_RL_TUNNEL_UNKNOWN_USER_PER_MIN=${FEDI3_RELAY_RL_TUNNEL_UNKNOWN_USER_PER_MIN:-30}
+      - FEDI3_RELAY_TUNNEL_UNKNOWN_USER_CACHE_SECS=${FEDI3_RELAY_TUNNEL_UNKNOWN_USER_CACHE_SECS:-60}
       - FEDI3_RELAY_RL_INBOX_PER_MIN=${FEDI3_RELAY_RL_INBOX_PER_MIN:-120}
       - FEDI3_RELAY_RL_FORWARD_PER_MIN=${FEDI3_RELAY_RL_FORWARD_PER_MIN:-240}
       - FEDI3_RELAY_MEDIA_BACKEND=${FEDI3_RELAY_MEDIA_BACKEND:-local}
@@ -68,7 +70,7 @@ services:
     expose:
       - "8787"
     ports:
-      - "0.0.0.0:8787:8787"
+      - "127.0.0.1:8787:8787"
     depends_on:
       dragonfly:
         condition: service_healthy
@@ -99,7 +101,7 @@ services:
     environment:
       - POSTGRES_DB=${FEDI3_RELAY_PG_DB:-fedi3_relay}
       - POSTGRES_USER=${FEDI3_RELAY_PG_USER:-fedi3}
-      - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:-fedi3}
+      - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:?set in .env}
     volumes:
       - relay_pg_data:/var/lib/postgresql/data
       - .:/app
@@ -185,7 +187,7 @@ services:
       - --min-port=${TURN_MIN_PORT:-49152}
       - --max-port=${TURN_MAX_PORT:-65535}
       - --lt-cred-mech
-      - --user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}
+      - --user=${TURN_USER:-relay}:${TURN_PASS:?set in .env}
       - --no-tlsv1
       - --no-tlsv1_1
 

@@ -74,8 +74,34 @@ fn load_or_generate_keypair(path: &PathBuf) -> Result<identity::Keypair> {
     }
     let kp = identity::Keypair::generate_ed25519();
     let bytes = kp.to_protobuf_encoding().context("encode keypair")?;
-    std::fs::write(path, bytes).context("write keypair")?;
+    write_private_file(path, &bytes).context("write keypair")?;
     Ok(kp)
+}
+
+fn write_private_file(path: &PathBuf, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("create parent dir")?;
+    }
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .context("open private file")?;
+        file.write_all(bytes).context("write private file")?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes).context("write private file")?;
+    }
+    Ok(())
 }
 
 fn load_mesh_config(cfg: &crate::RelayConfig) -> RelayMeshConfig {

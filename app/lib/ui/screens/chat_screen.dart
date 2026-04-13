@@ -17,8 +17,8 @@ import '../../model/chat_models.dart';
 import '../../model/core_config.dart';
 import '../../model/ui_prefs.dart';
 import '../../services/actor_repository.dart';
-import '../../services/core_event_stream.dart';
 import '../../services/gif_service.dart';
+import '../../services/relay_sync_api.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
@@ -40,13 +40,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _next;
   List<ChatThreadItem> _threads = const [];
   bool _showArchived = false;
-  StreamSubscription<CoreEvent>? _streamSub;
-  Timer? _streamDebounce;
-  Timer? _streamRetry;
-  Timer? _loadRetry;
   Timer? _timeTicker;
-  CoreConfig? _streamConfig;
-  late bool _lastRunning;
   late final VoidCallback _appStateListener;
 
   @override
@@ -54,25 +48,9 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadThreads(reset: true));
     _markSeen();
-    _lastRunning = widget.appState.isRunning;
-    _appStateListener = () {
-      final running = widget.appState.isRunning;
-      final cfg = widget.appState.config;
-      final configChanged = !identical(_streamConfig, cfg);
-      if (!running) {
-        _stopStream();
-      } else if (running && (!_lastRunning || configChanged)) {
-        _startStream();
-        if (mounted && _threads.isEmpty) {
-          _loadThreads(reset: true);
-        }
-      }
-      _lastRunning = running;
-    };
+    _appStateListener = _syncFromAppState;
     widget.appState.addListener(_appStateListener);
-    if (widget.appState.isRunning) {
-      _startStream();
-    }
+    _syncFromAppState();
     _timeTicker = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -80,13 +58,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _streamSub?.cancel();
-    _streamDebounce?.cancel();
-    _streamRetry?.cancel();
-    _loadRetry?.cancel();
     _timeTicker?.cancel();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
+  }
+
+  void _syncFromAppState() {
+    if (!mounted) return;
+    setState(() {
+      _threads = _filteredThreads(widget.appState.relayChatThreads);
+      _loading = widget.appState.relaySyncBusy && _threads.isEmpty;
+      _error = widget.appState.relaySyncError;
+      _next = null;
+    });
   }
 
   Future<void> _markSeen() async {
@@ -95,98 +79,10 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.appState.clearUnreadChats();
   }
 
-  void _startStream() {
-    if (!widget.appState.isRunning) return;
-    final cfg = widget.appState.config;
-    if (cfg == null) return;
-    if (identical(_streamConfig, cfg) && _streamSub != null) return;
-    _streamConfig = cfg;
-    _streamSub?.cancel();
-    _streamSub = CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
-      if (!mounted) return;
-      if (ev.kind != 'chat') return;
-      final ty = ev.activityType ?? '';
-      if (ty.startsWith('typing:')) return;
-      _streamDebounce?.cancel();
-      _streamDebounce = Timer(const Duration(milliseconds: 400), () {
-        if (!mounted) return;
-        _loadThreads(reset: true);
-      });
-    }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
-  }
-
-  void _stopStream() {
-    _streamRetry?.cancel();
-    _streamSub?.cancel();
-    _streamSub = null;
-  }
-
-  void _scheduleStreamRetry() {
-    if (!mounted) return;
-    _streamSub = null;
-    if (!widget.appState.isRunning) return;
-    _streamRetry?.cancel();
-    _streamRetry = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      _startStream();
-    });
-  }
-
   Future<void> _loadThreads({required bool reset}) async {
-    final cfg = widget.appState.config;
-    if (cfg == null || !widget.appState.isRunning) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-      if (reset) _next = null;
-    });
-    try {
-      final api = CoreApi(config: cfg);
-      final resp = await api.fetchChatThreads(
-        cursor: reset ? null : _next,
-        limit: 50,
-        archived: _showArchived,
-      );
-      final items = reset ? <ChatThreadItem>[] : List.of(_threads);
-      final raw = resp['items'];
-      if (raw is List) {
-        for (final it in raw) {
-          if (it is! Map) continue;
-          items.add(ChatThreadItem.fromJson(it.cast<String, dynamic>()));
-        }
-      }
-      final next = resp['next'];
-      if (mounted) {
-        setState(() {
-          _threads = items;
-          _next = next is String && next.trim().isNotEmpty ? next : null;
-        });
-        _updateUnreadCounts(items);
-      }
-    } catch (e) {
-      final msg = e.toString();
-      if (mounted) setState(() => _error = msg);
-      _scheduleRetryIfOffline(msg);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  void _scheduleRetryIfOffline(String msg) {
-    if (!mounted) return;
-    if (!widget.appState.isRunning) return;
-    final lower = msg.toLowerCase();
-    final shouldRetry = lower.contains('socketexception') ||
-        lower.contains('connection refused') ||
-        lower.contains('errno = 111') ||
-        lower.contains('errno=111');
-    if (!shouldRetry) return;
-    if (_loadRetry != null && _loadRetry!.isActive) return;
-    _loadRetry = Timer(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      if (!widget.appState.isRunning) return;
-      _loadThreads(reset: true);
-    });
+    await widget.appState.refreshRelaySync();
+    _syncFromAppState();
+    _updateUnreadCounts(_threads);
   }
 
   void _updateUnreadCounts(List<ChatThreadItem> items) {
@@ -198,6 +94,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (lastMs > seenMs) unread += 1;
     }
     widget.appState.setUnreadChats(unread);
+  }
+
+  List<ChatThreadItem> _filteredThreads(List<ChatThreadItem> items) {
+    if (_showArchived) return const [];
+    return items;
   }
 
   Future<void> _openNewChatDialog() async {
@@ -299,7 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         tooltip: context.l10n.chatNewTooltip,
-        onPressed: _openNewChatDialog,
+        onPressed: widget.appState.isRunning ? _openNewChatDialog : null,
         child: const Icon(Icons.add_comment),
       ),
       body: RefreshIndicator(
@@ -440,6 +341,15 @@ class _ChatScreenState extends State<ChatScreen> {
               trailing: Text(formatTimeAgo(context, when)),
               onLongPress: () => _showThreadMenu(thread, isPinned),
               onTap: () async {
+                if (!widget.appState.isRunning) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Start the core to decrypt and reply in chat.'),
+                    ),
+                  );
+                  return;
+                }
                 await Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => ChatThreadScreen(
@@ -505,6 +415,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     : context.l10n.chatArchiveThreadOption),
                 onTap: () => Navigator.of(context).pop(_showArchived ? 'unarchive' : 'archive'),
               ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: Text(context.l10n.chatDeleteThread),
+                onTap: () => Navigator.of(context).pop('delete'),
+              ),
             ],
           ),
         );
@@ -530,6 +445,57 @@ class _ChatScreenState extends State<ChatScreen> {
           threadId: thread.threadId,
           archived: action == 'archive',
         );
+        if (mounted) {
+          await _loadThreads(reset: true);
+        }
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+      return;
+    }
+    if (action == 'delete') {
+      final cfg = widget.appState.config;
+      if (cfg == null) return;
+      if (!mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(context.l10n.chatDeleteThread),
+          content: Text(context.l10n.chatDeleteThreadHint),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(context.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(context.l10n.chatDeleteThread),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      try {
+        final relay = RelaySyncApi(
+          config: cfg,
+          fallbackTokens: [
+            cfg.previousRelayToken ?? '',
+            widget.appState.prefs.relayAdminToken,
+          ],
+        );
+        await relay.deleteChatThread(threadId: thread.threadId);
+        await widget.appState.applyRelayChatThreadDeleted(
+          threadId: thread.threadId,
+        );
+        nextPinned.removeWhere((id) => id == thread.threadId);
+        await widget.appState
+            .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
+        try {
+          await CoreApi(config: cfg).deleteChatThread(threadId: thread.threadId);
+        } catch (_) {}
         if (mounted) {
           await _loadThreads(reset: true);
         }

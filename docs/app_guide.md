@@ -117,3 +117,24 @@ Se vuoi, incolla l’output di:
 ls -la linux/flutter/ephemeral/.plugin_symlinks
 flutter doctor -v
 e ti dico il punto esatto che manca.
+
+## Fedora / Bazzite notes (Linux desktop build)
+
+Per buildare il client Linux con i plugin correnti (`media_kit`, `desktop_webview_window`, `flutter_secure_storage_linux`) servono moduli `pkg-config` e header nativi:
+
+- `gtk+-3.0`
+- `webkit2gtk-4.1`
+- `libsecret-1`
+- `mpv`
+- include roots: `/usr/include/ffmpeg` e `/usr/include/cdio`
+
+Sul progetto è disponibile un preflight nello script release:
+
+```bash
+bash scripts/release_build_linux.sh
+```
+
+Lo script ora fallisce subito con un messaggio esplicito se manca una dipendenza.
+
+Nota Bazzite/Fedora immutable:
+- se vedi errori su `mpv`/`ffmpeg` durante CMake generation, il problema è quasi sempre lato repository/devel packages del sistema, non lato codice Flutter.
