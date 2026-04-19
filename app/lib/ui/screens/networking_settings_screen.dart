@@ -24,8 +24,7 @@ class NetworkingSettingsScreen extends StatefulWidget {
 
 class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
-    'https://relay.foxyhole.io',
+    'https://fedi3.foxyhole.io',
   ];
   bool _loadingRelays = false;
   bool _restartingCore = false;
