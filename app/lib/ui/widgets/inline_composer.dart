@@ -57,6 +57,7 @@ class _InlineComposerState extends State<InlineComposer> {
   bool _showPreview = false;
   Timer? _mentionDebounce;
   bool _mentionSearching = false;
+  int _mentionSearchSeq = 0;
   List<ActorProfile> _mentionSuggestions = const [];
   int? _mentionStart;
   String _mentionQuery = '';
@@ -553,6 +554,7 @@ class _InlineComposerState extends State<InlineComposer> {
     _mentionDebounce?.cancel();
     _mentionDebounce = Timer(const Duration(milliseconds: 250), () async {
       if (mounted) setState(() => _mentionSearching = true);
+      final searchId = ++_mentionSearchSeq;
       try {
         final resp = await widget.api.searchUsers(
           query: query,
@@ -560,6 +562,7 @@ class _InlineComposerState extends State<InlineComposer> {
           consistency: 'best',
           limit: 6,
         );
+        if (searchId != _mentionSearchSeq) return;
         final rawItems = resp['items'];
         final list = <ActorProfile>[];
         if (rawItems is List) {
@@ -571,9 +574,12 @@ class _InlineComposerState extends State<InlineComposer> {
         }
         if (mounted) setState(() => _mentionSuggestions = list);
       } catch (_) {
+        if (searchId != _mentionSearchSeq) return;
         if (mounted) setState(() => _mentionSuggestions = const []);
       } finally {
-        if (mounted) setState(() => _mentionSearching = false);
+        if (searchId == _mentionSearchSeq && mounted) {
+          setState(() => _mentionSearching = false);
+        }
       }
     });
   }
