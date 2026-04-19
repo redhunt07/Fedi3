@@ -265,6 +265,14 @@ struct RelayTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relay_db_busy_total: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_refresh_dedup_hit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_refresh_dropped_busy: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_unknown_user_throttled: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_coalesced_requests: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_pubkey_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature_b64: Option<String>,
@@ -553,6 +561,10 @@ struct AppState {
     relay_stale_cache_served: Arc<AtomicU64>,
     relay_tunnel_success_served: Arc<AtomicU64>,
     relay_db_busy_total: Arc<AtomicU64>,
+    relay_refresh_dedup_hit: Arc<AtomicU64>,
+    relay_refresh_dropped_busy: Arc<AtomicU64>,
+    relay_unknown_user_throttled: Arc<AtomicU64>,
+    relay_coalesced_requests: Arc<AtomicU64>,
     ap_inbox_accept_total: Arc<AtomicU64>,
     ap_inbox_reject_invalid_sig_total: Arc<AtomicU64>,
     ap_actor_resolve_404_total: Arc<AtomicU64>,
@@ -589,6 +601,9 @@ struct AppState {
     hot_path_inflight: Arc<Semaphore>,
     async_job_slots: Arc<Semaphore>,
     spool_flush_inflight: Arc<Mutex<HashSet<String>>>,
+    public_refresh_jobs: Arc<Mutex<HashMap<String, RefreshJobState>>>,
+    collection_request_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    tunnel_unknown_user_backoff: Arc<Mutex<HashMap<String, UnknownUserBackoffState>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -613,6 +628,18 @@ enum ForwardCircuitState {
     Closed,
     Open,
     HalfOpen,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RefreshJobState {
+    in_flight: bool,
+    last_started_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+struct UnknownUserBackoffState {
+    attempts: u32,
+    blocked_until_ms: i64,
 }
 
 #[derive(Default)]
@@ -1208,6 +1235,9 @@ struct RelayConfig {
     relay_sync_limit: u32,
     tunnel_unknown_user_cache_secs: u64,
     tunnel_unknown_user_quarantine_secs: u64,
+    tunnel_unknown_user_backoff_base_secs: u64,
+    tunnel_unknown_user_backoff_max_secs: u64,
+    public_refresh_cooldown_ms: u64,
     relay_media_ttl_secs: u64,
     relay_actor_ttl_secs: u64,
     relay_reputation_ttl_secs: u64,
@@ -1906,6 +1936,10 @@ async fn main() {
         relay_stale_cache_served: Arc::new(AtomicU64::new(0)),
         relay_tunnel_success_served: Arc::new(AtomicU64::new(0)),
         relay_db_busy_total: Arc::new(AtomicU64::new(0)),
+        relay_refresh_dedup_hit: Arc::new(AtomicU64::new(0)),
+        relay_refresh_dropped_busy: Arc::new(AtomicU64::new(0)),
+        relay_unknown_user_throttled: Arc::new(AtomicU64::new(0)),
+        relay_coalesced_requests: Arc::new(AtomicU64::new(0)),
         ap_inbox_accept_total: Arc::new(AtomicU64::new(0)),
         ap_inbox_reject_invalid_sig_total: Arc::new(AtomicU64::new(0)),
         ap_actor_resolve_404_total: Arc::new(AtomicU64::new(0)),
@@ -1942,6 +1976,9 @@ async fn main() {
         hot_path_inflight: Arc::new(Semaphore::new(max_hot_path_inflight)),
         async_job_slots: Arc::new(Semaphore::new(max_async_jobs)),
         spool_flush_inflight: Arc::new(Mutex::new(HashSet::new())),
+        public_refresh_jobs: Arc::new(Mutex::new(HashMap::new())),
+        collection_request_locks: Arc::new(Mutex::new(HashMap::new())),
+        tunnel_unknown_user_backoff: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let addr = state.cfg.bind;
@@ -2913,6 +2950,23 @@ fn load_config() -> RelayConfig {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(600)
             .clamp(30, 3600);
+    let tunnel_unknown_user_backoff_base_secs =
+        std::env::var("FEDI3_RELAY_TUNNEL_UNKNOWN_USER_BACKOFF_BASE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(15)
+            .clamp(1, 600);
+    let tunnel_unknown_user_backoff_max_secs =
+        std::env::var("FEDI3_RELAY_TUNNEL_UNKNOWN_USER_BACKOFF_MAX_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600)
+            .clamp(15, 7200);
+    let public_refresh_cooldown_ms = std::env::var("FEDI3_RELAY_PUBLIC_REFRESH_COOLDOWN_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1500)
+        .clamp(100, 30_000);
     let relay_media_ttl_secs = std::env::var("FEDI3_RELAY_MEDIA_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -3075,6 +3129,9 @@ fn load_config() -> RelayConfig {
         relay_sync_limit,
         tunnel_unknown_user_cache_secs,
         tunnel_unknown_user_quarantine_secs,
+        tunnel_unknown_user_backoff_base_secs,
+        tunnel_unknown_user_backoff_max_secs,
+        public_refresh_cooldown_ms,
         relay_media_ttl_secs,
         relay_actor_ttl_secs,
         relay_reputation_ttl_secs,
@@ -3108,6 +3165,21 @@ async fn tunnel_ws(
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
     let tunnel_client_ip = client_ip(&state.cfg, &peer, &headers);
+    if !state.cfg.allow_self_register {
+        if let Some(retry_after) = tunnel_unknown_user_backoff_retry_after(
+            &state,
+            &tunnel_client_ip,
+            &user,
+            now_ms(),
+        )
+        .await
+        {
+            state
+                .relay_unknown_user_throttled
+                .fetch_add(1, Ordering::Relaxed);
+            return too_many_requests_retry("unknown user throttled", retry_after);
+        }
+    }
     ws.on_upgrade(move |socket| handle_tunnel(state, tunnel_client_ip, user, q.token, socket))
 }
 
@@ -3160,6 +3232,7 @@ async fn handle_tunnel(
             )
             .await;
         error!(%user, ip = %peer_ip, "tunnel rejected: unknown user cooldown");
+        tunnel_unknown_user_backoff_record_failure(&state, &peer_ip, &user, now_ms()).await;
         return;
     }
 
@@ -3182,6 +3255,8 @@ async fn handle_tunnel(
                     )
                     .await;
                 tunnel_unknown_ip_quarantine_put(&state, &peer_ip, now_ms()).await;
+                tunnel_unknown_user_backoff_record_failure(&state, &peer_ip, &user, now_ms())
+                    .await;
                 error!(%user, ip = %peer_ip, "tunnel rejected: unknown user");
                 return;
             }
@@ -3259,7 +3334,7 @@ async fn handle_tunnel(
     let cache_user = user.clone();
     tokio::spawn(async move {
         let _ = ensure_user_cached(&cache_state, &cache_user).await;
-        refresh_public_actor_state(&cache_state, &cache_user).await;
+        spawn_public_refresh_job(&cache_state, &cache_user, "public_actor_state").await;
         let _ = index_outbox_for_user(&cache_state, &cache_user).await;
     });
 
@@ -4232,6 +4307,22 @@ async fn relay_metrics_prom(
         out.push_str("# TYPE fedi3_relay_db_busy_total counter\n");
         out.push_str(&format!("fedi3_relay_db_busy_total {v}\n"));
     }
+    if let Some(v) = telemetry.relay_refresh_dedup_hit {
+        out.push_str("# TYPE fedi3_relay_refresh_dedup_hit counter\n");
+        out.push_str(&format!("fedi3_relay_refresh_dedup_hit {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_refresh_dropped_busy {
+        out.push_str("# TYPE fedi3_relay_refresh_dropped_busy counter\n");
+        out.push_str(&format!("fedi3_relay_refresh_dropped_busy {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_unknown_user_throttled {
+        out.push_str("# TYPE fedi3_relay_unknown_user_throttled counter\n");
+        out.push_str(&format!("fedi3_relay_unknown_user_throttled {v}\n"));
+    }
+    if let Some(v) = telemetry.relay_coalesced_requests {
+        out.push_str("# TYPE fedi3_relay_coalesced_requests counter\n");
+        out.push_str(&format!("fedi3_relay_coalesced_requests {v}\n"));
+    }
     if let Some(v) = telemetry.legacy_sync_delta_p95_ms {
         out.push_str("# TYPE fedi3_relay_legacy_sync_delta_p95_ms gauge\n");
         out.push_str(&format!("fedi3_relay_legacy_sync_delta_p95_ms {v}\n"));
@@ -4506,10 +4597,6 @@ async fn forward_user_rest(
             normalize_ap_response_content_type(&headers, &mut resp);
             return resp;
         }
-        state
-            .ap_actor_resolve_404_total
-            .fetch_add(1, Ordering::Relaxed);
-        return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     if method == Method::GET && rest.starts_with("activities/") {
         if let Some(mut resp) =
@@ -4519,10 +4606,6 @@ async fn forward_user_rest(
             normalize_ap_response_content_type(&headers, &mut resp);
             return resp;
         }
-        state
-            .ap_actor_resolve_404_total
-            .fetch_add(1, Ordering::Relaxed);
-        return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
     // ActivityPub interop: remote servers deliver direct-to-actor inbox
@@ -4970,6 +5053,12 @@ fn public_ap_route_label(user: &str, path: &str) -> Option<&'static str> {
     }
 }
 
+fn prefer_live_tunnel_for_path(user: &str, path: &str) -> bool {
+    path == format!("/users/{user}/outbox")
+        || path.starts_with(&format!("/users/{user}/objects/"))
+        || path.starts_with(&format!("/users/{user}/activities/"))
+}
+
 async fn observe_public_get_request(state: &AppState, user: &str, path: &str) {
     let Some(route) = public_ap_route_label(user, path) else {
         return;
@@ -5309,6 +5398,106 @@ async fn tunnel_unknown_ip_quarantine_put(state: &AppState, ip: &str, now: i64) 
     cache.insert(ip.to_string(), now.saturating_add(ttl_ms));
 }
 
+fn tunnel_unknown_user_backoff_key(ip: &str, user: &str) -> String {
+    format!("{ip}:{user}")
+}
+
+async fn tunnel_unknown_user_backoff_retry_after(
+    state: &AppState,
+    ip: &str,
+    user: &str,
+    now: i64,
+) -> Option<u64> {
+    let key = tunnel_unknown_user_backoff_key(ip, user);
+    let mut map = state.tunnel_unknown_user_backoff.lock().await;
+    if map.len() > 20_000 {
+        map.retain(|_, v| v.blocked_until_ms > now);
+    }
+    let Some(v) = map.get(&key) else {
+        return None;
+    };
+    if v.blocked_until_ms <= now {
+        map.remove(&key);
+        return None;
+    }
+    let wait_ms = v.blocked_until_ms.saturating_sub(now);
+    Some(((wait_ms + 999) / 1000) as u64)
+}
+
+async fn tunnel_unknown_user_backoff_record_failure(state: &AppState, ip: &str, user: &str, now: i64) {
+    let key = tunnel_unknown_user_backoff_key(ip, user);
+    let mut map = state.tunnel_unknown_user_backoff.lock().await;
+    let base = state.cfg.tunnel_unknown_user_backoff_base_secs.max(1);
+    let maxv = state
+        .cfg
+        .tunnel_unknown_user_backoff_max_secs
+        .max(base)
+        .min(7_200);
+    let entry = map.entry(key).or_insert(UnknownUserBackoffState {
+        attempts: 0,
+        blocked_until_ms: 0,
+    });
+    entry.attempts = entry.attempts.saturating_add(1).min(16);
+    let shift = entry.attempts.saturating_sub(1).min(10);
+    let mut penalty = base.saturating_mul(1u64 << shift);
+    if penalty > maxv {
+        penalty = maxv;
+    }
+    entry.blocked_until_ms = now.saturating_add((penalty as i64).saturating_mul(1000));
+}
+
+fn too_many_requests_retry(message: &str, retry_after_secs: u64) -> Response<Body> {
+    let mut resp = simple(StatusCode::TOO_MANY_REQUESTS, message);
+    if let Ok(v) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        resp.headers_mut().insert("Retry-After", v);
+    }
+    resp
+}
+
+fn public_refresh_job_key(user: &str, kind: &str) -> String {
+    format!("{user}|{kind}")
+}
+
+async fn mark_public_refresh_done(state: &AppState, job_key: &str) {
+    let mut jobs = state.public_refresh_jobs.lock().await;
+    if let Some(st) = jobs.get_mut(job_key) {
+        st.in_flight = false;
+    }
+}
+
+async fn spawn_public_refresh_job(state: &AppState, user: &str, kind: &'static str) {
+    let now = now_ms();
+    let job_key = public_refresh_job_key(user, kind);
+    {
+        let mut jobs = state.public_refresh_jobs.lock().await;
+        let ent = jobs.entry(job_key.clone()).or_default();
+        let cooldown_ms = state.cfg.public_refresh_cooldown_ms as i64;
+        if ent.in_flight
+            || now.saturating_sub(ent.last_started_ms) < cooldown_ms.max(0)
+        {
+            state.relay_refresh_dedup_hit.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        ent.in_flight = true;
+        ent.last_started_ms = now;
+    }
+
+    let Ok(_permit) = state.async_job_slots.clone().try_acquire_owned() else {
+        state
+            .relay_refresh_dropped_busy
+            .fetch_add(1, Ordering::Relaxed);
+        mark_public_refresh_done(state, &job_key).await;
+        return;
+    };
+
+    let refresh_state = state.clone();
+    let refresh_user = user.to_string();
+    tokio::spawn(async move {
+        refresh_public_actor_state(&refresh_state, &refresh_user).await;
+        mark_public_refresh_done(&refresh_state, &job_key).await;
+    });
+}
+
 fn sync_stream_event_to_sse(ev: &SyncStreamEvent) -> Event {
     let payload = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
     Event::default()
@@ -5582,49 +5771,80 @@ async fn forward_to_user(
         observe_public_get_request(&state, &user, path).await;
     }
 
+    let mut _collection_guard = None;
+    if method == Method::GET && is_cached_collection_path(&user, path) {
+        let req_key = collection_request_key(&user, path, &query);
+        let req_lock = get_collection_request_lock(&state, &req_key).await;
+        if req_lock.try_lock().is_err() {
+            state
+                .relay_coalesced_requests
+                .fetch_add(1, Ordering::Relaxed);
+            let wait_guard = req_lock.lock().await;
+            drop(wait_guard);
+            if let Some((resp, source)) = cached_user_response(&state, &user, path, &headers).await {
+                observe_public_get_cache_hit_with_source(&state, &user, path, source).await;
+                observe_ap_cache_refresh(&state, &user, path, &format!("coalesced_hit_{source}"))
+                    .await;
+                let mut out = resp;
+                normalize_ap_response_content_type(&headers, &mut out);
+                return out;
+            }
+        }
+        _collection_guard = Some(req_lock.lock_owned().await);
+    }
+
     if method == Method::GET {
         let route_is_cached = is_public_ap_get_path(&user, path);
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         // Serve cache immediately only when user is offline.
-        // When online, prefer tunnel as source-of-truth and use cache as fallback.
+        // When online, prefer tunnel as source-of-truth for outbox/object/activity paths,
+        // and use cache as fallback on tunnel failures.
         if route_is_cached {
             if let Some((resp, source)) = cached_user_response(&state, &user, path, &headers).await
             {
-                observe_public_get_cache_hit_with_source(&state, &user, path, source).await;
-                observe_ap_cache_refresh(&state, &user, path, &format!("hit_{source}")).await;
-                state
-                    .relay_stale_cache_served
-                    .fetch_add(1, Ordering::Relaxed);
-                let mut out = resp;
-                normalize_ap_response_content_type(&headers, &mut out);
-                if out.status() == StatusCode::NOT_FOUND {
+                let prefer_live = is_online && prefer_live_tunnel_for_path(&user, path);
+                if !prefer_live {
+                    observe_public_get_cache_hit_with_source(&state, &user, path, source).await;
+                    observe_ap_cache_refresh(&state, &user, path, &format!("hit_{source}")).await;
                     state
-                        .ap_actor_resolve_404_total
+                        .relay_stale_cache_served
                         .fetch_add(1, Ordering::Relaxed);
+                    let mut out = resp;
+                    normalize_ap_response_content_type(&headers, &mut out);
+                    if out.status() == StatusCode::NOT_FOUND {
+                        state
+                            .ap_actor_resolve_404_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if is_online {
+                        let refresh_state = state.clone();
+                        let refresh_user = user.clone();
+                        let refresh_path = path.to_string();
+                        tokio::spawn(async move {
+                            observe_ap_cache_refresh(
+                                &refresh_state,
+                                &refresh_user,
+                                &refresh_path,
+                                "refresh_scheduled",
+                            )
+                            .await;
+                            spawn_public_refresh_job(
+                                &refresh_state,
+                                &refresh_user,
+                                "public_actor_state",
+                            )
+                            .await;
+                            observe_ap_cache_refresh(
+                                &refresh_state,
+                                &refresh_user,
+                                &refresh_path,
+                                "refresh_done",
+                            )
+                            .await;
+                        });
+                    }
+                    return out;
                 }
-                if is_online {
-                    let refresh_state = state.clone();
-                    let refresh_user = user.clone();
-                    let refresh_path = path.to_string();
-                    tokio::spawn(async move {
-                        observe_ap_cache_refresh(
-                            &refresh_state,
-                            &refresh_user,
-                            &refresh_path,
-                            "refresh_scheduled",
-                        )
-                        .await;
-                        refresh_public_actor_state(&refresh_state, &refresh_user).await;
-                        observe_ap_cache_refresh(
-                            &refresh_state,
-                            &refresh_user,
-                            &refresh_path,
-                            "refresh_done",
-                        )
-                        .await;
-                    });
-                }
-                return out;
             }
         }
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
@@ -5872,11 +6092,7 @@ async fn forward_to_user(
     }
     if upstream_status.is_success() || upstream_status == StatusCode::ACCEPTED {
         if should_refresh_public_actor_state(path, &method) {
-            let refresh_state = state.clone();
-            let refresh_user = user.clone();
-            tokio::spawn(async move {
-                refresh_public_actor_state(&refresh_state, &refresh_user).await;
-            });
+            spawn_public_refresh_job(&state, &user, "public_actor_state").await;
         }
     }
     out
@@ -5884,6 +6100,26 @@ async fn forward_to_user(
 
 fn is_cached_collection_path(user: &str, path: &str) -> bool {
     collection_kind_from_path(user, path).is_some()
+}
+
+fn collection_request_key(user: &str, path: &str, query: &str) -> String {
+    let normalized_query = query.trim();
+    if normalized_query.is_empty() {
+        format!("{user}:{path}")
+    } else {
+        format!("{user}:{path}?{normalized_query}")
+    }
+}
+
+async fn get_collection_request_lock(state: &AppState, key: &str) -> Arc<Mutex<()>> {
+    let mut locks = state.collection_request_locks.lock().await;
+    if locks.len() > 20_000 {
+        locks.clear();
+    }
+    locks
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 fn collection_kind_from_path<'a>(user: &str, path: &'a str) -> Option<&'a str> {
@@ -5959,15 +6195,11 @@ async fn local_outbox_read_model_response(
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, headers);
     let base = format!("{scheme}://{host}");
     let outbox = format!("{base}/users/{user}/outbox");
-    let total = {
-        let db = state.db.lock().await;
-        db.count_local_outbox_notes(user).ok()?
-    };
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
 
-    // Read-through path: if local read-model is empty but the user is online,
-    // fetch from tunnel once to avoid exposing stale-empty outbox to remotes.
-    if total == 0 && state.tunnels.read().await.contains_key(user) {
+    // Read-through path: when user is online, prefer tunnel as source-of-truth and
+    // fallback to relay read-model only if tunnel fetch fails.
+    if state.tunnels.read().await.contains_key(user) {
         let path = format!("/users/{user}/outbox");
         let mut forwarded = forward_to_user(
             state.clone(),
@@ -5994,6 +6226,11 @@ async fn local_outbox_read_model_response(
             return Some(forwarded);
         }
     }
+
+    let total = {
+        let db = state.db.lock().await;
+        db.count_local_outbox_notes(user).ok()?
+    };
 
     if !query_flag_true(raw_query, "page") {
         let body = serde_json::json!({
@@ -7334,6 +7571,17 @@ fn is_valid_username(user: &str) -> bool {
     }
     user.chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+fn normalize_search_user_query(input: &str) -> String {
+    let mut out = input.trim().to_ascii_lowercase();
+    if out.starts_with('@') {
+        out = out.trim_start_matches('@').to_string();
+    }
+    if let Some((username, _host)) = out.split_once('@') {
+        out = username.to_string();
+    }
+    out
 }
 
 fn normalize_host(host: String) -> String {
@@ -15929,7 +16177,10 @@ async fn relay_search_users(
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
     let limit = q.limit.unwrap_or(30).min(200);
-    let query = q.q.unwrap_or_default();
+    let query = normalize_search_user_query(&q.q.unwrap_or_default());
+    if query.len() < 2 || !is_valid_username(&query) {
+        return (StatusCode::BAD_REQUEST, "invalid query").into_response();
+    }
     let cursor = q.cursor;
     let base_template = user_base_template(&state.cfg);
     let cache_key = format!(
@@ -18178,6 +18429,12 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let relay_async_job_inflight = async_capacity.saturating_sub(async_available);
     let relay_async_job_queue_depth = relay_async_job_inflight;
     let relay_db_busy_total = state.relay_db_busy_total.load(Ordering::Relaxed);
+    let relay_refresh_dedup_hit = state.relay_refresh_dedup_hit.load(Ordering::Relaxed);
+    let relay_refresh_dropped_busy = state.relay_refresh_dropped_busy.load(Ordering::Relaxed);
+    let relay_unknown_user_throttled = state
+        .relay_unknown_user_throttled
+        .load(Ordering::Relaxed);
+    let relay_coalesced_requests = state.relay_coalesced_requests.load(Ordering::Relaxed);
 
     let mut telemetry = RelayTelemetry {
         relay_url: state
@@ -18245,6 +18502,10 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         relay_async_job_inflight: Some(relay_async_job_inflight),
         relay_async_job_queue_depth: Some(relay_async_job_queue_depth),
         relay_db_busy_total: Some(relay_db_busy_total),
+        relay_refresh_dedup_hit: Some(relay_refresh_dedup_hit),
+        relay_refresh_dropped_busy: Some(relay_refresh_dropped_busy),
+        relay_unknown_user_throttled: Some(relay_unknown_user_throttled),
+        relay_coalesced_requests: Some(relay_coalesced_requests),
         sign_pubkey_b64: None,
         signature_b64: None,
         users,
