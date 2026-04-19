@@ -5587,7 +5587,7 @@ async fn forward_to_user(
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         // Serve cache immediately only when user is offline.
         // When online, prefer tunnel as source-of-truth and use cache as fallback.
-        if route_is_cached {
+        if route_is_cached && !is_online {
             if let Some((resp, source)) = cached_user_response(&state, &user, path, &headers).await
             {
                 observe_public_get_cache_hit_with_source(&state, &user, path, source).await;
@@ -5601,28 +5601,6 @@ async fn forward_to_user(
                     state
                         .ap_actor_resolve_404_total
                         .fetch_add(1, Ordering::Relaxed);
-                }
-                if is_online {
-                    let refresh_state = state.clone();
-                    let refresh_user = user.clone();
-                    let refresh_path = path.to_string();
-                    tokio::spawn(async move {
-                        observe_ap_cache_refresh(
-                            &refresh_state,
-                            &refresh_user,
-                            &refresh_path,
-                            "refresh_scheduled",
-                        )
-                        .await;
-                        refresh_public_actor_state(&refresh_state, &refresh_user).await;
-                        observe_ap_cache_refresh(
-                            &refresh_state,
-                            &refresh_user,
-                            &refresh_path,
-                            "refresh_done",
-                        )
-                        .await;
-                    });
                 }
                 return out;
             }
@@ -6311,12 +6289,7 @@ fn local_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str) -> 
       "featured": format!("{base}/users/{user}/collections/featured"),
       "featuredTags": format!("{base}/users/{user}/collections/featuredTags"),
       "discoverable": true,
-      "indexable": true,
-      "publicKey": {
-        "id": format!("{base}/users/{user}#main-key"),
-        "owner": format!("{base}/users/{user}"),
-        "publicKeyPem": ""
-      }
+      "indexable": true
     })
     .to_string()
 }
@@ -16240,13 +16213,6 @@ fn ensure_actor_minimum_fields(db: &Db, cfg: &RelayConfig, user: &str) -> Result
     v["outbox"] = serde_json::Value::String(outbox);
     v["followers"] = serde_json::Value::String(followers);
     v["following"] = serde_json::Value::String(following);
-    if v.get("publicKey").is_none() {
-        v["publicKey"] = serde_json::json!({
-          "id": format!("{id}#main-key"),
-          "owner": id,
-          "publicKeyPem": ""
-        });
-    }
     let normalized = serde_json::to_string(&v).unwrap_or(actor_json);
     db.upsert_actor_cache(user, &normalized)?;
     Ok(())
