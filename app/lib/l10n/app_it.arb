@@ -717,8 +717,8 @@
   "editAccountTitle": "Modifica account",
   "editAccountSave": "Salva",
   "editAccountCoreRunningWarning": "Core in esecuzione: verrà fermato automaticamente prima di salvare per evitare incoerenze.",
-  "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
-  "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
+  "editAccountRelayPublicUrl": "Relay public URL (https://fedi3.foxyhole.io)",
+  "editAccountRelayWs": "Relay WS (wss://fedi3.foxyhole.io)",
   "editAccountRegenerateInternal": "Rigenera internal token",
 
   "devCoreTitle": "Dev core controls",
