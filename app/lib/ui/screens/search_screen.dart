@@ -54,6 +54,7 @@ class _SearchScreenState extends State<SearchScreen>
   String? _usersNext;
   bool _notesLoadingMore = false;
   bool _usersLoadingMore = false;
+  int _usersRequestSeq = 0;
 
   @override
   void initState() {
@@ -193,12 +194,29 @@ class _SearchScreenState extends State<SearchScreen>
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
-    final resp = await api.searchUsers(
-      query: _query,
-      cursor: reset ? null : _usersNext,
-      source: _source.name,
-      consistency: _source == SearchSource.all ? 'full' : 'best',
-    );
+    final requestId = ++_usersRequestSeq;
+    Map<String, dynamic> resp;
+    try {
+      resp = await api.searchUsers(
+        query: _query,
+        cursor: reset ? null : _usersNext,
+        source: _source.name,
+        consistency: _source == SearchSource.all ? 'full' : 'best',
+      );
+    } catch (e) {
+      if (e.toString().contains('search users overloaded')) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Relay occupato, riprova tra poco')),
+          );
+        }
+        return;
+      }
+      rethrow;
+    }
+    if (requestId != _usersRequestSeq) {
+      return;
+    }
     final list = reset ? <_SearchUserItem>[] : List.of(_userItems);
     final raw = resp['items'];
     if (raw is List) {
