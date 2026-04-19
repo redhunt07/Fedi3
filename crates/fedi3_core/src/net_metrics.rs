@@ -5,13 +5,21 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        // Avoid hard panic on poisoned mutex in observability path.
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 #[derive(Default)]
@@ -80,14 +88,14 @@ impl NetMetrics {
         self.relay_connected.store(v, Ordering::Relaxed);
         self.relay_last_change_ms.store(now_ms(), Ordering::Relaxed);
         if v {
-            let mut g = self.relay_last_error.lock().unwrap();
+            let mut g = lock_recover(&self.relay_last_error);
             *g = None;
         }
     }
 
     pub fn set_relay_error(&self, err: String) {
         self.set_relay_connected(false);
-        let mut g = self.relay_last_error.lock().unwrap();
+        let mut g = lock_recover(&self.relay_last_error);
         *g = Some(err);
     }
 
@@ -135,7 +143,7 @@ impl NetMetrics {
     }
 
     pub fn p2p_peer_seen(&self, peer_id: &str) {
-        let mut g = self.p2p_seen.lock().unwrap();
+        let mut g = lock_recover(&self.p2p_seen);
         g.insert(peer_id.to_string(), now_ms());
         self.p2p_active_peers
             .store(g.len() as u64, Ordering::Relaxed);
@@ -163,7 +171,7 @@ impl NetMetrics {
     }
 
     pub fn mailbox_peer_seen(&self, peer_id: &str) {
-        let mut g = self.mailbox_seen.lock().unwrap();
+        let mut g = lock_recover(&self.mailbox_seen);
         g.insert(peer_id.to_string(), now_ms());
         self.mailbox_active_peers
             .store(g.len() as u64, Ordering::Relaxed);
@@ -195,7 +203,7 @@ impl NetMetrics {
     }
 
     pub fn webrtc_peer_seen(&self, peer_id: &str) {
-        let mut g = self.webrtc_seen.lock().unwrap();
+        let mut g = lock_recover(&self.webrtc_seen);
         g.insert(peer_id.to_string(), now_ms());
         self.webrtc_active_peers
             .store(g.len() as u64, Ordering::Relaxed);
@@ -272,7 +280,7 @@ impl NetMetrics {
             self.transport_failover_error_total
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let mut g = self.last_failover_reason.lock().unwrap();
+        let mut g = lock_recover(&self.last_failover_reason);
         *g = Some(reason);
     }
 
@@ -291,7 +299,7 @@ impl NetMetrics {
         self.relay_preferred_until_ms
             .store(until_ms, Ordering::Relaxed);
         if let Some(r) = reason {
-            let mut g = self.last_failover_reason.lock().unwrap();
+            let mut g = lock_recover(&self.last_failover_reason);
             *g = Some(r.trim().to_string());
         }
     }
@@ -338,19 +346,19 @@ impl NetMetrics {
     pub fn prune_seen(&self, window_ms: u64) {
         let cutoff = now_ms().saturating_sub(window_ms);
         {
-            let mut g = self.p2p_seen.lock().unwrap();
+            let mut g = lock_recover(&self.p2p_seen);
             g.retain(|_, t| *t >= cutoff);
             self.p2p_active_peers
                 .store(g.len() as u64, Ordering::Relaxed);
         }
         {
-            let mut g = self.mailbox_seen.lock().unwrap();
+            let mut g = lock_recover(&self.mailbox_seen);
             g.retain(|_, t| *t >= cutoff);
             self.mailbox_active_peers
                 .store(g.len() as u64, Ordering::Relaxed);
         }
         {
-            let mut g = self.webrtc_seen.lock().unwrap();
+            let mut g = lock_recover(&self.webrtc_seen);
             g.retain(|_, t| *t >= cutoff);
             self.webrtc_active_peers
                 .store(g.len() as u64, Ordering::Relaxed);
@@ -358,8 +366,8 @@ impl NetMetrics {
     }
 
     pub fn snapshot_json(&self) -> serde_json::Value {
-        let last_error = self.relay_last_error.lock().unwrap().clone();
-        let last_failover_reason = self.last_failover_reason.lock().unwrap().clone();
+        let last_error = lock_recover(&self.relay_last_error).clone();
+        let last_failover_reason = lock_recover(&self.last_failover_reason).clone();
         self.prune_seen(60_000);
         serde_json::json!({
             "ts_ms": now_ms(),
