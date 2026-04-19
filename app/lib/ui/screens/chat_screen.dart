@@ -528,6 +528,7 @@ class _NewChatDialogState extends State<_NewChatDialog> {
   bool _searching = false;
   List<ActorProfile> _suggestions = const [];
   Timer? _searchDebounce;
+  int _searchSeq = 0;
   final List<_PickedMedia> _media = [];
 
   @override
@@ -549,6 +550,7 @@ class _NewChatDialogState extends State<_NewChatDialog> {
         return;
       }
       if (mounted) setState(() => _searching = true);
+      final searchId = ++_searchSeq;
       try {
         final api = CoreApi(config: widget.config);
         final resp = await api.searchUsers(
@@ -557,6 +559,7 @@ class _NewChatDialogState extends State<_NewChatDialog> {
           consistency: 'best',
           limit: 6,
         );
+        if (searchId != _searchSeq) return;
         final rawItems = resp['items'];
         final list = <ActorProfile>[];
         if (rawItems is List) {
@@ -570,9 +573,12 @@ class _NewChatDialogState extends State<_NewChatDialog> {
           setState(() => _suggestions = list);
         }
       } catch (_) {
+        if (searchId != _searchSeq) return;
         if (mounted) setState(() => _suggestions = const []);
       } finally {
-        if (mounted) setState(() => _searching = false);
+        if (searchId == _searchSeq && mounted) {
+          setState(() => _searching = false);
+        }
       }
     });
   }
