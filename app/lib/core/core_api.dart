@@ -52,6 +52,31 @@ class CoreApi {
     );
   }
 
+  int _retryAfterMs(http.Response resp) {
+    final raw = resp.headers['retry-after']?.trim() ?? '';
+    if (raw.isEmpty) return 800;
+    final secs = int.tryParse(raw);
+    if (secs == null) return 800;
+    final ms = secs * 1000;
+    if (ms < 300) return 300;
+    if (ms > 5000) return 5000;
+    return ms;
+  }
+
+  Future<http.Response> _getWithOverloadRetry(Uri uri,
+      {Map<String, String>? headers, int maxAttempts = 2}) async {
+    var attempt = 0;
+    while (true) {
+      final resp = await http.get(uri, headers: headers);
+      final isOverloaded = resp.statusCode == 429 || resp.statusCode == 503;
+      if (!isOverloaded || attempt + 1 >= maxAttempts) {
+        return resp;
+      }
+      await Future<void>.delayed(Duration(milliseconds: _retryAfterMs(resp)));
+      attempt += 1;
+    }
+  }
+
   Future<bool> checkHealth() async {
     final uri = _internal('/_fedi3/health');
     try {
@@ -407,7 +432,11 @@ class CoreApi {
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     };
     final uri = _internal('/_fedi3/search/users', params);
-    final resp = await http.get(uri, headers: _internalHeaders);
+    final resp = await _getWithOverloadRetry(uri, headers: _internalHeaders);
+    if (resp.statusCode == 429 || resp.statusCode == 503) {
+      throw StateError(
+          'search users overloaded: ${resp.statusCode} retry_after=${resp.headers['retry-after'] ?? ''}');
+    }
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('search users failed: ${resp.statusCode} ${resp.body}');
     }

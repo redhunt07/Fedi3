@@ -55,8 +55,13 @@ const CHAT_BUNDLE_FETCH_FAILURE_THRESHOLD: u32 = 3;
 const CHAT_RETRY_INTERVAL_SECS: u64 = 20;
 const CHAT_RETRY_MIN_AGE_MS: i64 = 20_000;
 const CHAT_RETRY_BATCH: u32 = 50;
+const SEARCH_USERS_EMPTY_CACHE_TTL_MS: i64 = 1500;
+const SEARCH_USERS_MIN_QUERY_LEN: usize = 2;
+const SEARCH_USERS_OVERLOAD_COOLDOWN_DEFAULT_MS: i64 = 1500;
 static CHAT_BUNDLE_INFLIGHT: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FOLLOW_IMPORT_JOB_SEQ: AtomicU64 = AtomicU64::new(1);
+static SEARCH_USERS_EMPTY_CACHE: OnceLock<Arc<Mutex<HashMap<String, i64>>>> = OnceLock::new();
+static RELAY_SEARCH_USERS_COOLDOWN_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 fn constant_time_eq(expected: &str, candidate: &str) -> bool {
     let a = expected.as_bytes();
@@ -3628,13 +3633,13 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
         return resp;
     }
     let query = parts.uri.query().unwrap_or("");
-    let q = query
+    let raw_q = query
         .split('&')
         .find(|p| p.starts_with("q="))
         .and_then(|p| p.split_once('='))
         .map(|(_, v)| url_decode(v))
         .unwrap_or_default();
-    if q.trim().is_empty() {
+    if raw_q.trim().is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing query");
     }
     let source = query
@@ -3662,8 +3667,30 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
 
+    let q = normalize_search_user_query(&raw_q);
+    if !is_valid_search_user_query(&q) {
+        return simple(
+            StatusCode::BAD_REQUEST,
+            "invalid query: use at least 2 chars [a-z0-9_-]",
+        );
+    }
+
     let source = normalize_search_source(&source);
     let consistency = normalize_search_consistency(&consistency);
+    let cache_key = format!(
+        "q={q}|source={source}|cons={consistency}|limit={limit}|cursor={:?}",
+        cursor
+    );
+    if cursor.is_none() && search_users_empty_cache_hit(&cache_key, now_ms()).await {
+        return axum::Json(serde_json::json!({
+          "total": 0,
+          "items": [],
+          "next": null,
+          "partial": source != "local",
+          "relay_ready": false,
+        }))
+        .into_response();
+    }
     let mut items = Vec::<serde_json::Value>::new();
     let mut total = 0u64;
     let mut next = None;
@@ -3699,6 +3726,10 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     let mut relay_ready = true;
     if source != "local" {
+        let relay_cooldown_until = RELAY_SEARCH_USERS_COOLDOWN_UNTIL_MS.load(Ordering::Relaxed) as i64;
+        if now_ms() < relay_cooldown_until {
+            relay_ready = false;
+        }
         if consistency == "full" {
             if require_relay_search_coverage(state).await.is_err() {
                 relay_ready = false;
@@ -3726,6 +3757,10 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
                 }
             }
         }
+    }
+
+    if cursor.is_none() && items.is_empty() {
+        search_users_empty_cache_put(cache_key, now_ms()).await;
     }
 
     axum::Json(serde_json::json!({
@@ -7342,7 +7377,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let has_followers = recipients.iter().any(|r| r == &local_followers);
     if has_followers {
         recipients.retain(|r| r != &local_followers);
-        let base_recipients = recipients.clone();
+        let mut expanded_recipients = recipients.clone();
 
         let mut cursor: Option<i64> = None;
         loop {
@@ -7354,33 +7389,28 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 break;
             }
 
-            let mut batch = base_recipients.clone();
-            batch.extend(
+            expanded_recipients.extend(
                 page.items
                     .into_iter()
                     .filter(|r| !is_blocked_actor(state, r)),
             );
-            batch.sort();
-            batch.dedup();
-            if !batch.is_empty() {
-                pending = pending.saturating_add(
-                    match state
-                        .queue
-                        .enqueue_activity(activity_bytes.clone(), batch)
-                        .await
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}"))
-                        }
-                    },
-                );
-            }
 
             cursor = page.next.as_deref().and_then(|s| s.parse::<i64>().ok());
             if cursor.is_none() {
                 break;
             }
+        }
+        expanded_recipients.sort();
+        expanded_recipients.dedup();
+        if !expanded_recipients.is_empty() {
+            pending = match state
+                .queue
+                .enqueue_activity(activity_bytes, expanded_recipients)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
+            };
         }
     } else {
         if !recipients.is_empty() {
@@ -10050,6 +10080,60 @@ fn normalize_search_consistency(input: &str) -> String {
     }
 }
 
+fn normalize_search_user_query(input: &str) -> String {
+    let mut out = input.trim().to_lowercase();
+    if out.starts_with('@') {
+        out = out.trim_start_matches('@').to_string();
+    }
+    if let Some((username, _host)) = out.split_once('@') {
+        out = username.to_string();
+    }
+    out
+}
+
+fn is_valid_search_user_query(q: &str) -> bool {
+    if q.len() < SEARCH_USERS_MIN_QUERY_LEN || q.len() > 64 {
+        return false;
+    }
+    q.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+fn search_users_empty_cache() -> &'static Arc<Mutex<HashMap<String, i64>>> {
+    SEARCH_USERS_EMPTY_CACHE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+async fn search_users_empty_cache_hit(key: &str, now: i64) -> bool {
+    let mut map = search_users_empty_cache().lock().await;
+    if let Some(until) = map.get(key).copied() {
+        if until > now {
+            return true;
+        }
+    }
+    map.remove(key);
+    false
+}
+
+async fn search_users_empty_cache_put(key: String, now: i64) {
+    let ttl_ms = SEARCH_USERS_EMPTY_CACHE_TTL_MS.max(100);
+    let mut map = search_users_empty_cache().lock().await;
+    if map.len() > 10_000 {
+        map.retain(|_, until| *until > now);
+    }
+    map.insert(key, now.saturating_add(ttl_ms));
+}
+
+fn parse_retry_after_ms(headers: &HeaderMap) -> Option<i64> {
+    let raw = headers.get(header::RETRY_AFTER)?.to_str().ok()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some((secs as i64).saturating_mul(1000));
+    }
+    None
+}
+
 async fn require_relay_search_coverage(state: &ApState) -> Result<(), Response<Body>> {
     let coverage = relay_search_coverage(state).await.map_err(|e| {
         simple(
@@ -10236,18 +10320,21 @@ async fn relay_search_users(
     if let Some(cur) = cursor {
         params.push(("cursor".to_string(), cur.to_string()));
     }
-    let resp = send_with_retry_metrics(
-        || {
-            state
-                .http
-                .get(&url)
-                .query(&params)
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        },
-        3,
-        &state.net,
-    )
-    .await?;
+    let resp = state
+        .http
+        .get(&url)
+        .query(&params)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .send()
+        .await?;
+    if resp.status() == StatusCode::TOO_MANY_REQUESTS || resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        let retry_after_ms = parse_retry_after_ms(resp.headers())
+            .unwrap_or(SEARCH_USERS_OVERLOAD_COOLDOWN_DEFAULT_MS)
+            .clamp(300, 10_000);
+        let until = now_ms().saturating_add(retry_after_ms) as u64;
+        RELAY_SEARCH_USERS_COOLDOWN_UNTIL_MS.store(until, Ordering::Relaxed);
+        return Ok(None);
+    }
     if !resp.status().is_success() {
         return Ok(None);
     }

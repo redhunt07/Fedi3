@@ -5,6 +5,7 @@ WORKDIR /src
 
 # Pre-copy manifests for better caching
 COPY Cargo.toml Cargo.toml
+COPY Cargo.lock Cargo.lock
 COPY crates/fedi3_protocol/Cargo.toml crates/fedi3_protocol/Cargo.toml
 COPY crates/fedi3_relay/Cargo.toml crates/fedi3_relay/Cargo.toml
 COPY crates/fedi3_core/Cargo.toml crates/fedi3_core/Cargo.toml
@@ -16,7 +17,7 @@ COPY crates/fedi3_relay crates/fedi3_relay
 COPY crates/fedi3_core crates/fedi3_core
 COPY crates/fedi3_p2p_infra crates/fedi3_p2p_infra
 
-RUN cargo build -p fedi3_relay --release
+RUN cargo build -p fedi3_relay --release --locked
 
 FROM debian:bookworm-slim
 RUN apt-get update \

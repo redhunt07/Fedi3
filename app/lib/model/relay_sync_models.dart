@@ -242,22 +242,24 @@ List<ChatThreadItem> deriveRelayChatThreads(
     final dmCandidate = senders.where((value) => value != (selfActor ?? '')).toList();
     final isDm = dmCandidate.length == 1;
     final updatedAtMs = _readInt(latest['created_at_ms']);
-    final title = isDm
-        ? null
-        : (((latest['envelope'] is Map)
-                    ? (latest['envelope'] as Map)['thread_title']
-                    : null)
-                ?.toString()
-                .trim()
-                .isNotEmpty ==
-            true)
-            ? ((latest['envelope'] as Map)['thread_title'] as String).trim()
-            : 'Encrypted thread';
+    String? groupTitle;
+    if (!isDm) {
+      for (final row in rows) {
+        final envelope = row['envelope'];
+        if (envelope is! Map) continue;
+        final candidate = envelope['thread_title']?.toString().trim() ?? '';
+        if (candidate.isNotEmpty) {
+          groupTitle = candidate;
+          break;
+        }
+      }
+      groupTitle ??= 'Encrypted thread';
+    }
     items.add(
       ChatThreadItem(
         threadId: group.key,
         kind: isDm ? 'dm' : 'group',
-        title: title,
+        title: groupTitle,
         createdAtMs: rows
             .map((row) => _readInt(row['created_at_ms']))
             .fold<int>(updatedAtMs, (min, value) => value < min ? value : min),
