@@ -7342,7 +7342,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let has_followers = recipients.iter().any(|r| r == &local_followers);
     if has_followers {
         recipients.retain(|r| r != &local_followers);
-        let base_recipients = recipients.clone();
+        let mut expanded_recipients = recipients.clone();
 
         let mut cursor: Option<i64> = None;
         loop {
@@ -7354,33 +7354,28 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 break;
             }
 
-            let mut batch = base_recipients.clone();
-            batch.extend(
+            expanded_recipients.extend(
                 page.items
                     .into_iter()
                     .filter(|r| !is_blocked_actor(state, r)),
             );
-            batch.sort();
-            batch.dedup();
-            if !batch.is_empty() {
-                pending = pending.saturating_add(
-                    match state
-                        .queue
-                        .enqueue_activity(activity_bytes.clone(), batch)
-                        .await
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}"))
-                        }
-                    },
-                );
-            }
 
             cursor = page.next.as_deref().and_then(|s| s.parse::<i64>().ok());
             if cursor.is_none() {
                 break;
             }
+        }
+        expanded_recipients.sort();
+        expanded_recipients.dedup();
+        if !expanded_recipients.is_empty() {
+            pending = match state
+                .queue
+                .enqueue_activity(activity_bytes, expanded_recipients)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}")),
+            };
         }
     } else {
         if !recipients.is_empty() {
