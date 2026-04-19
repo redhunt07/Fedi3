@@ -29,7 +29,7 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
   final List<String> _peerPreview = [];
 
   static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
+    'https://fedi3.foxyhole.io',
   ];
 
   @override

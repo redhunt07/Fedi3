@@ -1609,10 +1609,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get editAccountRelayPublicUrl =>
-      'Relay public URL (https://relay.fedi3.com)';
+      'Relay public URL (https://fedi3.foxyhole.io)';
 
   @override
-  String get editAccountRelayWs => 'Relay WS (wss://relay.fedi3.com)';
+  String get editAccountRelayWs => 'Relay WS (wss://fedi3.foxyhole.io)';
 
   @override
   String get editAccountRegenerateInternal => 'Regenerate internal token';

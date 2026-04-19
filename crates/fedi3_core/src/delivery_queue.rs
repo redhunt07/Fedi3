@@ -6,8 +6,9 @@
 use crate::delivery::Delivery;
 use crate::net_metrics::NetMetrics;
 use crate::ui_events::UiEvent;
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
 use rand::{rngs::OsRng, RngCore};
+use reqwest::StatusCode;
 use rusqlite::{params, Connection};
 use std::{
     collections::HashMap,
@@ -257,12 +258,7 @@ impl DeliveryQueue {
                             // Actor resolved but no P2P peer, fall through to HTTP delivery
                         }
                         Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("404")
-                                || err_str.contains("410")
-                                || err_str.contains("429")
-                                || err_str.contains("peer deleted")
-                            {
+                            if is_peer_gone_or_unreachable(&e) {
                                 let _ =
                                     self.mark_dead(&job.id, "peer deleted or unreachable").await;
                                 continue;
@@ -289,12 +285,7 @@ impl DeliveryQueue {
                     {
                         Ok(info) => info.inbox,
                         Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("404")
-                                || err_str.contains("410")
-                                || err_str.contains("429")
-                                || err_str.contains("peer deleted")
-                            {
+                            if is_peer_gone_or_unreachable(&e) {
                                 let _ =
                                     self.mark_dead(&job.id, "peer deleted or unreachable").await;
                                 continue;
@@ -418,12 +409,7 @@ impl DeliveryQueue {
                 match info {
                     Ok(v) => (v.inbox, v.p2p_peer_id, v.p2p_peer_addrs, v.public_key_pem),
                     Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("404")
-                            || err_str.contains("410")
-                            || err_str.contains("429")
-                            || err_str.contains("peer deleted")
-                        {
+                        if is_peer_gone_or_unreachable(&e) {
                             self.mark_dead(&job.id, "peer deleted or unreachable")
                                 .await?;
                             return Ok(());
@@ -1018,12 +1004,7 @@ async fn resolve_actor_cached(
     {
         Ok(v) => v,
         Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("404")
-                || err_str.contains("410")
-                || err_str.contains("429")
-                || err_str.contains("peer deleted")
-            {
+            if is_peer_gone_or_unreachable(&e) {
                 return Err(e);
             } else {
                 delivery.resolve_actor_info(actor_url).await?
@@ -1039,6 +1020,29 @@ fn short_body_hash(bytes: &[u8]) -> String {
     let mut h = sha2::Sha256::new();
     h.update(bytes);
     hex::encode(&h.finalize()[..8])
+}
+
+fn is_peer_gone_or_unreachable(err: &Error) -> bool {
+    if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
+        if let Some(status) = req_err.status() {
+            if matches!(
+                status,
+                StatusCode::NOT_FOUND | StatusCode::GONE | StatusCode::TOO_MANY_REQUESTS
+            ) {
+                return true;
+            }
+        }
+    }
+
+    // Fallback for non-typed errors crossing abstraction boundaries.
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("peer deleted")
+        || msg.contains(" 404 ")
+        || msg.contains(" 410 ")
+        || msg.contains(" 429 ")
+        || msg.contains("status 404")
+        || msg.contains("status 410")
+        || msg.contains("status 429")
 }
 
 #[derive(Debug, Clone)]

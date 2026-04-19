@@ -27,7 +27,17 @@ backups/
 dist/
 *.AppImage
 app/fedi3_core.dll
+app/libfedi3_core.so
 app/windows/flutter/ephemeral/
 app/linux/flutter/ephemeral/
 app/macos/Flutter/ephemeral/
 .tmp_fedi3_deploy.tgz
+
+# P2P infra runtime data (must never be versioned)
+deploy/p2p_infra/data/*
+!deploy/p2p_infra/data/.gitkeep
+
+# Local AI/tooling artifacts (not part of product source)
+.claude/
+.opencode/
+llm/
