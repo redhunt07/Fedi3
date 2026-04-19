@@ -5797,9 +5797,8 @@ async fn forward_to_user(
         let route_is_cached = is_public_ap_get_path(&user, path);
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         // Serve cache immediately only when user is offline.
-        // When online, prefer tunnel as source-of-truth for outbox/object/activity paths,
-        // and use cache as fallback on tunnel failures.
-        if route_is_cached {
+        // When online, prefer tunnel as source-of-truth and use cache as fallback.
+        if route_is_cached && !is_online {
             if let Some((resp, source)) = cached_user_response(&state, &user, path, &headers).await
             {
                 let prefer_live = is_online && prefer_live_tunnel_for_path(&user, path);
@@ -5845,6 +5844,7 @@ async fn forward_to_user(
                     }
                     return out;
                 }
+                return out;
             }
         }
         if tunnel_negative_cache_hit(&state, &user, path, now).await {
@@ -6548,12 +6548,7 @@ fn local_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str) -> 
       "featured": format!("{base}/users/{user}/collections/featured"),
       "featuredTags": format!("{base}/users/{user}/collections/featuredTags"),
       "discoverable": true,
-      "indexable": true,
-      "publicKey": {
-        "id": format!("{base}/users/{user}#main-key"),
-        "owner": format!("{base}/users/{user}"),
-        "publicKeyPem": ""
-      }
+      "indexable": true
     })
     .to_string()
 }
@@ -16491,13 +16486,6 @@ fn ensure_actor_minimum_fields(db: &Db, cfg: &RelayConfig, user: &str) -> Result
     v["outbox"] = serde_json::Value::String(outbox);
     v["followers"] = serde_json::Value::String(followers);
     v["following"] = serde_json::Value::String(following);
-    if v.get("publicKey").is_none() {
-        v["publicKey"] = serde_json::json!({
-          "id": format!("{id}#main-key"),
-          "owner": id,
-          "publicKeyPem": ""
-        });
-    }
     let normalized = serde_json::to_string(&v).unwrap_or(actor_json);
     db.upsert_actor_cache(user, &normalized)?;
     Ok(())
