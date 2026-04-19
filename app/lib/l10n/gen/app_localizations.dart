@@ -2975,13 +2975,13 @@ abstract class AppLocalizations {
   /// No description provided for @editAccountRelayPublicUrl.
   ///
   /// In en, this message translates to:
-  /// **'Relay public URL (https://relay.fedi3.com)'**
+  /// **'Relay public URL (https://fedi3.foxyhole.io)'**
   String get editAccountRelayPublicUrl;
 
   /// No description provided for @editAccountRelayWs.
   ///
   /// In en, this message translates to:
-  /// **'Relay WS (wss://relay.fedi3.com)'**
+  /// **'Relay WS (wss://fedi3.foxyhole.io)'**
   String get editAccountRelayWs;
 
   /// No description provided for @editAccountRegenerateInternal.

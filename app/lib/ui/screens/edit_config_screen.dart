@@ -40,8 +40,7 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
   _RelayOption? _selectedRelay;
 
   static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
-    'https://relay.foxyhole.io',
+    'https://fedi3.foxyhole.io',
   ];
 
   @override
