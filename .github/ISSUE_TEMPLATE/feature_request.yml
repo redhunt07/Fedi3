@@ -1,0 +1,23 @@
+name: Feature request / Proposta
+description: Describe a use case or a focused improvement.
+title: "[Idea]: "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Use case
+      description: Who needs this, and what problem would it solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the smallest useful change and any alternatives.
+    validations:
+      required: true
+  - type: textarea
+    id: contribution
+    attributes:
+      label: How could you help?
+      description: Testing, hardware reports, documentation, translation or implementation.

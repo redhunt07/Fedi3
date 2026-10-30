@@ -1,97 +1,108 @@
 # FEDI3
 
-FEDI3 è un social federato con componente P2P.  
-Privacy-first, interoperabile e resiliente senza sacrificare la compatibilità.
+[![CI](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml) [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Rust workspace](https://img.shields.io/badge/core-Rust-f97316.svg)](Cargo.toml) [![Flutter client](https://img.shields.io/badge/client-Flutter-38bdf8.svg)](app)
 
-## Cosa include
+**English** · [Italiano](README.it.md) · Maintainer: [RedHunt07](https://github.com/redhunt07)
 
-- App Flutter (UI/UX + impostazioni)
-- Core Rust locale (AP + P2P + cache)
-- Relay pubblico (compatibilità legacy + routing)
+![FEDI3: a Flutter client, a Rust core and a federated network](docs/assets/header.svg)
 
-## Quick start (relay)
+FEDI3 is federated social software combining a **Flutter client**, a **local Rust core** and a **public relay**, with ActivityPub compatibility and a peer-to-peer layer.
 
-```
+[Get started](docs/getting_started.md) · [Deployment](docs/deploy_relay.md) · [Troubleshooting](docs/troubleshooting.md) · [Contribute](CONTRIBUTING.md)
+
+## Choose your starting point
+
+| Goal | Start here |
+| --- | --- |
+| Run a relay | [Relay deployment](docs/deploy_relay.md) |
+| Run the desktop client | [App guide](docs/app_guide.md) and the installers below |
+| Understand the local runtime | [Core deployment](docs/deploy_core.md) |
+| Operate an existing installation | [Backup and restore](docs/ops_backup_restore.md) |
+| Explore project rules | [Governance](GOVERNANCE.md), [ethics](ETHICS.md), [protocol compatibility](PROTOCOL_COMPATIBILITY.md) |
+
+## Architecture
+
+| Component | Role | Source |
+| --- | --- | --- |
+| Flutter app | Client interface and settings | [app/](app/) |
+| Rust core | Local federation, P2P and cache runtime | [crates/fedi3_core/](crates/fedi3_core/) |
+| Public relay | Federation compatibility and routing | [crates/fedi3_relay/](crates/fedi3_relay/) |
+| Shared protocol | Protocol types and models | [crates/fedi3_protocol/](crates/fedi3_protocol/) |
+| P2P infrastructure | Peer and mailbox services | [crates/fedi3_p2p_infra/](crates/fedi3_p2p_infra/) |
+
+## Current platform scope
+
+The primary deployment target is **relay + Linux desktop**. Windows installation scripts are included. Android is not release-ready until its dedicated signing and mobile release pipeline are defined. Platform folders in the source tree do not by themselves establish release support.
+
+## Quick start: relay
+
+Clone the repository and prepare the environment before starting the stack:
+
+```sh
+git clone https://github.com/redhunt07/Fedi3.git
+cd Fedi3
 cp .env.example .env
+# Edit .env for your domain, database, media backend and secrets.
 docker compose up -d --build
 ```
 
-Note:
-- `.env.example` is a development-safe template; replace all secret values before public deployment.
-- The primary production target in this repo is `relay + Linux desktop`.
-- Android is not considered release-ready until dedicated signing and mobile release pipeline are defined.
+The example environment is a development template. Follow the [relay deployment guide](docs/deploy_relay.md) for public deployment, TLS and configuration.
 
-## Installazione client Linux (Debian/Ubuntu)
+## Desktop installers
 
-Install (build + setup):
+The installers build from source and can install dependencies, services and desktop integration. Review the script for your platform before running it.
 
-```
-curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash
-```
+| Platform | Installer | Installed core |
+| --- | --- | --- |
+| Debian / Ubuntu | [scripts/install_deb.sh](scripts/install_deb.sh) | User systemd service |
+| Arch and derivatives | [scripts/install_arch.sh](scripts/install_arch.sh) | User systemd service |
+| Windows | [scripts/install_windows.ps1](scripts/install_windows.ps1) | Scheduled Task |
 
-Update-only (senza reinstallare dipendenze):
+For Debian / Ubuntu, after cloning:
 
-```
-curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_deb.sh | bash -s -- --update-only
-```
-
-Note:
-- Richiede privilegi amministratore (usa `sudo`) per installare in `/opt` e scrivere in `/usr/share`.
-- Il core viene installato come servizio user systemd (`fedi3-core.service`).
-
-## Installazione client Linux (Arch/derivate)
-
-Install (build + setup):
-
-```
-curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash
+```sh
+bash scripts/install_deb.sh
+# Update an existing installation:
+bash scripts/install_deb.sh --update-only
 ```
 
-Update-only (senza reinstallare dipendenze):
+The [Italian guide](README.it.md) includes the existing commands for each platform. Linux installation uses administrative privileges for dependency installation and writes under `/opt` and `/usr/share`.
 
-```
-curl -fsSL https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_arch.sh | bash -s -- --update-only
-```
+## Development
 
-Dipendenze principali (pacman):
+See [AGENTS.md](AGENTS.md) for the repository map and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules.
 
-```
-base-devel git curl unzip xz zip python clang cmake ninja pkgconf gtk3 webkit2gtk
-gstreamer gst-plugins-base gst-plugins-good libsecret libnotify mpv
-```
+```sh
+cargo check -p fedi3_core
+cargo check -p fedi3_relay
+cargo test --workspace
 
-Note:
-- Richiede privilegi amministratore (usa `sudo`) per installare in `/opt` e scrivere in `/usr/share`.
-- Il core viene installato come servizio user systemd (`fedi3-core.service`).
-
-## Installazione client Windows
-
-Install (build + setup):
-
-```
-powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3"
+cd app
+flutter pub get
+flutter analyze
+flutter test
 ```
 
-Update-only:
+The [CI workflow](.github/workflows/ci.yml) includes Rust, Flutter, release-hardening and relay smoke checks. Its badge reports the current result.
 
-```
-powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
-```
+## Documentation
 
-Note:
-- Richiede privilegi amministratore per installare le dipendenze via winget/BuildTools.
-- Il core viene installato come Scheduled Task (`Fedi3 Core`).
+- [Getting started](docs/getting_started.md)
+- [Relay deployment](docs/deploy_relay.md)
+- [Core runtime](docs/deploy_core.md)
+- [App guide](docs/app_guide.md)
+- [Backup and restore](docs/ops_backup_restore.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Frequently asked questions](docs/faq.md)
 
-## Docs
+## Help improve FEDI3
 
-- `docs/getting_started.md`
-- `docs/deploy_relay.md`
-- `docs/deploy_core.md`
-- `docs/app_guide.md`
-- `docs/ops_backup_restore.md`
-- `docs/troubleshooting.md`
-- `docs/faq.md`
+Reproducible federation tests, accessibility work, translations and focused documentation fixes are welcome. Read the [contribution guide](CONTRIBUTING.md); preserve protocol compatibility and existing attribution.
 
-## Licenza
+[Report a bug](https://github.com/redhunt07/Fedi3/issues/new?template=bug_report.yml) · [Suggest an improvement](https://github.com/redhunt07/Fedi3/issues/new?template=feature_request.yml) · [Contribute](CONTRIBUTING.md)
 
-AGPLv3. Modifiche network-facing devono rimanere open.
+If the project is useful to you, a star helps others discover it. Use **Watch → Custom → Releases** to follow releases.
+
+## License
+
+Copyright © 2026 RedHunt07. **AGPL-3.0-or-later**, as specified in [LICENSE](LICENSE). See the [fork policy](FORK_POLICY.md) and [trademark and name policy](TRADEMARK_AND_NAME.md) for project-specific guidance.
