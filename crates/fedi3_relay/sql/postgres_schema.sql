@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS relay_notes (
   note_json TEXT NOT NULL,
   created_at_ms BIGINT NOT NULL,
   search_tsv tsvector GENERATED ALWAYS AS (
-    to_tsvector('simple', coalesce(content_text, '') || ' ' || coalesce(content_html, ''))
+    to_tsvector('simple', coalesce(content_text, ''))
   ) STORED
 );
 CREATE INDEX IF NOT EXISTS idx_relay_notes_created ON relay_notes(created_at_ms DESC);
@@ -237,7 +237,7 @@ $$;
 
 ALTER TABLE relay_notes
   ADD COLUMN IF NOT EXISTS search_tsv tsvector GENERATED ALWAYS AS (
-    to_tsvector('simple', coalesce(content_text, '') || ' ' || coalesce(content_html, ''))
+    to_tsvector('simple', coalesce(content_text, ''))
   ) STORED;
 ALTER TABLE relay_note_tags
   ADD COLUMN IF NOT EXISTS tag_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(tag, ''))) STORED;
@@ -265,3 +265,17 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at_ms 
 ALTER TABLE admin_audit ADD COLUMN IF NOT EXISTS request_id TEXT;
 ALTER TABLE admin_audit ADD COLUMN IF NOT EXISTS correlation_id TEXT;
 ALTER TABLE admin_audit ADD COLUMN IF NOT EXISTS user_agent TEXT;
+
+CREATE TABLE IF NOT EXISTS schema_version (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version BIGINT NOT NULL
+);
+INSERT INTO schema_version(id, version) VALUES (1, 2) ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS inbox_dedupe (
+  activity_id TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  PRIMARY KEY (activity_id, recipient)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_dedupe_created ON inbox_dedupe (created_at_ms);

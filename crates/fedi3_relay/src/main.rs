@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use anyhow::Result;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -16,21 +17,19 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use bytes::Bytes;
+use deadpool::managed::QueueMode;
+use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use futures_util::{SinkExt, StreamExt};
-use anyhow::Result;
-use httpdate::parse_http_date;
 use http::header;
-use deadpool_postgres::{ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime, Timeouts};
-use deadpool::managed::QueueMode;
-use std::future::Future;
-use std::sync::OnceLock;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::{NoTls, Row};
+use httpdate::parse_http_date;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::future::Future;
+use std::net::IpAddr;
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -40,21 +39,26 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::net::IpAddr;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::{mpsc, oneshot, RwLock, Semaphore};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{NoTls, Row};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, info_span, warn};
 
-use rusqlite::{params, Connection, OptionalExtension};
 use ed25519_dalek::{Signer as _, Verifier as _};
+use rusqlite::{params, Connection, OptionalExtension};
+use subtle::ConstantTimeEq;
 
 mod media_store;
 
 static REQ_ID: AtomicU64 = AtomicU64::new(1);
+static TUNNEL_CONN_ID: AtomicU64 = AtomicU64::new(1);
 const DB_BATCH_DELETE_MAX: usize = 500;
+/// Current relay schema version. Bumped by every numbered migration.
+const SCHEMA_VERSION: i64 = 2;
 
 fn next_request_id() -> String {
     let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
@@ -233,6 +237,8 @@ struct AppState {
 #[derive(Clone)]
 struct TunnelHandle {
     tx: mpsc::Sender<TunnelRequest>,
+    conn_id: u64,
+    inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>>,
 }
 
 struct TunnelRequest {
@@ -253,8 +259,8 @@ struct MeiliIndexer {
 impl MeiliIndexer {
     fn new(search: Arc<MeiliSearch>, batch_max: usize, flush_ms: u64, queue_max: usize) -> Self {
         let (tx, mut rx) = mpsc::channel(queue_max.max(16));
-        let batch_max = batch_max.max(1).min(500);
-        let flush_ms = flush_ms.max(50).min(5_000);
+        let batch_max = batch_max.clamp(1, 500);
+        let flush_ms = flush_ms.clamp(50, 5_000);
         tokio::spawn(async move {
             let mut users: Vec<MeiliUserDoc> = Vec::with_capacity(batch_max);
             let mut notes: Vec<MeiliNoteDoc> = Vec::with_capacity(batch_max);
@@ -315,8 +321,8 @@ struct SearchCache {
 impl SearchCache {
     fn new(ttl_secs: u64, max_entries: usize) -> Self {
         Self {
-            ttl_secs: ttl_secs.max(5).min(300),
-            max_entries: max_entries.max(64).min(10_000),
+            ttl_secs: ttl_secs.clamp(5, 300),
+            max_entries: max_entries.clamp(64, 10_000),
             users: Arc::new(TokioRwLock::new(HashMap::new())),
             notes: Arc::new(TokioRwLock::new(HashMap::new())),
         }
@@ -466,6 +472,16 @@ struct RelayConfig {
     telemetry_peers_limit: u32,
     relay_sync_interval_secs: u64,
     relay_sync_limit: u32,
+    allow_private_actor_fetch: bool,
+    forward_send_timeout_ms: u64,
+    inbox_dedupe_ttl_secs: u64,
+    admin_audit_ttl_secs: u64,
+    relay_notes_ttl_secs: u64,
+    peer_registry_ttl_secs: u64,
+    relay_registry_ttl_secs: u64,
+    relay_user_directory_ttl_secs: u64,
+    media_max_bytes_per_user: u64,
+    spool_max_bytes_per_user: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -509,7 +525,7 @@ struct PgTx<'a> {
 
 impl PgConn {
     fn execute(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
-        block_on_result(self.client.execute(stmt, params)).map_err(Into::into)
+        block_on_result(self.client.execute(stmt, params))
     }
 
     fn transaction(&mut self) -> Result<PgTx<'_>> {
@@ -518,29 +534,29 @@ impl PgConn {
     }
 
     fn batch_execute(&mut self, stmt: &str) -> Result<()> {
-        block_on_result(self.client.batch_execute(stmt)).map_err(Into::into)
+        block_on_result(self.client.batch_execute(stmt))
     }
 
     fn query(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
-        block_on_result(self.client.query(stmt, params)).map_err(Into::into)
+        block_on_result(self.client.query(stmt, params))
     }
 
     fn query_one(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Row> {
-        block_on_result(self.client.query_one(stmt, params)).map_err(Into::into)
+        block_on_result(self.client.query_one(stmt, params))
     }
 
     fn query_opt(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>> {
-        block_on_result(self.client.query_opt(stmt, params)).map_err(Into::into)
+        block_on_result(self.client.query_opt(stmt, params))
     }
 }
 
 impl<'a> PgTx<'a> {
     fn execute(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
-        block_on_result(self.tx.execute(stmt, params)).map_err(Into::into)
+        block_on_result(self.tx.execute(stmt, params))
     }
 
     fn commit(self) -> Result<()> {
-        block_on_result(self.tx.commit()).map_err(Into::into)
+        block_on_result(self.tx.commit())
     }
 }
 
@@ -750,10 +766,11 @@ impl MeiliSearch {
         if docs.is_empty() {
             return Ok(());
         }
-        let resp = self.req(
-            reqwest::Method::POST,
-            &format!("/indexes/{}/documents", self.notes_index),
-        )
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/indexes/{}/documents", self.notes_index),
+            )
             .json(docs)
             .send()
             .await?;
@@ -769,10 +786,11 @@ impl MeiliSearch {
         if docs.is_empty() {
             return Ok(());
         }
-        let resp = self.req(
-            reqwest::Method::POST,
-            &format!("/indexes/{}/documents", self.users_index),
-        )
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                &format!("/indexes/{}/documents", self.users_index),
+            )
             .json(docs)
             .send()
             .await?;
@@ -803,10 +821,14 @@ impl MeiliSearch {
         if let Some(cur) = cursor {
             filters.push(format!("created_at_ms < {}", cur));
         }
-        let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
+        let filter = if filters.is_empty() {
+            None
+        } else {
+            Some(filters.join(" AND "))
+        };
         let body = serde_json::json!({
             "q": q,
-            "limit": limit.min(200).max(1),
+            "limit": limit.clamp(1, 200),
             "filter": filter,
             "sort": ["created_at_ms:desc"]
         });
@@ -830,7 +852,7 @@ impl MeiliSearch {
             last_created = Some(hit.created_at_ms);
             items.push(hit.note_json);
         }
-        let next = if items.len() as u32 == limit.min(200).max(1) {
+        let next = if items.len() as u32 == limit.clamp(1, 200) {
             last_created.map(|v| v.to_string())
         } else {
             None
@@ -853,10 +875,14 @@ impl MeiliSearch {
         if let Some(cur) = cursor {
             filters.push(format!("updated_at_ms < {}", cur));
         }
-        let filter = if filters.is_empty() { None } else { Some(filters.join(" AND ")) };
+        let filter = if filters.is_empty() {
+            None
+        } else {
+            Some(filters.join(" AND "))
+        };
         let body = serde_json::json!({
             "q": q,
-            "limit": limit.min(200).max(1),
+            "limit": limit.clamp(1, 200),
             "filter": filter,
             "sort": ["updated_at_ms:desc"]
         });
@@ -885,7 +911,7 @@ impl MeiliSearch {
                 items.push(serde_json::to_string(&stub).unwrap_or_default());
             }
         }
-        let next = if items.len() as u32 == limit.min(200).max(1) {
+        let next = if items.len() as u32 == limit.clamp(1, 200) {
             last_updated.map(|v| v.to_string())
         } else {
             None
@@ -920,9 +946,7 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
     if cfg.search_backend != "meili" {
         return None;
     }
-    let Some(base_url) = cfg.meili_url.as_ref() else {
-        return None;
-    };
+    let base_url = cfg.meili_url.as_ref()?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(cfg.meili_timeout_secs))
         .build()
@@ -944,10 +968,16 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
-    let cfg = load_config();
+    let cfg = load_config().unwrap_or_else(|e| {
+        eprintln!("fedi3_relay config error: {e:#}");
+        std::process::exit(2);
+    });
     let db_path = std::env::var("FEDI3_RELAY_DB").unwrap_or_else(|_| "fedi3_relay.db".to_string());
     let db = Db {
         driver: cfg.db_driver,
@@ -1044,7 +1074,10 @@ async fn main() {
     let peer_directory_ttl_days = cleanup_state.cfg.peer_directory_ttl_days;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(
-            cleanup_state.cfg.webrtc_signal_cleanup_interval_secs.max(10),
+            cleanup_state
+                .cfg
+                .webrtc_signal_cleanup_interval_secs
+                .max(10),
         ));
         loop {
             interval.tick().await;
@@ -1061,6 +1094,39 @@ async fn main() {
             if peer_directory_ttl_days > 0 {
                 if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
                     error!("peer_directory cleanup failed: {e}");
+                }
+            }
+            // Retention for the append-only registry/audit/note tables (M-02 / RD-05).
+            for (label, result) in [
+                (
+                    "admin_audit",
+                    db.cleanup_admin_audit(cleanup_state.cfg.admin_audit_ttl_secs),
+                ),
+                (
+                    "relay_notes",
+                    db.cleanup_relay_notes(cleanup_state.cfg.relay_notes_ttl_secs),
+                ),
+                (
+                    "peer_registry",
+                    db.cleanup_peer_registry(cleanup_state.cfg.peer_registry_ttl_secs),
+                ),
+                (
+                    "relay_registry",
+                    db.cleanup_relay_registry(cleanup_state.cfg.relay_registry_ttl_secs),
+                ),
+                (
+                    "relay_user_directory",
+                    db.cleanup_relay_user_directory(
+                        cleanup_state.cfg.relay_user_directory_ttl_secs,
+                    ),
+                ),
+                (
+                    "inbox_dedupe",
+                    db.cleanup_inbox_dedupe(cleanup_state.cfg.inbox_dedupe_ttl_secs),
+                ),
+            ] {
+                if let Err(e) = result {
+                    error!("{label} cleanup failed: {e}");
                 }
             }
         }
@@ -1117,7 +1183,10 @@ async fn main() {
         .route("/.well-known/webfinger", get(webfinger))
         .route("/inbox", post(shared_inbox))
         .route("/admin/users", get(admin_list_users))
-        .route("/admin/users/:user", get(admin_get_user).delete(admin_delete_user))
+        .route(
+            "/admin/users/:user",
+            get(admin_get_user).delete(admin_delete_user),
+        )
         .route("/admin/users/:user/disable", post(admin_disable_user))
         .route("/admin/users/:user/enable", post(admin_enable_user))
         .route("/admin/users/:user/rotate_token", post(admin_rotate_token))
@@ -1137,13 +1206,19 @@ async fn main() {
         .route("/_fedi3/relay/reindex", post(relay_reindex))
         .route("/_fedi3/relay/telemetry", post(relay_telemetry_post))
         .route("/_fedi3/relay/move", post(relay_move_post))
-        .route("/_fedi3/relay/move/:user", axum::routing::delete(relay_move_delete))
+        .route(
+            "/_fedi3/relay/move/:user",
+            axum::routing::delete(relay_move_delete),
+        )
         .route("/_fedi3/relay/move_notice", post(relay_move_notice_post))
         .route("/_fedi3/webrtc/send", post(webrtc_signal_send))
         .route("/_fedi3/webrtc/poll", get(webrtc_signal_poll))
         .route("/_fedi3/webrtc/ack", post(webrtc_signal_ack))
         .route("/users/:user/media", post(media_upload))
-        .route("/users/:user/media/:id", get(media_get))
+        .route(
+            "/users/:user/media/:id",
+            get(media_get).delete(media_delete),
+        )
         .route("/users/:user", any(forward_user_root))
         .route("/users/:user/*rest", any(forward_user_rest))
         .route("/*rest", any(forward_host_any))
@@ -1183,7 +1258,9 @@ async fn main() {
     }
     let sync_state = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(sync_state.cfg.telemetry_interval_secs.max(10)));
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            sync_state.cfg.telemetry_interval_secs.max(10),
+        ));
         loop {
             interval.tick().await;
             if let Err(e) = push_telemetry_once(&sync_state).await {
@@ -1197,15 +1274,25 @@ async fn main() {
         info!("host routing enabled for base domain: {d}");
     }
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
-fn load_config() -> RelayConfig {
+fn load_config() -> Result<RelayConfig> {
+    validate_env_parsing()?;
     let bind = std::env::var("FEDI3_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0:8787".to_string());
-    let bind: SocketAddr = bind.parse().expect("FEDI3_RELAY_BIND invalid");
-    let base_domain = std::env::var("FEDI3_RELAY_BASE_DOMAIN").ok().map(normalize_host);
+    let bind: SocketAddr = bind
+        .trim()
+        .parse()
+        .map_err(|e| anyhow::anyhow!("FEDI3_RELAY_BIND invalid ({bind:?}): {e}"))?;
+    let base_domain = std::env::var("FEDI3_RELAY_BASE_DOMAIN")
+        .ok()
+        .map(normalize_host)
+        .filter(|s| !s.is_empty());
     let trust_proxy_headers = std::env::var("FEDI3_RELAY_TRUST_PROXY_HEADERS")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -1214,9 +1301,34 @@ fn load_config() -> RelayConfig {
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let admin_token = std::env::var("FEDI3_RELAY_ADMIN_TOKEN").ok();
-    let public_url = std::env::var("FEDI3_RELAY_PUBLIC_URL").ok().map(|s| s.trim_end_matches('/').to_string());
-    let telemetry_token = std::env::var("FEDI3_RELAY_TELEMETRY_TOKEN").ok();
+    // Fail-fast on the admin token: it is the only credential protecting the
+    // admin/health/metrics surface, so an empty or weak value must stop startup
+    // instead of silently turning every admin endpoint into a 401 (H-14).
+    let admin_token = std::env::var("FEDI3_RELAY_ADMIN_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let admin_token = match admin_token {
+        Some(t) if t.len() >= 32 => Some(t),
+        Some(t) => anyhow::bail!(
+            "FEDI3_RELAY_ADMIN_TOKEN is too short ({} chars, minimum 32)",
+            t.len()
+        ),
+        None => anyhow::bail!("FEDI3_RELAY_ADMIN_TOKEN is required (minimum 32 chars)"),
+    };
+    let public_url = std::env::var("FEDI3_RELAY_PUBLIC_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(url) = &public_url {
+        if http::Uri::try_from(url.as_str()).is_err() {
+            anyhow::bail!("FEDI3_RELAY_PUBLIC_URL invalid: {url:?}");
+        }
+    }
+    let telemetry_token = std::env::var("FEDI3_RELAY_TELEMETRY_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let seed_relays = std::env::var("FEDI3_RELAY_SEED_RELAYS")
         .ok()
         .map(|v| {
@@ -1236,7 +1348,11 @@ fn load_config() -> RelayConfig {
             match std::fs::read_to_string(&path) {
                 Ok(v) => {
                     let t = v.trim().to_string();
-                    if t.is_empty() { None } else { Some(t) }
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
                 }
                 Err(e) => {
                     warn!(path=%path, "read p2p_infra peer_id file failed: {e}");
@@ -1268,12 +1384,19 @@ fn load_config() -> RelayConfig {
     let max_body_bytes = std::env::var("FEDI3_RELAY_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(64 * 1024 * 1024);
+        .unwrap_or(64 * 1024 * 1024)
+        .clamp(1024, 256 * 1024 * 1024);
+    // Safe-by-default HSTS: a deployment that forgets the variable must not
+    // serve plain HTTP without enforcement (M-06 / RC-05).
     let hsts_max_age_secs = std::env::var("FEDI3_RELAY_HSTS_MAX_AGE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-    let csp = std::env::var("FEDI3_RELAY_CSP").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        .unwrap_or(31_536_000)
+        .min(63_072_000);
+    let csp = std::env::var("FEDI3_RELAY_CSP")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let http_timeout_secs = std::env::var("FEDI3_RELAY_HTTP_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1323,6 +1446,11 @@ fn load_config() -> RelayConfig {
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "db".to_string());
+    if !matches!(search_backend.as_str(), "db" | "meili") {
+        anyhow::bail!(
+            "FEDI3_RELAY_SEARCH_BACKEND invalid: {search_backend:?} (expected db or meili)"
+        );
+    }
     let search_total_mode = std::env::var("FEDI3_RELAY_SEARCH_TOTAL_MODE")
         .ok()
         .map(|v| v.trim().to_ascii_lowercase())
@@ -1384,12 +1512,15 @@ fn load_config() -> RelayConfig {
     let db_driver = std::env::var("FEDI3_RELAY_DB_DRIVER")
         .ok()
         .map(|v| v.trim().to_ascii_lowercase())
-        .and_then(|v| match v.as_str() {
-            "postgres" | "postgresql" | "pg" => Some(DbDriver::Postgres),
-            "sqlite" | "sqlite3" => Some(DbDriver::Sqlite),
-            _ => None,
-        })
-        .unwrap_or(DbDriver::Sqlite);
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "sqlite".to_string());
+    let db_driver = match db_driver.as_str() {
+        "postgres" | "postgresql" | "pg" => DbDriver::Postgres,
+        "sqlite" | "sqlite3" => DbDriver::Sqlite,
+        other => {
+            anyhow::bail!("FEDI3_RELAY_DB_DRIVER invalid: {other:?} (expected sqlite or postgres)")
+        }
+    };
     let db_url = std::env::var("FEDI3_RELAY_DB_URL")
         .ok()
         .map(|v| v.trim().to_string())
@@ -1416,8 +1547,7 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(16)
-        .max(1)
-        .min(256);
+        .clamp(1, 256);
     let pg_pool_wait_ms = std::env::var("FEDI3_RELAY_PG_POOL_WAIT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1443,14 +1573,12 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(30)
-        .max(1)
-        .min(300);
+        .clamp(1, 300);
     let pg_init_backoff_ms = std::env::var("FEDI3_RELAY_PG_INIT_BACKOFF_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(500)
-        .max(50)
-        .min(30_000);
+        .clamp(50, 30_000);
     let redis_url = std::env::var("FEDI3_RELAY_REDIS_URL")
         .ok()
         .map(|v| v.trim().to_string())
@@ -1464,8 +1592,7 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4)
-        .max(1)
-        .min(64);
+        .clamp(1, 64);
     let ip_allowlist = parse_ip_rules(std::env::var("FEDI3_RELAY_IP_ALLOWLIST").ok());
     let ip_denylist = parse_ip_rules(std::env::var("FEDI3_RELAY_IP_DENYLIST").ok());
     let noisy_backoff_base_secs = std::env::var("FEDI3_RELAY_NOISY_BACKOFF_BASE_SECS")
@@ -1481,11 +1608,13 @@ fn load_config() -> RelayConfig {
     let max_inbox_fanout = std::env::var("FEDI3_RELAY_MAX_INBOX_FANOUT")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(25);
+        .unwrap_or(25)
+        .clamp(1, 1000);
     let max_inflight_per_user = std::env::var("FEDI3_RELAY_MAX_INFLIGHT_PER_USER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(32);
+        .unwrap_or(32)
+        .clamp(1, 1024);
     let spool_ttl_secs = std::env::var("FEDI3_RELAY_SPOOL_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1494,10 +1623,11 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(7 * 24 * 60 * 60);
-    let move_notice_fanout_interval_secs = std::env::var("FEDI3_RELAY_MOVE_NOTICE_FANOUT_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(60);
+    let move_notice_fanout_interval_secs =
+        std::env::var("FEDI3_RELAY_MOVE_NOTICE_FANOUT_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
     let peer_directory_ttl_days = std::env::var("FEDI3_RELAY_PEER_DIRECTORY_TTL_DAYS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -1508,10 +1638,11 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(10 * 60);
-    let webrtc_signal_cleanup_interval_secs = std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_CLEANUP_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30);
+    let webrtc_signal_cleanup_interval_secs =
+        std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_CLEANUP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
     let webrtc_signal_max_per_peer = std::env::var("FEDI3_RELAY_WEBRTC_SIGNAL_MAX_PER_PEER")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -1524,8 +1655,10 @@ fn load_config() -> RelayConfig {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50);
-    let media_backend = std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
-    let media_dir = std::env::var("FEDI3_RELAY_MEDIA_DIR").unwrap_or_else(|_| "fedi3_relay_media".to_string());
+    let media_backend =
+        std::env::var("FEDI3_RELAY_MEDIA_BACKEND").unwrap_or_else(|_| "local".to_string());
+    let media_dir =
+        std::env::var("FEDI3_RELAY_MEDIA_DIR").unwrap_or_else(|_| "fedi3_relay_media".to_string());
     let media_prefix = std::env::var("FEDI3_RELAY_MEDIA_PREFIX").unwrap_or_default();
     let media_webdav_base_url = std::env::var("FEDI3_RELAY_MEDIA_WEBDAV_BASE_URL").ok();
     let media_webdav_username = std::env::var("FEDI3_RELAY_MEDIA_WEBDAV_USERNAME").ok();
@@ -1567,8 +1700,59 @@ fn load_config() -> RelayConfig {
     let relay_sync_limit = std::env::var("FEDI3_RELAY_SYNC_LIMIT")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(200);
-    RelayConfig {
+        .unwrap_or(200)
+        .clamp(1, 1000);
+    // Test/deployment hook: allow fetching actor documents from loopback/private
+    // addresses. Off by default to close the SSRF hole on remote keyId URLs.
+    let allow_private_actor_fetch = std::env::var("FEDI3_RELAY_ALLOW_PRIVATE_ACTOR_FETCH")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let forward_send_timeout_ms = std::env::var("FEDI3_RELAY_FORWARD_SEND_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(250)
+        .clamp(10, 5_000);
+    let inbox_dedupe_ttl_secs = std::env::var("FEDI3_RELAY_INBOX_DEDUPE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600)
+        .clamp(60, 86_400);
+    let admin_audit_ttl_secs = std::env::var("FEDI3_RELAY_ADMIN_AUDIT_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(90 * 24 * 60 * 60)
+        .max(3600);
+    let relay_notes_ttl_secs = std::env::var("FEDI3_RELAY_NOTES_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30 * 24 * 60 * 60)
+        .max(3600);
+    let peer_registry_ttl_secs = std::env::var("FEDI3_RELAY_PEER_REGISTRY_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30 * 24 * 60 * 60)
+        .max(3600);
+    let relay_registry_ttl_secs = std::env::var("FEDI3_RELAY_REGISTRY_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(90 * 24 * 60 * 60)
+        .max(3600);
+    let relay_user_directory_ttl_secs = std::env::var("FEDI3_RELAY_USER_DIRECTORY_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30 * 24 * 60 * 60)
+        .max(3600);
+    // 0 means unlimited.
+    let media_max_bytes_per_user = std::env::var("FEDI3_RELAY_MEDIA_MAX_BYTES_PER_USER")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1024 * 1024 * 1024);
+    let spool_max_bytes_per_user = std::env::var("FEDI3_RELAY_SPOOL_MAX_BYTES_PER_USER")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(64 * 1024 * 1024);
+    Ok(RelayConfig {
         bind,
         base_domain,
         trust_proxy_headers,
@@ -1657,7 +1841,124 @@ fn load_config() -> RelayConfig {
         telemetry_peers_limit,
         relay_sync_interval_secs,
         relay_sync_limit,
+        allow_private_actor_fetch,
+        forward_send_timeout_ms,
+        inbox_dedupe_ttl_secs,
+        admin_audit_ttl_secs,
+        relay_notes_ttl_secs,
+        peer_registry_ttl_secs,
+        relay_registry_ttl_secs,
+        relay_user_directory_ttl_secs,
+        media_max_bytes_per_user,
+        spool_max_bytes_per_user,
+    })
+}
+
+/// Strict parsing for every numeric configuration variable: an invalid value
+/// must stop startup with a clear message instead of silently becoming the
+/// default (RC-01, RC-02, RC-03, M-07).
+fn validate_env_parsing() -> Result<()> {
+    const U64_VARS: &[&str] = &[
+        "FEDI3_RELAY_TELEMETRY_INTERVAL_SECS",
+        "FEDI3_RELAY_HSTS_MAX_AGE_SECS",
+        "FEDI3_RELAY_HTTP_TIMEOUT_SECS",
+        "FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS",
+        "FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS",
+        "FEDI3_RELAY_TUNNEL_TIMEOUT_SECS",
+        "FEDI3_RELAY_MEILI_TIMEOUT_SECS",
+        "FEDI3_RELAY_MEILI_FLUSH_MS",
+        "FEDI3_RELAY_SEARCH_CACHE_TTL_SECS",
+        "FEDI3_RELAY_DB_BUSY_TIMEOUT_MS",
+        "FEDI3_RELAY_DB_CACHE_KB",
+        "FEDI3_RELAY_PG_POOL_WAIT_MS",
+        "FEDI3_RELAY_PG_POOL_CREATE_TIMEOUT_MS",
+        "FEDI3_RELAY_PG_POOL_RECYCLE_TIMEOUT_MS",
+        "FEDI3_RELAY_PG_INIT_BACKOFF_MS",
+        "FEDI3_RELAY_NOISY_BACKOFF_BASE_SECS",
+        "FEDI3_RELAY_NOISY_BACKOFF_MAX_SECS",
+        "FEDI3_RELAY_SPOOL_TTL_SECS",
+        "FEDI3_RELAY_MOVE_NOTICE_TTL_SECS",
+        "FEDI3_RELAY_MOVE_NOTICE_FANOUT_INTERVAL_SECS",
+        "FEDI3_RELAY_WEBRTC_SIGNAL_TTL_SECS",
+        "FEDI3_RELAY_WEBRTC_SIGNAL_CLEANUP_INTERVAL_SECS",
+        "FEDI3_RELAY_OUTBOX_INDEX_INTERVAL_SECS",
+        "FEDI3_RELAY_SYNC_INTERVAL_SECS",
+        "FEDI3_RELAY_FORWARD_SEND_TIMEOUT_MS",
+        "FEDI3_RELAY_INBOX_DEDUPE_TTL_SECS",
+        "FEDI3_RELAY_ADMIN_AUDIT_TTL_SECS",
+        "FEDI3_RELAY_NOTES_TTL_SECS",
+        "FEDI3_RELAY_PEER_REGISTRY_TTL_SECS",
+        "FEDI3_RELAY_REGISTRY_TTL_SECS",
+        "FEDI3_RELAY_USER_DIRECTORY_TTL_SECS",
+        "FEDI3_RELAY_MEDIA_MAX_BYTES_PER_USER",
+        "FEDI3_RELAY_SPOOL_MAX_BYTES_PER_USER",
+    ];
+    const USIZE_VARS: &[&str] = &[
+        "FEDI3_RELAY_MAX_BODY_BYTES",
+        "FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST",
+        "FEDI3_RELAY_MEILI_BATCH_MAX",
+        "FEDI3_RELAY_MEILI_QUEUE_MAX",
+        "FEDI3_RELAY_SEARCH_CACHE_MAX",
+        "FEDI3_RELAY_PG_POOL_MAX_SIZE",
+        "FEDI3_RELAY_PG_INIT_RETRIES",
+        "FEDI3_RELAY_REDIS_POOL_SIZE",
+        "FEDI3_RELAY_MAX_INBOX_FANOUT",
+        "FEDI3_RELAY_MAX_INFLIGHT_PER_USER",
+        "FEDI3_RELAY_SPOOL_MAX_ROWS_PER_USER",
+        "FEDI3_RELAY_SPOOL_FLUSH_BATCH",
+    ];
+    const U32_VARS: &[&str] = &[
+        "FEDI3_RELAY_RL_REGISTER_PER_MIN",
+        "FEDI3_RELAY_RL_TUNNEL_PER_MIN",
+        "FEDI3_RELAY_RL_INBOX_PER_MIN",
+        "FEDI3_RELAY_RL_FORWARD_PER_MIN",
+        "FEDI3_RELAY_RL_ADMIN_PER_MIN",
+        "FEDI3_RELAY_WEBRTC_SIGNAL_MAX_PER_PEER",
+        "FEDI3_RELAY_OUTBOX_INDEX_PAGES",
+        "FEDI3_RELAY_OUTBOX_INDEX_PAGE_LIMIT",
+        "FEDI3_RELAY_TELEMETRY_USERS_LIMIT",
+        "FEDI3_RELAY_TELEMETRY_PEERS_LIMIT",
+        "FEDI3_RELAY_SYNC_LIMIT",
+        "FEDI3_RELAY_PEER_DIRECTORY_TTL_DAYS",
+    ];
+    const U16_VARS: &[&str] = &["FEDI3_P2P_INFRA_PORT"];
+
+    let present = |name: &str| -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+
+    for name in U64_VARS {
+        if let Some(raw) = present(name) {
+            if raw.parse::<u64>().is_err() {
+                anyhow::bail!("{name} invalid: {raw:?} (expected an unsigned integer)");
+            }
+        }
     }
+    for name in USIZE_VARS {
+        if let Some(raw) = present(name) {
+            if raw.parse::<usize>().is_err() {
+                anyhow::bail!("{name} invalid: {raw:?} (expected an unsigned integer)");
+            }
+        }
+    }
+    for name in U32_VARS {
+        if let Some(raw) = present(name) {
+            if raw.parse::<u32>().is_err() {
+                anyhow::bail!("{name} invalid: {raw:?} (expected an unsigned 32-bit integer)");
+            }
+        }
+    }
+    for name in U16_VARS {
+        if let Some(raw) = present(name) {
+            if raw.parse::<u16>().is_err() {
+                anyhow::bail!("{name} invalid: {raw:?} (expected an unsigned 16-bit integer)");
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn get_user_semaphore(state: &AppState, user: &str) -> Arc<Semaphore> {
@@ -1675,12 +1976,23 @@ async fn tunnel_ws(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(user): Path<String>,
     Query(q): Query<TunnelQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, q.token, socket))
+    // Prefer Authorization: Bearer over the legacy query-string token so the
+    // long-lived credential does not end up in proxy access logs (H-16).
+    let token = bearer_token(&headers).or(q.token);
+    ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, token, headers, socket))
 }
 
-async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: Option<String>, socket: WebSocket) {
+async fn handle_tunnel(
+    state: AppState,
+    peer: SocketAddr,
+    user: String,
+    token: Option<String>,
+    headers: HeaderMap,
+    socket: WebSocket,
+) {
     let token = match token {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -1692,10 +2004,20 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
         error!(%user, "tunnel rejected: token too short");
         return;
     }
+    // The tunnel is the only path that registers self-service users, so it must
+    // apply the same username rules as every other handler (H-29 / RT-03).
+    if !is_valid_username(&user) {
+        error!(%user, "tunnel rejected: invalid username");
+        return;
+    }
 
     if !state
         .limiter
-        .check(peer_ip(&peer), "tunnel", state.cfg.rate_limit_tunnel_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "tunnel",
+            state.cfg.rate_limit_tunnel_per_min,
+        )
         .await
     {
         error!(%user, "tunnel rejected: rate limited");
@@ -1719,7 +2041,19 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
     let (tx, mut rx) = mpsc::channel::<TunnelRequest>(64);
     let tx_for_hello = tx.clone();
 
-    state.tunnels.write().await.insert(user.clone(), TunnelHandle { tx });
+    // A connection id makes the disconnect cleanup safe under reconnects: the
+    // old socket must not remove the new tunnel entry (H-30 / RT-04).
+    let conn_id = TUNNEL_CONN_ID.fetch_add(1, Ordering::Relaxed);
+    let inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+    state.tunnels.write().await.insert(
+        user.clone(),
+        TunnelHandle {
+            tx,
+            conn_id,
+            inflight: inflight.clone(),
+        },
+    );
 
     // Fetch peer hello (best-effort) and store it for telemetry/online peer id.
     let hello_state = state.clone();
@@ -1747,7 +2081,11 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
                     hello_state.meili_index_user(doc);
                 }
             }
-            hello_state.peer_hello.write().await.insert(hello_user, hello);
+            hello_state
+                .peer_hello
+                .write()
+                .await
+                .insert(hello_user, hello);
         }
     });
 
@@ -1760,15 +2098,15 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
 
     tokio::spawn(flush_spool_for_user(state.clone(), user.clone()));
 
-    let inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>> =
-        Arc::new(RwLock::new(HashMap::new()));
-
     let inflight_writer = inflight.clone();
     let user_writer = user.clone();
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let id = msg.id.clone();
-            inflight_writer.write().await.insert(id.clone(), msg.resp_tx);
+            inflight_writer
+                .write()
+                .await
+                .insert(id.clone(), msg.resp_tx);
             let json = match serde_json::to_string(&msg.req) {
                 Ok(v) => v,
                 Err(e) => {
@@ -1815,8 +2153,14 @@ async fn handle_tunnel(state: AppState, peer: SocketAddr, user: String, token: O
 
     let _ = tokio::join!(writer2, reader);
 
-    state.tunnels.write().await.remove(&user);
-    state.peer_hello.write().await.remove(&user);
+    {
+        let mut tunnels = state.tunnels.write().await;
+        if tunnels.get(&user).map(|t| t.conn_id) == Some(conn_id) {
+            tunnels.remove(&user);
+            drop(tunnels);
+            state.peer_hello.write().await.remove(&user);
+        }
+    }
     info!(%user, "tunnel disconnected");
 }
 
@@ -1824,10 +2168,22 @@ async fn webfinger(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
     Query(q): Query<WebfingerQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/webfinger", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/webfinger",
+        raw_query.as_deref(),
+    ) {
         return resp.into_response();
+    }
+    // Reject requests whose Host is outside the configured base domain instead
+    // of echoing it back in `subject`/`href` (M-03 / RW-02).
+    if !host_allowed_for_cfg(&state.cfg, &authority_from_headers(&headers)) {
+        return (StatusCode::MISDIRECTED_REQUEST, "invalid host").into_response();
     }
     let Some(resource) = q.resource else {
         return (StatusCode::BAD_REQUEST, "missing resource").into_response();
@@ -1903,18 +2259,20 @@ async fn register(
         return (StatusCode::BAD_REQUEST, "token too short").into_response();
     }
 
-    if !state.cfg.allow_self_register {
-        if !is_authorized_admin(&state.cfg, &headers) {
-            return (StatusCode::UNAUTHORIZED, "admin token required").into_response();
-        }
+    if !state.cfg.allow_self_register && !is_authorized_admin(&state.cfg, &headers) {
+        return (StatusCode::UNAUTHORIZED, "admin token required").into_response();
     }
 
     let mut db = state.db.lock().await;
     let result = db.upsert_user_token(&state.cfg, &headers, &req.username, &req.token);
     drop(db);
-    if matches!(result, Ok(UpsertUserResult::Created | UpsertUserResult::Updated)) {
+    if matches!(
+        result,
+        Ok(UpsertUserResult::Created | UpsertUserResult::Updated)
+    ) {
         let actor_url = format!("{}/users/{}", relay_self_base(&state.cfg), req.username);
-        let stub = actor_stub_from_actor_url(&req.username, &actor_url, &user_base_template(&state.cfg));
+        let stub =
+            actor_stub_from_actor_url(&req.username, &actor_url, &user_base_template(&state.cfg));
         let doc = MeiliUserDoc {
             id: meili_doc_id(&actor_url),
             username: req.username.clone(),
@@ -1928,8 +2286,39 @@ async fn register(
         Ok(UpsertUserResult::Created) => (StatusCode::CREATED, "created").into_response(),
         Ok(UpsertUserResult::Exists) => (StatusCode::OK, "exists").into_response(),
         Ok(UpsertUserResult::Updated) => (StatusCode::OK, "updated").into_response(),
-        Ok(UpsertUserResult::Unauthorized) => (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Ok(UpsertUserResult::Unauthorized) => {
+            (StatusCode::UNAUTHORIZED, "invalid token").into_response()
+        }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+}
+
+/// Allowlist for uploaded media types (M-16 / RM-03). Anything that can carry
+/// active content (e.g. text/html) is rejected.
+fn media_type_allowed(content_type: &str) -> bool {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    base.starts_with("image/")
+        || base.starts_with("video/")
+        || base.starts_with("audio/")
+        || matches!(
+            base.as_str(),
+            "application/pdf" | "application/octet-stream"
+        )
+}
+
+/// Restrict the extension used in storage keys to a short alphanumeric token
+/// (M-15 / RM-08); anything else becomes "bin".
+fn safe_extension(ext: &str) -> String {
+    let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    if ext.is_empty() || ext.len() > 8 || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+        "bin".to_string()
+    } else {
+        ext
     }
 }
 
@@ -1956,7 +2345,12 @@ async fn media_upload(
     }
     if !state
         .limiter
-        .check_weighted(client_ip(&state.cfg, &peer, &headers), "media_upload", state.cfg.rate_limit_inbox_per_min, 1)
+        .check_weighted(
+            client_ip(&state.cfg, &peer, &headers),
+            "media_upload",
+            state.cfg.rate_limit_inbox_per_min,
+            1,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -1969,24 +2363,41 @@ async fn media_upload(
         .get("X-Filename")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("upload.bin");
-    let ext = FsPath::new(filename)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("bin");
+    let ext = safe_extension(
+        FsPath::new(filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("bin"),
+    );
     let media_type = headers
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
-    let id = generate_media_id(ext);
-    let prefix = state
-        .cfg
-        .media_prefix
-        .trim()
-        .trim_matches('/')
-        .to_string();
-    let prefix = if prefix.is_empty() { String::new() } else { format!("{}/", prefix) };
+    if !media_type_allowed(media_type) {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported media type").into_response();
+    }
+    let id = generate_media_id(&ext);
+    // Per-user quota, measured from the media_items table (RM-04 / H-28).
+    if state.cfg.media_max_bytes_per_user > 0 {
+        let db = state.db.lock().await;
+        let used = db.user_media_bytes(&user).unwrap_or(0);
+        drop(db);
+        if used.saturating_add(body.len() as u64) > state.cfg.media_max_bytes_per_user {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "media quota exceeded").into_response();
+        }
+    }
+    let prefix = state.cfg.media_prefix.trim().trim_matches('/').to_string();
+    let prefix = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", prefix)
+    };
     let storage_key = media_store::sanitize_key(&format!("{prefix}{user}/{id}"));
-    let saved = match state.media_backend.save_upload(&storage_key, media_type, &bytes).await {
+    let saved = match state
+        .media_backend
+        .save_upload(&storage_key, media_type, &bytes)
+        .await
+    {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("store failed: {e:#}")).into_response(),
     };
@@ -2011,7 +2422,52 @@ async fn media_upload(
       "mediaType": saved.media_type,
       "size": saved.size
     });
-    (StatusCode::CREATED, [(http::header::CONTENT_TYPE, "application/json; charset=utf-8")], body.to_string()).into_response()
+    (
+        StatusCode::CREATED,
+        [(
+            http::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn media_delete(
+    State(state): State<AppState>,
+    Path((user, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
+    if id.is_empty() || id.contains("..") || id.contains('/') || id.contains('\\') {
+        return (StatusCode::BAD_REQUEST, "invalid media id").into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    };
+    let db = state.db.lock().await;
+    let ok = db.verify_user_token(&user, &token).unwrap_or(false);
+    let item = match db.get_media_item(&user, &id) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "db error").into_response(),
+    };
+    drop(db);
+    if !ok {
+        return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+    }
+    let Some(item) = item else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    if let Err(e) = state.media_backend.delete(&item.storage_key).await {
+        return (StatusCode::BAD_GATEWAY, format!("delete failed: {e:#}")).into_response();
+    }
+    let db = state.db.lock().await;
+    if let Err(e) = db.delete_media_item(&user, &id) {
+        return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+    }
+    (StatusCode::OK, "deleted").into_response()
 }
 
 async fn media_get(
@@ -2051,103 +2507,42 @@ async fn media_get(
     match state.media_backend.load(&item.storage_key).await {
         Ok(bytes) => {
             let mut headers_out = HeaderMap::new();
-            headers_out.insert(http::header::CONTENT_TYPE, HeaderValue::from_str(&item.media_type).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
-            headers_out.insert(http::header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+            headers_out.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_str(&item.media_type)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            );
+            headers_out.insert(
+                http::header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            );
             (StatusCode::OK, headers_out, bytes).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
 
-async fn healthz(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_healthz", None).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    let _ = state.db.lock().await.insert_admin_audit(
-        "admin_healthz",
-        None,
-        None,
-        Some(&audit.ip),
-        true,
-        None,
-        &audit.meta,
-    );
+async fn healthz() -> impl IntoResponse {
+    // Liveness probe: unauthenticated, no DB access, no audit row (H-23 / C6).
     (StatusCode::OK, "ok").into_response()
 }
 
-async fn readyz(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_readyz", None).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
+async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    // Readiness probe: unauthenticated, read-only DB ping, no audit side effect.
+    let db_ok = {
+        let db = state.db.lock().await;
+        db.health_check().is_ok()
     };
-    let db = state.db.lock().await;
-    if db.health_check().is_err() {
-        let _ = db.insert_admin_audit(
-            "admin_readyz",
-            None,
-            None,
-            Some(&audit.ip),
-            false,
-            Some("db not ready"),
-            &audit.meta,
-        );
+    if !db_ok {
         return (StatusCode::SERVICE_UNAVAILABLE, "db not ready").into_response();
     }
-    drop(db);
     if let Err(e) = state.media_backend.health_check().await {
-        let _ = state.db.lock().await.insert_admin_audit(
-            "admin_readyz",
-            None,
-            None,
-            Some(&audit.ip),
-            false,
-            Some("media not ready"),
-            &audit.meta,
-        );
-        return (StatusCode::SERVICE_UNAVAILABLE, format!("media not ready: {e}")).into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("media not ready: {e}"),
+        )
+            .into_response();
     }
-    let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
-    let relay_sync_cutoff_ms = now_ms().saturating_sub(relay_sync_window_ms);
-    let db = state.db.lock().await;
-    let sync_rows = db.list_relay_sync_state().unwrap_or_default();
-    let mut last_sync_ms = None;
-    for (_relay, last_ms) in sync_rows {
-        if last_sync_ms.map(|v| last_ms > v).unwrap_or(true) {
-            last_sync_ms = Some(last_ms);
-        }
-    }
-    if let Some(last_ms) = last_sync_ms {
-        if last_ms < relay_sync_cutoff_ms {
-            let _ = db.insert_admin_audit(
-                "admin_readyz",
-                None,
-                None,
-                Some(&audit.ip),
-                false,
-                Some("relay sync stale"),
-                &audit.meta,
-            );
-            return (StatusCode::SERVICE_UNAVAILABLE, "relay sync stale").into_response();
-        }
-    }
-    let _ = db.insert_admin_audit(
-        "admin_readyz",
-        None,
-        None,
-        Some(&audit.ip),
-        true,
-        None,
-        &audit.meta,
-    );
     (StatusCode::OK, "ready").into_response()
 }
 
@@ -2175,17 +2570,29 @@ async fn add_security_headers(
     if let Some(correlation) = correlation {
         headers.insert(
             "X-Correlation-Id",
-            HeaderValue::from_str(&correlation).unwrap_or_else(|_| HeaderValue::from_static("corr")),
+            HeaderValue::from_str(&correlation)
+                .unwrap_or_else(|_| HeaderValue::from_static("corr")),
         );
     }
-    headers.entry("X-Content-Type-Options").or_insert(HeaderValue::from_static("nosniff"));
-    headers.entry("X-Frame-Options").or_insert(HeaderValue::from_static("DENY"));
-    headers.entry("Referrer-Policy").or_insert(HeaderValue::from_static("no-referrer"));
+    headers
+        .entry("X-Content-Type-Options")
+        .or_insert(HeaderValue::from_static("nosniff"));
+    headers
+        .entry("X-Frame-Options")
+        .or_insert(HeaderValue::from_static("DENY"));
+    headers
+        .entry("Referrer-Policy")
+        .or_insert(HeaderValue::from_static("no-referrer"));
     headers
         .entry("Permissions-Policy")
-        .or_insert(HeaderValue::from_static("geolocation=(), microphone=(), camera=()"));
+        .or_insert(HeaderValue::from_static(
+            "geolocation=(), microphone=(), camera=()",
+        ));
     if state.cfg.hsts_max_age_secs > 0 {
-        let value = format!("max-age={}; includeSubDomains; preload", state.cfg.hsts_max_age_secs);
+        let value = format!(
+            "max-age={}; includeSubDomains; preload",
+            state.cfg.hsts_max_age_secs
+        );
         headers.insert(
             "Strict-Transport-Security",
             HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("max-age=0")),
@@ -2194,7 +2601,8 @@ async fn add_security_headers(
     if let Some(csp) = &state.cfg.csp {
         headers.insert(
             "Content-Security-Policy",
-            HeaderValue::from_str(csp).unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'")),
+            HeaderValue::from_str(csp)
+                .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'")),
         );
     }
     resp
@@ -2237,7 +2645,8 @@ async fn enforce_ip_policy(
         let mut resp = (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
         resp.headers_mut().insert(
             "Retry-After",
-            HeaderValue::from_str(&retry_secs.to_string()).unwrap_or_else(|_| HeaderValue::from_static("60")),
+            HeaderValue::from_str(&retry_secs.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("60")),
         );
         return resp;
     }
@@ -2257,7 +2666,9 @@ async fn relay_metrics_json(
     };
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     let _ = state.db.lock().await.insert_admin_audit(
         "admin_metrics_json",
@@ -2282,19 +2693,36 @@ async fn relay_metrics_prom(
     };
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     let mut out = String::new();
     out.push_str("# TYPE fedi3_relay_online_users gauge\n");
-    out.push_str(&format!("fedi3_relay_online_users {}\n", telemetry.online_users));
+    out.push_str(&format!(
+        "fedi3_relay_online_users {}\n",
+        telemetry.online_users
+    ));
     out.push_str("# TYPE fedi3_relay_online_peers gauge\n");
-    out.push_str(&format!("fedi3_relay_online_peers {}\n", telemetry.online_peers));
+    out.push_str(&format!(
+        "fedi3_relay_online_peers {}\n",
+        telemetry.online_peers
+    ));
     out.push_str("# TYPE fedi3_relay_total_users gauge\n");
-    out.push_str(&format!("fedi3_relay_total_users {}\n", telemetry.total_users));
+    out.push_str(&format!(
+        "fedi3_relay_total_users {}\n",
+        telemetry.total_users
+    ));
     out.push_str("# TYPE fedi3_relay_total_peers_seen gauge\n");
-    out.push_str(&format!("fedi3_relay_total_peers_seen {}\n", telemetry.total_peers_seen));
+    out.push_str(&format!(
+        "fedi3_relay_total_peers_seen {}\n",
+        telemetry.total_peers_seen
+    ));
     out.push_str("# TYPE fedi3_relay_relays_total gauge\n");
-    out.push_str(&format!("fedi3_relay_relays_total {}\n", telemetry.relays.len()));
+    out.push_str(&format!(
+        "fedi3_relay_relays_total {}\n",
+        telemetry.relays.len()
+    ));
     if let Some(v) = telemetry.search_indexed_users {
         out.push_str("# TYPE fedi3_relay_search_indexed_users gauge\n");
         out.push_str(&format!("fedi3_relay_search_indexed_users {v}\n"));
@@ -2318,7 +2746,13 @@ async fn relay_metrics_prom(
 }
 
 async fn host_meta(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/host-meta", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/host-meta",
+        None,
+    ) {
         return resp.into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
@@ -2339,7 +2773,13 @@ async fn host_meta(State(state): State<AppState>, headers: HeaderMap) -> impl In
 }
 
 async fn nodeinfo_links(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Some(resp) = maybe_redirect_canonical(&state.cfg, &headers, &Method::GET, "/.well-known/nodeinfo", None) {
+    if let Some(resp) = maybe_redirect_canonical(
+        &state.cfg,
+        &headers,
+        &Method::GET,
+        "/.well-known/nodeinfo",
+        None,
+    ) {
         return resp.into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
@@ -2398,7 +2838,12 @@ async fn forward_host_any(
     }
 
     // Don't shadow reserved endpoints.
-    if rest.starts_with("tunnel/") || rest == "register" || rest == "healthz" || rest == "readyz" || rest.starts_with(".well-known/") {
+    if rest.starts_with("tunnel/")
+        || rest == "register"
+        || rest == "healthz"
+        || rest == "readyz"
+        || rest.starts_with(".well-known/")
+    {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
@@ -2522,7 +2967,9 @@ async fn forward_to_user(
 
     // If the user is offline, still serve cached profile/collections to improve
     // legacy compatibility (profile/key discovery + collection fetches).
-    if method == Method::GET && (path == format!("/users/{user}") || is_cached_collection_path(&user, path)) {
+    if method == Method::GET
+        && (path == format!("/users/{user}") || is_cached_collection_path(&user, path))
+    {
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
             let db = state.db.lock().await;
@@ -2531,7 +2978,8 @@ async fn forward_to_user(
                     if wants_activity_json(&headers) {
                         // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
                         if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
-                            if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to) {
+                            if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to)
+                            {
                                 return (
                                     StatusCode::OK,
                                     [("Content-Type", "application/activity+json; charset=utf-8")],
@@ -2548,24 +2996,14 @@ async fn forward_to_user(
                         )
                             .into_response();
                     }
-                    return (
-                        StatusCode::PERMANENT_REDIRECT,
-                        [("Location", moved_to)],
-                        "",
-                    )
+                    return (StatusCode::PERMANENT_REDIRECT, [("Location", moved_to)], "")
                         .into_response();
                 }
 
                 // For collections, redirect to the new actor URL + same suffix.
-                let suffix = path
-                    .strip_prefix(&format!("/users/{user}"))
-                    .unwrap_or("");
+                let suffix = path.strip_prefix(&format!("/users/{user}")).unwrap_or("");
                 let location = format!("{}{}", moved_to.trim_end_matches('/'), suffix);
-                return (
-                    StatusCode::PERMANENT_REDIRECT,
-                    [("Location", location)],
-                    "",
-                )
+                return (StatusCode::PERMANENT_REDIRECT, [("Location", location)], "")
                     .into_response();
             }
             if path == format!("/users/{user}") {
@@ -2600,12 +3038,41 @@ async fn forward_to_user(
 
     let sem = get_user_semaphore(&state, &user).await;
     let Ok(_permit) = sem.try_acquire_owned() else {
-        return (StatusCode::TOO_MANY_REQUESTS, "user inflight limit").into_response();
+        return forward_failure(
+            &state,
+            &user,
+            &method,
+            path,
+            &query,
+            &headers,
+            &body,
+            StatusCode::TOO_MANY_REQUESTS,
+            "user inflight limit",
+        )
+        .await;
     };
 
-    let tunnels = state.tunnels.read().await;
-    let Some(tunnel) = tunnels.get(&user) else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "user offline").into_response();
+    // Clone the sender and release the tunnels lock *before* awaiting. Holding
+    // the read guard across `tx.send().await` blocked every other forward and
+    // tunnel upgrade behind one slow client (H-10 / C4).
+    let (tunnel_tx, tunnel_inflight) = {
+        let tunnels = state.tunnels.read().await;
+        let Some(tunnel) = tunnels.get(&user) else {
+            drop(tunnels);
+            return forward_failure(
+                &state,
+                &user,
+                &method,
+                path,
+                &query,
+                &headers,
+                &body,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "user offline",
+            )
+            .await;
+        };
+        (tunnel.tx.clone(), tunnel.inflight.clone())
     };
 
     let headers_vec = headers_to_vec(&headers);
@@ -2614,7 +3081,7 @@ async fn forward_to_user(
         id: id.clone(),
         method: method.to_string(),
         path: path.to_string(),
-        query,
+        query: query.clone(),
         headers: headers_vec,
         body_b64: B64.encode(&body),
     };
@@ -2625,16 +3092,91 @@ async fn forward_to_user(
         resp_tx,
     };
 
-    if tunnel.tx.send(msg).await.is_err() {
-        return (StatusCode::BAD_GATEWAY, "tunnel send failed").into_response();
+    // Bounded send: a full channel means the client stopped reading.
+    match tokio::time::timeout(
+        Duration::from_millis(state.cfg.forward_send_timeout_ms),
+        tunnel_tx.send(msg),
+    )
+    .await
+    {
+        Err(_) => {
+            tunnel_inflight.write().await.remove(&id);
+            return forward_failure(
+                &state,
+                &user,
+                &method,
+                path,
+                &query,
+                &headers,
+                &body,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "tunnel send timeout",
+            )
+            .await;
+        }
+        Ok(Err(_)) => {
+            tunnel_inflight.write().await.remove(&id);
+            return forward_failure(
+                &state,
+                &user,
+                &method,
+                path,
+                &query,
+                &headers,
+                &body,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "tunnel send failed",
+            )
+            .await;
+        }
+        Ok(Ok(())) => {}
     }
 
-    let Ok(resp) = tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await else {
-        return (StatusCode::GATEWAY_TIMEOUT, "tunnel timeout").into_response();
-    };
-    let Ok(resp) = resp else {
-        return (StatusCode::BAD_GATEWAY, "tunnel response dropped").into_response();
-    };
+    let resp =
+        match tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx)
+            .await
+        {
+            Err(_) => {
+                // Drop the stale inflight entry so a client that stops answering
+                // cannot leak one oneshot sender per request forever (H-31 / RT-09).
+                tunnel_inflight.write().await.remove(&id);
+                return forward_failure(
+                    &state,
+                    &user,
+                    &method,
+                    path,
+                    &query,
+                    &headers,
+                    &body,
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "tunnel timeout",
+                )
+                .await;
+            }
+            Ok(Err(_)) => {
+                tunnel_inflight.write().await.remove(&id);
+                return forward_failure(
+                    &state,
+                    &user,
+                    &method,
+                    path,
+                    &query,
+                    &headers,
+                    &body,
+                    StatusCode::BAD_GATEWAY,
+                    "tunnel response dropped",
+                )
+                .await;
+            }
+            Ok(Ok(resp)) => resp,
+        };
+
+    // Any retryable failure is queued for the next reconnect instead of being
+    // lost (H-11 / C4). GETs are cache/fetch probes and are not spooled, so a
+    // slow client cannot flood the spool with background cache reads.
+    if method != Method::GET && (resp.status == 429 || resp.status >= 500) {
+        let _ = spool_request(&state, &user, &method, path, &query, &headers, &body).await;
+    }
 
     if method == Method::GET && resp.status == 200 {
         if let Ok(bytes) = B64.decode(resp.body_b64.as_bytes()) {
@@ -2648,7 +3190,11 @@ async fn forward_to_user(
                             .and_then(|id| id.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let meili_raw_id = if actor_url.is_empty() { format!("user:{user}") } else { actor_url.clone() };
+                        let meili_raw_id = if actor_url.is_empty() {
+                            format!("user:{user}")
+                        } else {
+                            actor_url.clone()
+                        };
                         let doc = MeiliUserDoc {
                             id: meili_doc_id(&meili_raw_id),
                             username: user.clone(),
@@ -2675,6 +3221,51 @@ async fn forward_to_user(
     }
 
     build_response(resp)
+}
+
+/// Queue a request for delivery on the next tunnel reconnect (spool) and
+/// answer 503. Returns false when spooling itself failed.
+async fn spool_request(
+    state: &AppState,
+    user: &str,
+    method: &Method,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> bool {
+    let db = state.db.lock().await;
+    db.enqueue_spool(
+        &state.cfg,
+        user,
+        method.as_str(),
+        path,
+        query,
+        &headers_to_vec(headers),
+        &B64.encode(body),
+        body.len() as i64,
+    )
+    .is_ok()
+}
+
+/// Failure path for a forward: spool the request so it is retried after the
+/// user reconnects, then return 503/504/429 to the caller (H-11 / C4).
+#[allow(clippy::too_many_arguments)]
+async fn forward_failure(
+    state: &AppState,
+    user: &str,
+    method: &Method,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: &Bytes,
+    status: StatusCode,
+    reason: &'static str,
+) -> Response {
+    if *method != Method::GET {
+        let _ = spool_request(state, user, method, path, query, headers, body).await;
+    }
+    (status, reason).into_response()
 }
 
 fn is_cached_collection_path(user: &str, path: &str) -> bool {
@@ -2709,7 +3300,10 @@ fn collection_stub_json(user: &str, kind: &str, headers: &HeaderMap) -> String {
 }
 
 fn wants_activity_json(headers: &HeaderMap) -> bool {
-    let accept = headers.get("Accept").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let accept = headers
+        .get("Accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let accept = accept.to_ascii_lowercase();
     accept.contains("application/activity+json")
         || accept.contains("application/ld+json")
@@ -2718,7 +3312,12 @@ fn wants_activity_json(headers: &HeaderMap) -> bool {
         || accept.is_empty()
 }
 
-fn moved_actor_stub_json(cfg: &RelayConfig, headers: &HeaderMap, user: &str, moved_to_actor: &str) -> String {
+fn moved_actor_stub_json(
+    cfg: &RelayConfig,
+    headers: &HeaderMap,
+    user: &str,
+    moved_to_actor: &str,
+) -> String {
     let (scheme, host) = origin_for_links_with_cfg(cfg, headers);
     let id = format!("{scheme}://{host}/users/{user}");
     let inbox = format!("{scheme}://{host}/inbox");
@@ -2751,10 +3350,14 @@ fn patch_actor_with_moved_to(actor_json: &str, moved_to_actor: &str) -> Option<S
             }
         }
         Some(_) => {
-            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(moved_to_actor.to_string())]);
+            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(
+                moved_to_actor.to_string(),
+            )]);
         }
         None => {
-            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(moved_to_actor.to_string())]);
+            v["alsoKnownAs"] = serde_json::Value::Array(vec![serde_json::Value::String(
+                moved_to_actor.to_string(),
+            )]);
         }
     }
     serde_json::to_string(&v).ok()
@@ -2764,6 +3367,7 @@ async fn shared_inbox(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     method: Method,
+    uri: OriginalUri,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -2772,9 +3376,36 @@ async fn shared_inbox(
         return (StatusCode::METHOD_NOT_ALLOWED, "method not allowed").into_response();
     }
 
+    // Cheap abuse gate before the (remote) signature check.
+    let ip = client_ip(&state.cfg, &peer, &headers);
+    if !state
+        .limiter
+        .check_weighted(ip, "inbox_pre", state.cfg.rate_limit_inbox_per_min, 1)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+
+    // The relay used to accept every POST on trust (P0-06 / SEC-01). Verify the
+    // HTTP signature and its mandatory signed headers before doing any work.
+    if let Err(e) =
+        verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body))
+            .await
+    {
+        return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response();
+    }
+
     let users = match extract_users_from_activity(&body) {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad json: {e}")).into_response(),
+    };
+    // Only recipients that exist on this relay are ours (RI-05).
+    let users: Vec<String> = {
+        let db = state.db.lock().await;
+        users
+            .into_iter()
+            .filter(|u| db.user_exists(u).unwrap_or(false))
+            .collect()
     };
     if users.is_empty() {
         return (StatusCode::BAD_REQUEST, "no local recipients").into_response();
@@ -2784,11 +3415,11 @@ async fn shared_inbox(
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many recipients").into_response();
     }
 
-    let ip = client_ip(&state.cfg, &peer, &headers);
+    // Weighted rate limiting with the real fan-out cost.
     if !state
         .limiter
         .check_weighted(
-            ip,
+            client_ip(&state.cfg, &peer, &headers),
             "inbox",
             state.cfg.rate_limit_inbox_per_min,
             users.len().max(1) as u32,
@@ -2798,8 +3429,11 @@ async fn shared_inbox(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
 
+    let activity_id = extract_activity_id(&body);
+    let total = users.len() as u32;
     let mut delivered = 0u32;
     let mut spooled = 0u32;
+    let mut duplicate = 0u32;
     let headers_vec = headers_to_vec(&headers);
     let body_b64 = B64.encode(&body);
 
@@ -2807,12 +3441,26 @@ async fn shared_inbox(
         error!("relay search index failed: {e}");
     }
 
-    for user in users {
-        let is_online = { state.tunnels.read().await.contains_key(&user) };
+    for user in &users {
+        // Dedupe per (activity_id, recipient): sender retries must not deliver
+        // the same activity twice (H-20 / RI-06 / SEC-12).
+        if let Some(aid) = activity_id.as_deref() {
+            let inserted = {
+                let db = state.db.lock().await;
+                db.insert_inbox_dedupe(aid, user).unwrap_or(true)
+            };
+            if !inserted {
+                duplicate += 1;
+                continue;
+            }
+        }
+
+        let mut ok = false;
+        let is_online = { state.tunnels.read().await.contains_key(user) };
         if is_online {
             let resp = forward_to_user(
                 state.clone(),
-                user,
+                user.clone(),
                 Method::POST,
                 "/inbox",
                 String::new(),
@@ -2820,40 +3468,71 @@ async fn shared_inbox(
                 body.clone(),
             )
             .await;
-            if resp.status().is_success() || resp.status().as_u16() == 202 {
+            if resp.status().is_success() {
                 delivered += 1;
-            }
-            continue;
-        }
-
-        let db = state.db.lock().await;
-        match db.is_user_enabled(&user) {
-            Ok(true) => {
-                if db
-                    .enqueue_spool(
-                        &state.cfg,
-                        &user,
-                        "POST",
-                        "/inbox",
-                        "",
-                        &headers_vec,
-                        &body_b64,
-                        body.len() as i64,
-                    )
-                    .is_ok()
+                ok = true;
+            } else {
+                let status = resp.status();
+                if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                    // forward_to_user already queued the request in the spool.
+                    spooled += 1;
+                    ok = true;
+                } else if spool_request(&state, user, &Method::POST, "/inbox", "", &headers, &body)
+                    .await
                 {
                     spooled += 1;
+                    ok = true;
                 }
             }
-            Ok(false) => {}
-            Err(e) => error!(%user, "db error: {e}"),
+        } else {
+            let db = state.db.lock().await;
+            match db.is_user_enabled(user) {
+                Ok(true) => {
+                    if db
+                        .enqueue_spool(
+                            &state.cfg,
+                            user,
+                            "POST",
+                            "/inbox",
+                            "",
+                            &headers_vec,
+                            &body_b64,
+                            body.len() as i64,
+                        )
+                        .is_ok()
+                    {
+                        spooled += 1;
+                        ok = true;
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => error!(%user, "db error: {e}"),
+            }
+        }
+
+        if !ok {
+            if let Some(aid) = activity_id.as_deref() {
+                let db = state.db.lock().await;
+                let _ = db.delete_inbox_dedupe(aid, user);
+            }
         }
     }
-    if delivered == 0 && spooled == 0 {
-        (StatusCode::SERVICE_UNAVAILABLE, "no recipients online").into_response()
+
+    let accounted = delivered + spooled + duplicate;
+    if accounted == 0 || accounted < total {
+        (StatusCode::SERVICE_UNAVAILABLE, "delivery incomplete").into_response()
     } else {
         (StatusCode::ACCEPTED, "accepted").into_response()
     }
+}
+
+/// Extract the ActivityPub activity id used for relay-side dedupe.
+fn extract_activity_id(body: &Bytes) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    v.get("id")
+        .and_then(|id| id.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 async fn index_activity_bytes_for_search(state: &AppState, body: &Bytes) -> Result<()> {
@@ -2868,15 +3547,15 @@ async fn index_activity_bytes_for_search(state: &AppState, body: &Bytes) -> Resu
     let mut meili_docs = Vec::new();
     let db = state.db.lock().await;
     for note in notes {
-            if let Some(idx) = note_to_index(&note) {
-                let _ = db.upsert_relay_note(&idx);
-                meili_docs.push(MeiliNoteDoc {
-                    id: meili_doc_id(&idx.note_id),
-                    note_json: idx.note_json.clone(),
-                    content_text: idx.content_text.clone(),
-                    content_html: idx.content_html.clone(),
-                    tags: idx.tags.clone(),
-                    created_at_ms: idx.created_at_ms,
+        if let Some(idx) = note_to_index(&note) {
+            let _ = db.upsert_relay_note(&idx);
+            meili_docs.push(MeiliNoteDoc {
+                id: meili_doc_id(&idx.note_id),
+                note_json: idx.note_json.clone(),
+                content_text: idx.content_text.clone(),
+                content_html: idx.content_html.clone(),
+                tags: idx.tags.clone(),
+                created_at_ms: idx.created_at_ms,
             });
         }
     }
@@ -2923,7 +3602,9 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
             break;
         }
         pages += 1;
-        let Some(value) = fetch_json_url(state, &url).await else { break };
+        let Some(value) = fetch_json_url(state, &url).await else {
+            break;
+        };
         let mut meili_docs = Vec::new();
         for note in extract_notes_from_value(&value) {
             if let Some(idx) = note_to_index(&note) {
@@ -2966,12 +3647,19 @@ fn outbox_first_page_url(state: &AppState, user: &str) -> String {
     )
 }
 
-fn next_url_from_collection(state: &AppState, user: &str, value: &serde_json::Value) -> Option<String> {
+fn next_url_from_collection(
+    state: &AppState,
+    user: &str,
+    value: &serde_json::Value,
+) -> Option<String> {
     let next = value.get("next")?;
     let raw = if let Some(s) = next.as_str() {
         s.to_string()
     } else if let Some(obj) = next.as_object() {
-        obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        obj.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     } else {
         String::new()
     };
@@ -3045,7 +3733,7 @@ async fn flush_spool_for_user(state: AppState, user: String) {
     if !is_valid_username(&user) {
         return;
     }
-    let batch = state.cfg.spool_flush_batch.max(1).min(500);
+    let batch = state.cfg.spool_flush_batch.clamp(1, 500);
     loop {
         if !state.tunnels.read().await.contains_key(&user) {
             break;
@@ -3164,7 +3852,10 @@ fn extract_actor_ids_from_json(actor_json: &str) -> (Option<String>, Option<Stri
         Ok(v) => v,
         Err(_) => return (None, None),
     };
-    let actor_id = v.get("id").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+    let actor_id = v
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
     let actor_url = extract_actor_url_from_value(&v).or_else(|| actor_id.clone());
     (actor_id, actor_url)
 }
@@ -3173,12 +3864,20 @@ fn extract_actor_url_from_value(v: &serde_json::Value) -> Option<String> {
     let url_val = v.get("url")?;
     if let Some(s) = url_val.as_str() {
         let s = s.trim();
-        return if s.is_empty() { None } else { Some(s.to_string()) };
+        return if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        };
     }
     if let Some(obj) = url_val.as_object() {
         if let Some(s) = obj.get("href").and_then(|v| v.as_str()) {
             let s = s.trim();
-            return if s.is_empty() { None } else { Some(s.to_string()) };
+            return if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            };
         }
     }
     if let Some(arr) = url_val.as_array() {
@@ -3230,10 +3929,7 @@ fn build_response(resp: RelayHttpResponse) -> Response {
             headers.append(name, value);
         }
     }
-    let body = match B64.decode(resp.body_b64.as_bytes()) {
-        Ok(b) => b,
-        Err(_) => Vec::new(),
-    };
+    let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
     (status, headers, body).into_response()
 }
 
@@ -3260,17 +3956,21 @@ fn vec_to_headers(v: &[(String, String)]) -> HeaderMap {
 // (intentionally left out; was used for forward-webfinger)
 
 fn is_authorized_admin(cfg: &RelayConfig, headers: &HeaderMap) -> bool {
-    let Some(expected) = &cfg.admin_token else { return false };
-    let auth = headers.get("Authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let Some(token) = auth.strip_prefix("Bearer ") else { return false };
-    token == expected
+    let Some(expected) = cfg.admin_token.as_deref() else {
+        return false;
+    };
+    if expected.is_empty() {
+        return false;
+    }
+    token_matches(expected, bearer_token(headers).as_deref())
 }
 
 fn is_valid_username(user: &str) -> bool {
     if user.is_empty() || user.len() > 64 {
         return false;
     }
-    user.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    user.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 fn normalize_host(host: String) -> String {
@@ -3292,7 +3992,86 @@ fn user_from_host(cfg: &RelayConfig, headers: &HeaderMap) -> Option<String> {
         return None;
     }
     let user = prefix.to_string();
-    if is_valid_username(&user) { Some(user) } else { None }
+    if is_valid_username(&user) {
+        Some(user)
+    } else {
+        None
+    }
+}
+
+/// Numbered, fail-fast schema migration for SQLite. Only the expected
+/// "duplicate column name" error is tolerated; any other error aborts startup
+/// instead of being swallowed like the old `let _ =` statements (H-24 / RD-02).
+fn migrate_sqlite_schema(conn: &Connection) -> Result<()> {
+    let current: Option<i64> = conn
+        .query_row("SELECT version FROM schema_version WHERE id = 1", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(v) = current {
+        if v > SCHEMA_VERSION {
+            anyhow::bail!(
+                "relay database schema version {v} is newer than this binary supports ({SCHEMA_VERSION})"
+            );
+        }
+    }
+
+    // Migration 2: columns added after the first release.
+    const MIGRATIONS: &[(&str, &str)] = &[
+        (
+            "users.disabled",
+            "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "user_cache.actor_id",
+            "ALTER TABLE user_cache ADD COLUMN actor_id TEXT NULL",
+        ),
+        (
+            "user_cache.actor_url",
+            "ALTER TABLE user_cache ADD COLUMN actor_url TEXT NULL",
+        ),
+        (
+            "relay_registry.sign_pubkey_b64",
+            "ALTER TABLE relay_registry ADD COLUMN sign_pubkey_b64 TEXT NULL",
+        ),
+        (
+            "admin_audit.request_id",
+            "ALTER TABLE admin_audit ADD COLUMN request_id TEXT NULL",
+        ),
+        (
+            "admin_audit.correlation_id",
+            "ALTER TABLE admin_audit ADD COLUMN correlation_id TEXT NULL",
+        ),
+        (
+            "admin_audit.user_agent",
+            "ALTER TABLE admin_audit ADD COLUMN user_agent TEXT NULL",
+        ),
+    ];
+    for (label, sql) in MIGRATIONS {
+        match conn.execute(sql, []) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(anyhow::anyhow!("schema migration failed for {label}: {e}")),
+        }
+    }
+
+    match current {
+        Some(v) if v < SCHEMA_VERSION => {
+            conn.execute(
+                "UPDATE schema_version SET version = ?1 WHERE id = 1",
+                params![SCHEMA_VERSION],
+            )?;
+        }
+        None => {
+            conn.execute(
+                "INSERT INTO schema_version(id, version) VALUES (1, ?1)",
+                params![SCHEMA_VERSION],
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 impl Db {
@@ -3315,7 +4094,7 @@ impl Db {
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
         let _ = conn.pragma_update(None, "synchronous", self.db_synchronous.as_str());
         let _ = conn.pragma_update(None, "temp_store", "MEMORY");
-        let _ = conn.pragma_update(None, "cache_size", &self.db_cache_kb);
+        let _ = conn.pragma_update(None, "cache_size", self.db_cache_kb);
         let _ = conn.busy_timeout(Duration::from_millis(self.db_busy_timeout_ms));
         Ok(())
     }
@@ -3528,23 +4307,28 @@ impl Db {
               user_agent TEXT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS schema_version (
+              id INTEGER PRIMARY KEY CHECK(id = 1),
+              version INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS inbox_dedupe (
+              activity_id TEXT NOT NULL,
+              recipient TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(activity_id, recipient)
+            );
+            CREATE INDEX IF NOT EXISTS idx_inbox_dedupe_created ON inbox_dedupe(created_at_ms);
             "#,
                 )?;
-                // Migrate existing dbs.
-                let _ = conn.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0", []);
-                let _ = conn.execute("ALTER TABLE user_cache ADD COLUMN actor_id TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE user_cache ADD COLUMN actor_url TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE relay_registry ADD COLUMN sign_pubkey_b64 TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN request_id TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN correlation_id TEXT NULL", []);
-                let _ = conn.execute("ALTER TABLE admin_audit ADD COLUMN user_agent TEXT NULL", []);
+                migrate_sqlite_schema(&conn)?;
                 Ok(())
             }
             DbDriver::Postgres => {
-                let url = self
-                    .db_url
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("FEDI3_RELAY_DB_URL is required for postgres"))?;
+                let url = self.db_url.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("FEDI3_RELAY_DB_URL is required for postgres")
+                })?;
                 let mut cfg = deadpool_postgres::Config::new();
                 cfg.url = Some(url.to_string());
                 cfg.manager = Some(ManagerConfig {
@@ -3566,6 +4350,22 @@ impl Db {
                     match self.open_pg_conn() {
                         Ok(mut conn) => {
                             conn.batch_execute(include_str!("../sql/postgres_schema.sql"))?;
+                            // Reject databases written by a newer binary instead of
+                            // silently running against an unknown schema (RD-03).
+                            if let Some(row) = conn
+                                .query_opt("SELECT version FROM schema_version WHERE id = 1", &[])?
+                            {
+                                let version: i64 = row.get(0);
+                                if version > SCHEMA_VERSION {
+                                    anyhow::bail!(
+                                        "relay database schema version {version} is newer than this binary supports ({SCHEMA_VERSION})"
+                                    );
+                                }
+                            }
+                            conn.execute(
+                                "INSERT INTO schema_version(id, version) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version",
+                                &[&SCHEMA_VERSION],
+                            )?;
                             return Ok(());
                         }
                         Err(err) => {
@@ -3602,6 +4402,7 @@ impl Db {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_admin_audit(
         &self,
         action: &str,
@@ -3655,6 +4456,7 @@ impl Db {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn list_admin_audit(
         &self,
         limit: u32,
@@ -3674,7 +4476,7 @@ impl Db {
             Option<String>,
         )>,
     > {
-        let limit = limit.min(500).max(1) as i64;
+        let limit = limit.clamp(1, 500) as i64;
         let offset = offset as i64;
         match self.driver {
             DbDriver::Sqlite => {
@@ -3774,7 +4576,11 @@ impl Db {
         }
     }
 
-    fn list_relays(&self, limit: u32) -> Result<Vec<(String, Option<String>, i64, Option<String>, Option<String>)>> {
+    #[allow(clippy::type_complexity)]
+    fn list_relays(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<(String, Option<String>, i64, Option<String>, Option<String>)>> {
         let limit = limit.min(500) as i64;
         match self.driver {
             DbDriver::Sqlite => {
@@ -3832,9 +4638,13 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                conn.query_row("SELECT value FROM relay_meta WHERE key=?1", params![key], |r| r.get(0))
-                    .optional()
-                    .map_err(Into::into)
+                conn.query_row(
+                    "SELECT value FROM relay_meta WHERE key=?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -3848,7 +4658,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                conn.execute("INSERT OR REPLACE INTO relay_meta(key,value) VALUES (?1,?2)", params![key, value])?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO relay_meta(key,value) VALUES (?1,?2)",
+                    params![key, value],
+                )?;
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -3866,7 +4679,7 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare("SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%'")?;
+                let mut stmt = conn.prepare("SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%' ESCAPE '\\'")?;
                 let mut rows = stmt.query([])?;
                 let mut out = Vec::new();
                 while let Some(row) = rows.next()? {
@@ -3881,7 +4694,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%'",
+                    "SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%' ESCAPE '\\'",
                     &[],
                 )?;
                 let mut out = Vec::new();
@@ -3969,7 +4782,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| r.get(0))?;
+                let n: u64 =
+                    conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| {
+                        r.get(0)
+                    })?;
                 Ok(n)
             }
             DbDriver::Postgres => {
@@ -4059,7 +4875,7 @@ impl Db {
                         if disabled != 0 {
                             return Ok(false);
                         }
-                        Ok(stored == token_hash_hex(token))
+                        Ok(ct_eq_str(&stored, &token_hash_hex(token)))
                     }
                     None => Ok(false),
                 }
@@ -4077,7 +4893,7 @@ impl Db {
                         if disabled {
                             return Ok(false);
                         }
-                        Ok(stored == token_hash_hex(token))
+                        Ok(ct_eq_str(&stored, &token_hash_hex(token)))
                     }
                     None => Ok(false),
                 }
@@ -4118,7 +4934,11 @@ impl Db {
     ) -> Result<UpsertUserResult> {
         if !self.user_exists(username)? {
             let created = self.create_user(username, new_token)?;
-            return Ok(if created { UpsertUserResult::Created } else { UpsertUserResult::Exists });
+            return Ok(if created {
+                UpsertUserResult::Created
+            } else {
+                UpsertUserResult::Exists
+            });
         }
 
         // User exists: only admin can change token unless self-register is enabled
@@ -4158,7 +4978,7 @@ impl Db {
                             return Err(anyhow::anyhow!("user disabled"));
                         }
                         let got = token_hash_hex(token);
-                        if stored == got {
+                        if ct_eq_str(&stored, &got) {
                             Ok(())
                         } else {
                             Err(anyhow::anyhow!("invalid token"))
@@ -4192,7 +5012,7 @@ impl Db {
                             return Err(anyhow::anyhow!("user disabled"));
                         }
                         let got = token_hash_hex(token);
-                        if stored == got {
+                        if ct_eq_str(&stored, &got) {
                             Ok(())
                         } else {
                             Err(anyhow::anyhow!("invalid token"))
@@ -4226,11 +5046,13 @@ impl Db {
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .optional()?;
-                let Some((stored, disabled)) = row else { return Ok(false) };
+                let Some((stored, disabled)) = row else {
+                    return Ok(false);
+                };
                 if disabled != 0 {
                     return Ok(false);
                 }
-                Ok(stored == token_hash_hex(token))
+                Ok(ct_eq_str(&stored, &token_hash_hex(token)))
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -4244,7 +5066,7 @@ impl Db {
                 if disabled {
                     return Ok(false);
                 }
-                Ok(stored == token_hash_hex(token))
+                Ok(ct_eq_str(&stored, &token_hash_hex(token)))
             }
         }
     }
@@ -4275,7 +5097,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute("DELETE FROM user_moves WHERE username=?1", params![username])?;
+                let _ = conn.execute(
+                    "DELETE FROM user_moves WHERE username=?1",
+                    params![username],
+                )?;
                 Ok(())
             }
             DbDriver::Postgres => {
@@ -4355,8 +5180,12 @@ impl Db {
         }
     }
 
-    fn list_recent_move_notices(&self, cutoff_ms: i64, limit: u32) -> Result<Vec<(String, String, i64)>> {
-        let limit = limit.max(1).min(1000) as i64;
+    fn list_recent_move_notices(
+        &self,
+        cutoff_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(String, String, i64)>> {
+        let limit = limit.clamp(1, 1000) as i64;
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -4385,7 +5214,11 @@ impl Db {
         }
     }
 
-    fn get_fanout_status(&self, notice_id: &str, relay_url: &str) -> Result<Option<(i64, i64, i64)>> {
+    fn get_fanout_status(
+        &self,
+        notice_id: &str,
+        relay_url: &str,
+    ) -> Result<Option<(i64, i64, i64)>> {
         // returns (tries, last_try_ms, sent_ok)
         match self.driver {
             DbDriver::Sqlite => {
@@ -4449,7 +5282,7 @@ impl Db {
     }
 
     fn list_users(&self, limit: u32, offset: u32) -> Result<Vec<(String, i64, i64)>> {
-        let limit = limit.min(500).max(1) as i64;
+        let limit = limit.clamp(1, 500) as i64;
         let offset = offset as i64;
         match self.driver {
             DbDriver::Sqlite => {
@@ -4553,21 +5386,41 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute("DELETE FROM inbox_spool WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM user_cache WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM user_collection_cache WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM media_items WHERE username=?1", params![username])?;
-                let _ = conn.execute("DELETE FROM peer_directory WHERE username=?1", params![username])?;
-                let changed = conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
+                let _ = conn.execute(
+                    "DELETE FROM inbox_spool WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM user_cache WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM user_collection_cache WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM media_items WHERE username=?1",
+                    params![username],
+                )?;
+                let _ = conn.execute(
+                    "DELETE FROM peer_directory WHERE username=?1",
+                    params![username],
+                )?;
+                let changed =
+                    conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
                 Ok(changed > 0)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let _ = conn.execute("DELETE FROM inbox_spool WHERE username=$1", &[&username])?;
                 let _ = conn.execute("DELETE FROM user_cache WHERE username=$1", &[&username])?;
-                let _ = conn.execute("DELETE FROM user_collection_cache WHERE username=$1", &[&username])?;
+                let _ = conn.execute(
+                    "DELETE FROM user_collection_cache WHERE username=$1",
+                    &[&username],
+                )?;
                 let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
-                let _ = conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
+                let _ =
+                    conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
                 let changed = conn.execute("DELETE FROM users WHERE username=$1", &[&username])?;
                 Ok(changed > 0)
             }
@@ -4589,12 +5442,14 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
+                let row =
+                    conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
                 Ok(row.map(|r| !r.get::<_, bool>(0)).unwrap_or(false))
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn enqueue_spool(
         &self,
         cfg: &RelayConfig,
@@ -4609,9 +5464,42 @@ impl Db {
         let headers_json = serde_json::to_string(headers).unwrap_or_else(|_| "[]".to_string());
         let now = now_ms();
         let cap = cfg.spool_max_rows_per_user as i64;
+        let byte_cap = cfg.spool_max_bytes_per_user as i64;
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
+                if byte_cap > 0 {
+                    if body_len > byte_cap {
+                        anyhow::bail!("spool body exceeds per-user byte cap");
+                    }
+                    let used: i64 = conn.query_row(
+                        "SELECT COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=?1",
+                        params![username],
+                        |r| r.get(0),
+                    )?;
+                    let mut excess = used.saturating_add(body_len) - byte_cap;
+                    if excess > 0 {
+                        let mut stmt = conn.prepare(
+                            "SELECT id, body_len FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC",
+                        )?;
+                        let mut rows = stmt.query(params![username])?;
+                        let mut to_delete = Vec::new();
+                        while let Some(row) = rows.next()? {
+                            if excess <= 0 {
+                                break;
+                            }
+                            let id: i64 = row.get(0)?;
+                            let len: i64 = row.get(1)?;
+                            to_delete.push(id);
+                            excess -= len.max(0);
+                        }
+                        drop(rows);
+                        drop(stmt);
+                        for id in to_delete {
+                            conn.execute("DELETE FROM inbox_spool WHERE id=?1", params![id])?;
+                        }
+                    }
+                }
                 conn.execute(
                     "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![username, now, method, path, query, headers_json, body_b64, body_len],
@@ -4633,6 +5521,36 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
+                if byte_cap > 0 {
+                    if body_len > byte_cap {
+                        anyhow::bail!("spool body exceeds per-user byte cap");
+                    }
+                    let row = conn.query_one(
+                        "SELECT COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=$1",
+                        &[&username],
+                    )?;
+                    let used: i64 = row.get(0);
+                    let mut excess = used.saturating_add(body_len) - byte_cap;
+                    if excess > 0 {
+                        let rows = conn.query(
+                            "SELECT id, body_len FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC",
+                            &[&username],
+                        )?;
+                        let mut to_delete = Vec::new();
+                        for r in rows {
+                            if excess <= 0 {
+                                break;
+                            }
+                            let id: i64 = r.get(0);
+                            let len: i64 = r.get(1);
+                            to_delete.push(id);
+                            excess -= len.max(0);
+                        }
+                        for id in to_delete {
+                            conn.execute("DELETE FROM inbox_spool WHERE id=$1", &[&id])?;
+                        }
+                    }
+                }
                 conn.execute(
                     "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                     &[&username, &now, &method, &path, &query, &headers_json, &body_b64, &body_len],
@@ -4707,12 +5625,12 @@ impl Db {
                 let mut conn = self.open_sqlite_conn()?;
                 let tx = conn.transaction()?;
                 for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let placeholders = std::iter::repeat("?")
-                        .take(chunk.len())
+                    let placeholders = std::iter::repeat_n("?", chunk.len())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let sql = format!("DELETE FROM inbox_spool WHERE id IN ({placeholders})");
-                    let params: Vec<&dyn rusqlite::ToSql> = chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+                    let params: Vec<&dyn rusqlite::ToSql> =
+                        chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
                     let _ = tx.execute(&sql, rusqlite::params_from_iter(params))?;
                 }
                 tx.commit()?;
@@ -4721,7 +5639,8 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let _ = conn.execute("DELETE FROM inbox_spool WHERE id = ANY($1)", &[&chunk])?;
+                    let _ =
+                        conn.execute("DELETE FROM inbox_spool WHERE id = ANY($1)", &[&chunk])?;
                 }
                 Ok(())
             }
@@ -4733,13 +5652,19 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM inbox_spool WHERE created_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM inbox_spool WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 Ok(deleted as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM inbox_spool WHERE created_at_ms < $1", &[&cutoff])?;
-                Ok(deleted as u64)
+                let deleted = conn.execute(
+                    "DELETE FROM inbox_spool WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
+                Ok(deleted)
             }
         }
     }
@@ -4749,7 +5674,10 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM move_notices WHERE created_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM move_notices WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 let _ = conn.execute(
                     "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
                     [],
@@ -4758,12 +5686,15 @@ impl Db {
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM move_notices WHERE created_at_ms < $1", &[&cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM move_notices WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
                 let _ = conn.execute(
                     "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
                     &[],
                 )?;
-                Ok(deleted as u64)
+                Ok(deleted)
             }
         }
     }
@@ -4895,12 +5826,18 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute("DELETE FROM peer_directory WHERE updated_at_ms < ?1", params![cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM peer_directory WHERE updated_at_ms < ?1",
+                    params![cutoff],
+                )?;
                 Ok(deleted as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM peer_directory WHERE updated_at_ms < $1", &[&cutoff])?;
+                let deleted = conn.execute(
+                    "DELETE FROM peer_directory WHERE updated_at_ms < $1",
+                    &[&cutoff],
+                )?;
                 Ok(deleted)
             }
         }
@@ -4911,12 +5848,191 @@ impl Db {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute("DELETE FROM webrtc_signals WHERE created_at_ms < ?1", params![cutoff])? as u64)
+                Ok(conn.execute(
+                    "DELETE FROM webrtc_signals WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )? as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute("DELETE FROM webrtc_signals WHERE created_at_ms < $1", &[&cutoff])?;
-                Ok(deleted as u64)
+                let deleted = conn.execute(
+                    "DELETE FROM webrtc_signals WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?;
+                Ok(deleted)
+            }
+        }
+    }
+
+    /// Retention for append-only tables that used to grow forever (M-02 / RD-05).
+    fn cleanup_admin_audit(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM admin_audit WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM admin_audit WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?)
+            }
+        }
+    }
+
+    fn cleanup_relay_notes(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE created_at_ms < ?1)",
+                    params![cutoff],
+                )?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_notes WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE created_at_ms < $1)",
+                    &[&cutoff],
+                )?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_notes WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?)
+            }
+        }
+    }
+
+    fn cleanup_peer_registry(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM peer_registry WHERE last_seen_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM peer_registry WHERE last_seen_ms < $1",
+                    &[&cutoff],
+                )?)
+            }
+        }
+    }
+
+    fn cleanup_relay_registry(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_registry WHERE last_seen_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_registry WHERE last_seen_ms < $1",
+                    &[&cutoff],
+                )?)
+            }
+        }
+    }
+
+    fn cleanup_relay_user_directory(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_user_directory WHERE updated_at_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM relay_user_directory WHERE updated_at_ms < $1",
+                    &[&cutoff],
+                )?)
+            }
+        }
+    }
+
+    /// Dedupe activities per (activity_id, recipient) with a short TTL (H-20 / RI-06).
+    fn insert_inbox_dedupe(&self, activity_id: &str, recipient: &str) -> Result<bool> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let changed = conn.execute(
+                    "INSERT OR IGNORE INTO inbox_dedupe(activity_id, recipient, created_at_ms) VALUES (?1, ?2, ?3)",
+                    params![activity_id, recipient, now],
+                )?;
+                Ok(changed > 0)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let changed = conn.execute(
+                    "INSERT INTO inbox_dedupe(activity_id, recipient, created_at_ms) VALUES ($1, $2, $3) ON CONFLICT (activity_id, recipient) DO NOTHING",
+                    &[&activity_id, &recipient, &now],
+                )?;
+                Ok(changed > 0)
+            }
+        }
+    }
+
+    fn delete_inbox_dedupe(&self, activity_id: &str, recipient: &str) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM inbox_dedupe WHERE activity_id = ?1 AND recipient = ?2",
+                    params![activity_id, recipient],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM inbox_dedupe WHERE activity_id = $1 AND recipient = $2",
+                    &[&activity_id, &recipient],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn cleanup_inbox_dedupe(&self, ttl_secs: u64) -> Result<u64> {
+        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM inbox_dedupe WHERE created_at_ms < ?1",
+                    params![cutoff],
+                )? as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                Ok(conn.execute(
+                    "DELETE FROM inbox_dedupe WHERE created_at_ms < $1",
+                    &[&cutoff],
+                )?)
             }
         }
     }
@@ -4954,6 +6070,50 @@ impl Db {
                     ],
                 )?;
                 Ok(())
+            }
+        }
+    }
+
+    fn user_media_bytes(&self, username: &str) -> Result<u64> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let used: i64 = conn.query_row(
+                    "SELECT COALESCE(SUM(size), 0) FROM media_items WHERE username=?1",
+                    params![username],
+                    |r| r.get(0),
+                )?;
+                Ok(used.max(0) as u64)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "SELECT COALESCE(SUM(size), 0) FROM media_items WHERE username=$1",
+                    &[&username],
+                )?;
+                let used: i64 = row.get(0);
+                Ok(used.max(0) as u64)
+            }
+        }
+    }
+
+    fn delete_media_item(&self, username: &str, id: &str) -> Result<bool> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let changed = conn.execute(
+                    "DELETE FROM media_items WHERE username=?1 AND id=?2",
+                    params![username, id],
+                )?;
+                Ok(changed > 0)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let changed = conn.execute(
+                    "DELETE FROM media_items WHERE username=$1 AND id=$2",
+                    &[&username, &id],
+                )?;
+                Ok(changed > 0)
             }
         }
     }
@@ -5017,7 +6177,10 @@ impl Db {
                     ],
                 )?;
                 let tx = conn.unchecked_transaction()?;
-                tx.execute("DELETE FROM relay_note_tags WHERE note_id=?1", params![note.note_id])?;
+                tx.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id=?1",
+                    params![note.note_id],
+                )?;
                 for tag in &note.tags {
                     tx.execute(
                         "INSERT OR IGNORE INTO relay_note_tags(note_id, tag) VALUES (?1, ?2)",
@@ -5043,7 +6206,10 @@ impl Db {
                     "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=EXCLUDED.actor_id,\n               published_ms=EXCLUDED.published_ms,\n               content_text=EXCLUDED.content_text,\n               content_html=EXCLUDED.content_html,\n               note_json=EXCLUDED.note_json",
                     params,
                 )?;
-                tx.execute("DELETE FROM relay_note_tags WHERE note_id=$1", &[&note.note_id])?;
+                tx.execute(
+                    "DELETE FROM relay_note_tags WHERE note_id=$1",
+                    &[&note.note_id],
+                )?;
                 for tag in &note.tags {
                     tx.execute(
                         "INSERT INTO relay_note_tags(note_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -5065,7 +6231,7 @@ impl Db {
         since: Option<i64>,
         total_mode: SearchTotalMode,
     ) -> Result<CollectionPage<String>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.clamp(1, 200) as i64;
         let q_norm = q.trim().to_lowercase();
         let tag_norm = tag.trim().trim_start_matches('#').to_lowercase();
         let q_like = if q_norm.is_empty() {
@@ -5089,7 +6255,7 @@ impl Db {
                 SELECT COUNT(*)
                 FROM relay_note_tags t
                 JOIN relay_notes n ON n.note_id = t.note_id
-                WHERE lower(t.tag) LIKE ?1
+                WHERE lower(t.tag) LIKE ?1 ESCAPE '\\'
                 "#,
                             params![tag_like],
                             |r| r.get(0),
@@ -5097,7 +6263,7 @@ impl Db {
                         .unwrap_or(0)
                     } else {
                         conn.query_row(
-                            "SELECT COUNT(*) FROM relay_notes WHERE lower(content_text) LIKE ?1 OR lower(content_html) LIKE ?1",
+                            "SELECT COUNT(*) FROM relay_notes WHERE lower(content_text) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
                             |r| r.get(0),
                         )
@@ -5116,7 +6282,7 @@ impl Db {
                     SELECT n.note_json, n.created_at_ms
                     FROM relay_note_tags t
                     JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1 AND n.created_at_ms > ?2
+                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\' AND n.created_at_ms > ?2
                     ORDER BY n.created_at_ms DESC
                     LIMIT ?3
                     "#,
@@ -5128,7 +6294,7 @@ impl Db {
                     SELECT n.note_json, n.created_at_ms
                     FROM relay_note_tags t
                     JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1 AND n.created_at_ms < ?2
+                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\' AND n.created_at_ms < ?2
                     ORDER BY n.created_at_ms DESC
                     LIMIT ?3
                     "#,
@@ -5140,7 +6306,7 @@ impl Db {
                     SELECT n.note_json, n.created_at_ms
                     FROM relay_note_tags t
                     JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1
+                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\'
                     ORDER BY n.created_at_ms DESC
                     LIMIT ?2
                     "#,
@@ -5149,17 +6315,17 @@ impl Db {
                     }
                 } else if let Some(since) = since {
                     stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 OR lower(content_html) LIKE ?1) AND created_at_ms > ?2 ORDER BY created_at_ms DESC LIMIT ?3",
+                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 ESCAPE '\\') AND created_at_ms > ?2 ORDER BY created_at_ms DESC LIMIT ?3",
                     )?;
                     rows = stmt.query(params![q_like, since, limit])?;
                 } else if let Some(cur) = cursor {
                     stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 OR lower(content_html) LIKE ?1) AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
+                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 ESCAPE '\\') AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
                     )?;
                     rows = stmt.query(params![q_like, cur, limit])?;
                 } else {
                     stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE lower(content_text) LIKE ?1 OR lower(content_html) LIKE ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                        "SELECT note_json, created_at_ms FROM relay_notes WHERE lower(content_text) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
                     )?;
                     rows = stmt.query(params![q_like, limit])?;
                 }
@@ -5182,7 +6348,7 @@ impl Db {
                         if !tag_norm.is_empty() {
                             let n: i64 = conn
                                 .query_row(
-                                    "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE ?1",
+                                    "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE ?1 ESCAPE '\\'",
                                     params![tag_like],
                                     |r| r.get(0),
                                 )
@@ -5190,7 +6356,11 @@ impl Db {
                             n.max(0) as u64
                         } else if q_norm.is_empty() {
                             let n: i64 = conn
-                                .query_row("SELECT count FROM relay_notes_count WHERE id = 1", [], |r| r.get(0))
+                                .query_row(
+                                    "SELECT count FROM relay_notes_count WHERE id = 1",
+                                    [],
+                                    |r| r.get(0),
+                                )
                                 .unwrap_or(0);
                             n.max(0) as u64
                         } else {
@@ -5270,15 +6440,15 @@ impl Db {
                             &[&tag_norm, &limit],
                         )?
                     }
-                } else if !q_norm.is_empty() && since.is_some() {
+                } else if let (false, Some(since_val)) = (q_norm.is_empty(), since) {
                     conn.query(
                         "SELECT note_json, created_at_ms FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1) AND created_at_ms > $2 ORDER BY created_at_ms DESC LIMIT $3",
-                        &[&q_norm, &since.unwrap(), &limit],
+                        &[&q_norm, &since_val, &limit],
                     )?
-                } else if !q_norm.is_empty() && cursor.is_some() {
+                } else if let (false, Some(cur)) = (q_norm.is_empty(), cursor) {
                     conn.query(
                         "SELECT note_json, created_at_ms FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1) AND created_at_ms < $2 ORDER BY created_at_ms DESC LIMIT $3",
-                        &[&q_norm, &cursor.unwrap(), &limit],
+                        &[&q_norm, &cur, &limit],
                     )?
                 } else if !q_norm.is_empty() {
                     conn.query(
@@ -5320,13 +6490,16 @@ impl Db {
                     SearchTotalMode::Approx => {
                         if !tag_norm.is_empty() {
                             let row = conn.query_one(
-                                "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE $1",
+                                "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE $1 ESCAPE '\\'",
                                 &[&tag_like],
                             )?;
                             let n: i64 = row.get(0);
                             n.max(0) as u64
                         } else if q_norm.is_empty() {
-                            let row = conn.query_one("SELECT count FROM relay_notes_count WHERE id = 1", &[])?;
+                            let row = conn.query_one(
+                                "SELECT count FROM relay_notes_count WHERE id = 1",
+                                &[],
+                            )?;
                             let n: i64 = row.get(0);
                             n.max(0) as u64
                         } else {
@@ -5346,7 +6519,7 @@ impl Db {
         since: Option<i64>,
         cursor: Option<i64>,
     ) -> Result<CollectionPage<(String, i64)>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.clamp(1, 200) as i64;
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -5381,7 +6554,11 @@ impl Db {
                 } else {
                     None
                 };
-                Ok(CollectionPage { total: items.len() as u64, items, next })
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -5414,7 +6591,11 @@ impl Db {
                 } else {
                     None
                 };
-                Ok(CollectionPage { total: items.len() as u64, items, next })
+                Ok(CollectionPage {
+                    total: items.len() as u64,
+                    items,
+                    next,
+                })
             }
         }
     }
@@ -5427,7 +6608,7 @@ impl Db {
         base_template: &str,
         total_mode: SearchTotalMode,
     ) -> Result<CollectionPage<String>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.clamp(1, 200) as i64;
         let q_norm = q.trim().to_lowercase();
         let q_like = if q_norm.is_empty() {
             "%".to_string()
@@ -5440,28 +6621,28 @@ impl Db {
                 let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
                     let total_cache: u64 = conn
                         .query_row(
-                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE ?1 OR lower(actor_id) LIKE ?1 OR lower(actor_url) LIKE ?1",
+                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
                             |r| r.get(0),
                         )
                         .unwrap_or(0);
                     let total_users: u64 = conn
                         .query_row(
-                            "SELECT COUNT(*) FROM users WHERE disabled=0 AND lower(username) LIKE ?1",
+                            "SELECT COUNT(*) FROM users WHERE disabled=0 AND lower(username) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
                             |r| r.get(0),
                         )
                         .unwrap_or(0);
                     let total_peers: u64 = conn
                         .query_row(
-                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1",
+                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
                             |r| r.get(0),
                         )
                         .unwrap_or(0);
                     let total_relay_users: u64 = conn
                         .query_row(
-                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1",
+                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
                             |r| r.get(0),
                         )
@@ -5476,11 +6657,11 @@ impl Db {
 
                 let mut stmt = if cursor.is_some() {
                     conn.prepare(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE ?1 OR lower(actor_id) LIKE ?1 OR lower(actor_url) LIKE ?1) AND updated_at_ms < ?2 ORDER BY updated_at_ms DESC LIMIT ?3",
+                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\') AND updated_at_ms < ?2 ORDER BY updated_at_ms DESC LIMIT ?3",
                     )?
                 } else {
                     conn.prepare(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE ?1 OR lower(actor_id) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
                     )?
                 };
                 let mut rows = if let Some(cur) = cursor {
@@ -5507,7 +6688,7 @@ impl Db {
                 }
 
                 let mut stmt_users = conn.prepare(
-                    "SELECT username, created_at_ms FROM users WHERE disabled=0 AND lower(username) LIKE ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                    "SELECT username, created_at_ms FROM users WHERE disabled=0 AND lower(username) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
                 )?;
                 let mut user_rows = stmt_users.query(params![q_like, limit])?;
                 while let Some(row) = user_rows.next()? {
@@ -5532,7 +6713,7 @@ impl Db {
                 }
 
                 let mut stmt_peers = conn.prepare(
-                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
                 )?;
                 let mut peer_rows = stmt_peers.query(params![q_like, limit])?;
                 while let Some(row) = peer_rows.next()? {
@@ -5558,7 +6739,7 @@ impl Db {
                 }
 
                 let mut stmt_remote = conn.prepare(
-                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
                 )?;
                 let mut remote_rows = stmt_remote.query(params![q_like, limit])?;
                 while let Some(row) = remote_rows.next()? {
@@ -5600,7 +6781,7 @@ impl Db {
                 let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
                     let total_cache: u64 = {
                         let row = conn.query_one(
-                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE $1 OR lower(actor_id) LIKE $1 OR lower(actor_url) LIKE $1",
+                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
                             &[&q_like],
                         )?;
                         let n: i64 = row.get(0);
@@ -5608,7 +6789,7 @@ impl Db {
                     };
                     let total_users: u64 = {
                         let row = conn.query_one(
-                            "SELECT COUNT(*) FROM users WHERE disabled=false AND lower(username) LIKE $1",
+                            "SELECT COUNT(*) FROM users WHERE disabled=false AND lower(username) LIKE $1 ESCAPE '\\'",
                             &[&q_like],
                         )?;
                         let n: i64 = row.get(0);
@@ -5616,7 +6797,7 @@ impl Db {
                     };
                     let total_peers: u64 = {
                         let row = conn.query_one(
-                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1",
+                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
                             &[&q_like],
                         )?;
                         let n: i64 = row.get(0);
@@ -5624,7 +6805,7 @@ impl Db {
                     };
                     let total_relay_users: u64 = {
                         let row = conn.query_one(
-                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1",
+                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
                             &[&q_like],
                         )?;
                         let n: i64 = row.get(0);
@@ -5640,12 +6821,12 @@ impl Db {
 
                 let rows = if let Some(cur) = cursor {
                     conn.query(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE $1 OR lower(actor_id) LIKE $1 OR lower(actor_url) LIKE $1) AND updated_at_ms < $2 ORDER BY updated_at_ms DESC LIMIT $3",
+                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\') AND updated_at_ms < $2 ORDER BY updated_at_ms DESC LIMIT $3",
                         &[&q_like, &cur, &limit],
                     )?
                 } else {
                     conn.query(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE $1 OR lower(actor_id) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
                         &[&q_like, &limit],
                     )?
                 };
@@ -5668,7 +6849,7 @@ impl Db {
                 }
 
                 let user_rows = conn.query(
-                    "SELECT username, created_at_ms FROM users WHERE disabled=false AND lower(username) LIKE $1 ORDER BY created_at_ms DESC LIMIT $2",
+                    "SELECT username, created_at_ms FROM users WHERE disabled=false AND lower(username) LIKE $1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT $2",
                     &[&q_like, &limit],
                 )?;
                 for row in user_rows {
@@ -5693,7 +6874,7 @@ impl Db {
                 }
 
                 let peer_rows = conn.query(
-                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
                     &[&q_like, &limit],
                 )?;
                 for row in peer_rows {
@@ -5719,7 +6900,7 @@ impl Db {
                 }
 
                 let remote_rows = conn.query(
-                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
                     &[&q_like, &limit],
                 )?;
                 for row in remote_rows {
@@ -5760,7 +6941,7 @@ impl Db {
     }
 
     fn search_relay_tags(&self, q: &str, limit: u32) -> Result<Vec<(String, u64)>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.clamp(1, 200) as i64;
         let q_norm = q.trim().trim_start_matches('#').to_lowercase();
         let q_like = if q_norm.is_empty() {
             "%".to_string()
@@ -5774,7 +6955,7 @@ impl Db {
                     r#"
             SELECT tag, count
             FROM relay_tag_counts
-            WHERE lower(tag) LIKE ?1
+            WHERE lower(tag) LIKE ?1 ESCAPE '\\'
             ORDER BY count DESC
             LIMIT ?2
             "#,
@@ -5794,7 +6975,7 @@ impl Db {
                     r#"
             SELECT tag, count
             FROM relay_tag_counts
-            WHERE lower(tag) LIKE $1
+            WHERE lower(tag) LIKE $1 ESCAPE '\\'
             ORDER BY count DESC
             LIMIT $2
             "#,
@@ -5834,7 +7015,7 @@ impl Db {
     }
 
     fn list_peer_directory(&self, q: &str, limit: u32) -> Result<Vec<(String, String, String)>> {
-        let limit = limit.min(200).max(1) as i64;
+        let limit = limit.clamp(1, 200) as i64;
         let q_norm = q.trim().to_lowercase();
         let q_like = if q_norm.is_empty() {
             "%".to_string()
@@ -5845,7 +7026,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
                 )?;
                 let mut rows = stmt.query(params![q_like, limit])?;
                 let mut out = Vec::new();
@@ -5857,7 +7038,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
                     &[&q_like, &limit],
                 )?;
                 let mut out = Vec::new();
@@ -5869,7 +7050,12 @@ impl Db {
         }
     }
 
-    fn upsert_relay_user_directory(&self, username: &str, actor_url: &str, relay_url: &str) -> Result<()> {
+    fn upsert_relay_user_directory(
+        &self,
+        username: &str,
+        actor_url: &str,
+        relay_url: &str,
+    ) -> Result<()> {
         let now = now_ms();
         match self.driver {
             DbDriver::Sqlite => {
@@ -5892,8 +7078,12 @@ impl Db {
     }
 
     #[allow(dead_code)]
-    fn list_relay_user_directory(&self, q: &str, limit: u32) -> Result<Vec<(String, String, String)>> {
-        let limit = limit.min(200).max(1) as i64;
+    fn list_relay_user_directory(
+        &self,
+        q: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, String, String)>> {
+        let limit = limit.clamp(1, 200) as i64;
         let q_norm = q.trim().to_lowercase();
         let q_like = if q_norm.is_empty() {
             "%".to_string()
@@ -5904,7 +7094,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE ?1 OR lower(actor_url) LIKE ?1 ORDER BY updated_at_ms DESC LIMIT ?2",
+                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
                 )?;
                 let mut rows = stmt.query(params![q_like, limit])?;
                 let mut out = Vec::new();
@@ -5916,7 +7106,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE $1 OR lower(actor_url) LIKE $1 ORDER BY updated_at_ms DESC LIMIT $2",
+                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
                     &[&q_like, &limit],
                 )?;
                 let mut out = Vec::new();
@@ -6065,15 +7255,28 @@ impl Db {
               payload_json=EXCLUDED.payload_json,
               created_at_ms=EXCLUDED.created_at_ms
             "#,
-                    &[&signal_id, &to_peer_id, &from_actor, &session_id, &kind, &payload_json, &now],
+                    &[
+                        &signal_id,
+                        &to_peer_id,
+                        &from_actor,
+                        &session_id,
+                        &kind,
+                        &payload_json,
+                        &now,
+                    ],
                 )?;
                 Ok(())
             }
         }
     }
 
-    fn list_webrtc_signals(&self, to_peer_id: &str, limit: u32) -> Result<Vec<(String, String, String, String, String)>> {
-        let limit = limit.min(200).max(1) as i64;
+    #[allow(clippy::type_complexity)]
+    fn list_webrtc_signals(
+        &self,
+        to_peer_id: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, String, String, String, String)>> {
+        let limit = limit.clamp(1, 200) as i64;
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -6124,8 +7327,7 @@ impl Db {
                 let tx = conn.transaction()?;
                 let mut deleted: u64 = 0;
                 for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let placeholders = std::iter::repeat("?")
-                        .take(chunk.len())
+                    let placeholders = std::iter::repeat_n("?", chunk.len())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let sql = format!(
@@ -6149,7 +7351,7 @@ impl Db {
                         "DELETE FROM webrtc_signals WHERE to_peer_id=$1 AND signal_id = ANY($2)",
                         params,
                     )?;
-                    deleted = deleted.saturating_add(n as u64);
+                    deleted = deleted.saturating_add(n);
                 }
                 Ok(deleted)
             }
@@ -6165,13 +7367,40 @@ enum UpsertUserResult {
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
-    let v = headers.get("Authorization")?.to_str().ok()?.trim().to_string();
-    let v = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer "))?;
+    let v = headers
+        .get("Authorization")?
+        .to_str()
+        .ok()?
+        .trim()
+        .to_string();
+    let v = v
+        .strip_prefix("Bearer ")
+        .or_else(|| v.strip_prefix("bearer "))?;
     let v = v.trim();
     if v.is_empty() {
         None
     } else {
         Some(v.to_string())
+    }
+}
+
+/// Constant-time comparison for credentials. Length differences are not
+/// secret; the byte comparison itself must not short-circuit (H-14 / B5).
+fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.ct_eq(b).into()
+}
+
+fn ct_eq_str(a: &str, b: &str) -> bool {
+    ct_eq_bytes(a.as_bytes(), b.as_bytes())
+}
+
+fn token_matches(expected: &str, provided: Option<&str>) -> bool {
+    match provided {
+        Some(p) if !p.is_empty() => ct_eq_str(expected, p),
+        _ => false,
     }
 }
 
@@ -6236,7 +7465,11 @@ impl RateLimiter {
                         Err(e) => error!("redis init failed: {e}"),
                     }
                 }
-                if conns.is_empty() { None } else { Some(conns) }
+                if conns.is_empty() {
+                    None
+                } else {
+                    Some(conns)
+                }
             }
             None => None,
         };
@@ -6256,10 +7489,13 @@ impl RateLimiter {
     }
 
     async fn check_weighted(&self, ip: String, bucket: &str, per_minute: u32, weight: u32) -> bool {
-        if let Some(_) = self.noisy_block_remaining(&ip).await {
+        if self.noisy_block_remaining(&ip).await.is_some() {
             return false;
         }
-        if let Some(ok) = self.redis_check_weighted(&ip, bucket, per_minute, weight).await {
+        if let Some(ok) = self
+            .redis_check_weighted(&ip, bucket, per_minute, weight)
+            .await
+        {
             if !ok {
                 let now = now_ms();
                 self.register_noisy(&ip, now).await;
@@ -6312,7 +7548,7 @@ impl RateLimiter {
             return None;
         }
         let remaining_ms = state.blocked_until_ms.saturating_sub(now);
-        Some(((remaining_ms as u64) + 999) / 1000)
+        Some((remaining_ms as u64).div_ceil(1000))
     }
 
     async fn register_noisy(&self, ip: &str, now: i64) {
@@ -6334,13 +7570,22 @@ impl RateLimiter {
         entry.strikes = entry.strikes.saturating_add(1);
         let shift = entry.strikes.saturating_sub(1).min(10);
         let base = self.noisy_backoff_base_secs.saturating_mul(1u64 << shift);
-        let backoff = base.min(self.noisy_backoff_max_secs.max(self.noisy_backoff_base_secs));
+        let backoff = base.min(
+            self.noisy_backoff_max_secs
+                .max(self.noisy_backoff_base_secs),
+        );
         entry.blocked_until_ms = now + (backoff as i64).saturating_mul(1000);
         entry.last_hit_ms = now;
     }
 
-    async fn redis_check_weighted(&self, ip: &str, bucket: &str, per_minute: u32, weight: u32) -> Option<bool> {
-        let Some(redis) = self.redis_handle() else { return None };
+    async fn redis_check_weighted(
+        &self,
+        ip: &str,
+        bucket: &str,
+        per_minute: u32,
+        weight: u32,
+    ) -> Option<bool> {
+        let redis = self.redis_handle()?;
         let key = format!(
             "{}:rl:{}:{}:{}",
             self.redis_prefix,
@@ -6371,7 +7616,7 @@ impl RateLimiter {
     }
 
     async fn redis_noisy_remaining(&self, ip: &str) -> Option<u64> {
-        let Some(redis) = self.redis_handle() else { return None };
+        let redis = self.redis_handle()?;
         let key = format!("{}:noisy:block:{}", self.redis_prefix, ip);
         let mut conn = redis.lock().await;
         let ttl: redis::RedisResult<i64> = conn.ttl(key).await;
@@ -6382,7 +7627,7 @@ impl RateLimiter {
     }
 
     async fn redis_register_noisy(&self, ip: &str) -> Option<()> {
-        let Some(redis) = self.redis_handle() else { return None };
+        let redis = self.redis_handle()?;
         let base = self.noisy_backoff_base_secs.max(1);
         let max = self.noisy_backoff_max_secs.max(base);
         let mut conn = redis.lock().await;
@@ -6406,7 +7651,17 @@ fn client_ip(cfg: &RelayConfig, peer: &SocketAddr, headers: &HeaderMap) -> Strin
         return peer_ip(peer);
     }
 
-    // Only safe when a trusted reverse proxy is deployed in front and overwrites these headers.
+    // The relay only trusts these headers when deployed behind a reverse proxy
+    // that overwrites them. Caddy *appends* the real client IP to any inbound
+    // X-Forwarded-For, so the last element is the only trustworthy one; taking
+    // the first let clients spoof the rate-limit/allowlist key (H-13 / RL-06).
+    if let Some(v) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
+        for part in v.split(',').rev() {
+            if let Some(ip) = parse_ip_str(part) {
+                return ip;
+            }
+        }
+    }
     if let Some(v) = headers.get("X-Real-IP").and_then(|v| v.to_str().ok()) {
         if let Some(ip) = parse_ip_str(v) {
             return ip;
@@ -6414,11 +7669,6 @@ fn client_ip(cfg: &RelayConfig, peer: &SocketAddr, headers: &HeaderMap) -> Strin
     }
     if let Some(v) = headers.get("Forwarded").and_then(|v| v.to_str().ok()) {
         if let Some(ip) = parse_forwarded_for_ip(v) {
-            return ip;
-        }
-    }
-    if let Some(v) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
-        if let Some(ip) = v.split(',').map(|s| s.trim()).find_map(parse_ip_str) {
             return ip;
         }
     }
@@ -6443,11 +7693,25 @@ fn is_ip_allowed(cfg: &RelayConfig, ip: IpAddr) -> bool {
 }
 
 fn parse_ip_str(s: &str) -> Option<String> {
-    let s = s.trim().trim_matches('"');
-    let s = s.trim_start_matches('[').trim_end_matches(']');
-    let ip_part = s.split(':').next().unwrap_or("").trim();
-    let ip: std::net::IpAddr = ip_part.parse().ok()?;
-    Some(ip.to_string())
+    let s = s.trim().trim_matches('"').trim();
+    // Bracketed IPv6, optionally with a port: [::1] or [::1]:443
+    if let Some(rest) = s.strip_prefix('[') {
+        let ip_part = rest.split(']').next()?.trim();
+        return ip_part.parse::<IpAddr>().ok().map(|ip| ip.to_string());
+    }
+    // Bare address (IPv4 or IPv6).
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    // host:port (IPv4 only; bare IPv6 already matched above).
+    if let Some((host, port)) = s.rsplit_once(':') {
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -6457,8 +7721,10 @@ enum IpRule {
 }
 
 fn parse_ip_rules(env: Option<String>) -> Vec<IpRule> {
-    let Some(raw) = env else { return Vec::new(); };
-    raw.split(|c| c == ',' || c == ' ' || c == '\n' || c == '\t')
+    let Some(raw) = env else {
+        return Vec::new();
+    };
+    raw.split([',', ' ', '\n', '\t'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .filter_map(parse_ip_rule)
@@ -6487,12 +7753,20 @@ fn ip_in_cidr(ip: IpAddr, base: IpAddr, prefix: u8) -> bool {
     match (ip, base) {
         (IpAddr::V4(ip), IpAddr::V4(base)) => {
             let prefix = prefix.min(32);
-            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
             (u32::from(ip) & mask) == (u32::from(base) & mask)
         }
         (IpAddr::V6(ip), IpAddr::V6(base)) => {
             let prefix = prefix.min(128);
-            let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
             (u128::from(ip) & mask) == (u128::from(base) & mask)
         }
         _ => false,
@@ -6501,19 +7775,24 @@ fn ip_in_cidr(ip: IpAddr, base: IpAddr, prefix: u8) -> bool {
 
 fn parse_forwarded_for_ip(forwarded: &str) -> Option<String> {
     // Forwarded: for=...;proto=https;host=...
-    // Values may be quoted and may include IPv6 in [].
+    // Multiple forwarded elements may be present; the last one is the one added
+    // by our trusted proxy.
+    let mut last = None;
     for part in forwarded.split(';') {
         let part = part.trim();
         let lower = part.to_ascii_lowercase();
         if !lower.starts_with("for=") {
             continue;
         }
-        let raw = part.splitn(2, '=').nth(1)?.trim();
-        return parse_ip_str(raw);
+        let raw = part.split_once('=')?.1.trim();
+        if let Some(ip) = parse_ip_str(raw) {
+            last = Some(ip);
+        }
     }
-    None
+    last
 }
 
+#[allow(clippy::result_large_err)]
 async fn admin_guard(
     state: &AppState,
     peer: &SocketAddr,
@@ -6528,35 +7807,27 @@ async fn admin_guard(
         .check(ip.clone(), "admin", state.cfg.rate_limit_admin_per_min)
         .await
     {
-        let _ = state
-            .db
-            .lock()
-            .await
-            .insert_admin_audit(
-                action,
-                username,
-                None,
-                Some(&ip),
-                false,
-                Some("rate limited"),
-                &meta,
-            );
+        let _ = state.db.lock().await.insert_admin_audit(
+            action,
+            username,
+            None,
+            Some(&ip),
+            false,
+            Some("rate limited"),
+            &meta,
+        );
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response());
     }
     if !is_authorized_admin(&state.cfg, headers) {
-        let _ = state
-            .db
-            .lock()
-            .await
-            .insert_admin_audit(
-                action,
-                username,
-                None,
-                Some(&ip),
-                false,
-                Some("unauthorized"),
-                &meta,
-            );
+        let _ = state.db.lock().await.insert_admin_audit(
+            action,
+            username,
+            None,
+            Some(&ip),
+            false,
+            Some("unauthorized"),
+            &meta,
+        );
         return Err((StatusCode::UNAUTHORIZED, "admin token required").into_response());
     }
     Ok(AdminAuditContext { ip, meta })
@@ -6572,8 +7843,15 @@ async fn admin_list_users(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let limit = q.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(100).min(500);
-    let offset = q.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(100)
+        .min(500);
+    let offset = q
+        .get("offset")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
     let db = state.db.lock().await;
     match db.list_users(limit, offset) {
         Ok(users) => {
@@ -6587,16 +7865,16 @@ async fn admin_list_users(
                 &audit.meta,
             );
             axum::Json(
-            users
-                .into_iter()
-                .map(|(u, created_at_ms, disabled)| {
-                    serde_json::json!({
-                      "username": u,
-                      "created_at_ms": created_at_ms,
-                      "disabled": disabled != 0
+                users
+                    .into_iter()
+                    .map(|(u, created_at_ms, disabled)| {
+                        serde_json::json!({
+                          "username": u,
+                          "created_at_ms": created_at_ms,
+                          "disabled": disabled != 0
+                        })
                     })
-                })
-                .collect::<Vec<_>>(),
+                    .collect::<Vec<_>>(),
             )
             .into_response()
         }
@@ -6685,7 +7963,8 @@ async fn admin_disable_user(
     headers: HeaderMap,
     Path(user): Path<String>,
 ) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_disable_user", Some(&user)).await {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_disable_user", Some(&user)).await
+    {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -6769,7 +8048,8 @@ async fn admin_rotate_token(
     headers: HeaderMap,
     Path(user): Path<String>,
 ) -> impl IntoResponse {
-    let audit = match admin_guard(&state, &peer, &headers, "admin_rotate_token", Some(&user)).await {
+    let audit = match admin_guard(&state, &peer, &headers, "admin_rotate_token", Some(&user)).await
+    {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -6806,16 +8086,25 @@ async fn admin_rotate_token(
     }
 }
 
-async fn relay_stats(State(state): State<AppState>, Query(q): Query<RelayTelemetryQuery>) -> impl IntoResponse {
+async fn relay_stats(
+    State(state): State<AppState>,
+    Query(q): Query<RelayTelemetryQuery>,
+) -> impl IntoResponse {
     let _ = q;
     let telemetry = match build_self_telemetry(&state).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
+        }
     };
     axum::Json(telemetry).into_response()
 }
 
-async fn relay_me(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelayMeQuery>) -> impl IntoResponse {
+async fn relay_me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayMeQuery>,
+) -> impl IntoResponse {
     if !is_valid_username(&q.username) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
     }
@@ -6900,7 +8189,11 @@ struct RelaySyncNotesResponse {
     next: Option<String>,
 }
 
-async fn relay_search_notes(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -6940,13 +8233,25 @@ async fn relay_search_notes(State(state): State<AppState>, headers: HeaderMap, Q
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_notes(&query, &tag, limit, cursor, since).await {
+        match search
+            .search_notes(&query, &tag, limit, cursor, since)
+            .await
+        {
             Ok(p) => p,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+            }
         }
     } else {
         let db = state.db.lock().await;
-        match db.search_relay_notes(&query, &tag, limit, cursor, since, state.cfg.search_total_mode) {
+        match db.search_relay_notes(
+            &query,
+            &tag,
+            limit,
+            cursor,
+            since,
+            state.cfg.search_total_mode,
+        ) {
             Ok(p) => p,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -6975,11 +8280,16 @@ async fn relay_search_notes(State(state): State<AppState>, headers: HeaderMap, Q
 async fn relay_sync_notes(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<RelaySyncNotesQuery>,
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "relay_sync", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "relay_sync",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -6996,13 +8306,24 @@ async fn relay_sync_notes(
         .filter_map(|(note_json, created_at_ms)| {
             serde_json::from_str::<serde_json::Value>(&note_json)
                 .ok()
-                .map(|note| RelaySyncNoteItem { note, created_at_ms })
+                .map(|note| RelaySyncNoteItem {
+                    note,
+                    created_at_ms,
+                })
         })
         .collect::<Vec<_>>();
-    axum::Json(RelaySyncNotesResponse { items, next: page.next }).into_response()
+    axum::Json(RelaySyncNotesResponse {
+        items,
+        next: page.next,
+    })
+    .into_response()
 }
 
-async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -7039,9 +8360,14 @@ async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Q
         }
     }
     let page = if let Some(search) = state.search.as_ref() {
-        match search.search_users(&query, limit, cursor, &base_template).await {
+        match search
+            .search_users(&query, limit, cursor, &base_template)
+            .await
+        {
             Ok(p) => p,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("search error: {e}")).into_response()
+            }
         }
     } else {
         let db = state.db.lock().await;
@@ -7077,7 +8403,11 @@ async fn relay_search_users(State(state): State<AppState>, headers: HeaderMap, Q
     axum::Json(body).into_response()
 }
 
-async fn relay_search_hashtags(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelaySearchQuery>) -> impl IntoResponse {
+async fn relay_search_hashtags(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelaySearchQuery>,
+) -> impl IntoResponse {
     let user = q.username.trim().to_string();
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid username").into_response();
@@ -7112,7 +8442,11 @@ struct RelayCoverageQuery {
     username: Option<String>,
 }
 
-async fn relay_search_coverage(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<RelayCoverageQuery>) -> impl IntoResponse {
+async fn relay_search_coverage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RelayCoverageQuery>,
+) -> impl IntoResponse {
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
@@ -7154,14 +8488,12 @@ async fn relay_search_coverage(State(state): State<AppState>, headers: HeaderMap
 
     let mut user_state = None;
     if let Some(user) = q.username.as_deref() {
-        if let Ok(state_row) = db.get_outbox_index_state(user) {
-            if let Some((ms, ok)) = state_row {
-                user_state = Some(serde_json::json!({
-                    "username": user,
-                    "last_index_ms": ms,
-                    "last_ok": ok
-                }));
-            }
+        if let Ok(Some((ms, ok))) = db.get_outbox_index_state(user) {
+            user_state = Some(serde_json::json!({
+                "username": user,
+                "last_index_ms": ms,
+                "last_ok": ok
+            }));
         }
     }
 
@@ -7192,7 +8524,10 @@ async fn relay_reindex(State(state): State<AppState>, headers: HeaderMap) -> imp
     (StatusCode::ACCEPTED, "reindex started").into_response()
 }
 
-async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetryQuery>) -> impl IntoResponse {
+async fn relay_list(
+    State(state): State<AppState>,
+    Query(q): Query<RelayTelemetryQuery>,
+) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let db = state.db.lock().await;
     let rows = match db.list_relays(limit) {
@@ -7203,7 +8538,9 @@ async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetr
 
     let mut relays = Vec::new();
     for (url, base_domain, last_seen_ms, last_json, sign_pubkey_b64) in rows {
-        let parsed: Option<serde_json::Value> = last_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        let parsed: Option<serde_json::Value> = last_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
         relays.push(serde_json::json!({
           "relay_url": url,
           "base_domain": base_domain,
@@ -7215,7 +8552,10 @@ async fn relay_list(State(state): State<AppState>, Query(q): Query<RelayTelemetr
     axum::Json(serde_json::json!({ "relays": relays })).into_response()
 }
 
-async fn relay_peers(State(state): State<AppState>, Query(q): Query<RelayPeersQuery>) -> impl IntoResponse {
+async fn relay_peers(
+    State(state): State<AppState>,
+    Query(q): Query<RelayPeersQuery>,
+) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let query = q.q.unwrap_or_default();
     let online_users = {
@@ -7256,14 +8596,18 @@ async fn relay_telemetry_post(
             .get("X-Fedi3-Telemetry-Token")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if got != expected {
+        if !ct_eq_str(got, expected) {
             return (StatusCode::UNAUTHORIZED, "telemetry token required").into_response();
         }
     }
 
     if !state
         .limiter
-        .check(peer_ip(&peer), "telemetry", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "telemetry",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7278,7 +8622,12 @@ async fn relay_telemetry_post(
         Some(v) if !v.trim().is_empty() => v.trim().to_string(),
         _ => return (StatusCode::BAD_REQUEST, "missing sign_pubkey_b64").into_response(),
     };
-    if input.signature_b64.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+    if input
+        .signature_b64
+        .as_deref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         return (StatusCode::BAD_REQUEST, "missing signature_b64").into_response();
     }
 
@@ -7295,7 +8644,12 @@ async fn relay_telemetry_post(
     }
 
     let telemetry_json = serde_json::to_string(&input).ok();
-    let _ = db.upsert_relay(&input.relay_url, input.base_domain.clone(), telemetry_json, Some(provided_pk.clone()));
+    let _ = db.upsert_relay(
+        &input.relay_url,
+        input.base_domain.clone(),
+        telemetry_json,
+        Some(provided_pk.clone()),
+    );
     for r in &input.relays {
         if r.starts_with("http://") || r.starts_with("https://") {
             let _ = db.upsert_relay(r, None, None, None);
@@ -7359,7 +8713,11 @@ async fn relay_move_post(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "move",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7408,7 +8766,11 @@ async fn relay_move_delete(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "move",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7447,7 +8809,11 @@ async fn relay_move_notice_post(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "move_notice",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7492,9 +8858,7 @@ async fn relay_move_notice_post(
     };
 
     let db = state.db.lock().await;
-    let authorized = if sig_ok {
-        true
-    } else if is_authorized_admin(&state.cfg, &headers) {
+    let authorized = if sig_ok || is_authorized_admin(&state.cfg, &headers) {
         true
     } else if let Some(tok) = bearer.as_deref() {
         db.verify_token(&user, tok).unwrap_or(false)
@@ -7502,7 +8866,11 @@ async fn relay_move_notice_post(
         false
     };
     if !authorized {
-        return (StatusCode::UNAUTHORIZED, "signature or admin/user token required").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signature or admin/user token required",
+        )
+            .into_response();
     }
 
     let notice_id = notice_id_hex(&notice);
@@ -7515,11 +8883,19 @@ async fn relay_move_notice_post(
     if let Err(e) = db.set_user_move(&user, &moved_to) {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
-    let _ = db.upsert_move_notice(&notice_id, &serde_json::to_string(&notice).unwrap_or_default());
+    let _ = db.upsert_move_notice(
+        &notice_id,
+        &serde_json::to_string(&notice).unwrap_or_default(),
+    );
     drop(db);
 
     // Fan-out the signed notice to other relays (best-effort).
-    tokio::spawn(fanout_move_notice(state.clone(), notice_id, body.to_vec(), hop + 1));
+    tokio::spawn(fanout_move_notice(
+        state.clone(),
+        notice_id,
+        body.to_vec(),
+        hop + 1,
+    ));
 
     (StatusCode::OK, "ok").into_response()
 }
@@ -7533,7 +8909,11 @@ async fn webrtc_signal_send(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "webrtc_send",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7560,9 +8940,19 @@ async fn webrtc_signal_send(
         return (StatusCode::BAD_REQUEST, "invalid kind").into_response();
     }
 
-    let (actor, _actor_json) = match verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body)).await {
+    let (actor, _actor_json) = match verify_actor_signature_for_request(
+        &state,
+        &Method::POST,
+        &uri.0,
+        &headers,
+        Some(&body),
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response()
+        }
     };
 
     // Backpressure / anti-abuse: cap queued signals per peer.
@@ -7581,7 +8971,14 @@ async fn webrtc_signal_send(
     let payload_json = serde_json::to_string(&req.payload).unwrap_or_else(|_| "null".to_string());
     {
         let db = state.db.lock().await;
-        if let Err(e) = db.insert_webrtc_signal(&signal_id, &to_peer_id, &actor, &session_id, &kind, &payload_json) {
+        if let Err(e) = db.insert_webrtc_signal(
+            &signal_id,
+            &to_peer_id,
+            &actor,
+            &session_id,
+            &kind,
+            &payload_json,
+        ) {
             return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
         }
     }
@@ -7598,7 +8995,11 @@ async fn webrtc_signal_poll(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "webrtc_poll",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7608,11 +9009,21 @@ async fn webrtc_signal_poll(
     if to_peer_id.is_empty() || to_peer_id.len() > 128 {
         return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
     }
-    let limit = q.limit.unwrap_or(50).max(1).min(200);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
 
-    let (actor, actor_json) = match verify_actor_signature_for_request(&state, &Method::GET, &uri.0, &headers, None).await {
+    let (actor, actor_json) = match verify_actor_signature_for_request(
+        &state,
+        &Method::GET,
+        &uri.0,
+        &headers,
+        None,
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response()
+        }
     };
     let actor_peer = extract_peer_id_from_actor_json(&actor_json).unwrap_or_default();
     if actor_peer != to_peer_id {
@@ -7629,7 +9040,8 @@ async fn webrtc_signal_poll(
 
     let mut out = Vec::new();
     for (id, from_actor, session_id, kind, payload_json) in rows {
-        let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
         out.push(serde_json::json!({
           "id": id,
           "from_actor": from_actor,
@@ -7651,7 +9063,11 @@ async fn webrtc_signal_ack(
 ) -> impl IntoResponse {
     if !state
         .limiter
-        .check(peer_ip(&peer), "forward", state.cfg.rate_limit_forward_per_min)
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "webrtc_ack",
+            state.cfg.rate_limit_forward_per_min,
+        )
         .await
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
@@ -7670,9 +9086,19 @@ async fn webrtc_signal_ack(
         return (StatusCode::BAD_REQUEST, "invalid to_peer_id").into_response();
     }
 
-    let (_actor, actor_json) = match verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body)).await {
+    let (_actor, actor_json) = match verify_actor_signature_for_request(
+        &state,
+        &Method::POST,
+        &uri.0,
+        &headers,
+        Some(&body),
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response()
+        }
     };
     let actor_peer = extract_peer_id_from_actor_json(&actor_json).unwrap_or_default();
     if actor_peer != to_peer_id {
@@ -7758,8 +9184,15 @@ async fn admin_audit_list(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let limit = q.get("limit").and_then(|v| v.parse::<u32>().ok()).unwrap_or(200).min(500);
-    let offset = q.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(200)
+        .min(500);
+    let offset = q
+        .get("offset")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
     let db = state.db.lock().await;
     match db.list_admin_audit(limit, offset) {
         Ok(rows) => {
@@ -7773,22 +9206,39 @@ async fn admin_audit_list(
                 &audit.meta,
             );
             axum::Json(
-                rows.into_iter().map(|(id, action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent)| {
-                    serde_json::json!({
-                        "id": id,
-                        "action": action,
-                        "username": username,
-                        "actor": actor,
-                        "ip": ip,
-                        "ok": ok,
-                        "detail": detail,
-                        "created_at_ms": created_at_ms,
-                        "request_id": request_id,
-                        "correlation_id": correlation_id,
-                        "user_agent": user_agent
-                    })
-                }).collect::<Vec<_>>()
-            ).into_response()
+                rows.into_iter()
+                    .map(
+                        |(
+                            id,
+                            action,
+                            username,
+                            actor,
+                            ip,
+                            ok,
+                            detail,
+                            created_at_ms,
+                            request_id,
+                            correlation_id,
+                            user_agent,
+                        )| {
+                            serde_json::json!({
+                                "id": id,
+                                "action": action,
+                                "username": username,
+                                "actor": actor,
+                                "ip": ip,
+                                "ok": ok,
+                                "detail": detail,
+                                "created_at_ms": created_at_ms,
+                                "request_id": request_id,
+                                "correlation_id": correlation_id,
+                                "user_agent": user_agent
+                            })
+                        },
+                    )
+                    .collect::<Vec<_>>(),
+            )
+            .into_response()
         }
         Err(e) => {
             let _ = db.insert_admin_audit(
@@ -7844,7 +9294,11 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-async fn fetch_peer_hello(state: &AppState, user: &str, tunnel_tx: mpsc::Sender<TunnelRequest>) -> Result<Option<PeerHello>> {
+async fn fetch_peer_hello(
+    state: &AppState,
+    user: &str,
+    tunnel_tx: mpsc::Sender<TunnelRequest>,
+) -> Result<Option<PeerHello>> {
     let id = format!("{user}-hello-{}", REQ_ID.fetch_add(1, Ordering::Relaxed));
     let req = RelayHttpRequest {
         id: id.clone(),
@@ -7855,11 +9309,17 @@ async fn fetch_peer_hello(state: &AppState, user: &str, tunnel_tx: mpsc::Sender<
         body_b64: "".to_string(),
     };
     let (resp_tx, resp_rx) = oneshot::channel();
-    let msg = TunnelRequest { id: id.clone(), req, resp_tx };
+    let msg = TunnelRequest {
+        id: id.clone(),
+        req,
+        resp_tx,
+    };
     if tunnel_tx.send(msg).await.is_err() {
         return Ok(None);
     }
-    let Ok(resp) = tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await else {
+    let Ok(resp) =
+        tokio::time::timeout(Duration::from_secs(state.cfg.tunnel_timeout_secs), resp_rx).await
+    else {
         return Ok(None);
     };
     let Ok(resp) = resp else { return Ok(None) };
@@ -7896,7 +9356,18 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let search_cutoff_ms = now_ms().saturating_sub(search_window_ms);
     let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
     let relay_sync_cutoff_ms = now_ms().saturating_sub(relay_sync_window_ms);
-    let (total_users, total_peers_seen, relays, users, peers, search_indexed_users, search_last_index_ms, search_relays_total, search_relays_synced, search_relays_last_sync_ms) = {
+    let (
+        total_users,
+        total_peers_seen,
+        relays,
+        users,
+        peers,
+        search_indexed_users,
+        search_last_index_ms,
+        search_relays_total,
+        search_relays_synced,
+        search_relays_last_sync_ms,
+    ) = {
         let db = state.db.lock().await;
         let total_users = db.count_users_total().unwrap_or(0);
         let total_peers_seen = db.count_peers_seen_since(cutoff_ms).unwrap_or(0);
@@ -7931,7 +9402,11 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
             .unwrap_or_default()
             .into_iter()
             .map(|(username, _, _)| RelayUserEntry {
-                actor_url: format!("{}/users/{}", user_base_url(&state.cfg, &username), username),
+                actor_url: format!(
+                    "{}/users/{}",
+                    user_base_url(&state.cfg, &username),
+                    username
+                ),
                 username,
             })
             .collect::<Vec<_>>();
@@ -7960,7 +9435,11 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     };
 
     let mut telemetry = RelayTelemetry {
-        relay_url: state.cfg.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+        relay_url: state
+            .cfg
+            .public_url
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         timestamp_ms: now_ms(),
         online_users,
         online_peers,
@@ -7976,7 +9455,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         search_window_ms: Some(search_window_ms),
         search_relays_total: Some(search_relays_total),
         search_relays_synced: Some(search_relays_synced),
-        search_relays_last_sync_ms: search_relays_last_sync_ms,
+        search_relays_last_sync_ms,
         search_relay_sync_window_ms: Some(relay_sync_window_ms),
         sign_pubkey_b64: None,
         signature_b64: None,
@@ -8098,7 +9577,12 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
             }
             let telemetry_json = serde_json::to_string(&remote).ok();
             let mut db = state.db.lock().await;
-            let _ = db.upsert_relay(&remote.relay_url, remote.base_domain.clone(), telemetry_json, remote.sign_pubkey_b64.clone());
+            let _ = db.upsert_relay(
+                &remote.relay_url,
+                remote.base_domain.clone(),
+                telemetry_json,
+                remote.sign_pubkey_b64.clone(),
+            );
             for r in remote.relays {
                 if r.starts_with("http://") || r.starts_with("https://") {
                     let _ = db.upsert_relay(&r, None, None, None);
@@ -8111,7 +9595,8 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                     continue;
                 }
                 let _ = db.upsert_relay_user_directory(username, actor_url, &remote.relay_url);
-                let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
+                let stub =
+                    actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
                     id: meili_doc_id(actor_url),
                     username: username.to_string(),
@@ -8129,7 +9614,8 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                     continue;
                 }
                 let _ = db.upsert_peer_directory(peer_id, username, actor_url);
-                let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
+                let stub =
+                    actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
                     id: meili_doc_id(actor_url),
                     username: username.to_string(),
@@ -8182,7 +9668,7 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
             .flatten()
             .and_then(|v| v.parse::<i64>().ok())
     };
-    let limit = state.cfg.relay_sync_limit.min(200).max(1);
+    let limit = state.cfg.relay_sync_limit.clamp(1, 200);
     let mut cursor = None;
     let mut since = last_seen;
     let mut max_seen = last_seen.unwrap_or(0);
@@ -8241,7 +9727,10 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
 }
 
 fn escape_like(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn strip_html(input: &str) -> String {
@@ -8273,7 +9762,8 @@ fn extract_notes_from_value(value: &serde_json::Value) -> Vec<serde_json::Value>
             if ty == "Create" || ty == "Announce" {
                 if let Some(obj) = map.get("object") {
                     if let serde_json::Value::Object(obj_map) = obj {
-                        let inner = if obj_map.get("type").and_then(|t| t.as_str()) == Some("Note") {
+                        let inner = if obj_map.get("type").and_then(|t| t.as_str()) == Some("Note")
+                        {
                             Some(obj)
                         } else {
                             obj_map.get("object")
@@ -8287,12 +9777,16 @@ fn extract_notes_from_value(value: &serde_json::Value) -> Vec<serde_json::Value>
                     }
                 }
             }
-            if ty == "OrderedCollection" || ty == "OrderedCollectionPage" || ty == "Collection" || ty == "CollectionPage" {
-                if let Some(items) = map.get("orderedItems").or_else(|| map.get("items")) {
-                    if let serde_json::Value::Array(arr) = items {
-                        for item in arr {
-                            out.extend(extract_notes_from_value(item));
-                        }
+            if ty == "OrderedCollection"
+                || ty == "OrderedCollectionPage"
+                || ty == "Collection"
+                || ty == "CollectionPage"
+            {
+                if let Some(serde_json::Value::Array(arr)) =
+                    map.get("orderedItems").or_else(|| map.get("items"))
+                {
+                    for item in arr {
+                        out.extend(extract_notes_from_value(item));
                     }
                 }
             }
@@ -8308,11 +9802,19 @@ fn extract_notes_from_value(value: &serde_json::Value) -> Vec<serde_json::Value>
 }
 
 fn note_to_index(note: &serde_json::Value) -> Option<RelayNoteIndex> {
-    let id = note.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let id = note
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if id.is_empty() {
         return None;
     }
-    let actor_id = note.get("attributedTo").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+    let actor_id = note
+        .get("attributedTo")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
     let published_ms = note
         .get("published")
         .and_then(|v| v.as_str())
@@ -8340,7 +9842,9 @@ fn note_to_index(note: &serde_json::Value) -> Option<RelayNoteIndex> {
 }
 
 fn extract_tags(tag_value: Option<&serde_json::Value>) -> Vec<String> {
-    let Some(tag_value) = tag_value else { return Vec::new() };
+    let Some(tag_value) = tag_value else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut push_tag = |name: &str| {
         let t = name.trim().trim_start_matches('#').to_string();
@@ -8397,8 +9901,73 @@ fn host_only(headers: &HeaderMap) -> &str {
         .unwrap_or("localhost")
 }
 
+/// Full Host authority including an explicit port (M-04).
+fn authority_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("Host")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "localhost".to_string())
+}
+
+fn split_authority(authority: &str) -> (String, Option<String>) {
+    let authority = authority.trim().trim_end_matches('.').to_ascii_lowercase();
+    if let Some(rest) = authority.strip_prefix('[') {
+        // [ipv6]:port
+        if let Some((host, port)) = rest.split_once("]:") {
+            return (format!("[{host}]"), Some(port.to_string()));
+        }
+        return (authority, None);
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+            (host.to_string(), Some(port.to_string()))
+        }
+        _ => (authority, None),
+    }
+}
+
+fn host_without_port(authority: &str) -> String {
+    split_authority(authority)
+        .0
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+/// Normalized `scheme://authority` used for canonical comparisons; default
+/// ports are dropped so `http://host` and `http://host:80` compare equal.
+fn normalized_origin(scheme: &str, authority: &str) -> String {
+    let (host, port) = split_authority(authority);
+    let scheme = scheme.trim().to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" => Some("80".to_string()),
+        "https" => Some("443".to_string()),
+        _ => None,
+    };
+    match port {
+        Some(p) if Some(&p) == default_port.as_ref() => format!("{scheme}://{host}"),
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
+/// M-03: in host-routing mode only `base_domain` and its subdomains are
+/// accepted, so a spoofed `Host: evil.example` cannot leak into actor URLs.
+fn host_allowed_for_cfg(cfg: &RelayConfig, authority: &str) -> bool {
+    let Some(base) = cfg.base_domain.as_deref() else {
+        return true;
+    };
+    let host = host_without_port(authority);
+    host == base || host.ends_with(&format!(".{base}"))
+}
+
 fn actor_stub_json(username: &str, base_template: &str) -> serde_json::Value {
-    let base = base_template.replace("{user}", username).trim_end_matches('/').to_string();
+    let base = base_template
+        .replace("{user}", username)
+        .trim_end_matches('/')
+        .to_string();
     let id = if base.contains("/users/") {
         base.clone()
     } else {
@@ -8416,7 +9985,11 @@ fn actor_stub_json(username: &str, base_template: &str) -> serde_json::Value {
     })
 }
 
-fn actor_stub_from_actor_url(username: &str, actor_url: &str, fallback_base: &str) -> serde_json::Value {
+fn actor_stub_from_actor_url(
+    username: &str,
+    actor_url: &str,
+    fallback_base: &str,
+) -> serde_json::Value {
     if actor_url.trim().is_empty() {
         return actor_stub_json(username, fallback_base);
     }
@@ -8429,14 +10002,23 @@ fn actor_stub_from_actor_url(username: &str, actor_url: &str, fallback_base: &st
 }
 
 fn origin_for_links_with_cfg(cfg: &RelayConfig, headers: &HeaderMap) -> (String, String) {
-    // For host-based routing, the Host header is the canonical origin (per-user subdomain).
+    let scheme = scheme_from_headers(headers).to_string();
+    let authority = authority_from_headers(headers);
     if cfg.base_domain.is_some() {
-        return (scheme_from_headers(headers).to_string(), host_only(headers).to_string());
+        if host_allowed_for_cfg(cfg, &authority) {
+            return (scheme, authority);
+        }
+        // Invalid Host: derive the origin from the configured canonical URL
+        // instead of trusting the client-supplied header (M-03).
+        if let Some((s, h)) = canonical_origin(cfg) {
+            return (s, h);
+        }
+        return (scheme, cfg.base_domain.clone().unwrap_or(authority));
     }
     if let Some((s, h)) = canonical_origin(cfg) {
         return (s, h);
     }
-    (scheme_from_headers(headers).to_string(), host_only(headers).to_string())
+    (scheme, authority)
 }
 
 fn canonical_origin(cfg: &RelayConfig) -> Option<(String, String)> {
@@ -8462,23 +10044,28 @@ fn maybe_redirect_canonical(
     if cfg.base_domain.is_some() {
         return None;
     }
-    let Some((canon_scheme, canon_host)) = canonical_origin(cfg) else {
-        return None;
-    };
+    let (canon_scheme, canon_authority) = canonical_origin(cfg)?;
 
     let cur_scheme = scheme_from_headers(headers);
-    let cur_host = host_only(headers);
-    if cur_scheme.eq_ignore_ascii_case(&canon_scheme) && cur_host.eq_ignore_ascii_case(&canon_host) {
+    let cur_authority = authority_from_headers(headers);
+    // Compare the full authority, including an explicit port: comparing only
+    // the hostname made `http://localhost:8787` redirect to itself forever (M-04).
+    if normalized_origin(cur_scheme, &cur_authority)
+        == normalized_origin(&canon_scheme, &canon_authority)
+    {
         return None;
     }
 
     let qs = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
-    let location = format!("{canon_scheme}://{canon_host}{path}{qs}");
+    let location = format!("{canon_scheme}://{canon_authority}{path}{qs}");
     Some((StatusCode::PERMANENT_REDIRECT, [("Location", location)], "").into_response())
 }
 
 fn scheme_from_headers(headers: &HeaderMap) -> &str {
-    if let Some(v) = headers.get("X-Forwarded-Proto").and_then(|v| v.to_str().ok()) {
+    if let Some(v) = headers
+        .get("X-Forwarded-Proto")
+        .and_then(|v| v.to_str().ok())
+    {
         if v.eq_ignore_ascii_case("https") {
             return "https";
         }
@@ -8534,7 +10121,8 @@ async fn fanout_move_notice_to_relay(
     // Retry/backoff per (notice_id, relay_url).
     {
         let db = state.db.lock().await;
-        if let Ok(Some((tries, last_try_ms, sent_ok))) = db.get_fanout_status(notice_id, relay_url) {
+        if let Ok(Some((tries, last_try_ms, sent_ok))) = db.get_fanout_status(notice_id, relay_url)
+        {
             if sent_ok != 0 {
                 return Ok(true);
             }
@@ -8546,17 +10134,36 @@ async fn fanout_move_notice_to_relay(
         }
     }
 
-    let url = format!("{}/_fedi3/relay/move_notice", relay_url.trim_end_matches('/'));
-    let resp = state
+    let url = format!(
+        "{}/_fedi3/relay/move_notice",
+        relay_url.trim_end_matches('/')
+    );
+    let target: http::Uri = url
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid relay URL {url:?}: {e}"))?;
+    let host = target
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .unwrap_or_default();
+    // Sign the fan-out with the relay Ed25519 key; the receiver verifies it
+    // against the key pinned in its registry (H-08 / RN-02).
+    let signed_headers =
+        signed_relay_headers(state, "POST", "/_fedi3/relay/move_notice", &host, body).await?;
+    let mut req = state
         .http
         .post(url)
         .header("Content-Type", "application/json")
         .header("X-Fedi3-Notice-Id", notice_id.to_string())
         .header("X-Fedi3-Notice-Hop", hop.to_string())
-        .body(body.to_vec())
-        .send()
-        .await;
-    let ok = resp.as_ref().map(|r| r.status().is_success()).unwrap_or(false);
+        .body(body.to_vec());
+    for (name, value) in signed_headers {
+        req = req.header(name, value);
+    }
+    let resp = req.send().await;
+    let ok = resp
+        .as_ref()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
     let db = state.db.lock().await;
     let _ = db.record_fanout_attempt(notice_id, relay_url, ok);
     Ok(ok)
@@ -8592,37 +10199,132 @@ async fn fanout_pending_move_notices(state: &AppState) -> Result<()> {
 
 #[derive(Debug)]
 struct SignatureParams {
+    key_id: String,
+    algorithm: Option<String>,
     headers: Vec<String>,
     signature: Vec<u8>,
 }
 
+/// Parse a `Signature` header with quoted-string support and case-insensitive
+/// parameter names. Splitting on commas broke quoted values and `keyId=` was
+/// case-sensitive before (H-15).
 fn parse_signature_header(value: &str) -> Result<SignatureParams> {
-    // Signature: keyId="...",headers="(request-target) host date",signature="base64..."
-    let mut map = std::collections::HashMap::<String, String>::new();
-    for part in value.split(',') {
-        let part = part.trim();
-        let Some((k, v)) = part.split_once('=') else { continue };
-        let v = v.trim().trim_matches('"');
-        map.insert(k.trim().to_string(), v.to_string());
+    let mut key_id: Option<String> = None;
+    let mut algorithm: Option<String> = None;
+    let mut headers_raw: Option<String> = None;
+    let mut signature_b64: Option<String> = None;
+    let bytes = value.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let key_start = i;
+        while i < bytes.len() && bytes[i] != b'=' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            anyhow::bail!("malformed Signature parameter");
+        }
+        let key = value[key_start..i].trim().to_ascii_lowercase();
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let val = if i < bytes.len() && bytes[i] == b'"' {
+            i += 1;
+            let mut out = String::new();
+            let mut closed = false;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' => {
+                        i += 1;
+                        if i < bytes.len() {
+                            out.push(bytes[i] as char);
+                            i += 1;
+                        }
+                    }
+                    b'"' => {
+                        i += 1;
+                        closed = true;
+                        break;
+                    }
+                    b => {
+                        out.push(b as char);
+                        i += 1;
+                    }
+                }
+            }
+            if !closed {
+                anyhow::bail!("unterminated quoted string in Signature header");
+            }
+            out
+        } else {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b',' {
+                i += 1;
+            }
+            value[start..i].trim().to_string()
+        };
+        match key.as_str() {
+            "keyid" => key_id = Some(val),
+            "algorithm" => algorithm = Some(val.to_ascii_lowercase()),
+            "headers" => headers_raw = Some(val),
+            "signature" => signature_b64 = Some(val),
+            _ => {}
+        }
     }
 
-    let headers = map.get("headers").cloned().unwrap_or_else(|| "date".to_string());
-    let signature_b64 = map
-        .get("signature")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Signature missing signature"))?;
-
-    let signature = B64.decode(signature_b64.as_bytes())?;
+    let key_id = key_id
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Signature missing keyId"))?;
+    let headers_raw = headers_raw.ok_or_else(|| anyhow::anyhow!("Signature missing headers"))?;
+    let headers: Vec<String> = headers_raw
+        .split_whitespace()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if headers.is_empty() {
+        anyhow::bail!("Signature headers empty");
+    }
+    let signature_b64 =
+        signature_b64.ok_or_else(|| anyhow::anyhow!("Signature missing signature"))?;
+    let signature = B64.decode(signature_b64.trim().as_bytes())?;
+    if signature.is_empty() {
+        anyhow::bail!("Signature empty");
+    }
     Ok(SignatureParams {
-        headers: headers
-            .split_whitespace()
-            .map(|s| s.to_ascii_lowercase())
-            .collect(),
+        key_id,
+        algorithm,
+        headers,
         signature,
     })
 }
 
-fn build_signing_string(method: &Method, uri: &http::Uri, headers: &HeaderMap, signed_headers: &[String]) -> Result<String> {
+/// Minimum signed-header set. Without these an attacker can rewrite the body,
+/// the path or the Date while the signature still verifies (H-01 / H-15).
+fn require_signed_headers(params: &SignatureParams, has_body: bool) -> Result<()> {
+    let mut required = vec!["(request-target)", "host", "date"];
+    if has_body {
+        required.push("digest");
+    }
+    for name in required {
+        if !params.headers.iter().any(|h| h == name) {
+            anyhow::bail!("signed headers missing {name}");
+        }
+    }
+    Ok(())
+}
+
+fn build_signing_string(
+    method: &Method,
+    uri: &http::Uri,
+    headers: &HeaderMap,
+    signed_headers: &[String],
+) -> Result<String> {
     let mut out = String::new();
     for (i, name) in signed_headers.iter().enumerate() {
         if i > 0 {
@@ -8650,25 +10352,121 @@ fn build_signing_string(method: &Method, uri: &http::Uri, headers: &HeaderMap, s
     Ok(out)
 }
 
-fn verify_signature_rsa_sha256(public_key_pem: &str, signing_string: &str, signature: &[u8]) -> bool {
-    use rsa::{
-        pkcs1v15::VerifyingKey,
-        pkcs8::DecodePublicKey,
-        signature::Verifier,
-        RsaPublicKey,
+/// Verify a `Digest` header. For requests with a body the digest is mandatory
+/// and SHA-256 is the only accepted algorithm (H-01 / B4).
+fn verify_digest_header(headers: &HeaderMap, body: Option<&[u8]>, required: bool) -> Result<()> {
+    let digest = headers
+        .get("Digest")
+        .or_else(|| headers.get("digest"))
+        .and_then(|v| v.to_str().ok());
+    match (body, digest) {
+        (Some(body), Some(raw)) => {
+            let mut sha256: Option<&str> = None;
+            for part in raw.split(',') {
+                if let Some((alg, val)) = part.split_once('=') {
+                    if alg.trim().eq_ignore_ascii_case("SHA-256") {
+                        sha256 = Some(val.trim());
+                    }
+                }
+            }
+            let Some(value) = sha256 else {
+                anyhow::bail!("unsupported Digest algorithm (SHA-256 required)");
+            };
+            let expected = B64.decode(value.as_bytes()).unwrap_or_default();
+            let actual = Sha256::digest(body);
+            if !ct_eq_bytes(&expected, &actual) {
+                anyhow::bail!("Digest mismatch");
+            }
+        }
+        (Some(_), None) if required => anyhow::bail!("missing Digest"),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn verify_signature_rsa_sha256(
+    public_key_pem: &str,
+    signing_string: &str,
+    signature: &[u8],
+) -> bool {
+    use rsa::{pkcs1v15::VerifyingKey, pkcs8::DecodePublicKey, signature::Verifier, RsaPublicKey};
+    let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_key_pem) else {
+        return false;
     };
-    let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_key_pem) else { return false };
     let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(signature) else { return false };
-    verifying_key.verify(signing_string.as_bytes(), &sig).is_ok()
+    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(signature) else {
+        return false;
+    };
+    verifying_key
+        .verify(signing_string.as_bytes(), &sig)
+        .is_ok()
+}
+
+/// Ed25519 verification for modern ActivityPub implementations and for the
+/// relay's own signed move-notice fan-out. Accepts an SPKI PEM or a raw
+/// base64-encoded 32-byte public key (the format used by relay telemetry).
+fn verify_signature_ed25519(key_material: &str, signing_string: &str, signature: &[u8]) -> bool {
+    let key_material = key_material.trim();
+    if key_material.is_empty() {
+        return false;
+    }
+    let Ok(sig) = ed25519_dalek::Signature::from_slice(signature) else {
+        return false;
+    };
+    if key_material.contains("BEGIN") {
+        use ed25519_dalek::pkcs8::DecodePublicKey as _;
+        let Ok(vk) = ed25519_dalek::VerifyingKey::from_public_key_pem(key_material) else {
+            return false;
+        };
+        return vk.verify(signing_string.as_bytes(), &sig).is_ok();
+    }
+    let Ok(bytes) = B64.decode(key_material.as_bytes()) else {
+        return false;
+    };
+    if bytes.len() != 32 {
+        return false;
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&arr) else {
+        return false;
+    };
+    vk.verify(signing_string.as_bytes(), &sig).is_ok()
+}
+
+fn verify_signature_with_algorithm(
+    key_material: &str,
+    signing_string: &str,
+    signature: &[u8],
+    algorithm: Option<&str>,
+) -> bool {
+    match algorithm.unwrap_or("rsa-sha256") {
+        "ed25519" => verify_signature_ed25519(key_material, signing_string, signature),
+        // hs2019 does not pin the algorithm; accept either RSA or Ed25519.
+        "hs2019" | "rsa-sha256" => {
+            verify_signature_rsa_sha256(key_material, signing_string, signature)
+                || verify_signature_ed25519(key_material, signing_string, signature)
+        }
+        _ => {
+            verify_signature_rsa_sha256(key_material, signing_string, signature)
+                || verify_signature_ed25519(key_material, signing_string, signature)
+        }
+    }
 }
 
 fn extract_public_key_pem_from_actor_json(actor_json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(actor_json).ok()?;
     let pk = v.get("publicKey")?;
-    let pem = pk.get("publicKeyPem")?.as_str()?;
+    let pem = pk
+        .get("publicKeyPem")
+        .or_else(|| pk.get("publicKeyBase64"))
+        .and_then(|v| v.as_str())?;
     let pem = pem.trim();
-    if pem.is_empty() { None } else { Some(pem.to_string()) }
+    if pem.is_empty() {
+        None
+    } else {
+        Some(pem.to_string())
+    }
 }
 
 fn extract_peer_id_from_actor_json(actor_json: &str) -> Option<String> {
@@ -8676,7 +10474,11 @@ fn extract_peer_id_from_actor_json(actor_json: &str) -> Option<String> {
     let endpoints = v.get("endpoints")?;
     let pid = endpoints.get("fedi3PeerId")?.as_str()?;
     let pid = pid.trim();
-    if pid.is_empty() { None } else { Some(pid.to_string()) }
+    if pid.is_empty() {
+        None
+    } else {
+        Some(pid.to_string())
+    }
 }
 
 fn actor_from_key_id(key_id: &str) -> Option<String> {
@@ -8693,6 +10495,73 @@ fn actor_from_key_id(key_id: &str) -> Option<String> {
     }
 }
 
+/// Origin (`scheme://authority`) of a keyId, used to look up a relay's pinned
+/// Ed25519 key in the registry.
+fn relay_origin_from_key_id(key_id: &str) -> Option<String> {
+    let k = key_id.split('#').next().unwrap_or("").trim();
+    let uri: http::Uri = k.parse().ok()?;
+    let scheme = uri.scheme_str()?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = uri.authority()?.as_str();
+    Some(format!("{scheme}://{authority}"))
+}
+
+fn is_private_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+        }
+    }
+}
+
+/// Fetch an actor document for key resolution, rejecting private targets
+/// (SSRF, SEC-07) and capping the response size.
+async fn fetch_actor_document(state: &AppState, url: &str) -> Result<String> {
+    let uri: http::Uri = url
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid keyId URL {url:?}: {e}"))?;
+    let scheme = uri.scheme_str().unwrap_or("");
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("unsupported keyId scheme: {scheme:?}");
+    }
+    if let Some(host) = uri.host() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if is_private_ip(&ip) && !state.cfg.allow_private_actor_fetch {
+                anyhow::bail!("keyId points to a private address: {ip}");
+            }
+        }
+    }
+    let resp = state
+        .http
+        .get(url)
+        .header(
+            "Accept",
+            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
+        )
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("actor fetch failed with status {}", resp.status());
+    }
+    let bytes = resp.bytes().await?;
+    if bytes.len() > 1024 * 1024 {
+        anyhow::bail!("actor document too large");
+    }
+    Ok(String::from_utf8(bytes.to_vec())?)
+}
+
 async fn verify_actor_signature_for_request(
     state: &AppState,
     method: &Method,
@@ -8700,107 +10569,185 @@ async fn verify_actor_signature_for_request(
     headers: &HeaderMap,
     body: Option<&[u8]>,
 ) -> Result<(String, String)> {
-    let sig = headers.get("Signature").or_else(|| headers.get("signature")).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let sig = headers
+        .get("Signature")
+        .or_else(|| headers.get("signature"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if sig.trim().is_empty() {
         anyhow::bail!("missing Signature");
     }
     let params = parse_signature_header(sig)?;
+    require_signed_headers(&params, body.is_some())?;
 
     // Date skew (5 minutes).
-    let date = headers.get("Date").or_else(|| headers.get("date")).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let date = headers
+        .get("Date")
+        .or_else(|| headers.get("date"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if date.is_empty() {
         anyhow::bail!("missing Date");
     }
     let ts = parse_http_date(date)?;
     let now = std::time::SystemTime::now();
-    let diff = if now > ts { now.duration_since(ts).unwrap_or_default() } else { ts.duration_since(now).unwrap_or_default() };
+    let diff = if now > ts {
+        now.duration_since(ts).unwrap_or_default()
+    } else {
+        ts.duration_since(now).unwrap_or_default()
+    };
     if diff > Duration::from_secs(300) {
         anyhow::bail!("Date skew too large");
     }
 
-    // Digest check if present and body provided.
-    if let Some(body) = body {
-        if let Some(d) = headers.get("Digest").or_else(|| headers.get("digest")).and_then(|v| v.to_str().ok()) {
-            let Some((alg, value)) = d.split_once('=') else { anyhow::bail!("bad Digest") };
-            if !alg.trim().eq_ignore_ascii_case("SHA-256") {
-                anyhow::bail!("unsupported Digest alg");
-            }
-            let expected = B64.decode(value.trim().as_bytes()).unwrap_or_default();
-            let actual = Sha256::digest(body);
-            if expected.as_slice() != actual.as_slice() {
-                anyhow::bail!("Digest mismatch");
-            }
-        }
-    }
+    // POST bodies must carry a valid Digest (H-01).
+    verify_digest_header(headers, body, body.is_some())?;
 
     let signing_string = build_signing_string(method, uri, headers, &params.headers)?;
 
-    // Parse keyId from Signature header.
-    let key_id = {
-        let sig = headers.get("Signature").or_else(|| headers.get("signature")).and_then(|v| v.to_str().ok()).unwrap_or("");
-        let mut key_id = None;
-        for part in sig.split(',') {
-            let part = part.trim();
-            if let Some(v) = part.strip_prefix("keyId=") {
-                let v = v.trim().trim_matches('"').trim();
-                if !v.is_empty() {
-                    key_id = Some(v.to_string());
-                }
-            }
-        }
-        key_id.ok_or_else(|| anyhow::anyhow!("Signature missing keyId"))?
-    };
-
-    let actor = actor_from_key_id(&key_id).ok_or_else(|| anyhow::anyhow!("invalid keyId"))?;
-    let resp = state
-        .http
-        .get(&actor)
-        .header("Accept", "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"")
-        .send()
-        .await?;
-    let actor_json = resp.text().await?;
-    let pem = extract_public_key_pem_from_actor_json(&actor_json).ok_or_else(|| anyhow::anyhow!("actor missing publicKeyPem"))?;
-    if !verify_signature_rsa_sha256(&pem, &signing_string, &params.signature) {
+    let actor = actor_from_key_id(&params.key_id)
+        .ok_or_else(|| anyhow::anyhow!("invalid keyId {:?}", params.key_id))?;
+    let actor_json = fetch_actor_document(state, &actor).await?;
+    let pem = extract_public_key_pem_from_actor_json(&actor_json)
+        .ok_or_else(|| anyhow::anyhow!("actor missing publicKeyPem"))?;
+    if !verify_signature_with_algorithm(
+        &pem,
+        &signing_string,
+        &params.signature,
+        params.algorithm.as_deref(),
+    ) {
         anyhow::bail!("signature invalid");
     }
     Ok((actor, actor_json))
 }
 
-async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, user: &str, body: &[u8]) -> Result<bool> {
-    let sig = headers.get("Signature").and_then(|v| v.to_str().ok()).unwrap_or("");
+/// Sign an outgoing request with the relay's Ed25519 key and return the
+/// headers needed by the receiver (Signature, Date, Digest, Host).
+async fn signed_relay_headers(
+    state: &AppState,
+    method: &str,
+    path_and_query: &str,
+    host: &str,
+    body: &[u8],
+) -> Result<Vec<(String, String)>> {
+    let (_, sk_b64) = {
+        let db = state.db.lock().await;
+        db.load_or_create_signing_keypair_b64()?
+    };
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
+    let digest = format!("SHA-256={}", B64.encode(Sha256::digest(body)));
+    let signing_string = format!(
+        "(request-target): {} {}\nhost: {}\ndate: {}\ndigest: {}",
+        method.to_ascii_lowercase(),
+        path_and_query,
+        host,
+        date,
+        digest
+    );
+    let sk_bytes = B64.decode(sk_b64.as_bytes())?;
+    if sk_bytes.len() != 32 {
+        anyhow::bail!("bad relay signing key length");
+    }
+    let mut sk = [0u8; 32];
+    sk.copy_from_slice(&sk_bytes);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk);
+    let signature: ed25519_dalek::Signature = signing_key.sign(signing_string.as_bytes());
+
+    let public_url = state
+        .cfg
+        .public_url
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("FEDI3_RELAY_PUBLIC_URL required for signed fan-out"))?;
+    let key_id = format!(
+        "{}/_fedi3/relay/move_notice",
+        public_url.trim_end_matches('/')
+    );
+    let signature_header = format!(
+        "keyId=\"{}\",algorithm=\"ed25519\",headers=\"(request-target) host date digest\",signature=\"{}\"",
+        key_id,
+        B64.encode(signature.to_bytes())
+    );
+    Ok(vec![
+        ("Signature".to_string(), signature_header),
+        ("Date".to_string(), date),
+        ("Digest".to_string(), digest),
+        ("Host".to_string(), host.to_string()),
+    ])
+}
+
+async fn verify_move_notice_signature(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &str,
+    body: &[u8],
+) -> Result<bool> {
+    let sig = headers
+        .get("Signature")
+        .or_else(|| headers.get("signature"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if sig.trim().is_empty() {
+        return Ok(false);
+    }
+    let Ok(params) = parse_signature_header(sig) else {
+        return Ok(false);
+    };
+    if require_signed_headers(&params, true).is_err() {
         return Ok(false);
     }
 
     // Date skew (5 minutes).
-    let date = headers.get("Date").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let date = headers
+        .get("Date")
+        .or_else(|| headers.get("date"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if date.is_empty() {
         return Ok(false);
     }
-    let ts = parse_http_date(date)?;
+    let Ok(ts) = parse_http_date(date) else {
+        return Ok(false);
+    };
     let now = std::time::SystemTime::now();
-    let diff = if now > ts { now.duration_since(ts).unwrap_or_default() } else { ts.duration_since(now).unwrap_or_default() };
+    let diff = if now > ts {
+        now.duration_since(ts).unwrap_or_default()
+    } else {
+        ts.duration_since(now).unwrap_or_default()
+    };
     if diff > Duration::from_secs(300) {
         return Ok(false);
     }
 
-    // Digest check if present.
-    if let Some(d) = headers.get("Digest").and_then(|v| v.to_str().ok()) {
-        let Some((alg, value)) = d.split_once('=') else { return Ok(false) };
-        if !alg.trim().eq_ignore_ascii_case("SHA-256") {
-            return Ok(false);
-        }
-        let expected = B64.decode(value.trim().as_bytes()).unwrap_or_default();
-        let actual = Sha256::digest(body);
-        if expected.as_slice() != actual.as_slice() {
-            return Ok(false);
+    if verify_digest_header(headers, Some(body), true).is_err() {
+        return Ok(false);
+    }
+
+    let uri: http::Uri = "/_fedi3/relay/move_notice".parse()?;
+    let Ok(signing_string) = build_signing_string(&Method::POST, &uri, headers, &params.headers)
+    else {
+        return Ok(false);
+    };
+
+    // Fan-out notices are signed by the sending relay with its Ed25519 key; the
+    // public key is pinned in relay_registry (H-08 / RN-02).
+    let key_path = params.key_id.split('#').next().unwrap_or("").trim();
+    if key_path.contains("/_fedi3/relay/") {
+        if let Some(origin) = relay_origin_from_key_id(&params.key_id) {
+            let pinned = {
+                let db = state.db.lock().await;
+                db.get_relay_pubkey_b64(&origin).ok().flatten()
+            };
+            if let Some(pk) = pinned.filter(|v| !v.trim().is_empty()) {
+                return Ok(verify_signature_ed25519(
+                    &pk,
+                    &signing_string,
+                    &params.signature,
+                ));
+            }
         }
     }
 
-    let params = parse_signature_header(sig)?;
-    let uri: http::Uri = "/_fedi3/relay/move_notice".parse()?;
-    let signing_string = build_signing_string(&Method::POST, &uri, headers, &params.headers)?;
-
+    // Legacy/actor-signed notices: verify against the cached actor key.
     let mut pem = {
         let db = state.db.lock().await;
         db.get_actor_cache(user)
@@ -8810,20 +10757,16 @@ async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, use
             .unwrap_or_default()
     };
     if pem.trim().is_empty() {
-        // Fallback: try fetching old actor URL (helps relays that didn't previously cache the user).
         if let Ok(notice) = serde_json::from_slice::<RelayMoveNotice>(body) {
-            if let Some(old_actor) = notice.old_actor.as_deref().map(str::trim).filter(|v| v.starts_with("http://") || v.starts_with("https://")) {
-                if let Ok(resp) = state
-                    .http
-                    .get(old_actor)
-                    .header("Accept", "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"")
-                    .send()
-                    .await
-                {
-                    if let Ok(text) = resp.text().await {
-                        if let Some(got) = extract_public_key_pem_from_actor_json(&text) {
-                            pem = got;
-                        }
+            if let Some(old_actor) = notice
+                .old_actor
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| v.starts_with("http://") || v.starts_with("https://"))
+            {
+                if let Ok(text) = fetch_actor_document(state, old_actor).await {
+                    if let Some(got) = extract_public_key_pem_from_actor_json(&text) {
+                        pem = got;
                     }
                 }
             }
@@ -8832,5 +10775,798 @@ async fn verify_move_notice_signature(state: &AppState, headers: &HeaderMap, use
     if pem.trim().is_empty() {
         return Ok(false);
     }
-    Ok(verify_signature_rsa_sha256(&pem, &signing_string, &params.signature))
+    Ok(verify_signature_with_algorithm(
+        &pem,
+        &signing_string,
+        &params.signature,
+        params.algorithm.as_deref(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+    use std::sync::Mutex as StdMutex;
+
+    static TEST_DIR_ID: AtomicU64 = AtomicU64::new(1);
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn test_cfg() -> RelayConfig {
+        RelayConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            base_domain: None,
+            trust_proxy_headers: false,
+            allow_self_register: true,
+            admin_token: Some("a".repeat(48)),
+            public_url: Some("http://127.0.0.1:8787".to_string()),
+            telemetry_token: None,
+            seed_relays: Vec::new(),
+            p2p_infra_peer_id: None,
+            p2p_infra_multiaddrs: Vec::new(),
+            p2p_infra_host: None,
+            p2p_infra_port: 4001,
+            telemetry_interval_secs: 30,
+            max_body_bytes: 1024 * 1024,
+            http_timeout_secs: 5,
+            http_connect_timeout_secs: 2,
+            http_pool_idle_timeout_secs: 90,
+            http_pool_max_idle_per_host: 8,
+            hsts_max_age_secs: 31_536_000,
+            csp: None,
+            tunnel_timeout_secs: 1,
+            rate_limit_register_per_min: 10_000,
+            rate_limit_tunnel_per_min: 10_000,
+            rate_limit_inbox_per_min: 10_000,
+            rate_limit_forward_per_min: 10_000,
+            rate_limit_admin_per_min: 10_000,
+            search_backend: "db".to_string(),
+            search_total_mode: SearchTotalMode::Exact,
+            search_cache_ttl_secs: 0,
+            search_cache_max_entries: 0,
+            meili_url: None,
+            meili_api_key: None,
+            meili_timeout_secs: 10,
+            meili_notes_index: "relay_notes".to_string(),
+            meili_users_index: "relay_users".to_string(),
+            meili_batch_max: 64,
+            meili_flush_ms: 250,
+            meili_queue_max: 2000,
+            db_driver: DbDriver::Sqlite,
+            db_url: None,
+            db_synchronous: "NORMAL".to_string(),
+            db_cache_kb: -65536,
+            db_busy_timeout_ms: 2000,
+            pg_pool_max_size: 16,
+            pg_pool_wait_ms: None,
+            pg_pool_create_timeout_ms: None,
+            pg_pool_recycle_timeout_ms: None,
+            pg_pool_queue_mode: QueueMode::Fifo,
+            pg_init_retries: 1,
+            pg_init_backoff_ms: 50,
+            redis_url: None,
+            redis_prefix: "fedi3".to_string(),
+            redis_pool_size: 4,
+            ip_allowlist: Vec::new(),
+            ip_denylist: Vec::new(),
+            noisy_backoff_base_secs: 0,
+            noisy_backoff_max_secs: 600,
+            max_inbox_fanout: 25,
+            max_inflight_per_user: 32,
+            spool_ttl_secs: 3600,
+            move_notice_ttl_secs: 3600,
+            move_notice_fanout_interval_secs: 60,
+            webrtc_signal_ttl_secs: 600,
+            webrtc_signal_cleanup_interval_secs: 30,
+            webrtc_signal_max_per_peer: 200,
+            spool_max_rows_per_user: 100,
+            spool_flush_batch: 50,
+            peer_directory_ttl_days: 30,
+            media_backend: "local".to_string(),
+            media_dir: PathBuf::from("test-media"),
+            media_prefix: String::new(),
+            media_webdav_base_url: None,
+            media_webdav_username: None,
+            media_webdav_password: None,
+            media_webdav_bearer_token: None,
+            media_s3_region: None,
+            media_s3_bucket: None,
+            media_s3_endpoint: None,
+            media_s3_access_key: None,
+            media_s3_secret_key: None,
+            media_s3_path_style: false,
+            outbox_index_interval_secs: 300,
+            outbox_index_pages: 5,
+            outbox_index_page_limit: 40,
+            telemetry_users_limit: 200,
+            telemetry_peers_limit: 200,
+            relay_sync_interval_secs: 120,
+            relay_sync_limit: 200,
+            allow_private_actor_fetch: true,
+            forward_send_timeout_ms: 50,
+            inbox_dedupe_ttl_secs: 3600,
+            admin_audit_ttl_secs: 3600,
+            relay_notes_ttl_secs: 3600,
+            peer_registry_ttl_secs: 3600,
+            relay_registry_ttl_secs: 3600,
+            relay_user_directory_ttl_secs: 3600,
+            media_max_bytes_per_user: 1024 * 1024,
+            spool_max_bytes_per_user: 1024 * 1024,
+        }
+    }
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_DIR_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("fedi3-relay-unit-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn test_db() -> (Db, PathBuf) {
+        let dir = temp_dir();
+        let path = dir.join("relay.db");
+        let db = Db {
+            driver: DbDriver::Sqlite,
+            path: path.clone(),
+            db_url: None,
+            db_synchronous: "NORMAL".to_string(),
+            db_cache_kb: -65536,
+            db_busy_timeout_ms: 2000,
+            pg_pool_max_size: 16,
+            pg_pool_wait_ms: None,
+            pg_pool_create_timeout_ms: None,
+            pg_pool_recycle_timeout_ms: None,
+            pg_pool_queue_mode: QueueMode::Fifo,
+            pg_init_retries: 1,
+            pg_init_backoff_ms: 50,
+            pg_pool: OnceLock::new(),
+        };
+        db.init().unwrap();
+        (db, dir)
+    }
+
+    async fn test_state(cfg: RelayConfig) -> (AppState, PathBuf) {
+        let dir = temp_dir();
+        let mut db = test_db().0;
+        db.path = dir.join("state.db");
+        db.init().unwrap();
+        let media_cfg = media_store::MediaConfig {
+            backend: "local".to_string(),
+            local_dir: dir.join("media"),
+            webdav_base_url: None,
+            webdav_username: None,
+            webdav_password: None,
+            webdav_bearer_token: None,
+            s3_region: None,
+            s3_bucket: None,
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            s3_path_style: false,
+        };
+        let http = reqwest::Client::new();
+        let media_backend = media_store::build_media_backend(&media_cfg, http.clone())
+            .await
+            .unwrap();
+        let limiter = Arc::new(RateLimiter::new(0, 600, None, "fedi3".to_string(), 1).await);
+        let state = AppState {
+            tunnels: Arc::new(RwLock::new(HashMap::new())),
+            inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
+            peer_hello: Arc::new(RwLock::new(HashMap::new())),
+            cfg,
+            db: Arc::new(Mutex::new(db)),
+            limiter,
+            http,
+            search: None,
+            meili_indexer: None,
+            search_cache: None,
+            media_cfg,
+            media_backend: Arc::from(media_backend),
+        };
+        (state, dir)
+    }
+
+    fn hmap(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (k, v) in pairs {
+            headers.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn ct_eq_is_exact() {
+        assert!(ct_eq_str("abcdef", "abcdef"));
+        assert!(!ct_eq_str("abcdef", "abcdeg"));
+        assert!(!ct_eq_str("abc", "abcd"));
+        assert!(ct_eq_bytes(b"", b""));
+    }
+
+    #[test]
+    fn token_matches_rejects_empty_and_prefixes() {
+        assert!(token_matches(
+            "secret-token-value",
+            Some("secret-token-value")
+        ));
+        assert!(!token_matches(
+            "secret-token-value",
+            Some("secret-token-valu")
+        ));
+        assert!(!token_matches(
+            "secret-token-value",
+            Some("secret-token-valueX")
+        ));
+        assert!(!token_matches("secret-token-value", Some("")));
+        assert!(!token_matches("secret-token-value", None));
+    }
+
+    #[test]
+    fn bearer_token_parses_and_rejects_empty() {
+        assert_eq!(
+            bearer_token(&hmap(&[("Authorization", "Bearer abc123")])),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            bearer_token(&hmap(&[("Authorization", "bearer abc123")])),
+            Some("abc123".to_string())
+        );
+        assert_eq!(bearer_token(&hmap(&[("Authorization", "Bearer ")])), None);
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn admin_authorization_cases() {
+        let cfg = test_cfg();
+        let token = cfg.admin_token.clone().unwrap();
+        assert!(is_authorized_admin(
+            &cfg,
+            &hmap(&[("Authorization", &format!("Bearer {token}"))])
+        ));
+        assert!(!is_authorized_admin(
+            &cfg,
+            &hmap(&[("Authorization", "Bearer wrong")])
+        ));
+        // Correct prefix, wrong suffix must fail.
+        let wrong = format!("{}x", &token[..token.len() - 1]);
+        assert!(!is_authorized_admin(
+            &cfg,
+            &hmap(&[("Authorization", &format!("Bearer {wrong}"))])
+        ));
+        assert!(!is_authorized_admin(&cfg, &HeaderMap::new()));
+        let mut empty_cfg = test_cfg();
+        empty_cfg.admin_token = None;
+        assert!(!is_authorized_admin(&empty_cfg, &HeaderMap::new()));
+    }
+
+    #[test]
+    fn token_hash_is_sha256_hex() {
+        // SHA-256("abc")
+        assert_eq!(
+            token_hash_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn env_validation_rejects_invalid_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let names = [
+            "FEDI3_RELAY_MAX_BODY_BYTES",
+            "FEDI3_RELAY_DB_DRIVER",
+            "FEDI3_RELAY_SEARCH_BACKEND",
+        ];
+        for name in names {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("FEDI3_RELAY_MAX_BODY_BYTES", "64M");
+        let err = validate_env_parsing().unwrap_err();
+        assert!(format!("{err}").contains("MAX_BODY_BYTES"));
+
+        std::env::set_var("FEDI3_RELAY_MAX_BODY_BYTES", "67108864");
+        std::env::set_var("FEDI3_RELAY_RL_INBOX_PER_MIN", "not-a-number");
+        assert!(validate_env_parsing().is_err());
+
+        std::env::remove_var("FEDI3_RELAY_RL_INBOX_PER_MIN");
+        assert!(validate_env_parsing().is_ok());
+        for name in names {
+            std::env::remove_var(name);
+        }
+    }
+
+    #[test]
+    fn client_ip_prefers_last_forwarded_element() {
+        let mut cfg = test_cfg();
+        cfg.trust_proxy_headers = true;
+        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let headers = hmap(&[("X-Forwarded-For", "6.6.6.6, 203.0.113.9")]);
+        assert_eq!(client_ip(&cfg, &peer, &headers), "203.0.113.9");
+        let headers = hmap(&[("X-Forwarded-For", "6.6.6.6")]);
+        assert_eq!(client_ip(&cfg, &peer, &headers), "6.6.6.6");
+        let headers = hmap(&[("X-Real-IP", "198.51.100.4")]);
+        assert_eq!(client_ip(&cfg, &peer, &headers), "198.51.100.4");
+    }
+
+    #[test]
+    fn client_ip_ignores_forwarding_headers_when_untrusted() {
+        let cfg = test_cfg();
+        let peer: SocketAddr = "192.0.2.10:5000".parse().unwrap();
+        let headers = hmap(&[("X-Forwarded-For", "6.6.6.6")]);
+        assert_eq!(client_ip(&cfg, &peer, &headers), "192.0.2.10");
+    }
+
+    #[test]
+    fn parse_ip_handles_ports_and_ipv6() {
+        assert_eq!(parse_ip_str("203.0.113.7"), Some("203.0.113.7".to_string()));
+        assert_eq!(
+            parse_ip_str("203.0.113.7:443"),
+            Some("203.0.113.7".to_string())
+        );
+        assert_eq!(parse_ip_str("[::1]:443"), Some("::1".to_string()));
+        assert_eq!(parse_ip_str("::1"), Some("::1".to_string()));
+        assert_eq!(parse_ip_str("not-an-ip"), None);
+    }
+
+    #[test]
+    fn cidr_rules_and_allowlist() {
+        assert!(ip_in_cidr(
+            "10.1.2.3".parse().unwrap(),
+            "10.0.0.0".parse().unwrap(),
+            8
+        ));
+        assert!(!ip_in_cidr(
+            "11.0.0.1".parse().unwrap(),
+            "10.0.0.0".parse().unwrap(),
+            8
+        ));
+        assert!(ip_in_cidr(
+            "1.2.3.4".parse().unwrap(),
+            "0.0.0.0".parse().unwrap(),
+            0
+        ));
+        let rule = parse_ip_rule("192.0.2.1/32").unwrap();
+        assert!(ip_in_rules(&[rule], "192.0.2.1".parse().unwrap()));
+        let mut cfg = test_cfg();
+        cfg.ip_denylist = vec![parse_ip_rule("10.0.0.0/8").unwrap()];
+        assert!(!is_ip_allowed(&cfg, "10.9.9.9".parse().unwrap()));
+        assert!(is_ip_allowed(&cfg, "8.8.8.8".parse().unwrap()));
+        cfg.ip_allowlist = vec![parse_ip_rule("8.8.8.8").unwrap()];
+        assert!(!is_ip_allowed(&cfg, "1.1.1.1".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_memory_fallback() {
+        let limiter = RateLimiter::new(0, 600, None, "fedi3".to_string(), 1).await;
+        assert!(limiter.check("1.1.1.1".to_string(), "b", 2).await);
+        assert!(limiter.check("1.1.1.1".to_string(), "b", 2).await);
+        assert!(!limiter.check("1.1.1.1".to_string(), "b", 2).await);
+        // Separate bucket is independent.
+        assert!(limiter.check("1.1.1.1".to_string(), "other", 2).await);
+        // Weighted requests count against the limit.
+        assert!(
+            !limiter
+                .check_weighted("2.2.2.2".to_string(), "w", 3, 5)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_noisy_backoff() {
+        let limiter = RateLimiter::new(1, 10, None, "fedi3".to_string(), 1).await;
+        assert!(limiter.noisy_block_remaining("9.9.9.9").await.is_none());
+        limiter.register_noisy("9.9.9.9", now_ms()).await;
+        assert!(limiter.noisy_block_remaining("9.9.9.9").await.is_some());
+        assert!(!limiter.check("9.9.9.9".to_string(), "b", 100).await);
+    }
+
+    #[test]
+    fn normalized_origin_handles_default_ports() {
+        assert_eq!(
+            normalized_origin("http", "localhost:80"),
+            normalized_origin("http", "localhost")
+        );
+        assert_eq!(
+            normalized_origin("https", "relay.example:443"),
+            normalized_origin("https", "relay.example")
+        );
+        assert_ne!(
+            normalized_origin("http", "localhost:8787"),
+            normalized_origin("http", "localhost")
+        );
+    }
+
+    #[test]
+    fn host_allowed_for_base_domain() {
+        let mut cfg = test_cfg();
+        cfg.base_domain = Some("relay.example".to_string());
+        assert!(host_allowed_for_cfg(&cfg, "alice.relay.example"));
+        assert!(host_allowed_for_cfg(&cfg, "relay.example"));
+        assert!(!host_allowed_for_cfg(&cfg, "evil.example"));
+        assert!(!host_allowed_for_cfg(&cfg, "alice.relay.example.evil.com"));
+        let mut no_base = test_cfg();
+        no_base.base_domain = None;
+        assert!(host_allowed_for_cfg(&no_base, "anything.example"));
+    }
+
+    #[test]
+    fn canonical_redirect_with_explicit_port() {
+        let cfg = test_cfg();
+        let headers = hmap(&[("Host", "127.0.0.1:8787")]);
+        assert!(maybe_redirect_canonical(&cfg, &headers, &Method::GET, "/users/u", None).is_none());
+
+        let headers = hmap(&[("Host", "127.0.0.1")]);
+        let resp = maybe_redirect_canonical(&cfg, &headers, &Method::GET, "/users/u", Some("a=1"))
+            .expect("redirect expected");
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            "http://127.0.0.1:8787/users/u?a=1"
+        );
+        // POST must never redirect (signature would break).
+        assert!(maybe_redirect_canonical(&cfg, &headers, &Method::POST, "/inbox", None).is_none());
+    }
+
+    #[test]
+    fn signature_header_quoted_parsing() {
+        let raw = r#"keyId="https://relay.example/users/a#k",algorithm="ed25519",headers="(request-target) host date digest",signature="c2ln""#;
+        let params = parse_signature_header(raw).unwrap();
+        assert_eq!(params.key_id, "https://relay.example/users/a#k");
+        assert_eq!(params.algorithm.as_deref(), Some("ed25519"));
+        assert_eq!(
+            params.headers,
+            vec!["(request-target)", "host", "date", "digest"]
+        );
+        assert_eq!(params.signature, b"sig");
+    }
+
+    #[test]
+    fn signature_header_case_insensitive_and_quoted_commas() {
+        let raw = r#"KEYID="https://x.example/users/a#k",Headers="(request-target) host date",Signature="c2ln",Algorithm="HS2019""#;
+        let params = parse_signature_header(raw).unwrap();
+        assert_eq!(params.algorithm.as_deref(), Some("hs2019"));
+        assert_eq!(params.signature, b"sig");
+        assert!(parse_signature_header(r#"keyId="x""#).is_err());
+        assert!(parse_signature_header(r#"headers="date",signature="c2ln""#).is_err());
+    }
+
+    #[test]
+    fn signed_header_minimum_set_is_enforced() {
+        let params = parse_signature_header(
+            r#"keyId="https://x/users/a#k",headers="(request-target) host date",signature="c2ln""#,
+        )
+        .unwrap();
+        assert!(require_signed_headers(&params, false).is_ok());
+        assert!(require_signed_headers(&params, true).is_err());
+    }
+
+    #[test]
+    fn signing_string_includes_request_target() {
+        let headers = hmap(&[
+            ("Host", "relay.example"),
+            ("Date", "Tue, 01 Jan 2030 00:00:00 GMT"),
+        ]);
+        let uri: http::Uri = "/inbox?x=1".parse().unwrap();
+        let signed = build_signing_string(
+            &Method::POST,
+            &uri,
+            &headers,
+            &[
+                "(request-target)".to_string(),
+                "host".to_string(),
+                "date".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            signed,
+            "(request-target): post /inbox?x=1\nhost: relay.example\ndate: Tue, 01 Jan 2030 00:00:00 GMT"
+        );
+        assert!(build_signing_string(
+            &Method::POST,
+            &uri,
+            &headers,
+            &["host".to_string(), "missing".to_string()]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn digest_verification() {
+        let body = b"hello world";
+        let digest = format!("SHA-256={}", B64.encode(Sha256::digest(body)));
+        let headers = hmap(&[("Digest", &digest)]);
+        assert!(verify_digest_header(&headers, Some(body), true).is_ok());
+        // Multi-algorithm header: SHA-256 entry is accepted.
+        let multi = format!("SHA-512=abc,{}", digest);
+        let headers = hmap(&[("Digest", &multi)]);
+        assert!(verify_digest_header(&headers, Some(body), true).is_ok());
+        // Wrong digest.
+        let headers = hmap(&[("Digest", "SHA-256=AAAA")]);
+        assert!(verify_digest_header(&headers, Some(body), true).is_err());
+        // Missing digest on POST.
+        assert!(verify_digest_header(&HeaderMap::new(), Some(body), true).is_err());
+        // Unsupported algorithm only.
+        let headers = hmap(&[("Digest", "SHA-512=abc")]);
+        assert!(verify_digest_header(&headers, Some(body), true).is_err());
+    }
+
+    #[test]
+    fn ed25519_signature_roundtrip() {
+        use rand::rngs::OsRng;
+        let signing = ed25519_dalek::SigningKey::generate(&mut OsRng);
+        let verifying = signing.verifying_key();
+        let message = b"relay-signed-request";
+        let sig = signing.sign(message);
+        let raw_pk = B64.encode(verifying.to_bytes());
+        assert!(verify_signature_ed25519(
+            &raw_pk,
+            "relay-signed-request",
+            &sig.to_bytes()
+        ));
+        assert!(!verify_signature_ed25519(
+            &raw_pk,
+            "relay-signed-requesT",
+            &sig.to_bytes()
+        ));
+        assert!(verify_signature_with_algorithm(
+            &raw_pk,
+            "relay-signed-request",
+            &sig.to_bytes(),
+            Some("ed25519")
+        ));
+    }
+
+    #[test]
+    fn rsa_signature_roundtrip() {
+        use rand::rngs::OsRng;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::{EncodePublicKey, LineEnding};
+        use rsa::signature::{SignatureEncoding, Signer};
+        let private = rsa::RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+        let public = private.to_public_key();
+        let pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+        let signing = SigningKey::<Sha256>::new(private);
+        let message = "signed-string";
+        let sig = signing.sign(message.as_bytes());
+        assert!(verify_signature_rsa_sha256(&pem, message, &sig.to_bytes()));
+        assert!(!verify_signature_rsa_sha256(
+            &pem,
+            "tampered",
+            &sig.to_bytes()
+        ));
+        assert!(verify_signature_with_algorithm(
+            &pem,
+            message,
+            &sig.to_bytes(),
+            Some("rsa-sha256")
+        ));
+    }
+
+    #[test]
+    fn escape_like_and_strip_html() {
+        assert_eq!(escape_like("100%_x\\y"), "100\\%\\_x\\\\y");
+        assert_eq!(strip_html("<b>hello</b> world"), "hello world");
+        assert_eq!(strip_html("no tags"), "no tags");
+    }
+
+    #[test]
+    fn activity_id_and_username_validation() {
+        let body = Bytes::from(r#"{"id":"https://x.example/activities/1","type":"Create"}"#);
+        assert_eq!(
+            extract_activity_id(&body),
+            Some("https://x.example/activities/1".to_string())
+        );
+        assert_eq!(extract_activity_id(&Bytes::from("{}")), None);
+        assert!(is_valid_username("alice_01-x"));
+        assert!(!is_valid_username("Alice"));
+        assert!(!is_valid_username(""));
+        assert!(!is_valid_username("a.b"));
+    }
+
+    #[test]
+    fn media_type_and_extension_policy() {
+        assert!(media_type_allowed("image/png"));
+        assert!(media_type_allowed("video/mp4; codecs=avc1"));
+        assert!(media_type_allowed("application/pdf"));
+        assert!(media_type_allowed("application/octet-stream"));
+        assert!(!media_type_allowed("text/html"));
+        assert_eq!(safe_extension("PNG"), "png");
+        assert_eq!(safe_extension("tar.gz"), "bin");
+        assert_eq!(safe_extension("#weird?"), "bin");
+    }
+
+    #[test]
+    fn sanitize_key_rejects_traversal() {
+        assert_eq!(media_store::sanitize_key("../etc/passwd"), "etc/passwd");
+        assert_eq!(media_store::sanitize_key("a//b/./c"), "a/b/c");
+        assert_eq!(
+            media_store::sanitize_key("/prefix/alice/x.png"),
+            "prefix/alice/x.png"
+        );
+    }
+
+    #[test]
+    fn sqlite_schema_migration_is_idempotent() {
+        let (db, _dir) = test_db();
+        db.init().unwrap();
+        let conn = db.open_sqlite_conn().unwrap();
+        let version: i64 = conn
+            .query_row("SELECT version FROM schema_version WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        // A newer database must be rejected explicitly (RD-03).
+        conn.execute(
+            "UPDATE schema_version SET version = ?1 WHERE id = 1",
+            params![SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        let err = db.init().unwrap_err();
+        assert!(format!("{err}").contains("newer"));
+    }
+
+    #[test]
+    fn inbox_dedupe_prevents_double_delivery() {
+        let (db, _dir) = test_db();
+        assert!(db.insert_inbox_dedupe("act-1", "alice").unwrap());
+        assert!(!db.insert_inbox_dedupe("act-1", "alice").unwrap());
+        assert!(db.insert_inbox_dedupe("act-1", "bob").unwrap());
+        db.delete_inbox_dedupe("act-1", "alice").unwrap();
+        assert!(db.insert_inbox_dedupe("act-1", "alice").unwrap());
+    }
+
+    #[test]
+    fn spool_byte_cap_drops_oldest() {
+        let (db, _dir) = test_db();
+        let mut cfg = test_cfg();
+        cfg.spool_max_bytes_per_user = 10;
+        cfg.spool_max_rows_per_user = 100;
+        db.enqueue_spool(&cfg, "alice", "POST", "/inbox", "", &[], "b64", 8)
+            .unwrap();
+        db.enqueue_spool(&cfg, "alice", "POST", "/inbox", "", &[], "b64", 8)
+            .unwrap();
+        let items = db.list_spool("alice", 10).unwrap();
+        assert_eq!(items.len(), 1);
+        // A body larger than the whole cap is rejected instead of evicting all.
+        assert!(db
+            .enqueue_spool(&cfg, "alice", "POST", "/inbox", "", &[], "b64", 11)
+            .is_err());
+    }
+
+    #[test]
+    fn retention_cleanup_removes_old_rows() {
+        let (db, _dir) = test_db();
+        let old = now_ms() - 10_000;
+        {
+            let conn = db.open_sqlite_conn().unwrap();
+            conn.execute(
+                "INSERT INTO admin_audit(action, ok, created_at_ms) VALUES ('old', 1, ?1)",
+                params![old],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO peer_registry(peer_id, last_seen_ms) VALUES ('old-peer', ?1)",
+                params![old],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO relay_registry(relay_url, last_seen_ms) VALUES ('https://old.example', ?1)",
+                params![old],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO relay_user_directory(actor_url, username, relay_url, updated_at_ms) VALUES ('https://old.example/users/a','a','https://old.example', ?1)",
+                params![old],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO inbox_dedupe(activity_id, recipient, created_at_ms) VALUES ('act','a', ?1)",
+                params![old],
+            )
+            .unwrap();
+        }
+        let note = RelayNoteIndex {
+            note_id: "note-old".to_string(),
+            actor_id: None,
+            published_ms: None,
+            content_text: "old".to_string(),
+            content_html: "old".to_string(),
+            note_json: "{}".to_string(),
+            created_at_ms: old,
+            tags: Vec::new(),
+        };
+        db.upsert_relay_note(&note).unwrap();
+
+        assert_eq!(db.cleanup_admin_audit(1).unwrap(), 1);
+        assert_eq!(db.cleanup_peer_registry(1).unwrap(), 1);
+        assert_eq!(db.cleanup_relay_registry(1).unwrap(), 1);
+        assert_eq!(db.cleanup_relay_user_directory(1).unwrap(), 1);
+        assert_eq!(db.cleanup_inbox_dedupe(1).unwrap(), 1);
+        assert_eq!(db.cleanup_relay_notes(1).unwrap(), 1);
+
+        let conn = db.open_sqlite_conn().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM relay_notes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn relay_search_uses_escape_and_ignores_html() {
+        let (db, _dir) = test_db();
+        for (id, text, html) in [
+            ("n1", "100% off", "<p>100% off</p>"),
+            ("n2", "foo_bar", "<p>foo_bar</p>"),
+            ("n3", "fooXbar", "<p>fooXbar</p>"),
+            ("n4", "plain text", "<b>marker</b>"),
+        ] {
+            let note = RelayNoteIndex {
+                note_id: id.to_string(),
+                actor_id: Some("https://x.example/users/a".to_string()),
+                published_ms: None,
+                content_text: text.to_string(),
+                content_html: html.to_string(),
+                note_json: format!(r#"{{"id":"{id}","type":"Note"}}"#),
+                created_at_ms: now_ms(),
+                tags: Vec::new(),
+            };
+            db.upsert_relay_note(&note).unwrap();
+        }
+        let page = db
+            .search_relay_notes("100%", "", 10, None, None, SearchTotalMode::Exact)
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.items[0].contains("n1"));
+
+        let page = db
+            .search_relay_notes("foo_bar", "", 10, None, None, SearchTotalMode::Exact)
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.items[0].contains("n2"));
+
+        // content_html is no longer part of the search (M-01).
+        let page = db
+            .search_relay_notes("marker", "", 10, None, None, SearchTotalMode::Exact)
+            .unwrap();
+        assert_eq!(page.items.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn forward_timeout_spools_and_clears_inflight() {
+        let cfg = test_cfg();
+        let (state, _dir) = test_state(cfg).await;
+        {
+            let mut db = state.db.lock().await;
+            db.create_user("alice", &"t".repeat(32)).unwrap();
+        }
+        let (tx, _rx) = mpsc::channel::<TunnelRequest>(4);
+        let inflight = Arc::new(RwLock::new(HashMap::new()));
+        state.tunnels.write().await.insert(
+            "alice".to_string(),
+            TunnelHandle {
+                tx,
+                conn_id: 1,
+                inflight: inflight.clone(),
+            },
+        );
+        let resp = forward_to_user(
+            state.clone(),
+            "alice".to_string(),
+            Method::POST,
+            "/users/alice/outbox",
+            String::new(),
+            HeaderMap::new(),
+            Bytes::from_static(b"{}"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert!(inflight.read().await.is_empty());
+        let db = state.db.lock().await;
+        assert_eq!(db.list_spool("alice", 10).unwrap().len(), 1);
+    }
 }
