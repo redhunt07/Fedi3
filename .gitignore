@@ -13,14 +13,42 @@ build/
 **/.packages
 **/.flutter-plugins
 **/.flutter-plugins-dependencies
+**/coverage/
+**/app.*.symbols
+**/app.*.map.json
 
 # Rust
 target/
 **/target/
 
-# OS
+# Build artifacts and native libraries
+# (built from source and published as release assets, not committed)
+dist/
+AppDir/
+.cache/
+*.AppImage
+*.dll
+*.so
+*.so.*
+*.dylib
+*.a
+*.o
+
+# Editor / OS
 Thumbs.db
 *.swp
+*.swo
+*~
+
+# Environment and secrets
 .env
 .env.*
+# the committed template is not a secret
+!.env.example
 backups/
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
