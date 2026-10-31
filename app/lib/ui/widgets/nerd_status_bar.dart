@@ -73,20 +73,40 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     final api = CoreApi(config: cfg);
     try {
       final net = await api.fetchNetMetrics();
-      final relay = (net['relay'] is Map) ? (net['relay'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-      final p2p = (net['p2p'] is Map) ? (net['p2p'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-      final mailbox = (net['mailbox'] is Map) ? (net['mailbox'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-      final webrtc = (net['webrtc'] is Map) ? (net['webrtc'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-      final ts = (net['ts_ms'] is num) ? (net['ts_ms'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
+      final relay = (net['relay'] is Map)
+          ? (net['relay'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final p2p = (net['p2p'] is Map)
+          ? (net['p2p'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final mailbox = (net['mailbox'] is Map)
+          ? (net['mailbox'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final webrtc = (net['webrtc'] is Map)
+          ? (net['webrtc'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final ts = (net['ts_ms'] is num)
+          ? (net['ts_ms'] as num).toInt()
+          : DateTime.now().millisecondsSinceEpoch;
 
-      final relayRx = (relay['rx_bytes'] is num) ? (relay['rx_bytes'] as num).toInt() : 0;
-      final relayTx = (relay['tx_bytes'] is num) ? (relay['tx_bytes'] as num).toInt() : 0;
-      final p2pRx = (p2p['rx_bytes'] is num) ? (p2p['rx_bytes'] as num).toInt() : 0;
-      final p2pTx = (p2p['tx_bytes'] is num) ? (p2p['tx_bytes'] as num).toInt() : 0;
-      final mailboxRx = (mailbox['rx_bytes'] is num) ? (mailbox['rx_bytes'] as num).toInt() : 0;
-      final mailboxTx = (mailbox['tx_bytes'] is num) ? (mailbox['tx_bytes'] as num).toInt() : 0;
-      final webrtcRx = (webrtc['rx_bytes'] is num) ? (webrtc['rx_bytes'] as num).toInt() : 0;
-      final webrtcTx = (webrtc['tx_bytes'] is num) ? (webrtc['tx_bytes'] as num).toInt() : 0;
+      final relayRx =
+          (relay['rx_bytes'] is num) ? (relay['rx_bytes'] as num).toInt() : 0;
+      final relayTx =
+          (relay['tx_bytes'] is num) ? (relay['tx_bytes'] as num).toInt() : 0;
+      final p2pRx =
+          (p2p['rx_bytes'] is num) ? (p2p['rx_bytes'] as num).toInt() : 0;
+      final p2pTx =
+          (p2p['tx_bytes'] is num) ? (p2p['tx_bytes'] as num).toInt() : 0;
+      final mailboxRx = (mailbox['rx_bytes'] is num)
+          ? (mailbox['rx_bytes'] as num).toInt()
+          : 0;
+      final mailboxTx = (mailbox['tx_bytes'] is num)
+          ? (mailbox['tx_bytes'] as num).toInt()
+          : 0;
+      final webrtcRx =
+          (webrtc['rx_bytes'] is num) ? (webrtc['rx_bytes'] as num).toInt() : 0;
+      final webrtcTx =
+          (webrtc['tx_bytes'] is num) ? (webrtc['tx_bytes'] as num).toInt() : 0;
 
       var dtMs = ts - _lastTsMs;
       if (_lastTsMs == 0 || dtMs <= 0) dtMs = 2000;
@@ -146,15 +166,25 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     final fg = Theme.of(context).colorScheme.onSurface.withAlpha(170);
     final bg = Theme.of(context).colorScheme.surface.withAlpha(235);
 
-    final relay = (_net?['relay'] is Map) ? (_net!['relay'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final relay = (_net?['relay'] is Map)
+        ? (_net!['relay'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final relayConnected = (relay['connected'] == true);
-    final relayRtt = (relay['rtt_ms'] is num) ? (relay['rtt_ms'] as num).toInt() : 0;
-    final relayColor = !widget.appState.isRunning ? Colors.grey : (relayConnected ? Colors.greenAccent : Colors.redAccent);
+    final relayRtt =
+        (relay['rtt_ms'] is num) ? (relay['rtt_ms'] as num).toInt() : 0;
+    final relayColor = !widget.appState.isRunning
+        ? Colors.grey
+        : (relayConnected ? Colors.greenAccent : Colors.redAccent);
 
-    final p2p = (_net?['p2p'] is Map) ? (_net!['p2p'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final p2p = (_net?['p2p'] is Map)
+        ? (_net!['p2p'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final p2pEnabled = (p2p['enabled'] == true);
-    final p2pPeers = (p2p['connected_peers'] is num) ? (p2p['connected_peers'] as num).toInt() : 0;
-    final p2pActive = (p2p['active_peers'] is num) ? (p2p['active_peers'] as num).toInt() : 0;
+    final p2pPeers = (p2p['connected_peers'] is num)
+        ? (p2p['connected_peers'] as num).toInt()
+        : 0;
+    final p2pActive =
+        (p2p['active_peers'] is num) ? (p2p['active_peers'] as num).toInt() : 0;
     final p2pRtt = (p2p['rtt_ms'] is num) ? (p2p['rtt_ms'] as num).toInt() : 0;
     final p2pColor = !p2pEnabled
         ? Colors.grey
@@ -162,18 +192,28 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
             ? Colors.greenAccent
             : Colors.orangeAccent;
 
-    final mailbox = (_net?['mailbox'] is Map) ? (_net!['mailbox'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-    final mailboxPeers = (mailbox['active_peers'] is num) ? (mailbox['active_peers'] as num).toInt() : 0;
-    final mailboxRtt = (mailbox['rtt_ms'] is num) ? (mailbox['rtt_ms'] as num).toInt() : 0;
+    final mailbox = (_net?['mailbox'] is Map)
+        ? (_net!['mailbox'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final mailboxPeers = (mailbox['active_peers'] is num)
+        ? (mailbox['active_peers'] as num).toInt()
+        : 0;
+    final mailboxRtt =
+        (mailbox['rtt_ms'] is num) ? (mailbox['rtt_ms'] as num).toInt() : 0;
     final mailboxColor = !p2pEnabled
         ? Colors.grey
         : (mailboxPeers > 0)
             ? Colors.greenAccent
             : Colors.orangeAccent;
 
-    final webrtc = (_net?['webrtc'] is Map) ? (_net!['webrtc'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
-    final webrtcSessions = (webrtc['sessions'] is num) ? (webrtc['sessions'] as num).toInt() : 0;
-    final webrtcPeers = (webrtc['active_peers'] is num) ? (webrtc['active_peers'] as num).toInt() : 0;
+    final webrtc = (_net?['webrtc'] is Map)
+        ? (_net!['webrtc'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final webrtcSessions =
+        (webrtc['sessions'] is num) ? (webrtc['sessions'] as num).toInt() : 0;
+    final webrtcPeers = (webrtc['active_peers'] is num)
+        ? (webrtc['active_peers'] as num).toInt()
+        : 0;
     final webrtcColor = !p2pEnabled
         ? Colors.grey
         : (webrtcSessions > 0 || webrtcPeers > 0)
@@ -187,7 +227,9 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withAlpha(80))),
+            border: Border(
+                top: BorderSide(
+                    color: Theme.of(context).dividerColor.withAlpha(80))),
           ),
           child: ClipRect(
             child: SingleChildScrollView(
@@ -196,37 +238,64 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
                 children: [
                   Tooltip(
                     message: context.l10n.statusRelay,
-                    child: _chip(icon: Icons.cloud, color: relayColor, text: _relayLabel()),
+                    child: _chip(
+                        icon: Icons.cloud,
+                        color: relayColor,
+                        text: _relayLabel()),
                   ),
                   const SizedBox(width: 10),
-              Tooltip(
-                message: context.l10n.statusP2p,
-                child: _chip(icon: Icons.wifi_tethering, color: p2pColor, text: _p2pLabel(p2pPeers, p2pActive)),
-              ),
-              const SizedBox(width: 10),
-              Tooltip(
-                message: context.l10n.statusMailbox,
-                child: _chip(icon: Icons.markunread_mailbox, color: mailboxColor, text: mailboxPeers.toString()),
-              ),
-              const SizedBox(width: 10),
-              Tooltip(
-                message: context.l10n.statusWebrtc,
-                child: _chip(icon: Icons.video_call, color: webrtcColor, text: '${webrtcSessions.toString()}·${webrtcPeers.toString()}'),
-              ),
-              const SizedBox(width: 16),
-              _mono('${context.l10n.statusRelayRtt}: ${relayRtt > 0 ? '${relayRtt}ms' : '-'}', fg),
-              const SizedBox(width: 10),
-              _mono('${context.l10n.statusP2pRtt}: ${p2pRtt > 0 ? '${p2pRtt}ms' : '-'}', fg),
-              const SizedBox(width: 10),
-              _mono('${context.l10n.statusMailboxRtt}: ${mailboxRtt > 0 ? '${mailboxRtt}ms' : '-'}', fg),
-              const SizedBox(width: 16),
-              _mono('${context.l10n.statusRelayTraffic} ${_fmtRate(_relayUpBps)}/${_fmtRate(_relayDownBps)}', fg),
-              const SizedBox(width: 10),
-              _mono('${context.l10n.statusP2pTraffic} ${_fmtRate(_p2pUpBps)}/${_fmtRate(_p2pDownBps)}', fg),
-              const SizedBox(width: 10),
-              _mono('${context.l10n.statusMailboxTraffic} ${_fmtRate(_mailboxUpBps)}/${_fmtRate(_mailboxDownBps)}', fg),
-              const SizedBox(width: 10),
-              _mono('${context.l10n.statusWebrtcTraffic} ${_fmtRate(_webrtcUpBps)}/${_fmtRate(_webrtcDownBps)}', fg),
+                  Tooltip(
+                    message: context.l10n.statusP2p,
+                    child: _chip(
+                        icon: Icons.wifi_tethering,
+                        color: p2pColor,
+                        text: _p2pLabel(p2pPeers, p2pActive)),
+                  ),
+                  const SizedBox(width: 10),
+                  Tooltip(
+                    message: context.l10n.statusMailbox,
+                    child: _chip(
+                        icon: Icons.markunread_mailbox,
+                        color: mailboxColor,
+                        text: mailboxPeers.toString()),
+                  ),
+                  const SizedBox(width: 10),
+                  Tooltip(
+                    message: context.l10n.statusWebrtc,
+                    child: _chip(
+                        icon: Icons.video_call,
+                        color: webrtcColor,
+                        text:
+                            '${webrtcSessions.toString()}·${webrtcPeers.toString()}'),
+                  ),
+                  const SizedBox(width: 16),
+                  _mono(
+                      '${context.l10n.statusRelayRtt}: ${relayRtt > 0 ? '${relayRtt}ms' : '-'}',
+                      fg),
+                  const SizedBox(width: 10),
+                  _mono(
+                      '${context.l10n.statusP2pRtt}: ${p2pRtt > 0 ? '${p2pRtt}ms' : '-'}',
+                      fg),
+                  const SizedBox(width: 10),
+                  _mono(
+                      '${context.l10n.statusMailboxRtt}: ${mailboxRtt > 0 ? '${mailboxRtt}ms' : '-'}',
+                      fg),
+                  const SizedBox(width: 16),
+                  _mono(
+                      '${context.l10n.statusRelayTraffic} ${_fmtRate(_relayUpBps)}/${_fmtRate(_relayDownBps)}',
+                      fg),
+                  const SizedBox(width: 10),
+                  _mono(
+                      '${context.l10n.statusP2pTraffic} ${_fmtRate(_p2pUpBps)}/${_fmtRate(_p2pDownBps)}',
+                      fg),
+                  const SizedBox(width: 10),
+                  _mono(
+                      '${context.l10n.statusMailboxTraffic} ${_fmtRate(_mailboxUpBps)}/${_fmtRate(_mailboxDownBps)}',
+                      fg),
+                  const SizedBox(width: 10),
+                  _mono(
+                      '${context.l10n.statusWebrtcTraffic} ${_fmtRate(_webrtcUpBps)}/${_fmtRate(_webrtcDownBps)}',
+                      fg),
                 ],
               ),
             ),
@@ -241,7 +310,9 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     if (_net?['relay'] is! Map) return context.l10n.statusUnknownShort;
     final relay = (_net!['relay'] as Map).cast<String, dynamic>();
     final online = relay['connected'] == true;
-    return online ? context.l10n.statusConnectedShort : context.l10n.statusDisconnectedShort;
+    return online
+        ? context.l10n.statusConnectedShort
+        : context.l10n.statusDisconnectedShort;
   }
 
   String _p2pLabel(int connected, int active) {
@@ -252,7 +323,8 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
     return '$connected·$active';
   }
 
-  Widget _chip({required IconData icon, required Color color, required String text}) {
+  Widget _chip(
+      {required IconData icon, required Color color, required String text}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -260,7 +332,8 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
         const SizedBox(width: 6),
         Text(
           text,
-          style: const TextStyle(fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+          style: const TextStyle(
+              fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
         ),
       ],
     );

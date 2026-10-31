@@ -128,7 +128,9 @@ class Note {
     final id = (json['id'] as String?)?.trim() ?? '';
     if (id.isEmpty) return null;
     final attributedTo = (json['attributedTo'] as String?)?.trim() ?? '';
-    var content = (json['content'] as String?)?.trim() ?? (json['name'] as String?)?.trim() ?? '';
+    var content = (json['content'] as String?)?.trim() ??
+        (json['name'] as String?)?.trim() ??
+        '';
     if (content.isEmpty) {
       content = _contentFromMap(json['contentMap']);
     }
@@ -138,7 +140,8 @@ class Note {
         final srcMap = src.cast<String, dynamic>();
         final srcContent = (srcMap['content'] as String?)?.trim() ?? '';
         if (srcContent.isNotEmpty) {
-          final mediaType = (srcMap['mediaType'] as String?)?.toLowerCase().trim() ?? '';
+          final mediaType =
+              (srcMap['mediaType'] as String?)?.toLowerCase().trim() ?? '';
           if (mediaType.contains('text/plain') && !_looksLikeHtml(srcContent)) {
             content = _htmlFromPlain(srcContent);
           } else {
@@ -298,7 +301,9 @@ class TimelineItem {
       } else {
         return null;
       }
-    } else if (activityType == 'Note' || activityType == 'Article' || activityType == 'Question') {
+    } else if (activityType == 'Note' ||
+        activityType == 'Article' ||
+        activityType == 'Question') {
       noteJson = activity;
       effectiveType = 'Create';
     } else if (activityType.isEmpty && activity['content'] != null) {
@@ -315,11 +320,17 @@ class TimelineItem {
     final effectiveActor = actor.isNotEmpty
         ? actor
         : (noteJson?['attributedTo'] as String?)?.trim() ?? '';
-    final inReplyToPreview = activity['fedi3InReplyToObject'] is Map ? (activity['fedi3InReplyToObject'] as Map).cast<String, dynamic>() : null;
-    final quotePreview = activity['fedi3QuoteObject'] is Map ? (activity['fedi3QuoteObject'] as Map).cast<String, dynamic>() : null;
+    final inReplyToPreview = activity['fedi3InReplyToObject'] is Map
+        ? (activity['fedi3InReplyToObject'] as Map).cast<String, dynamic>()
+        : null;
+    final quotePreview = activity['fedi3QuoteObject'] is Map
+        ? (activity['fedi3QuoteObject'] as Map).cast<String, dynamic>()
+        : null;
 
     return TimelineItem(
-      activityId: activityId.isNotEmpty ? activityId : (noteJson?['id'] as String?)?.trim() ?? '',
+      activityId: activityId.isNotEmpty
+          ? activityId
+          : (noteJson?['id'] as String?)?.trim() ?? '',
       activityType: effectiveType.isNotEmpty ? effectiveType : activityType,
       actor: effectiveActor,
       note: note,

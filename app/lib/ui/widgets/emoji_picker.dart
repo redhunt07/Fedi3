@@ -28,7 +28,8 @@ class EmojiPicker extends StatefulWidget {
   final int columns;
   final EmojiPickerStyle style;
 
-  static Future<String?> show(BuildContext context, {required UiPrefs prefs}) async {
+  static Future<String?> show(BuildContext context,
+      {required UiPrefs prefs}) async {
     final res = await showModalBottomSheet<EmojiPickerResult>(
       context: context,
       isScrollControlled: true,
@@ -107,7 +108,9 @@ class _EmojiPickerState extends State<EmojiPicker> {
   List<String> _filter(List<String> input) {
     final query = _query.trim().toLowerCase();
     if (query.isEmpty) return input;
-    return input.where((e) => e.toLowerCase().contains(query)).toList(growable: false);
+    return input
+        .where((e) => e.toLowerCase().contains(query))
+        .toList(growable: false);
   }
 
   List<MapEntry<String, String>> _filterCustom(Map<String, String> input) {
@@ -117,12 +120,10 @@ class _EmojiPickerState extends State<EmojiPicker> {
       ..sort((a, b) => a.key.compareTo(b.key));
     final query = _query.trim().toLowerCase();
     if (query.isEmpty) return entries;
-    return entries
-        .where((e) {
-          final name = e.key.toLowerCase();
-          return name.contains(query) || name.replaceAll(':', '').contains(query);
-        })
-        .toList(growable: false);
+    return entries.where((e) {
+      final name = e.key.toLowerCase();
+      return name.contains(query) || name.replaceAll(':', '').contains(query);
+    }).toList(growable: false);
   }
 
   @override
@@ -140,7 +141,9 @@ class _EmojiPickerState extends State<EmojiPicker> {
             builder: (context, constraints) {
               const spacing = 8.0;
               final columns = widget.columns.clamp(4, 12);
-              final size = ((constraints.maxWidth - spacing * (columns - 1)) / columns).clamp(32.0, 64.0);
+              final size =
+                  ((constraints.maxWidth - spacing * (columns - 1)) / columns)
+                      .clamp(32.0, 64.0);
               final font = (20.0 * widget.scale).clamp(16.0, 30.0);
               return Wrap(
                 spacing: spacing,
@@ -185,7 +188,8 @@ class _EmojiPickerState extends State<EmojiPicker> {
                   onTap: () => _pick(e.key),
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(12),
@@ -201,10 +205,13 @@ class _EmojiPickerState extends State<EmojiPicker> {
                             width: 22,
                             height: 22,
                             fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => Text(e.key, style: const TextStyle(fontSize: 16)),
+                            errorBuilder: (_, __, ___) => Text(e.key,
+                                style: const TextStyle(fontSize: 16)),
                           ),
                         const SizedBox(width: 8),
-                        Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        Text(e.key,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
                       ],
                     ),
                   ),
@@ -228,7 +235,10 @@ class _EmojiPickerState extends State<EmojiPicker> {
         children: [
           Row(
             children: [
-              Expanded(child: Text(context.l10n.emojiPickerTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))),
+              Expanded(
+                  child: Text(context.l10n.emojiPickerTitle,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w900, fontSize: 16))),
               IconButton(
                 tooltip: context.l10n.emojiPickerClose,
                 onPressed: () => Navigator.of(context).pop(),
@@ -262,7 +272,8 @@ class _EmojiPickerState extends State<EmojiPicker> {
                   section(context.l10n.emojiPickerCommon, _filter(_common)),
                   if (_globalCustom.isNotEmpty) ...[
                     const SizedBox(height: 18),
-                    customSection(context.l10n.emojiPickerCustom, _filterCustom(_globalCustom)),
+                    customSection(context.l10n.emojiPickerCustom,
+                        _filterCustom(_globalCustom)),
                   ],
                 ],
               ),

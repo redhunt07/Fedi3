@@ -122,7 +122,9 @@ class _ReactionPickerState extends State<ReactionPicker> {
 
     List<String> filter(List<String> input) {
       if (!searchActive) return input;
-      return input.where((e) => e.toLowerCase().contains(query)).toList(growable: false);
+      return input
+          .where((e) => e.toLowerCase().contains(query))
+          .toList(growable: false);
     }
 
     List<MapEntry<String, String>> filterCustom(Map<String, String> input) {
@@ -131,12 +133,10 @@ class _ReactionPickerState extends State<ReactionPicker> {
           .toList(growable: false)
         ..sort((a, b) => a.key.compareTo(b.key));
       if (!searchActive) return entries;
-      return entries
-          .where((e) {
-            final name = e.key.toLowerCase();
-            return name.contains(query) || name.replaceAll(':', '').contains(query);
-          })
-          .toList(growable: false);
+      return entries.where((e) {
+        final name = e.key.toLowerCase();
+        return name.contains(query) || name.replaceAll(':', '').contains(query);
+      }).toList(growable: false);
     }
 
     final theme = Theme.of(context);
@@ -152,7 +152,9 @@ class _ReactionPickerState extends State<ReactionPicker> {
             builder: (context, constraints) {
               const spacing = 8.0;
               final columns = widget.columns.clamp(4, 12);
-              final size = ((constraints.maxWidth - spacing * (columns - 1)) / columns).clamp(32.0, 64.0);
+              final size =
+                  ((constraints.maxWidth - spacing * (columns - 1)) / columns)
+                      .clamp(32.0, 64.0);
               final font = (20.0 * widget.scale).clamp(16.0, 30.0);
               return Wrap(
                 spacing: spacing,
@@ -197,7 +199,8 @@ class _ReactionPickerState extends State<ReactionPicker> {
                   onTap: () => _pick(e.key),
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(12),
@@ -213,10 +216,13 @@ class _ReactionPickerState extends State<ReactionPicker> {
                             width: 22,
                             height: 22,
                             fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => Text(e.key, style: const TextStyle(fontSize: 16)),
+                            errorBuilder: (_, __, ___) => Text(e.key,
+                                style: const TextStyle(fontSize: 16)),
                           ),
                         const SizedBox(width: 8),
-                        Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        Text(e.key,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
                       ],
                     ),
                   ),
@@ -240,7 +246,10 @@ class _ReactionPickerState extends State<ReactionPicker> {
         children: [
           Row(
             children: [
-              Expanded(child: Text(context.l10n.reactionPickerTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))),
+              Expanded(
+                  child: Text(context.l10n.reactionPickerTitle,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w900, fontSize: 16))),
               IconButton(
                 tooltip: context.l10n.reactionPickerClose,
                 onPressed: () => Navigator.of(context).pop(),
@@ -272,11 +281,13 @@ class _ReactionPickerState extends State<ReactionPicker> {
                   section(context.l10n.reactionPickerCommon, filter(_common)),
                   if (customEmoji.isNotEmpty) ...[
                     const SizedBox(height: 18),
-                    section(context.l10n.reactionPickerNoteEmojis, filter(customEmoji)),
+                    section(context.l10n.reactionPickerNoteEmojis,
+                        filter(customEmoji)),
                   ],
                   if (_globalCustom.isNotEmpty) ...[
                     const SizedBox(height: 18),
-                    customSection(context.l10n.reactionPickerGlobalEmojis, filterCustom(_globalCustom)),
+                    customSection(context.l10n.reactionPickerGlobalEmojis,
+                        filterCustom(_globalCustom)),
                   ],
                 ],
               ),

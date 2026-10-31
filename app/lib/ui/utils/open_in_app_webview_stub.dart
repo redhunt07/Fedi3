@@ -12,4 +12,3 @@ Future<bool> openInAppWebView(String url) async {
   if (uri == null) return false;
   return launchUrl(uri, mode: LaunchMode.inAppBrowserView);
 }
-

@@ -14,7 +14,8 @@ enum EmojiPickerStyle { image, text }
 enum TranslationProvider { deepl, deeplx }
 
 class UiPrefs {
-  static const String _legacyTenorKey = 'AIzaSyBX2FXmLsYCAG7oucPMsbWSfGzaWD2bLnM';
+  static const String _legacyTenorKey =
+      'AIzaSyBX2FXmLsYCAG7oucPMsbWSfGzaWD2bLnM';
   static const String _defaultGiphyKey = 'JqCEl4nBczyPxQPX7ooxoQIzsKhnsi2e';
 
   const UiPrefs({
@@ -128,7 +129,8 @@ class UiPrefs {
       accent: accent ?? this.accent,
       textScale: textScale ?? this.textScale,
       localeTag: localeTag ?? this.localeTag,
-      lastNotificationsSeenMs: lastNotificationsSeenMs ?? this.lastNotificationsSeenMs,
+      lastNotificationsSeenMs:
+          lastNotificationsSeenMs ?? this.lastNotificationsSeenMs,
       lastChatSeenMs: lastChatSeenMs ?? this.lastChatSeenMs,
       chatThreadSeenMs: chatThreadSeenMs ?? this.chatThreadSeenMs,
       pinnedChatThreads: pinnedChatThreads ?? this.pinnedChatThreads,
@@ -145,7 +147,8 @@ class UiPrefs {
       translationTimeoutMs: translationTimeoutMs ?? this.translationTimeoutMs,
       translationDeepLxUrl: translationDeepLxUrl ?? this.translationDeepLxUrl,
       telemetryEnabled: telemetryEnabled ?? this.telemetryEnabled,
-      clientMonitoringEnabled: clientMonitoringEnabled ?? this.clientMonitoringEnabled,
+      clientMonitoringEnabled:
+          clientMonitoringEnabled ?? this.clientMonitoringEnabled,
       relayAdminToken: relayAdminToken ?? this.relayAdminToken,
     );
   }
@@ -208,9 +211,15 @@ class UiPrefs {
       return UiPrefs.defaults().translationProvider;
     }
 
-    final accent = (raw['accent'] is num) ? (raw['accent'] as num).toInt() : UiPrefs.defaults().accent;
-    final scale = (raw['textScale'] is num) ? (raw['textScale'] as num).toDouble() : UiPrefs.defaults().textScale;
-    final timeoutMs = (raw['translationTimeoutMs'] is num) ? (raw['translationTimeoutMs'] as num).toInt() : UiPrefs.defaults().translationTimeoutMs;
+    final accent = (raw['accent'] is num)
+        ? (raw['accent'] as num).toInt()
+        : UiPrefs.defaults().accent;
+    final scale = (raw['textScale'] is num)
+        ? (raw['textScale'] as num).toDouble()
+        : UiPrefs.defaults().textScale;
+    final timeoutMs = (raw['translationTimeoutMs'] is num)
+        ? (raw['translationTimeoutMs'] as num).toInt()
+        : UiPrefs.defaults().translationTimeoutMs;
     final seenRaw = raw['chatThreadSeenMs'];
     final seenMap = <String, int>{};
     if (seenRaw is Map) {
@@ -227,31 +236,54 @@ class UiPrefs {
       }
     }
     final rawGifKey = (raw['gifApiKey'] as String? ?? '').trim();
-    final gifApiKey = (rawGifKey == _legacyTenorKey || rawGifKey.isEmpty) ? _defaultGiphyKey : rawGifKey;
+    final gifApiKey = (rawGifKey == _legacyTenorKey || rawGifKey.isEmpty)
+        ? _defaultGiphyKey
+        : rawGifKey;
     return UiPrefs(
       themeMode: parseTheme(raw['themeMode']?.toString()),
       density: parseDensity(raw['density']?.toString()),
       accent: accent,
       textScale: scale.clamp(0.75, 1.5),
       localeTag: (raw['localeTag'] as String? ?? '').trim(),
-      lastNotificationsSeenMs: (raw['lastNotificationsSeenMs'] is num) ? (raw['lastNotificationsSeenMs'] as num).toInt() : 0,
-      lastChatSeenMs: (raw['lastChatSeenMs'] is num) ? (raw['lastChatSeenMs'] as num).toInt() : 0,
+      lastNotificationsSeenMs: (raw['lastNotificationsSeenMs'] is num)
+          ? (raw['lastNotificationsSeenMs'] as num).toInt()
+          : 0,
+      lastChatSeenMs: (raw['lastChatSeenMs'] is num)
+          ? (raw['lastChatSeenMs'] as num).toInt()
+          : 0,
       chatThreadSeenMs: seenMap,
       pinnedChatThreads: (raw['pinnedChatThreads'] is List)
-          ? (raw['pinnedChatThreads'] as List).map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
+          ? (raw['pinnedChatThreads'] as List)
+              .map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList()
           : const [],
-      desktopUseColumns: raw['desktopUseColumns'] == null ? UiPrefs.defaults().desktopUseColumns : raw['desktopUseColumns'] == true,
-      mediaAutoplay: raw['mediaAutoplay'] == null ? UiPrefs.defaults().mediaAutoplay : raw['mediaAutoplay'] == true,
-      mediaMuted: raw['mediaMuted'] == null ? UiPrefs.defaults().mediaMuted : raw['mediaMuted'] == true,
-      emojiPickerScale: (raw['emojiPickerScale'] is num) ? (raw['emojiPickerScale'] as num).toDouble().clamp(0.7, 1.6) : UiPrefs.defaults().emojiPickerScale,
-      emojiPickerColumns: (raw['emojiPickerColumns'] is num) ? (raw['emojiPickerColumns'] as num).toInt().clamp(5, 12) : UiPrefs.defaults().emojiPickerColumns,
-      emojiPickerStyle: parseEmojiPickerStyle(raw['emojiPickerStyle']?.toString()),
+      desktopUseColumns: raw['desktopUseColumns'] == null
+          ? UiPrefs.defaults().desktopUseColumns
+          : raw['desktopUseColumns'] == true,
+      mediaAutoplay: raw['mediaAutoplay'] == null
+          ? UiPrefs.defaults().mediaAutoplay
+          : raw['mediaAutoplay'] == true,
+      mediaMuted: raw['mediaMuted'] == null
+          ? UiPrefs.defaults().mediaMuted
+          : raw['mediaMuted'] == true,
+      emojiPickerScale: (raw['emojiPickerScale'] is num)
+          ? (raw['emojiPickerScale'] as num).toDouble().clamp(0.7, 1.6)
+          : UiPrefs.defaults().emojiPickerScale,
+      emojiPickerColumns: (raw['emojiPickerColumns'] is num)
+          ? (raw['emojiPickerColumns'] as num).toInt().clamp(5, 12)
+          : UiPrefs.defaults().emojiPickerColumns,
+      emojiPickerStyle:
+          parseEmojiPickerStyle(raw['emojiPickerStyle']?.toString()),
       gifApiKey: gifApiKey,
-      translationProvider: parseTranslationProvider(raw['translationProvider']?.toString()),
+      translationProvider:
+          parseTranslationProvider(raw['translationProvider']?.toString()),
       translationAuthKey: (raw['translationAuthKey'] as String? ?? '').trim(),
       translationUsePro: raw['translationUsePro'] == true,
       translationTimeoutMs: timeoutMs.clamp(2000, 60000),
-      translationDeepLxUrl: (raw['translationDeepLxUrl'] as String? ?? UiPrefs.defaults().translationDeepLxUrl).trim(),
+      translationDeepLxUrl: (raw['translationDeepLxUrl'] as String? ??
+              UiPrefs.defaults().translationDeepLxUrl)
+          .trim(),
       telemetryEnabled: raw['telemetryEnabled'] == true,
       clientMonitoringEnabled: raw['clientMonitoringEnabled'] == true,
       relayAdminToken: (raw['relayAdminToken'] as String? ?? '').trim(),
@@ -275,7 +307,9 @@ class UiPrefs {
     return Locale(tag);
   }
 
-  VisualDensity get visualDensity => density == UiDensity.compact ? VisualDensity.compact : VisualDensity.standard;
+  VisualDensity get visualDensity => density == UiDensity.compact
+      ? VisualDensity.compact
+      : VisualDensity.standard;
 
   Color get accentColor => Color(accent);
 }

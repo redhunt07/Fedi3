@@ -270,6 +270,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatReact => 'React';
 
   @override
+  String get chatDeleteThread => 'Delete chat';
+
+  @override
+  String get chatDeleteThreadHint =>
+      'This will delete the entire chat thread for everyone.';
+
+  @override
   String get chatPin => 'Pin chat';
 
   @override
@@ -419,6 +426,48 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noteHideContent => 'Hide';
+
+  @override
+  String get noteActions => 'Actions';
+
+  @override
+  String get noteEdit => 'Edit';
+
+  @override
+  String get noteDelete => 'Delete';
+
+  @override
+  String get noteDeleted => 'Note deleted';
+
+  @override
+  String get noteEditTitle => 'Edit note';
+
+  @override
+  String get noteEditContentHint => 'Edit content';
+
+  @override
+  String get noteEditSummaryHint => 'Content warning (optional)';
+
+  @override
+  String get noteSensitiveLabel => 'Sensitive content';
+
+  @override
+  String get noteEditSave => 'Save';
+
+  @override
+  String get noteEditMissingAudience => 'Missing audience';
+
+  @override
+  String get noteDeleteTitle => 'Delete note';
+
+  @override
+  String get noteDeleteHint => 'Are you sure you want to delete this note?';
+
+  @override
+  String get noteDeleteConfirm => 'Delete';
+
+  @override
+  String get noteDeleteMissingAudience => 'Missing audience';
 
   @override
   String get timeAgoJustNow => 'just now';
@@ -1568,4 +1617,162 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get uiEmojiPickerPreviewLabel => 'Preview';
+
+  @override
+  String get p2pRelayReserveLabel =>
+      'P2P relay reserve (multiaddr, one per line)';
+
+  @override
+  String get postDeliveryModeLabel => 'Post delivery mode';
+
+  @override
+  String get postDeliveryP2pRelay => 'P2P + Relay (fallback after 5s)';
+
+  @override
+  String get postDeliveryP2pOnly => 'P2P only (never relay)';
+
+  @override
+  String get webrtcSectionTitle => 'WebRTC (ICE/TURN)';
+
+  @override
+  String get webrtcSectionHint => 'Use TURN/STUN as P2P fallback (recommended)';
+
+  @override
+  String get webrtcAutofill => 'Auto-fill ICE from relay';
+
+  @override
+  String get webrtcIceUrlsLabel => 'WebRTC ICE URLs (one per line)';
+
+  @override
+  String get webrtcIceUsernameLabel => 'WebRTC ICE username';
+
+  @override
+  String get webrtcIceCredentialLabel => 'WebRTC ICE credential';
+
+  @override
+  String get fileTypeJson => 'JSON';
+
+  @override
+  String get notificationsMarkAllRead => 'Mark all read';
+
+  @override
+  String get notificationsFilterAll => 'All';
+
+  @override
+  String get notificationsFilterMentions => 'Mentions';
+
+  @override
+  String get notificationsFilterReactions => 'Reactions';
+
+  @override
+  String get notificationsFilterFollows => 'Follows';
+
+  @override
+  String get notificationsFilterBoosts => 'Boosts';
+
+  @override
+  String get notificationsFilterLikes => 'Likes';
+
+  @override
+  String get notificationsFollowedBack => 'Followed back';
+
+  @override
+  String get notificationsFollowBack => 'Follow back';
+
+  @override
+  String notificationsFollowBackFailed(String error) {
+    return 'Follow back failed: $error';
+  }
+
+  @override
+  String get notificationsReply => 'Reply';
+
+  @override
+  String get timelineFiltersTooltip => 'Filters';
+
+  @override
+  String get timelineFiltersTitle => 'Filters';
+
+  @override
+  String get timelineFilterMedia => 'Media';
+
+  @override
+  String get timelineFilterReply => 'Reply';
+
+  @override
+  String get timelineFilterBoost => 'Boost';
+
+  @override
+  String get timelineFilterMention => 'Mention';
+
+  @override
+  String get mediaDownload => 'Download';
+
+  @override
+  String get mediaShare => 'Share';
+
+  @override
+  String get mediaAutoplayOn => 'Autoplay on';
+
+  @override
+  String get mediaAutoplayOff => 'Autoplay off';
+
+  @override
+  String get mediaMuted => 'Muted';
+
+  @override
+  String get mediaSoundOn => 'Sound on';
+
+  @override
+  String get mediaOpenInBrowser => 'Open in browser';
+
+  @override
+  String get mediaDownloaded => 'Downloaded';
+
+  @override
+  String mediaDownloadFailed(String error) {
+    return 'Download failed: $error';
+  }
+
+  @override
+  String get noteThreadMuted => 'Thread muted';
+
+  @override
+  String get noteUnmute => 'Unmute';
+
+  @override
+  String get noteLinkCopied => 'Link copied';
+
+  @override
+  String get noteUsers => 'Users';
+
+  @override
+  String noteReactionsTitle(String label) {
+    return 'Reactions $label';
+  }
+
+  @override
+  String get semanticsAvatar => 'Avatar';
+
+  @override
+  String get semanticsMedia => 'Media attachment';
+
+  @override
+  String get onboardingErrUsername =>
+      'Username must be 1-64 characters: letters, digits or underscore.';
+
+  @override
+  String get onboardingErrDomain => 'Enter a valid domain (e.g. example.com).';
+
+  @override
+  String get onboardingErrPublicUrl =>
+      'Public URL must be an absolute http(s) URL.';
+
+  @override
+  String get onboardingErrRelayWs =>
+      'Relay WebSocket URL must start with ws:// or wss://.';
+
+  @override
+  String get onboardingErrBind =>
+      'Bind address must be host:port (e.g. 127.0.0.1:8788).';
 }

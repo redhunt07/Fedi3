@@ -3,14 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
-import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../model/note_models.dart';
+import '../../core/core_http.dart';
 import '../../state/app_state.dart';
 import '../utils/open_url.dart';
 import '../utils/media_url.dart';
@@ -37,7 +39,8 @@ class MediaViewerScreen extends StatefulWidget {
 }
 
 class _MediaViewerScreenState extends State<MediaViewerScreen> {
-  late final PageController _pager = PageController(initialPage: widget.initialIndex);
+  late final PageController _pager =
+      PageController(initialPage: widget.initialIndex);
   late List<NoteAttachment> _items;
   late List<NoteAttachment> _resolvedItems;
   late bool _autoplay;
@@ -47,7 +50,9 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   @override
   void initState() {
     super.initState();
-    _items = widget.attachments.isNotEmpty ? widget.attachments : [NoteAttachment(url: widget.url, mediaType: widget.mediaType)];
+    _items = widget.attachments.isNotEmpty
+        ? widget.attachments
+        : [NoteAttachment(url: widget.url, mediaType: widget.mediaType)];
     _resolvedItems = _items
         .map(
           (a) => NoteAttachment(
@@ -82,40 +87,47 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: current.url));
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.copied)));
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(context.l10n.copied)));
             },
             icon: const Icon(Icons.content_copy),
           ),
           IconButton(
-            tooltip: 'Download',
+            tooltip: context.l10n.mediaDownload,
             onPressed: () => _downloadCurrent(current),
             icon: const Icon(Icons.download),
           ),
           IconButton(
-            tooltip: 'Share',
+            tooltip: context.l10n.mediaShare,
             onPressed: () => Share.share(current.url),
             icon: const Icon(Icons.share),
           ),
           IconButton(
-            tooltip: _autoplay ? 'Autoplay on' : 'Autoplay off',
+            tooltip: _autoplay
+                ? context.l10n.mediaAutoplayOn
+                : context.l10n.mediaAutoplayOff,
             onPressed: () async {
               final next = !_autoplay;
               setState(() => _autoplay = next);
-              await widget.appState.savePrefs(widget.appState.prefs.copyWith(mediaAutoplay: next));
+              await widget.appState.savePrefs(
+                  widget.appState.prefs.copyWith(mediaAutoplay: next));
             },
-            icon: Icon(_autoplay ? Icons.play_circle : Icons.play_circle_outline),
+            icon:
+                Icon(_autoplay ? Icons.play_circle : Icons.play_circle_outline),
           ),
           IconButton(
-            tooltip: _muted ? 'Muted' : 'Sound on',
+            tooltip:
+                _muted ? context.l10n.mediaMuted : context.l10n.mediaSoundOn,
             onPressed: () async {
               final next = !_muted;
               setState(() => _muted = next);
-              await widget.appState.savePrefs(widget.appState.prefs.copyWith(mediaMuted: next));
+              await widget.appState
+                  .savePrefs(widget.appState.prefs.copyWith(mediaMuted: next));
             },
             icon: Icon(_muted ? Icons.volume_off : Icons.volume_up),
           ),
           IconButton(
-            tooltip: 'Open in browser',
+            tooltip: context.l10n.mediaOpenInBrowser,
             onPressed: () => openUrlExternal(current.url),
             icon: const Icon(Icons.open_in_new),
           ),
@@ -142,12 +154,15 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                 maxScale: 5,
                 child: Image.network(
                   item.url,
+                  semanticLabel: context.l10n.semanticsMedia,
                   fit: BoxFit.contain,
                   loadingBuilder: (context, child, progress) {
                     if (progress == null) return child;
                     return const Center(child: CircularProgressIndicator());
                   },
-                  errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white)),
+                  errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(Icons.broken_image_outlined,
+                          color: Colors.white)),
                 ),
               );
             }
@@ -174,23 +189,38 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   Future<void> _downloadCurrent(NoteAttachment item) async {
     final url = resolveLocalMediaUrl(widget.appState.config, item.url).trim();
     if (url.isEmpty) return;
-    final parts = url.split('/').where((s) => s.isNotEmpty).toList();
-    final name = parts.isNotEmpty ? parts.last : 'media';
-    final loc = await getSaveLocation(suggestedName: name);
-    final path = loc?.path;
-    if (path == null || path.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    final name = (uri == null || uri.pathSegments.isEmpty)
+        ? 'media'
+        : Uri.decodeComponent(uri.pathSegments.last);
     try {
-      final resp = await http.get(Uri.parse(url));
+      final resp = await CoreHttp.client
+          .get(Uri.parse(url))
+          .timeout(CoreHttp.totalTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         throw StateError('download failed: ${resp.statusCode}');
       }
-      final file = XFile.fromData(resp.bodyBytes, mimeType: item.mediaType, name: name);
-      await file.saveTo(path);
+      final file =
+          XFile.fromData(resp.bodyBytes, mimeType: item.mediaType, name: name);
+      if (Platform.isAndroid || Platform.isIOS) {
+        // M-31: getSaveLocation is not implemented on mobile; sharing the XFile
+        // saves it through the platform share sheet instead.
+        await Share.shareXFiles([file], text: name);
+      } else {
+        final loc = await getSaveLocation(suggestedName: name);
+        final path = loc?.path;
+        if (path == null || path.isEmpty) return;
+        await file.saveTo(path);
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Downloaded')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.mediaDownloaded)),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.mediaDownloadFailed(e.toString()))),
+      );
     }
   }
 
@@ -199,7 +229,8 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
       if (i < 0 || i >= _items.length) continue;
       final item = _resolvedItems[i];
       final mt = item.mediaType.toLowerCase();
-      final isImage = mt.startsWith('image/') || (!mt.startsWith('video/') && !mt.startsWith('audio/'));
+      final isImage = mt.startsWith('image/') ||
+          (!mt.startsWith('video/') && !mt.startsWith('audio/'));
       if (isImage) {
         precacheImage(NetworkImage(item.url), context);
       }

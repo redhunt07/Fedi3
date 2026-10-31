@@ -43,13 +43,15 @@ class LinkPreviewCard extends StatelessWidget {
               children: [
                 if (img.isNotEmpty)
                   ClipRRect(
-                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(14)),
+                    borderRadius: const BorderRadius.horizontal(
+                        left: Radius.circular(14)),
                     child: Image.network(
                       img,
                       width: 96,
                       height: 96,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox(width: 96, height: 96),
+                      errorBuilder: (_, __, ___) =>
+                          const SizedBox(width: 96, height: 96),
                     ),
                   ),
                 Expanded(
@@ -58,14 +60,23 @@ class LinkPreviewCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         if (desc.isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
                             desc,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(179),
+                                fontSize: 12),
                           ),
                         ],
                         const SizedBox(height: 8),
@@ -73,7 +84,12 @@ class LinkPreviewCard extends StatelessWidget {
                           host.isNotEmpty ? host : u,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(128),
+                              fontSize: 12),
                         ),
                       ],
                     ),
@@ -96,7 +112,8 @@ class LinkPreviewCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: const Icon(Icons.link),
-        title: Text(host.isNotEmpty ? host : url, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(host.isNotEmpty ? host : url,
+            maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: _CopyLinkButton(url: url),
         onTap: () => openUrlExternal(url),
@@ -104,7 +121,8 @@ class LinkPreviewCard extends StatelessWidget {
     );
   }
 
-  Widget _skeleton(BuildContext context, {required String host, required String url}) {
+  Widget _skeleton(BuildContext context,
+      {required String host, required String url}) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -114,7 +132,10 @@ class LinkPreviewCard extends StatelessWidget {
               width: 96,
               height: 96,
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withAlpha(120),
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
@@ -123,11 +144,29 @@ class LinkPreviewCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(height: 14, width: double.infinity, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120)),
+                  Container(
+                      height: 14,
+                      width: double.infinity,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(120)),
                   const SizedBox(height: 8),
-                  Container(height: 12, width: double.infinity, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(100)),
+                  Container(
+                      height: 12,
+                      width: double.infinity,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(100)),
                   const SizedBox(height: 8),
-                  Container(height: 12, width: 160, color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(80)),
+                  Container(
+                      height: 12,
+                      width: 160,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(80)),
                 ],
               ),
             ),
@@ -151,7 +190,8 @@ class _CopyLinkButton extends StatelessWidget {
       onPressed: () async {
         await Clipboard.setData(ClipboardData(text: url));
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.copied)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(context.l10n.copied)));
       },
     );
   }

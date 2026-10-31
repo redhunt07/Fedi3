@@ -17,7 +17,8 @@ import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, required this.appState, required this.actorUrl});
+  const ProfileScreen(
+      {super.key, required this.appState, required this.actorUrl});
 
   final AppState appState;
   final String actorUrl;
@@ -63,16 +64,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final followers = p.followers;
         final following = p.following;
         if (followers.isNotEmpty) {
-          _followersCount = await ActorRepository.instance.fetchCollectionCount(followers);
+          _followersCount =
+              await ActorRepository.instance.fetchCollectionCount(followers);
         }
         if (following.isNotEmpty) {
-          _followingCount = await ActorRepository.instance.fetchCollectionCount(following);
+          _followingCount =
+              await ActorRepository.instance.fetchCollectionCount(following);
         }
         if (!mounted) return;
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final items = await ActorRepository.instance.fetchOutbox(p!.outbox, limit: 20);
+        final items =
+            await ActorRepository.instance.fetchOutbox(p!.outbox, limit: 20);
         if (!mounted) return;
         setState(() => _outbox = items);
       }
@@ -93,7 +97,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final s = await api.fetchFollowingStatus(p.id);
       if (!mounted) return;
       setState(() {
-        if (s == 'none' && (_followingStatus == 'pending' || _followingStatus == 'accepted')) {
+        if (s == 'none' &&
+            (_followingStatus == 'pending' || _followingStatus == 'accepted')) {
           return;
         }
         _followingStatus = s;
@@ -117,7 +122,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         title: Text(_profile?.displayName ?? widget.actorUrl),
         actions: [
-          IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
+          IconButton(
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh)),
         ],
       ),
       body: ListView(
@@ -140,10 +147,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           if (_profile == null && !_loading)
             Center(child: Text(context.l10n.listNoItems)),
-          if (_loading) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+          if (_loading)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator())),
           if (_outbox.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text(context.l10n.timelineTabHome, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.l10n.timelineTabHome,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final a in _outbox)
               TimelineActivityCard(appState: widget.appState, activity: a),
@@ -159,7 +171,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_followBusy) return;
     setState(() => _followBusy = true);
     try {
-      final following = _followingStatus == 'accepted' || _followingStatus == 'pending';
+      final following =
+          _followingStatus == 'accepted' || _followingStatus == 'pending';
       setState(() => _followingStatus = following ? 'none' : 'pending');
       if (following) {
         await api.unfollow(p.id);
@@ -169,14 +182,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _ensureFollowPoll();
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
       await _refreshFollowingStatus();
       // Some servers accept asynchronously; re-check after a short delay.
       await Future<void>.delayed(const Duration(seconds: 2));
       if (mounted) await _refreshFollowingStatus();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     } finally {
       if (mounted) setState(() => _followBusy = false);
     }
@@ -184,7 +199,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _ensureFollowPoll() {
     if (_followPoll != null) return;
-    _followPoll = Timer.periodic(const Duration(seconds: 6), (_) => _refreshFollowingStatus());
+    _followPoll = Timer.periodic(
+        const Duration(seconds: 6), (_) => _refreshFollowingStatus());
   }
 
   void _stopFollowPoll() {
@@ -212,8 +228,10 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final following = followingStatus == 'accepted' || followingStatus == 'pending';
-    final label = following ? context.l10n.settingsUnfollow : context.l10n.settingsFollow;
+    final following =
+        followingStatus == 'accepted' || followingStatus == 'pending';
+    final label =
+        following ? context.l10n.settingsUnfollow : context.l10n.settingsFollow;
     final fields = profile.fields;
     return Card(
       child: Padding(
@@ -248,18 +266,28 @@ class _ProfileHeader extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(profile.displayName, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                      Text(profile.displayName,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 16)),
                       const SizedBox(height: 2),
                       Text(
-                        profile.preferredUsername.isNotEmpty ? '@${profile.preferredUsername}' : profile.id,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                        profile.preferredUsername.isNotEmpty
+                            ? '@${profile.preferredUsername}'
+                            : profile.id,
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(179)),
                       ),
                       if (profile.url.trim().isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
                             profile.url,
-                            style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12),
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontSize: 12),
                           ),
                         ),
                     ],
@@ -271,16 +299,26 @@ class _ProfileHeader extends StatelessWidget {
                     FilledButton(
                       onPressed: followBusy ? null : onToggleFollow,
                       child: followBusy
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : Text(label),
                     ),
                     const SizedBox(height: 6),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (followersCount != null) _StatChip(label: context.l10n.profileFollowers, value: followersCount!),
-                        if (followersCount != null && followingCount != null) const SizedBox(width: 6),
-                        if (followingCount != null) _StatChip(label: context.l10n.profileFollowing, value: followingCount!),
+                        if (followersCount != null)
+                          _StatChip(
+                              label: context.l10n.profileFollowers,
+                              value: followersCount!),
+                        if (followersCount != null && followingCount != null)
+                          const SizedBox(width: 6),
+                        if (followingCount != null)
+                          _StatChip(
+                              label: context.l10n.profileFollowing,
+                              value: followingCount!),
                       ],
                     ),
                   ],
@@ -329,9 +367,13 @@ class _StatChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withAlpha(120),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
+        border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant.withAlpha(120)),
       ),
       child: Text(
         '$label $value',

@@ -28,10 +28,14 @@ class MfmCodec {
 
   static String _applyInlineFormatting(String input) {
     var out = input;
-    out = out.replaceAllMapped(RegExp(r'`([^`]+)`'), (m) => '<code>${m[1]}</code>');
-    out = out.replaceAllMapped(RegExp(r'\*\*([^*]+)\*\*'), (m) => '<strong>${m[1]}</strong>');
-    out = out.replaceAllMapped(RegExp(r'~~([^~]+)~~'), (m) => '<del>${m[1]}</del>');
-    out = out.replaceAllMapped(RegExp(r'\*([^*]+)\*'), (m) => '<em>${m[1]}</em>');
+    out = out.replaceAllMapped(
+        RegExp(r'`([^`]+)`'), (m) => '<code>${m[1]}</code>');
+    out = out.replaceAllMapped(
+        RegExp(r'\*\*([^*]+)\*\*'), (m) => '<strong>${m[1]}</strong>');
+    out = out.replaceAllMapped(
+        RegExp(r'~~([^~]+)~~'), (m) => '<del>${m[1]}</del>');
+    out =
+        out.replaceAllMapped(RegExp(r'\*([^*]+)\*'), (m) => '<em>${m[1]}</em>');
     return out;
   }
 }

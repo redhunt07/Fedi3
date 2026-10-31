@@ -27,6 +27,7 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _loading = false;
+  bool _pendingIncremental = false;
   String? _error;
   String? _cursor;
   final _items = <Map<String, dynamic>>[];
@@ -54,7 +55,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
       if (running && (!_lastRunning || configChanged)) {
         _coreUnreachable = false;
-        if (mounted) _refresh();
+        if (mounted) {
+          // H-53: keep the list and cursor when resuming; only the first load
+          // resets the paging state.
+          if (_items.isEmpty) {
+            _refresh();
+          } else {
+            _refreshIncremental();
+          }
+        }
         _startStream();
       }
       _lastRunning = running;
@@ -91,7 +100,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 350), () {
         if (!mounted) return;
-        if (widget.appState.isRunning) _refresh();
+        if (widget.appState.isRunning) _refreshIncremental();
         widget.appState.incrementUnreadNotifications();
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
@@ -125,10 +134,50 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     widget.appState.clearUnreadNotifications();
   }
 
+  /// H-53/AW-11: fetch page 1 and merge unseen items at the head without
+  /// clearing the existing list or resetting the pagination cursor.
+  Future<void> _refreshIncremental() async {
+    if (_loading) {
+      // H-53/AW-11: a notification can arrive while the first page is loading;
+      // remember it so the merge is not silently dropped.
+      _pendingIncremental = true;
+      return;
+    }
+    if (!widget.appState.isRunning) return;
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final api = CoreApi(config: cfg);
+    try {
+      final resp = await api.fetchNotifications(limit: 50);
+      final items = (resp['items'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        final known = _items
+            .map((m) => m['id']?.toString() ?? '')
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        final fresh = items
+            .where((m) => !known.contains(m['id']?.toString() ?? ''))
+            .toList();
+        _items.insertAll(0, fresh);
+        final next = (resp['next'] as String?)?.trim();
+        if (_cursor == null && next != null && next.isNotEmpty) {
+          _cursor = next;
+        }
+      });
+    } catch (_) {
+      // Best-effort: keep showing the current list on transient failures.
+    }
+  }
+
   Future<void> _markSeenNow() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final prefs = widget.appState.prefs;
-    await widget.appState.savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
+    await widget.appState
+        .savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
   }
 
   Future<void> _loadMore() async {
@@ -154,7 +203,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       });
     } catch (e) {
       final msg = e.toString();
-      if (msg.contains('SocketException') || msg.contains('Connection refused') || msg.contains('errno = 1225')) {
+      if (msg.contains('SocketException') ||
+          msg.contains('Connection refused') ||
+          msg.contains('errno = 1225')) {
         if (mounted) {
           setState(() {
             _coreUnreachable = true;
@@ -167,7 +218,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (!mounted) return;
       setState(() => _error = msg);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        if (_pendingIncremental) {
+          _pendingIncremental = false;
+          unawaited(_refreshIncremental());
+        }
+      }
     }
   }
 
@@ -191,7 +248,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   bool _matchesFilter(Map<String, dynamic> item) {
     if (_filter == 'all') return true;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     return switch (_filter) {
       'mentions' => type == 'Create',
@@ -221,7 +280,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(context.l10n.notificationsCoreNotRunning, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.notificationsCoreNotRunning,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         FilledButton(
                           onPressed: () async {
@@ -230,14 +291,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             if (widget.appState.isRunning) {
                               await _refresh();
                             } else if (widget.appState.lastError != null) {
-                              setState(() => _error = widget.appState.lastError);
+                              setState(
+                                  () => _error = widget.appState.lastError);
                             }
                           },
                           child: Text(context.l10n.coreStart),
                         ),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
-                          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                          Text(_error!,
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error)),
                         ],
                       ],
                     ),
@@ -255,7 +319,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             title: Text(context.l10n.notificationsTitle),
             actions: [
               IconButton(
-                tooltip: 'Mark all read',
+                tooltip: context.l10n.notificationsMarkAllRead,
                 onPressed: () async {
                   await _markSeenNow();
                   widget.appState.clearUnreadNotifications();
@@ -263,7 +327,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 },
                 icon: const Icon(Icons.mark_email_read_outlined),
               ),
-              IconButton(onPressed: _loading ? null : _refresh, icon: const Icon(Icons.refresh)),
+              IconButton(
+                  onPressed: _loading ? null : _refresh,
+                  icon: const Icon(Icons.refresh)),
             ],
           ),
           body: RefreshIndicator(
@@ -276,32 +342,32 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   runSpacing: 6,
                   children: [
                     ChoiceChip(
-                      label: const Text('All'),
+                      label: Text(context.l10n.notificationsFilterAll),
                       selected: _filter == 'all',
                       onSelected: (_) => setState(() => _filter = 'all'),
                     ),
                     ChoiceChip(
-                      label: const Text('Mentions'),
+                      label: Text(context.l10n.notificationsFilterMentions),
                       selected: _filter == 'mentions',
                       onSelected: (_) => setState(() => _filter = 'mentions'),
                     ),
                     ChoiceChip(
-                      label: const Text('Reactions'),
+                      label: Text(context.l10n.notificationsFilterReactions),
                       selected: _filter == 'reactions',
                       onSelected: (_) => setState(() => _filter = 'reactions'),
                     ),
                     ChoiceChip(
-                      label: const Text('Follows'),
+                      label: Text(context.l10n.notificationsFilterFollows),
                       selected: _filter == 'follows',
                       onSelected: (_) => setState(() => _filter = 'follows'),
                     ),
                     ChoiceChip(
-                      label: const Text('Boosts'),
+                      label: Text(context.l10n.notificationsFilterBoosts),
                       selected: _filter == 'boosts',
                       onSelected: (_) => setState(() => _filter = 'boosts'),
                     ),
                     ChoiceChip(
-                      label: const Text('Likes'),
+                      label: Text(context.l10n.notificationsFilterLikes),
                       selected: _filter == 'likes',
                       onSelected: (_) => setState(() => _filter = 'likes'),
                     ),
@@ -329,7 +395,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         ? const CircularProgressIndicator()
                         : OutlinedButton(
                             onPressed: canLoadMore ? _loadMore : null,
-                            child: Text(canLoadMore ? context.l10n.listLoadMore : context.l10n.listEnd),
+                            child: Text(canLoadMore
+                                ? context.l10n.listLoadMore
+                                : context.l10n.listEnd),
                           ),
                   ),
                 ),
@@ -350,12 +418,17 @@ class _NotificationItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ts = (item['ts'] is num) ? (item['ts'] as num).toInt() : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final ts = (item['ts'] is num)
+        ? (item['ts'] as num).toInt()
+        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     final actor = (activity['actor'] as String?)?.trim() ?? '';
     final label = _labelFor(context, type);
-    final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
+    final when =
+        ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
 
     return Column(
       children: [
@@ -369,21 +442,34 @@ class _NotificationItem extends StatelessWidget {
                   children: [
                     _iconFor(type),
                     const SizedBox(width: 8),
-                    Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w800))),
+                    Expanded(
+                        child: Text(label,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800))),
                     if (when != null)
                       Text(
                         '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(128),
+                            fontSize: 12),
                       ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 if (type == 'Create')
-                  TimelineActivityCard(appState: appState, activity: activity, elevated: true)
+                  TimelineActivityCard(
+                      appState: appState, activity: activity, elevated: true)
                 else
                   Text(
                     _shortText(activity),
-                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                    style: TextStyle(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(179)),
                   ),
                 if (type == 'Follow' || type == 'Create') ...[
                   const SizedBox(height: 8),
@@ -396,22 +482,31 @@ class _NotificationItem extends StatelessWidget {
                             try {
                               await api.follow(actor);
                               if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Followed back')));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text(context
+                                          .l10n.notificationsFollowedBack)));
                             } catch (e) {
                               if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Follow back failed: $e')));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text(context.l10n
+                                          .notificationsFollowBackFailed(
+                                              e.toString()))));
                             }
                           },
-                          child: const Text('Follow back'),
+                          child: Text(context.l10n.notificationsFollowBack),
                         ),
                       if (type == 'Create')
                         TextButton(
                           onPressed: () {
                             Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => NoteDetailScreen(appState: appState, activity: activity)),
+                              MaterialPageRoute(
+                                  builder: (_) => NoteDetailScreen(
+                                      appState: appState, activity: activity)),
                             );
                           },
-                          child: const Text('Reply'),
+                          child: Text(context.l10n.notificationsReply),
                         ),
                     ],
                   ),

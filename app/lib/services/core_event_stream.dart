@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../model/core_config.dart';
+import '../core/core_http.dart';
 
 class CoreEvent {
   CoreEvent({
@@ -26,7 +27,9 @@ class CoreEvent {
   static CoreEvent? tryParse(Map<String, dynamic> json) {
     final kind = json['kind']?.toString().trim() ?? '';
     if (kind.isEmpty) return null;
-    final ts = (json['ts_ms'] is num) ? (json['ts_ms'] as num).toInt() : int.tryParse(json['ts_ms']?.toString() ?? '') ?? 0;
+    final ts = (json['ts_ms'] is num)
+        ? (json['ts_ms'] as num).toInt()
+        : int.tryParse(json['ts_ms']?.toString() ?? '') ?? 0;
     return CoreEvent(
       kind: kind,
       tsMs: ts,
@@ -37,10 +40,19 @@ class CoreEvent {
 }
 
 class CoreEventStream {
-  CoreEventStream({required this.config});
+  CoreEventStream({required this.config, http.Client? client})
+      : _client = client;
 
   final CoreConfig config;
+  final http.Client? _client;
 
+  http.Client get _http => _client ?? CoreHttp.client;
+
+  /// Opens the SSE stream.
+  ///
+  /// H-50/AN-08..10: the connection has a bounded timeout, malformed frames are
+  /// dropped without killing the stream, and network errors propagate so the
+  /// caller can reconnect with backoff.
   Stream<CoreEvent> stream({String? kind}) async* {
     final base = config.localBaseUri;
     final uri = base.replace(
@@ -50,40 +62,45 @@ class CoreEventStream {
       },
     );
 
-    final client = http.Client();
+    final req = http.Request('GET', uri);
+    if (config.internalToken.trim().isNotEmpty) {
+      req.headers['X-Fedi3-Internal'] = config.internalToken.trim();
+    }
+    req.headers['Accept'] = 'text/event-stream';
+
+    final resp = await _http.send(req).timeout(CoreHttp.totalTimeout);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw StateError('stream failed: ${resp.statusCode}');
+    }
+
+    var dataBuf = '';
+    await for (final line in resp.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())) {
+      if (line.startsWith('data:')) {
+        dataBuf += line.substring('data:'.length).trimLeft();
+        continue;
+      }
+      if (line.isEmpty) {
+        if (dataBuf.isNotEmpty) {
+          final ev = _tryParseFrame(dataBuf);
+          if (ev != null) yield ev;
+          dataBuf = '';
+        }
+        continue;
+      }
+    }
+  }
+
+  CoreEvent? _tryParseFrame(String data) {
     try {
-      final req = http.Request('GET', uri);
-      if (config.internalToken.trim().isNotEmpty) {
-        req.headers['X-Fedi3-Internal'] = config.internalToken.trim();
-      }
-      req.headers['Accept'] = 'text/event-stream';
-
-      final resp = await client.send(req);
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        throw StateError('stream failed: ${resp.statusCode}');
-      }
-
-      var dataBuf = '';
-      await for (final line in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
-        if (line.startsWith('data:')) {
-          dataBuf += line.substring('data:'.length).trimLeft();
-          continue;
-        }
-        if (line.isEmpty) {
-          if (dataBuf.isNotEmpty) {
-            final json = jsonDecode(dataBuf);
-            if (json is Map) {
-              final ev = CoreEvent.tryParse(json.cast<String, dynamic>());
-              if (ev != null) yield ev;
-            }
-            dataBuf = '';
-          }
-          continue;
-        }
-      }
-    } finally {
-      client.close();
+      final json = jsonDecode(data);
+      if (json is! Map) return null;
+      return CoreEvent.tryParse(json.cast<String, dynamic>());
+    } on FormatException {
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 }
-

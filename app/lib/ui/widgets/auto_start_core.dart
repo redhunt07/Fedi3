@@ -20,10 +20,13 @@ class AutoStartCore extends StatefulWidget {
 
 class _AutoStartCoreState extends State<AutoStartCore> {
   bool _started = false;
+  bool _wasRunning = false;
 
   @override
   void initState() {
     super.initState();
+    widget.appState.addListener(_onStateChanged);
+    _wasRunning = widget.appState.isRunning;
     _kick();
   }
 
@@ -31,9 +34,31 @@ class _AutoStartCoreState extends State<AutoStartCore> {
   void didUpdateWidget(covariant AutoStartCore oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.appState != widget.appState) {
+      oldWidget.appState.removeListener(_onStateChanged);
+      widget.appState.addListener(_onStateChanged);
       _started = false;
+      _wasRunning = widget.appState.isRunning;
       _kick();
     } else {
+      _kick();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.appState.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    final running = widget.appState.isRunning;
+    if (_wasRunning && !running) {
+      // H-51/P0-12: the core died (crash, stop from another screen, watchdog).
+      // Reset the latch so the auto-start can run again.
+      _started = false;
+    }
+    _wasRunning = running;
+    if (!running && !_started) {
       _kick();
     }
   }
@@ -47,10 +72,12 @@ class _AutoStartCoreState extends State<AutoStartCore> {
     if (cfg == null) return;
     if (widget.appState.isRunning) {
       _started = true;
+      _wasRunning = true;
       return;
     }
     _started = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       widget.appState.startCore();
     });
   }

@@ -4,8 +4,9 @@
  */
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+
+import '../../core/core_http.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../model/ui_prefs.dart';
@@ -50,7 +51,8 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
       final peerSet = <String>{};
       for (final base in _bootstrapRelays) {
         final relaysUri = Uri.parse(base).replace(path: '/_fedi3/relay/relays');
-        final relaysResp = await http.get(relaysUri);
+        final relaysResp =
+            await CoreHttp.client.get(relaysUri).timeout(CoreHttp.totalTimeout);
         if (relaysResp.statusCode >= 200 && relaysResp.statusCode < 300) {
           final json = jsonDecode(relaysResp.body);
           if (json is Map) {
@@ -68,7 +70,8 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
           }
         }
         final peersUri = Uri.parse(base).replace(path: '/_fedi3/relay/peers');
-        final peersResp = await http.get(peersUri);
+        final peersResp =
+            await CoreHttp.client.get(peersUri).timeout(CoreHttp.totalTimeout);
         if (peersResp.statusCode >= 200 && peersResp.statusCode < 300) {
           final json = jsonDecode(peersResp.body);
           if (json is Map) {
@@ -139,7 +142,9 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => OnboardingScreen(appState: widget.appState, mode: OnboardingMode.loginExisting),
+                        builder: (_) => OnboardingScreen(
+                            appState: widget.appState,
+                            mode: OnboardingMode.loginExisting),
                       ),
                     );
                   },
@@ -155,7 +160,9 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => OnboardingScreen(appState: widget.appState, mode: OnboardingMode.createNew),
+                        builder: (_) => OnboardingScreen(
+                            appState: widget.appState,
+                            mode: OnboardingMode.createNew),
                       ),
                     );
                   },
@@ -183,10 +190,16 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
         child: ListView(
           shrinkWrap: true,
           children: [
-            ListTile(title: Text(context.l10n.uiLanguageSystem), onTap: () => Navigator.pop(context, '')),
+            ListTile(
+                title: Text(context.l10n.uiLanguageSystem),
+                onTap: () => Navigator.pop(context, '')),
             const Divider(height: 1),
-            ListTile(title: const Text('English'), onTap: () => Navigator.pop(context, 'en')),
-            ListTile(title: const Text('Italiano'), onTap: () => Navigator.pop(context, 'it')),
+            ListTile(
+                title: const Text('English'),
+                onTap: () => Navigator.pop(context, 'en')),
+            ListTile(
+                title: const Text('Italiano'),
+                onTap: () => Navigator.pop(context, 'it')),
           ],
         ),
       ),
@@ -206,12 +219,16 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
               children: [
                 const Icon(Icons.public),
                 const SizedBox(width: 8),
-                Text(context.l10n.firstRunRelayPreviewTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(context.l10n.firstRunRelayPreviewTitle,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
                 const Spacer(),
                 IconButton(
                   onPressed: _loadingPreview ? null : _loadPreview,
                   icon: _loadingPreview
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.refresh),
                 ),
               ],
@@ -220,7 +237,8 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: NetworkErrorCard(
-                  message: _previewError ?? context.l10n.firstRunRelayPreviewError,
+                  message:
+                      _previewError ?? context.l10n.firstRunRelayPreviewError,
                   onRetry: _loadPreview,
                   compact: true,
                 ),
@@ -232,13 +250,18 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
               if (_relayPreview.isEmpty)
                 Text(
                   context.l10n.firstRunRelayPreviewEmpty,
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(160)),
                 )
               else
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: _relayPreview.map((r) => Chip(label: Text(r))).toList(),
+                  children:
+                      _relayPreview.map((r) => Chip(label: Text(r))).toList(),
                 ),
               const SizedBox(height: 8),
               Text(context.l10n.firstRunRelayPreviewPeers),
@@ -246,13 +269,18 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
               if (_peerPreview.isEmpty)
                 Text(
                   context.l10n.firstRunRelayPreviewEmpty,
-                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(160)),
                 )
               else
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: _peerPreview.map((p) => Chip(label: Text(p))).toList(),
+                  children:
+                      _peerPreview.map((p) => Chip(label: Text(p))).toList(),
                 ),
             ],
           ],

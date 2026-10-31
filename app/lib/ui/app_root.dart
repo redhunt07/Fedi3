@@ -26,8 +26,10 @@ class AppRoot extends StatelessWidget {
         final prefs = appState.prefs;
         return MaterialApp(
           onGenerateTitle: (context) => AppLocalizations.of(context)!.appTitle,
-          theme: MisskeyTheme.light(accent: prefs.accentColor, density: prefs.visualDensity),
-          darkTheme: MisskeyTheme.dark(accent: prefs.accentColor, density: prefs.visualDensity),
+          theme: MisskeyTheme.light(
+              accent: prefs.accentColor, density: prefs.visualDensity),
+          darkTheme: MisskeyTheme.dark(
+              accent: prefs.accentColor, density: prefs.visualDensity),
           themeMode: prefs.flutterThemeMode,
           locale: prefs.flutterLocale,
           localizationsDelegates: const [
@@ -49,7 +51,8 @@ class AppRoot extends StatelessWidget {
           },
           home: appState.config == null
               ? FirstRunScreen(appState: appState)
-              : AutoStartCore(appState: appState, child: Shell(appState: appState)),
+              : AutoStartCore(
+                  appState: appState, child: Shell(appState: appState)),
         );
       },
     );

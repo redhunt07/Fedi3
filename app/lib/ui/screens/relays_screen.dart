@@ -39,7 +39,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
   void initState() {
     super.initState();
     _refresh();
-    _peerRefresh = Timer.periodic(const Duration(seconds: 10), (_) => _refreshPeers());
+    _peerRefresh =
+        Timer.periodic(const Duration(seconds: 10), (_) => _refreshPeers());
   }
 
   @override
@@ -115,7 +116,9 @@ class _RelaysScreenState extends State<RelaysScreen> {
       appBar: AppBar(
         title: Text(context.l10n.relaysTitle),
         actions: [
-          IconButton(onPressed: _loading ? null : _refresh, icon: const Icon(Icons.refresh)),
+          IconButton(
+              onPressed: _loading ? null : _refresh,
+              icon: const Icon(Icons.refresh)),
         ],
       ),
       body: ListView(
@@ -147,12 +150,18 @@ class _RelaysScreenState extends State<RelaysScreen> {
             _coverageCard(context, _coverage!),
           ],
           const SizedBox(height: 10),
-          Text(context.l10n.relaysKnown, style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.l10n.relaysKnown,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          if (_loading) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+          if (_loading)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator())),
           for (final r in (_relays ?? const [])) _relayTile(context, r as Map),
           const SizedBox(height: 16),
-          Text(context.l10n.relaysPeersTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.l10n.relaysPeersTitle,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           TextField(
             decoration: InputDecoration(
@@ -168,13 +177,20 @@ class _RelaysScreenState extends State<RelaysScreen> {
           ),
           const SizedBox(height: 8),
           if (_loading || _loadingPeers)
-            const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
-          if (!_loading && !_loadingPeers && (_peers == null || _peers!.isEmpty))
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator())),
+          if (!_loading &&
+              !_loadingPeers &&
+              (_peers == null || _peers!.isEmpty))
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Text(
                 context.l10n.relaysPeersEmpty,
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+                style: TextStyle(
+                    color:
+                        Theme.of(context).colorScheme.onSurface.withAlpha(160)),
               ),
             ),
           for (final p in (_peers ?? const []))
@@ -185,7 +201,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
                   (p as Map)['username']?.toString() ?? '',
                   (p)['online'] == true,
                 ),
-                title: Text((p as Map)['username']?.toString() ?? ''),
+                title: Text(p['username']?.toString() ?? ''),
                 subtitle: Text((p)['actor_url']?.toString() ?? ''),
                 trailing: Text((p)['peer_id']?.toString() ?? ''),
               ),
@@ -210,7 +226,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(url),
-            if (isRecommended) Chip(label: Text(context.l10n.relaysRecommended)),
+            if (isRecommended)
+              Chip(label: Text(context.l10n.relaysRecommended)),
           ],
         ),
         subtitle: Column(
@@ -273,15 +290,20 @@ class _RelaysScreenState extends State<RelaysScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(context.l10n.relaysCoverageTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.l10n.relaysCoverageTitle,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            Text(context.l10n.relaysCoverageUsers(indexed.toInt(), total.toInt())),
+            Text(context.l10n
+                .relaysCoverageUsers(indexed.toInt(), total.toInt())),
             const SizedBox(height: 8),
             LinearProgressIndicator(value: ratio),
             const SizedBox(height: 6),
             Text(
-              context.l10n.relaysCoverageLast(coverage['last_index_ms']?.toString() ?? '-'),
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+              context.l10n.relaysCoverageLast(
+                  coverage['last_index_ms']?.toString() ?? '-'),
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                  fontSize: 12),
             ),
           ],
         ),

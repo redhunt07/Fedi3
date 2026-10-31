@@ -25,7 +25,8 @@ typedef _StartDart = int Function(
   ffi.Pointer<ffi.Pointer<ffi.Char>>,
 );
 
-typedef _StopNative = ffi.Int32 Function(ffi.Uint64, ffi.Pointer<ffi.Pointer<ffi.Char>>);
+typedef _StopNative = ffi.Int32 Function(
+    ffi.Uint64, ffi.Pointer<ffi.Pointer<ffi.Char>>);
 typedef _StopDart = int Function(int, ffi.Pointer<ffi.Pointer<ffi.Char>>);
 
 ffi.DynamicLibrary _openCoreLibrary() {
@@ -98,12 +99,26 @@ ffi.DynamicLibrary _openFirstExisting(List<String> candidates) {
       lastError = e;
     }
   }
-  throw StateError('Unable to load fedi3_core library. Tried: $candidates. Last error: $lastError');
+  throw StateError(
+      'Unable to load fedi3_core library. Tried: $candidates. Last error: $lastError');
 }
 
-class Fedi3Core {
+/// Testable seam over the native core. Tests inject a fake implementation.
+abstract class CoreRuntime {
+  /// Starts the core and returns its handle.
+  ///
+  /// Contract (P0-11): `fedi3_core_start` returns 0 only once the server is
+  /// listening, so a normal return means the core is ready.
+  int startJson(String configJson);
+
+  /// Stops the core behind [handle].
+  void stop(int handle);
+}
+
+class Fedi3Core implements CoreRuntime {
   Fedi3Core._(this._lib)
-      : _version = _lib.lookupFunction<_VersionNative, _VersionDart>('fedi3_core_version'),
+      : _version = _lib
+            .lookupFunction<_VersionNative, _VersionDart>('fedi3_core_version'),
         _stringFree = _lib.lookupFunction<_StringFreeNative, _StringFreeDart>(
           'fedi3_core_string_free',
         );
@@ -111,10 +126,13 @@ class Fedi3Core {
   final ffi.DynamicLibrary _lib;
   final _VersionDart _version;
   final _StringFreeDart _stringFree;
-  late final _StartDart _start = _lib.lookupFunction<_StartNative, _StartDart>('fedi3_core_start');
-  late final _StopDart _stop = _lib.lookupFunction<_StopNative, _StopDart>('fedi3_core_stop');
+  late final _StartDart _start =
+      _lib.lookupFunction<_StartNative, _StartDart>('fedi3_core_start');
+  late final _StopDart _stop =
+      _lib.lookupFunction<_StopNative, _StopDart>('fedi3_core_stop');
   late final _StringFreeDart _freeCString =
-      _lib.lookupFunction<_StringFreeNative, _StringFreeDart>('fedi3_core_free_cstring');
+      _lib.lookupFunction<_StringFreeNative, _StringFreeDart>(
+          'fedi3_core_free_cstring');
 
   static final Fedi3Core instance = Fedi3Core._(_openCoreLibrary());
 
@@ -127,6 +145,7 @@ class Fedi3Core {
     }
   }
 
+  @override
   int startJson(String configJson) {
     final cfgPtr = configJson.toNativeUtf8().cast<ffi.Char>();
     final outHandle = calloc<ffi.Uint64>();
@@ -135,7 +154,9 @@ class Fedi3Core {
       final rc = _start(cfgPtr, outHandle, outErr);
       if (rc != 0) {
         final errPtr = outErr.value;
-        final msg = errPtr == ffi.nullptr ? 'unknown error (rc=$rc)' : errPtr.cast<Utf8>().toDartString();
+        final msg = errPtr == ffi.nullptr
+            ? 'unknown error (rc=$rc)'
+            : errPtr.cast<Utf8>().toDartString();
         if (errPtr != ffi.nullptr) _freeCString(errPtr);
         throw StateError('core start failed: $msg');
       }
@@ -147,13 +168,16 @@ class Fedi3Core {
     }
   }
 
+  @override
   void stop(int handle) {
     final outErr = calloc<ffi.Pointer<ffi.Char>>();
     try {
       final rc = _stop(handle, outErr);
       if (rc != 0) {
         final errPtr = outErr.value;
-        final msg = errPtr == ffi.nullptr ? 'unknown error (rc=$rc)' : errPtr.cast<Utf8>().toDartString();
+        final msg = errPtr == ffi.nullptr
+            ? 'unknown error (rc=$rc)'
+            : errPtr.cast<Utf8>().toDartString();
         if (errPtr != ffi.nullptr) _freeCString(errPtr);
         throw StateError('core stop failed: $msg');
       }

@@ -55,11 +55,14 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _relayToken = TextEditingController(text: cfg.relayToken);
     _bind = TextEditingController(text: cfg.bind);
     _internalToken = TextEditingController(text: cfg.internalToken);
-    _p2pRelayReserve = TextEditingController(text: cfg.p2pRelayReserve.join('\n'));
+    _p2pRelayReserve =
+        TextEditingController(text: cfg.p2pRelayReserve.join('\n'));
     _p2pEnable = cfg.p2pEnable;
     _webrtcIceUrls = TextEditingController(text: cfg.webrtcIceUrls.join('\n'));
-    _webrtcIceUsername = TextEditingController(text: cfg.webrtcIceUsername ?? '');
-    _webrtcIceCredential = TextEditingController(text: cfg.webrtcIceCredential ?? '');
+    _webrtcIceUsername =
+        TextEditingController(text: cfg.webrtcIceUsername ?? '');
+    _webrtcIceCredential =
+        TextEditingController(text: cfg.webrtcIceCredential ?? '');
     _webrtcEnable = cfg.webrtcEnable;
     _postDeliveryMode = cfg.postDeliveryMode;
     _seedRelayOptions(cfg.publicBaseUrl);
@@ -123,25 +126,27 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           _field(context.l10n.onboardingRelayToken, _relayToken),
           _field(context.l10n.onboardingBind, _bind),
           _field(context.l10n.onboardingInternalToken, _internalToken),
-          _field('P2P relay reserve (multiaddr, una per riga)', _p2pRelayReserve, maxLines: 3),
+          _field(context.l10n.p2pRelayReserveLabel, _p2pRelayReserve,
+              maxLines: 3),
           SwitchListTile(
             title: Text(context.l10n.onboardingEnableP2p),
             value: _p2pEnable,
             onChanged: (v) => setState(() => _p2pEnable = v),
           ),
           DropdownButtonFormField<String>(
-            value: _postDeliveryMode,
-            decoration: const InputDecoration(
-              labelText: 'Modalità consegna post',
+            initialValue: _postDeliveryMode,
+            key: ValueKey(_postDeliveryMode),
+            decoration: InputDecoration(
+              labelText: context.l10n.postDeliveryModeLabel,
             ),
-            items: const [
+            items: [
               DropdownMenuItem(
                 value: CoreConfig.postDeliveryP2pRelay,
-                child: Text('P2P + Relay (fallback dopo 5s)'),
+                child: Text(context.l10n.postDeliveryP2pRelay),
               ),
               DropdownMenuItem(
                 value: CoreConfig.postDeliveryP2pOnly,
-                child: Text('Solo P2P (mai relay)'),
+                child: Text(context.l10n.postDeliveryP2pOnly),
               ),
             ],
             onChanged: (value) {
@@ -151,25 +156,27 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           ),
           const SizedBox(height: 6),
           SwitchListTile(
-            title: const Text('WebRTC (ICE/TURN)'),
-            subtitle: const Text('Usa TURN/STUN come fallback P2P (consigliato)'),
+            title: Text(context.l10n.webrtcSectionTitle),
+            subtitle: Text(context.l10n.webrtcSectionHint),
             value: _webrtcEnable,
             onChanged: (v) => setState(() => _webrtcEnable = v),
           ),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () => setState(() => _autofillNetworkingDefaults(force: true)),
+              onPressed: () =>
+                  setState(() => _autofillNetworkingDefaults(force: true)),
               icon: const Icon(Icons.bolt),
-              label: const Text('Auto-popola ICE da relay'),
+              label: Text(context.l10n.webrtcAutofill),
             ),
           ),
-          _field('WebRTC ICE URLs (una per riga)', _webrtcIceUrls, maxLines: 3),
-          _field('WebRTC ICE username', _webrtcIceUsername),
-          _field('WebRTC ICE credential', _webrtcIceCredential),
+          _field(context.l10n.webrtcIceUrlsLabel, _webrtcIceUrls, maxLines: 3),
+          _field(context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
+          _field(context.l10n.webrtcIceCredentialLabel, _webrtcIceCredential),
           const SizedBox(height: 12),
           OutlinedButton(
-            onPressed: () => setState(() => _internalToken.text = CoreConfig.randomToken()),
+            onPressed: () =>
+                setState(() => _internalToken.text = CoreConfig.randomToken()),
             child: Text(context.l10n.editAccountRegenerateInternal),
           ),
         ],
@@ -177,7 +184,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController controller, {int maxLines = 1}) {
+  Widget _field(String label, TextEditingController controller,
+      {int maxLines = 1}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
@@ -194,7 +202,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(context.l10n.onboardingRelaySelect, style: Theme.of(context).textTheme.labelLarge),
+          Text(context.l10n.onboardingRelaySelect,
+              style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -204,7 +213,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
                   items: _relayOptions
                       .map((r) => DropdownMenuItem(
                             value: r,
-                            child: Text(r.label, overflow: TextOverflow.ellipsis),
+                            child:
+                                Text(r.label, overflow: TextOverflow.ellipsis),
                           ))
                       .toList(),
                   onChanged: _discovering
@@ -223,15 +233,24 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
               const SizedBox(width: 10),
               FilledButton.icon(
                 onPressed: _discovering ? null : _discoverRelays,
-                icon: _discovering ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.public),
-                label: Text(_discovering ? context.l10n.onboardingRelayDiscovering : context.l10n.onboardingRelayDiscover),
+                icon: _discovering
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.public),
+                label: Text(_discovering
+                    ? context.l10n.onboardingRelayDiscovering
+                    : context.l10n.onboardingRelayDiscover),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
             context.l10n.onboardingRelayListHint,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                fontSize: 12),
           ),
         ],
       ),
@@ -306,9 +325,17 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final publicUrl = uri
+        .replace(scheme: scheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final wsScheme = scheme == 'https' ? 'wss' : 'ws';
-    final wsUrl = uri.replace(scheme: wsScheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final wsUrl = uri
+        .replace(scheme: wsScheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,
@@ -336,11 +363,14 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
     _autofillP2pRelayReserve(force: force, domain: domain);
   }
 
-  Future<void> _autofillP2pRelayReserve({required bool force, required String domain}) async {
+  Future<void> _autofillP2pRelayReserve(
+      {required bool force, required String domain}) async {
     if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
       return;
     }
-    final base = _publicBaseUrl.text.trim().isNotEmpty ? _publicBaseUrl.text.trim() : 'https://$domain';
+    final base = _publicBaseUrl.text.trim().isNotEmpty
+        ? _publicBaseUrl.text.trim()
+        : 'https://$domain';
     final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
     if (uri == null) return;
     try {
@@ -391,8 +421,12 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toList(),
-      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty ? null : _webrtcIceUsername.text.trim(),
-      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty ? null : _webrtcIceCredential.text.trim(),
+      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty
+          ? null
+          : _webrtcIceUsername.text.trim(),
+      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty
+          ? null
+          : _webrtcIceCredential.text.trim(),
       apRelays: widget.appState.config?.apRelays ?? const [],
       displayName: widget.appState.config?.displayName ?? '',
       summary: widget.appState.config?.summary ?? '',
@@ -401,7 +435,8 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       imageUrl: widget.appState.config?.imageUrl ?? '',
       imageMediaType: widget.appState.config?.imageMediaType ?? '',
       profileFields: widget.appState.config?.profileFields ?? const [],
-      manuallyApprovesFollowers: widget.appState.config?.manuallyApprovesFollowers ?? false,
+      manuallyApprovesFollowers:
+          widget.appState.config?.manuallyApprovesFollowers ?? false,
       blockedDomains: widget.appState.config?.blockedDomains ?? const [],
       blockedActors: widget.appState.config?.blockedActors ?? const [],
       postDeliveryMode: _postDeliveryMode,
@@ -410,8 +445,15 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       previousRelayToken: widget.appState.config?.previousRelayToken,
     );
 
-    await widget.appState.stopCore();
-    await widget.appState.saveConfig(cfg);
+    try {
+      await widget.appState.replaceConfig(cfg);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.err(e.toString()))),
+      );
+      return;
+    }
     if (!context.mounted) return;
     Navigator.of(context).pop();
   }

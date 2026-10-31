@@ -28,20 +28,23 @@ class NetworkErrorCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.cloud_off_outlined, color: Theme.of(context).colorScheme.error),
+            Icon(Icons.cloud_off_outlined,
+                color: Theme.of(context).colorScheme.error),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(l10n.networkErrorTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text(l10n.networkErrorTitle,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
                   Text(l10n.networkErrorHint),
                   if (message != null && message!.trim().isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
                       message!,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error),
                     ),
                   ],
                   if (onRetry != null) ...[

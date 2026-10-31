@@ -35,11 +35,17 @@ class TelemetryEvent {
     final tsRaw = raw['ts']?.toString();
     final type = raw['type']?.toString().trim();
     final message = raw['message']?.toString().trim();
-    if (tsRaw == null || type == null || type.isEmpty || message == null || message.isEmpty) {
+    if (tsRaw == null ||
+        type == null ||
+        type.isEmpty ||
+        message == null ||
+        message.isEmpty) {
       return null;
     }
     final ts = DateTime.tryParse(tsRaw) ?? DateTime.now();
-    final data = raw['data'] is Map ? Map<String, dynamic>.from(raw['data'] as Map) : null;
+    final data = raw['data'] is Map
+        ? Map<String, dynamic>.from(raw['data'] as Map)
+        : null;
     return TelemetryEvent(ts: ts, type: type, message: message, data: data);
   }
 }
@@ -55,7 +61,8 @@ class TelemetryService {
   }
 
   static bool get enabled => _prefsGetter?.call().telemetryEnabled ?? false;
-  static bool get monitoringEnabled => _prefsGetter?.call().clientMonitoringEnabled ?? false;
+  static bool get monitoringEnabled =>
+      _prefsGetter?.call().clientMonitoringEnabled ?? false;
 
   static Future<void> record(
     String type,
@@ -126,7 +133,8 @@ class TelemetryService {
     if (!await file.exists()) return null;
     final dir = await getTemporaryDirectory();
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
-    final out = File('${dir.path}${Platform.pathSeparator}fedi3-telemetry-$ts.log');
+    final out =
+        File('${dir.path}${Platform.pathSeparator}fedi3-telemetry-$ts.log');
     await file.copy(out.path);
     return out;
   }
@@ -141,7 +149,8 @@ class TelemetryService {
   static Future<String?> _resolveLogPath() async {
     try {
       final dir = await getApplicationSupportDirectory();
-      final telemetryDir = Directory('${dir.path}${Platform.pathSeparator}telemetry');
+      final telemetryDir =
+          Directory('${dir.path}${Platform.pathSeparator}telemetry');
       if (!await telemetryDir.exists()) {
         await telemetryDir.create(recursive: true);
       }

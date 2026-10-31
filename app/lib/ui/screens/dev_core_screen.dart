@@ -54,7 +54,8 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
           Card(
             child: ListTile(
               title: Text(context.l10n.devCoreConfigSaved),
-              subtitle: Text(const JsonEncoder.withIndent('  ').convert(cfg.toCoreStartJson())),
+              subtitle: Text(const JsonEncoder.withIndent('  ')
+                  .convert(cfg.toCoreStartJson())),
             ),
           ),
           const SizedBox(height: 12),
@@ -63,11 +64,13 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
             runSpacing: 10,
             children: [
               FilledButton(
-                onPressed: running ? null : () async => widget.appState.startCore(),
+                onPressed:
+                    running ? null : () async => widget.appState.startCore(),
                 child: Text(context.l10n.devCoreStart),
               ),
               OutlinedButton(
-                onPressed: running ? () async => widget.appState.stopCore() : null,
+                onPressed:
+                    running ? () async => widget.appState.stopCore() : null,
                 child: Text(context.l10n.devCoreStop),
               ),
               OutlinedButton(
@@ -78,7 +81,10 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
           ),
           if (_migrationJson.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Card(child: Padding(padding: const EdgeInsets.all(12), child: Text(_migrationJson))),
+            Card(
+                child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(_migrationJson))),
           ],
         ],
       ),
@@ -99,7 +105,8 @@ class _DevCoreScreenState extends State<DevCoreScreen> {
       final base = cfg.localBaseUri;
       final uri = base.replace(path: '/_fedi3/migration/status');
       final r = await _getJson(uri, cfg.internalToken);
-      setState(() => _migrationJson = const JsonEncoder.withIndent('  ').convert(r));
+      setState(
+          () => _migrationJson = const JsonEncoder.withIndent('  ').convert(r));
     } catch (e) {
       setState(() => _migrationJson = context.l10n.settingsErr(e.toString()));
     }

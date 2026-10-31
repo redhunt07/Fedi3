@@ -41,6 +41,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   String? _draftStatus;
   final _media = <_PickedMedia>[];
   bool _restoredDraft = false;
+  bool _hasText = false;
   Timer? _draftDebounce;
 
   @override
@@ -48,12 +49,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
     super.initState();
     _loadDraft();
     _loadDirectRecent();
+    _text.addListener(_onTextChanged);
     _text.addListener(_scheduleDraftSave);
   }
 
   @override
   void dispose() {
     _draftDebounce?.cancel();
+    _text.removeListener(_onTextChanged);
     _text.removeListener(_scheduleDraftSave);
     _text.dispose();
     _cw.dispose();
@@ -76,11 +79,16 @@ class _ComposeScreenState extends State<ComposeScreen> {
     return Shortcuts(
       shortcuts: {
         // Windows/Linux.
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.enter): const _SubmitComposeIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.numpadEnter): const _SubmitComposeIntent(),
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.enter):
+            const _SubmitComposeIntent(),
+        LogicalKeySet(
+                LogicalKeyboardKey.control, LogicalKeyboardKey.numpadEnter):
+            const _SubmitComposeIntent(),
         // macOS.
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.enter): const _SubmitComposeIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.numpadEnter): const _SubmitComposeIntent(),
+        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.enter):
+            const _SubmitComposeIntent(),
+        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.numpadEnter):
+            const _SubmitComposeIntent(),
       },
       child: Actions(
         actions: {
@@ -97,169 +105,205 @@ class _ComposeScreenState extends State<ComposeScreen> {
           body: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-          if (!widget.appState.isRunning)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  context.l10n.composeCoreNotRunning(context.l10n.navSettings, context.l10n.devCoreStart),
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            ),
-          TextField(
-            controller: _text,
-            minLines: 5,
-            maxLines: 12,
-            decoration: InputDecoration(labelText: context.l10n.composeWhatsHappening),
-          ),
-          if (_draftStatus != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _draftStatus!,
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              OutlinedButton.icon(
-                onPressed: widget.appState.isRunning ? _addMediaFromPath : null,
-                icon: const Icon(Icons.attach_file),
-                label: Text(context.l10n.composeAddMediaPath),
-              ),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final picked = await EmojiPicker.show(context, prefs: widget.appState.prefs);
-                  if (picked == null) return;
-                  _insertEmoji(_text, picked);
-                  await EmojiRecentStore.add(picked);
-                },
-                icon: const Icon(Icons.emoji_emotions_outlined),
-                label: Text(context.l10n.composeEmojiButton),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => MfmCheatsheet.show(context),
-                icon: const Icon(Icons.text_snippet_outlined),
-                label: Text(context.l10n.composeMfmCheatsheet),
-              ),
-              FilterChip(
-                label: Text(context.l10n.composeContentWarningTitle),
-                selected: _cwEnabled,
-                onSelected: (v) {
-                  setState(() => _cwEnabled = v);
-                  _scheduleDraftSave();
-                },
-              ),
-              FilterChip(
-                label: Text(context.l10n.composeSensitiveMediaTitle),
-                selected: _sensitive,
-                onSelected: (v) {
-                  setState(() => _sensitive = v);
-                  _scheduleDraftSave();
-                },
-              ),
-              PopupMenuButton<String>(
-                tooltip: context.l10n.composeVisibilityTitle,
-                onSelected: (v) {
-                  setState(() => _visibility = v);
-                  _scheduleDraftSave();
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(value: 'public', child: Text(context.l10n.composeVisibilityPublic)),
-                  PopupMenuItem(value: 'home', child: Text(context.l10n.composeVisibilityHome)),
-                  PopupMenuItem(value: 'followers', child: Text(context.l10n.composeVisibilityFollowers)),
-                  PopupMenuItem(value: 'direct', child: Text(context.l10n.composeVisibilityDirect)),
-                ],
-                icon: Icon(
-                  _visibility == 'public'
-                      ? Icons.public
-                      : _visibility == 'home'
-                          ? Icons.home_outlined
-                          : _visibility == 'direct'
-                              ? Icons.mail_outline
-                              : Icons.lock_outline,
-                ),
-              ),
-              OutlinedButton.icon(
-                onPressed: _posting ? null : _clearDraft,
-                icon: const Icon(Icons.delete_outline),
-                label: Text(context.l10n.composeClearDraft),
-              ),
-              FilledButton.icon(
-                onPressed: widget.appState.isRunning && !_posting ? () => _post(api) : null,
-                icon: const Icon(Icons.send),
-                label: Text(context.l10n.composePost),
-              ),
-            ],
-          ),
-          if (_cwEnabled) ...[
-            const SizedBox(height: 10),
-            TextField(
-              controller: _cw,
-              decoration: InputDecoration(labelText: context.l10n.composeContentWarningTextLabel),
-              onChanged: (_) => _scheduleDraftSave(),
-            ),
-          ],
-          if (_visibility == 'direct') ...[
-            const SizedBox(height: 10),
-            _DirectRecipientField(
-              controller: _directTo,
-              recent: _directRecent,
-              label: context.l10n.composeVisibilityDirectLabel,
-              hint: context.l10n.composeVisibilityDirectHint,
-              onChanged: _scheduleDraftSave,
-            ),
-          ],
-          const SizedBox(height: 10),
-          TextField(
-            controller: _filePath,
-            decoration: InputDecoration(
-              labelText: context.l10n.composeMediaFilePathLabel,
-              hintText: context.l10n.composeMediaFilePathHint,
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (_status != null)
-            Text(
-              _status!,
-              style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
-            ),
-          if (_media.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(context.l10n.composeAttachments, style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            for (var i = 0; i < _media.length; i++)
-              Card(
-                child: ListTile(
-                  title: Text(_media[i].name),
-                  subtitle: Text(
-                    _media[i].coreMediaId == null ? context.l10n.composeNotUploaded : context.l10n.composeMediaId(_media[i].coreMediaId!),
+              if (!widget.appState.isRunning)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      context.l10n.composeCoreNotRunning(
+                          context.l10n.navSettings, context.l10n.devCoreStart),
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Move up',
-                        onPressed: _posting || i == 0 ? null : () => setState(() => _swapMedia(i, i - 1)),
-                        icon: const Icon(Icons.keyboard_arrow_up),
-                      ),
-                      IconButton(
-                        tooltip: 'Move down',
-                        onPressed: _posting || i == _media.length - 1 ? null : () => setState(() => _swapMedia(i, i + 1)),
-                        icon: const Icon(Icons.keyboard_arrow_down),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: _posting ? null : () => setState(() => _media.removeAt(i)),
-                      ),
+                ),
+              TextField(
+                controller: _text,
+                minLines: 5,
+                maxLines: 12,
+                decoration: InputDecoration(
+                    labelText: context.l10n.composeWhatsHappening),
+              ),
+              if (_draftStatus != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _draftStatus!,
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(160),
+                      fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed:
+                        widget.appState.isRunning ? _addMediaFromPath : null,
+                    icon: const Icon(Icons.attach_file),
+                    label: Text(context.l10n.composeAddMediaPath),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final picked = await EmojiPicker.show(context,
+                          prefs: widget.appState.prefs);
+                      if (picked == null) return;
+                      _insertEmoji(_text, picked);
+                      await EmojiRecentStore.add(picked);
+                    },
+                    icon: const Icon(Icons.emoji_emotions_outlined),
+                    label: Text(context.l10n.composeEmojiButton),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => MfmCheatsheet.show(context),
+                    icon: const Icon(Icons.text_snippet_outlined),
+                    label: Text(context.l10n.composeMfmCheatsheet),
+                  ),
+                  FilterChip(
+                    label: Text(context.l10n.composeContentWarningTitle),
+                    selected: _cwEnabled,
+                    onSelected: (v) {
+                      setState(() => _cwEnabled = v);
+                      _scheduleDraftSave();
+                    },
+                  ),
+                  FilterChip(
+                    label: Text(context.l10n.composeSensitiveMediaTitle),
+                    selected: _sensitive,
+                    onSelected: (v) {
+                      setState(() => _sensitive = v);
+                      _scheduleDraftSave();
+                    },
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: context.l10n.composeVisibilityTitle,
+                    onSelected: (v) {
+                      setState(() => _visibility = v);
+                      _scheduleDraftSave();
+                    },
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                          value: 'public',
+                          child: Text(context.l10n.composeVisibilityPublic)),
+                      PopupMenuItem(
+                          value: 'home',
+                          child: Text(context.l10n.composeVisibilityHome)),
+                      PopupMenuItem(
+                          value: 'followers',
+                          child: Text(context.l10n.composeVisibilityFollowers)),
+                      PopupMenuItem(
+                          value: 'direct',
+                          child: Text(context.l10n.composeVisibilityDirect)),
                     ],
+                    icon: Icon(
+                      _visibility == 'public'
+                          ? Icons.public
+                          : _visibility == 'home'
+                              ? Icons.home_outlined
+                              : _visibility == 'direct'
+                                  ? Icons.mail_outline
+                                  : Icons.lock_outline,
+                    ),
                   ),
+                  OutlinedButton.icon(
+                    onPressed: _posting ? null : _clearDraft,
+                    icon: const Icon(Icons.delete_outline),
+                    label: Text(context.l10n.composeClearDraft),
+                  ),
+                  FilledButton.icon(
+                    // AW-06: an empty post cannot be submitted.
+                    onPressed:
+                        widget.appState.isRunning && !_posting && _hasText
+                            ? () => _post(api)
+                            : null,
+                    icon: const Icon(Icons.send),
+                    label: Text(context.l10n.composePost),
+                  ),
+                ],
+              ),
+              if (_cwEnabled) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _cw,
+                  decoration: InputDecoration(
+                      labelText: context.l10n.composeContentWarningTextLabel),
+                  onChanged: (_) => _scheduleDraftSave(),
+                ),
+              ],
+              if (_visibility == 'direct') ...[
+                const SizedBox(height: 10),
+                _DirectRecipientField(
+                  controller: _directTo,
+                  recent: _directRecent,
+                  label: context.l10n.composeVisibilityDirectLabel,
+                  hint: context.l10n.composeVisibilityDirectHint,
+                  onChanged: _scheduleDraftSave,
+                ),
+              ],
+              const SizedBox(height: 10),
+              TextField(
+                controller: _filePath,
+                decoration: InputDecoration(
+                  labelText: context.l10n.composeMediaFilePathLabel,
+                  hintText: context.l10n.composeMediaFilePathHint,
                 ),
               ),
-          ],
+              const SizedBox(height: 12),
+              if (_status != null)
+                Text(
+                  _status!,
+                  style: TextStyle(
+                      color: _status!.startsWith('OK')
+                          ? null
+                          : Theme.of(context).colorScheme.error),
+                ),
+              if (_media.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(context.l10n.composeAttachments,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                for (var i = 0; i < _media.length; i++)
+                  Card(
+                    child: ListTile(
+                      title: Text(_media[i].name),
+                      subtitle: Text(
+                        _media[i].coreMediaId == null
+                            ? context.l10n.composeNotUploaded
+                            : context.l10n
+                                .composeMediaId(_media[i].coreMediaId!),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Move up',
+                            onPressed: _posting || i == 0
+                                ? null
+                                : () => setState(() => _swapMedia(i, i - 1)),
+                            icon: const Icon(Icons.keyboard_arrow_up),
+                          ),
+                          IconButton(
+                            tooltip: 'Move down',
+                            onPressed: _posting || i == _media.length - 1
+                                ? null
+                                : () => setState(() => _swapMedia(i, i + 1)),
+                            icon: const Icon(Icons.keyboard_arrow_down),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: _posting
+                                ? null
+                                : () => setState(() => _media.removeAt(i)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ],
           ),
         ),
@@ -267,10 +311,18 @@ class _ComposeScreenState extends State<ComposeScreen> {
     );
   }
 
+  void _onTextChanged() {
+    final hasText = _text.text.trim().isNotEmpty;
+    if (hasText != _hasText && mounted) {
+      setState(() => _hasText = hasText);
+    }
+  }
+
   Future<void> _loadDraft() async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final draft = await DraftStore.read(username: cfg.username, domain: cfg.domain);
+    final draft =
+        await DraftStore.read(username: cfg.username, domain: cfg.domain);
     if (!mounted || draft == null) return;
     final hasText = draft.text.trim().isNotEmpty;
     if (!hasText) return;
@@ -313,7 +365,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
         directTo: directTo,
         updatedAtMs: now.millisecondsSinceEpoch,
       );
-      await DraftStore.write(username: cfg.username, domain: cfg.domain, draft: draft);
+      await DraftStore.write(
+          username: cfg.username, domain: cfg.domain, draft: draft);
       if (!mounted) return;
       setState(() {
         _draftStatus = context.l10n.composeDraftSaved;
@@ -345,11 +398,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
       final bytes = await file.readAsBytes();
       final name = path.split(RegExp(r'[\\/]+')).last;
       setState(() {
-        _media.add(_PickedMedia(name: name.isEmpty ? context.l10n.composeFileFallback : name, bytes: bytes));
+        _media.add(_PickedMedia(
+            name: name.isEmpty ? context.l10n.composeFileFallback : name,
+            bytes: bytes));
         _filePath.clear();
       });
     } catch (e) {
-      setState(() => _status = context.l10n.composeErrUnableReadFile(e.toString()));
+      setState(
+          () => _status = context.l10n.composeErrUnableReadFile(e.toString()));
     }
   }
 
@@ -381,7 +437,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
           mediaIds.add(id);
         }
       }
-      final content = MfmCodec.hasMarkers(text) ? MfmCodec.toHtml(text) : text;
+      // D4/H-62: the outbox content is text/html, so plain text must be
+      // escaped and wrapped in HTML even when no MFM marker is present.
+      final content = MfmCodec.toHtml(text);
       await api.postNote(
         content: content,
         public: _visibility == 'public',
@@ -437,7 +495,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
     );
     _scheduleDraftSave();
   }
-
 }
 
 class _DirectRecipientField extends StatelessWidget {

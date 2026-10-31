@@ -24,6 +24,33 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- P0-04: the embedded core speaks plain HTTP on the loopback interface.
+	     NSAllowsLocalNetworking is scoped to local hosts instead of allowing
+	     arbitrary insecure loads. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- M-08: usage descriptions are mandatory when the plugins touch these
+	     resources; without them iOS kills the app on first access. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Fedi3 uses the camera to take photos and videos to attach to your posts.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Fedi3 accesses your photo library to attach images and videos to your posts.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Fedi3 uses the microphone when recording videos for your posts.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.fedi3.client</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fedi3</string>
+			</array>
+		</dict>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

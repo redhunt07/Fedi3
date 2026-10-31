@@ -53,7 +53,9 @@ class _MentionPillState extends State<MentionPill> {
   void _openProfile() {
     final url = widget.actorUrl.trim();
     if (url.isEmpty) return;
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: url)));
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) =>
+            ProfileScreen(appState: widget.appState, actorUrl: url)));
   }
 
   @override
@@ -67,7 +69,10 @@ class _MentionPillState extends State<MentionPill> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(140),
+          color: Theme.of(context)
+              .colorScheme
+              .surfaceContainerHighest
+              .withAlpha(140),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(

@@ -43,7 +43,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadThreads(reset: true));
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _loadThreads(reset: true));
     _markSeen();
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -78,7 +79,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _markSeen() async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    await widget.appState.savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
+    await widget.appState
+        .savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
     widget.appState.clearUnreadChats();
   }
 
@@ -129,7 +131,8 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     try {
       final api = CoreApi(config: cfg);
-      final resp = await api.fetchChatThreads(cursor: reset ? null : _next, limit: 50);
+      final resp =
+          await api.fetchChatThreads(cursor: reset ? null : _next, limit: 50);
       final items = reset ? <ChatThreadItem>[] : List.of(_threads);
       final raw = resp['items'];
       if (raw is List) {
@@ -251,7 +254,10 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
     if (_threads.isEmpty) {
-      return ListView(children: [const SizedBox(height: 120), Center(child: Text(context.l10n.chatThreadsEmpty))]);
+      return ListView(children: [
+        const SizedBox(height: 120),
+        Center(child: Text(context.l10n.chatThreadsEmpty))
+      ]);
     }
     final pinnedIds = widget.appState.prefs.pinnedChatThreads.toSet();
     final pinned = <ChatThreadItem>[];
@@ -282,13 +288,17 @@ class _ChatScreenState extends State<ChatScreen> {
         final thread = all[index];
         final name = thread.title?.trim().isNotEmpty == true
             ? thread.title!.trim()
-            : (thread.kind == 'dm' ? context.l10n.chatDirectMessage : context.l10n.chatGroup);
+            : (thread.kind == 'dm'
+                ? context.l10n.chatDirectMessage
+                : context.l10n.chatGroup);
         final preview = thread.lastMessagePreview?.trim().isNotEmpty == true
             ? thread.lastMessagePreview!.trim()
             : context.l10n.chatNoMessages;
         final ts = thread.lastMessageMs ?? thread.updatedAtMs;
-        final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts) : DateTime.now();
-        final seenMs = widget.appState.prefs.chatThreadSeenMs[thread.threadId] ?? 0;
+        final when =
+            ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts) : DateTime.now();
+        final seenMs =
+            widget.appState.prefs.chatThreadSeenMs[thread.threadId] ?? 0;
         final isUnread = ts > seenMs;
         final isPinned = pinnedIds.contains(thread.threadId);
         return ListTile(
@@ -298,7 +308,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 const Icon(Icons.push_pin, size: 16),
                 const SizedBox(width: 6),
               ],
-              Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+              Expanded(
+                  child:
+                      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
               if (isUnread)
                 Container(
                   width: 8,
@@ -343,8 +355,10 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Wrap(
             children: [
               ListTile(
-                leading: Icon(pinned ? Icons.push_pin_outlined : Icons.push_pin),
-                title: Text(pinned ? context.l10n.chatUnpin : context.l10n.chatPin),
+                leading:
+                    Icon(pinned ? Icons.push_pin_outlined : Icons.push_pin),
+                title: Text(
+                    pinned ? context.l10n.chatUnpin : context.l10n.chatPin),
                 onTap: () => Navigator.of(context).pop('pin'),
               ),
             ],
@@ -360,7 +374,8 @@ class _ChatScreenState extends State<ChatScreen> {
         nextPinned.add(thread.threadId);
       }
     }
-    await widget.appState.savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
+    await widget.appState
+        .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
     if (mounted) setState(() {});
   }
 }
@@ -455,7 +470,8 @@ class _NewChatDialogState extends State<_NewChatDialog> {
       for (final p in parts) {
         resolved.add(await api.resolveActorInput(p));
       }
-      final resp = await api.sendChatMessage(recipients: resolved, text: message);
+      final resp =
+          await api.sendChatMessage(recipients: resolved, text: message);
       final createdId = resp['thread_id']?.toString();
       if (createdId == null || createdId.isEmpty) {
         throw StateError(l10n.chatNewFailed);
@@ -501,7 +517,8 @@ class _NewChatDialogState extends State<_NewChatDialog> {
                   constraints: const BoxConstraints(maxHeight: 160),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
                   ),
                   child: ListView.separated(
                     shrinkWrap: true,
@@ -511,16 +528,20 @@ class _NewChatDialogState extends State<_NewChatDialog> {
                       final profile = _suggestions[index];
                       return ListTile(
                         dense: true,
-                        title: Text(profile.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(profile.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        title: Text(profile.displayName,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(profile.id,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
                         onTap: () {
                           final raw = _recipientsCtrl.text;
                           final parts = raw.split(RegExp(r'[,\n]'));
                           final last = parts.isNotEmpty ? parts.last : '';
-                          final prefix = raw.substring(0, raw.length - last.length);
+                          final prefix =
+                              raw.substring(0, raw.length - last.length);
                           final next = '$prefix${profile.id}, ';
                           _recipientsCtrl.text = next;
-                          _recipientsCtrl.selection = TextSelection.fromPosition(
+                          _recipientsCtrl.selection =
+                              TextSelection.fromPosition(
                             TextPosition(offset: next.length),
                           );
                           setState(() => _suggestions = const []);
@@ -542,7 +563,8 @@ class _NewChatDialogState extends State<_NewChatDialog> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ],
           ],
         ),
@@ -555,7 +577,10 @@ class _NewChatDialogState extends State<_NewChatDialog> {
         FilledButton(
           onPressed: _sending ? null : _submit,
           child: _sending
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
               : Text(context.l10n.chatCreate),
         ),
       ],

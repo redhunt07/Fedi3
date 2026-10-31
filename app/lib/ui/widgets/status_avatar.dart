@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n_ext.dart';
 import '../../state/peer_presence_store.dart';
 
 class StatusAvatar extends StatelessWidget {
@@ -57,6 +58,7 @@ class StatusAvatar extends StatelessWidget {
       borderRadius: BorderRadius.circular(size / 2),
       child: Image.network(
         u,
+        semanticLabel: context.l10n.semanticsAvatar,
         width: size,
         height: size,
         fit: BoxFit.cover,
@@ -85,13 +87,18 @@ class _StatusDot extends StatelessWidget {
     return Positioned(
       right: -1,
       bottom: -1,
-      child: Container(
-        width: dot,
-        height: dot,
-        decoration: BoxDecoration(
-          color: online ? Colors.green : Colors.grey,
-          shape: BoxShape.circle,
-          border: Border.all(color: border, width: 2),
+      child: Semantics(
+        label: online
+            ? context.l10n.statusConnectedShort
+            : context.l10n.statusDisconnectedShort,
+        child: Container(
+          width: dot,
+          height: dot,
+          decoration: BoxDecoration(
+            color: online ? Colors.green : Colors.grey,
+            shape: BoxShape.circle,
+            border: Border.all(color: border, width: 2),
+          ),
         ),
       ),
     );

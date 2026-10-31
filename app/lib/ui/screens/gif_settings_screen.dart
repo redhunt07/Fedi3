@@ -51,7 +51,12 @@ class _GifSettingsScreenState extends State<GifSettingsScreen> {
                     children: [
                       Text(
                         context.l10n.gifProviderHint,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(160),
+                            fontSize: 12),
                       ),
                     ],
                   ),
@@ -64,13 +69,15 @@ class _GifSettingsScreenState extends State<GifSettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(context.l10n.gifApiKeyLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(context.l10n.gifApiKeyLabel,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _keyCtrl,
                         focusNode: _keyFocus,
                         obscureText: true,
-                        onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(gifApiKey: v.trim())),
+                        onChanged: (v) => widget.appState
+                            .savePrefs(prefs.copyWith(gifApiKey: v.trim())),
                         decoration: InputDecoration(
                           hintText: context.l10n.gifApiKeyHint,
                           border: const OutlineInputBorder(),
@@ -81,12 +88,18 @@ class _GifSettingsScreenState extends State<GifSettingsScreen> {
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(
                             context.l10n.gifSettingsDefaultHint,
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(150), fontSize: 12),
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(150),
+                                fontSize: 12),
                           ),
                         ),
                       if (prefs.gifApiKey.trim().isEmpty)
                         TextButton(
-                          onPressed: () => widget.appState.savePrefs(prefs.copyWith(gifApiKey: _defaultGiphyKey)),
+                          onPressed: () => widget.appState.savePrefs(
+                              prefs.copyWith(gifApiKey: _defaultGiphyKey)),
                           child: Text(context.l10n.gifSettingsUseDefault),
                         ),
                     ],

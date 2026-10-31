@@ -1,4 +1,4 @@
-package com.example.fedi3
+package org.fedi3.client
 
 import io.flutter.embedding.android.FlutterActivity
 

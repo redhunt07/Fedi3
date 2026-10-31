@@ -29,4 +29,3 @@ String formatTimeAgo(BuildContext context, DateTime when, {DateTime? now}) {
   final years = (days / 365).floor().clamp(1, 1000);
   return context.l10n.timeAgoYears(years);
 }
-

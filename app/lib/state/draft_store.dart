@@ -45,16 +45,22 @@ class ComposeDraft {
       isPublic: isPublic,
       summary: (json['summary'] as String? ?? ''),
       sensitive: json['sensitive'] == true,
-      visibility: (visibility == null || visibility.isEmpty) ? (isPublic ? 'public' : 'followers') : visibility,
+      visibility: (visibility == null || visibility.isEmpty)
+          ? (isPublic ? 'public' : 'followers')
+          : visibility,
       directTo: (json['directTo'] as String? ?? ''),
-      updatedAtMs: (json['updatedAtMs'] is num) ? (json['updatedAtMs'] as num).toInt() : 0,
+      updatedAtMs: (json['updatedAtMs'] is num)
+          ? (json['updatedAtMs'] as num).toInt()
+          : 0,
     );
   }
 }
 
 class DraftStore {
-  static Future<File> _file({required String username, required String domain}) async {
-    String safe(String v) => v.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9._-]+'), '_');
+  static Future<File> _file(
+      {required String username, required String domain}) async {
+    String safe(String v) =>
+        v.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9._-]+'), '_');
     final u = safe(username);
     final d = safe(domain);
     final dir = await getApplicationSupportDirectory();
@@ -62,7 +68,8 @@ class DraftStore {
     return File('${dir.path}${Platform.pathSeparator}$name');
   }
 
-  static Future<ComposeDraft?> read({required String username, required String domain}) async {
+  static Future<ComposeDraft?> read(
+      {required String username, required String domain}) async {
     try {
       final f = await _file(username: username, domain: domain);
       if (!await f.exists()) return null;
@@ -76,13 +83,17 @@ class DraftStore {
     }
   }
 
-  static Future<void> write({required String username, required String domain, required ComposeDraft draft}) async {
+  static Future<void> write(
+      {required String username,
+      required String domain,
+      required ComposeDraft draft}) async {
     final f = await _file(username: username, domain: domain);
     await f.parent.create(recursive: true);
     await f.writeAsString(jsonEncode(draft.toJson()));
   }
 
-  static Future<void> clear({required String username, required String domain}) async {
+  static Future<void> clear(
+      {required String username, required String domain}) async {
     try {
       final f = await _file(username: username, domain: domain);
       if (await f.exists()) {

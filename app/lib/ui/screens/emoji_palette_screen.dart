@@ -96,7 +96,8 @@ class _EmojiPaletteScreenState extends State<EmojiPaletteScreen> {
             for (var i = 0; i < _palette.length; i++)
               Card(
                 child: ListTile(
-                  title: Text(_palette[i], style: const TextStyle(fontSize: 22)),
+                  title:
+                      Text(_palette[i], style: const TextStyle(fontSize: 22)),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -107,7 +108,9 @@ class _EmojiPaletteScreenState extends State<EmojiPaletteScreen> {
                       ),
                       IconButton(
                         tooltip: 'Move down',
-                        onPressed: i == _palette.length - 1 ? null : () => _swap(i, i + 1),
+                        onPressed: i == _palette.length - 1
+                            ? null
+                            : () => _swap(i, i + 1),
                         icon: const Icon(Icons.keyboard_arrow_down),
                       ),
                       IconButton(

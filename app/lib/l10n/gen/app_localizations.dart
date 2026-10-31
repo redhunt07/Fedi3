@@ -608,6 +608,18 @@ abstract class AppLocalizations {
   /// **'React'**
   String get chatReact;
 
+  /// No description provided for @chatDeleteThread.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete chat'**
+  String get chatDeleteThread;
+
+  /// No description provided for @chatDeleteThreadHint.
+  ///
+  /// In en, this message translates to:
+  /// **'This will delete the entire chat thread for everyone.'**
+  String get chatDeleteThreadHint;
+
   /// No description provided for @chatPin.
   ///
   /// In en, this message translates to:
@@ -883,6 +895,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Hide'**
   String get noteHideContent;
+
+  /// No description provided for @noteActions.
+  ///
+  /// In en, this message translates to:
+  /// **'Actions'**
+  String get noteActions;
+
+  /// No description provided for @noteEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get noteEdit;
+
+  /// No description provided for @noteDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get noteDelete;
+
+  /// No description provided for @noteDeleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Note deleted'**
+  String get noteDeleted;
+
+  /// No description provided for @noteEditTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit note'**
+  String get noteEditTitle;
+
+  /// No description provided for @noteEditContentHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit content'**
+  String get noteEditContentHint;
+
+  /// No description provided for @noteEditSummaryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Content warning (optional)'**
+  String get noteEditSummaryHint;
+
+  /// No description provided for @noteSensitiveLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Sensitive content'**
+  String get noteSensitiveLabel;
+
+  /// No description provided for @noteEditSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get noteEditSave;
+
+  /// No description provided for @noteEditMissingAudience.
+  ///
+  /// In en, this message translates to:
+  /// **'Missing audience'**
+  String get noteEditMissingAudience;
+
+  /// No description provided for @noteDeleteTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete note'**
+  String get noteDeleteTitle;
+
+  /// No description provided for @noteDeleteHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to delete this note?'**
+  String get noteDeleteHint;
+
+  /// No description provided for @noteDeleteConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get noteDeleteConfirm;
+
+  /// No description provided for @noteDeleteMissingAudience.
+  ///
+  /// In en, this message translates to:
+  /// **'Missing audience'**
+  String get noteDeleteMissingAudience;
 
   /// No description provided for @timeAgoJustNow.
   ///
@@ -2935,6 +3031,300 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Preview'**
   String get uiEmojiPickerPreviewLabel;
+
+  /// No description provided for @p2pRelayReserveLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'P2P relay reserve (multiaddr, one per line)'**
+  String get p2pRelayReserveLabel;
+
+  /// No description provided for @postDeliveryModeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Post delivery mode'**
+  String get postDeliveryModeLabel;
+
+  /// No description provided for @postDeliveryP2pRelay.
+  ///
+  /// In en, this message translates to:
+  /// **'P2P + Relay (fallback after 5s)'**
+  String get postDeliveryP2pRelay;
+
+  /// No description provided for @postDeliveryP2pOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'P2P only (never relay)'**
+  String get postDeliveryP2pOnly;
+
+  /// No description provided for @webrtcSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'WebRTC (ICE/TURN)'**
+  String get webrtcSectionTitle;
+
+  /// No description provided for @webrtcSectionHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Use TURN/STUN as P2P fallback (recommended)'**
+  String get webrtcSectionHint;
+
+  /// No description provided for @webrtcAutofill.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto-fill ICE from relay'**
+  String get webrtcAutofill;
+
+  /// No description provided for @webrtcIceUrlsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'WebRTC ICE URLs (one per line)'**
+  String get webrtcIceUrlsLabel;
+
+  /// No description provided for @webrtcIceUsernameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'WebRTC ICE username'**
+  String get webrtcIceUsernameLabel;
+
+  /// No description provided for @webrtcIceCredentialLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'WebRTC ICE credential'**
+  String get webrtcIceCredentialLabel;
+
+  /// No description provided for @fileTypeJson.
+  ///
+  /// In en, this message translates to:
+  /// **'JSON'**
+  String get fileTypeJson;
+
+  /// No description provided for @notificationsMarkAllRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark all read'**
+  String get notificationsMarkAllRead;
+
+  /// No description provided for @notificationsFilterAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get notificationsFilterAll;
+
+  /// No description provided for @notificationsFilterMentions.
+  ///
+  /// In en, this message translates to:
+  /// **'Mentions'**
+  String get notificationsFilterMentions;
+
+  /// No description provided for @notificationsFilterReactions.
+  ///
+  /// In en, this message translates to:
+  /// **'Reactions'**
+  String get notificationsFilterReactions;
+
+  /// No description provided for @notificationsFilterFollows.
+  ///
+  /// In en, this message translates to:
+  /// **'Follows'**
+  String get notificationsFilterFollows;
+
+  /// No description provided for @notificationsFilterBoosts.
+  ///
+  /// In en, this message translates to:
+  /// **'Boosts'**
+  String get notificationsFilterBoosts;
+
+  /// No description provided for @notificationsFilterLikes.
+  ///
+  /// In en, this message translates to:
+  /// **'Likes'**
+  String get notificationsFilterLikes;
+
+  /// No description provided for @notificationsFollowedBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Followed back'**
+  String get notificationsFollowedBack;
+
+  /// No description provided for @notificationsFollowBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow back'**
+  String get notificationsFollowBack;
+
+  /// No description provided for @notificationsFollowBackFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow back failed: {error}'**
+  String notificationsFollowBackFailed(String error);
+
+  /// No description provided for @notificationsReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get notificationsReply;
+
+  /// No description provided for @timelineFiltersTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Filters'**
+  String get timelineFiltersTooltip;
+
+  /// No description provided for @timelineFiltersTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Filters'**
+  String get timelineFiltersTitle;
+
+  /// No description provided for @timelineFilterMedia.
+  ///
+  /// In en, this message translates to:
+  /// **'Media'**
+  String get timelineFilterMedia;
+
+  /// No description provided for @timelineFilterReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get timelineFilterReply;
+
+  /// No description provided for @timelineFilterBoost.
+  ///
+  /// In en, this message translates to:
+  /// **'Boost'**
+  String get timelineFilterBoost;
+
+  /// No description provided for @timelineFilterMention.
+  ///
+  /// In en, this message translates to:
+  /// **'Mention'**
+  String get timelineFilterMention;
+
+  /// No description provided for @mediaDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get mediaDownload;
+
+  /// No description provided for @mediaShare.
+  ///
+  /// In en, this message translates to:
+  /// **'Share'**
+  String get mediaShare;
+
+  /// No description provided for @mediaAutoplayOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Autoplay on'**
+  String get mediaAutoplayOn;
+
+  /// No description provided for @mediaAutoplayOff.
+  ///
+  /// In en, this message translates to:
+  /// **'Autoplay off'**
+  String get mediaAutoplayOff;
+
+  /// No description provided for @mediaMuted.
+  ///
+  /// In en, this message translates to:
+  /// **'Muted'**
+  String get mediaMuted;
+
+  /// No description provided for @mediaSoundOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Sound on'**
+  String get mediaSoundOn;
+
+  /// No description provided for @mediaOpenInBrowser.
+  ///
+  /// In en, this message translates to:
+  /// **'Open in browser'**
+  String get mediaOpenInBrowser;
+
+  /// No description provided for @mediaDownloaded.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloaded'**
+  String get mediaDownloaded;
+
+  /// No description provided for @mediaDownloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Download failed: {error}'**
+  String mediaDownloadFailed(String error);
+
+  /// No description provided for @noteThreadMuted.
+  ///
+  /// In en, this message translates to:
+  /// **'Thread muted'**
+  String get noteThreadMuted;
+
+  /// No description provided for @noteUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get noteUnmute;
+
+  /// No description provided for @noteLinkCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Link copied'**
+  String get noteLinkCopied;
+
+  /// No description provided for @noteUsers.
+  ///
+  /// In en, this message translates to:
+  /// **'Users'**
+  String get noteUsers;
+
+  /// No description provided for @noteReactionsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reactions {label}'**
+  String noteReactionsTitle(String label);
+
+  /// No description provided for @semanticsAvatar.
+  ///
+  /// In en, this message translates to:
+  /// **'Avatar'**
+  String get semanticsAvatar;
+
+  /// No description provided for @semanticsMedia.
+  ///
+  /// In en, this message translates to:
+  /// **'Media attachment'**
+  String get semanticsMedia;
+
+  /// No description provided for @onboardingErrUsername.
+  ///
+  /// In en, this message translates to:
+  /// **'Username must be 1-64 characters: letters, digits or underscore.'**
+  String get onboardingErrUsername;
+
+  /// No description provided for @onboardingErrDomain.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid domain (e.g. example.com).'**
+  String get onboardingErrDomain;
+
+  /// No description provided for @onboardingErrPublicUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Public URL must be an absolute http(s) URL.'**
+  String get onboardingErrPublicUrl;
+
+  /// No description provided for @onboardingErrRelayWs.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay WebSocket URL must start with ws:// or wss://.'**
+  String get onboardingErrRelayWs;
+
+  /// No description provided for @onboardingErrBind.
+  ///
+  /// In en, this message translates to:
+  /// **'Bind address must be host:port (e.g. 127.0.0.1:8788).'**
+  String get onboardingErrBind;
 }
 
 class _AppLocalizationsDelegate

@@ -8,7 +8,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 class NotificationService {
   NotificationService._();
 
-  static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  static final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   static bool _ready = false;
 
   static Future<void> init() async {
@@ -26,7 +27,8 @@ class NotificationService {
     _ready = true;
   }
 
-  static Future<void> showChatNotification({required String title, required String body}) async {
+  static Future<void> showChatNotification(
+      {required String title, required String body}) async {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(

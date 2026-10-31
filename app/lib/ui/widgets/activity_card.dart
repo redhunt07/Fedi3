@@ -12,6 +12,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
+import '../utils/open_url.dart';
 import 'status_avatar.dart';
 
 class ActivityCard extends StatefulWidget {
@@ -45,7 +46,8 @@ class _ActivityCardState extends State<ActivityCard> {
   @override
   void didUpdateWidget(covariant ActivityCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if ((oldWidget.activity['actor'] as String?) != (widget.activity['actor'] as String?)) {
+    if ((oldWidget.activity['actor'] as String?) !=
+        (widget.activity['actor'] as String?)) {
       _actor = null;
       _loadActor();
     }
@@ -93,10 +95,14 @@ class _ActivityCardState extends State<ActivityCard> {
     if (rawObj is Map) obj = rawObj.cast<String, dynamic>();
 
     final note = _unwrapNoteFromActivity(type, obj);
-    final content = (note?['content'] as String?)?.trim() ?? (note?['name'] as String?)?.trim() ?? '';
+    final content = (note?['content'] as String?)?.trim() ??
+        (note?['name'] as String?)?.trim() ??
+        '';
     final noteId = (note?['id'] as String?)?.trim() ?? '';
     final noteActor = (note?['attributedTo'] as String?)?.trim() ?? '';
-    final published = (note?['published'] as String?)?.trim() ?? (widget.activity['published'] as String?)?.trim() ?? '';
+    final published = (note?['published'] as String?)?.trim() ??
+        (widget.activity['published'] as String?)?.trim() ??
+        '';
     final replyTo = (note?['inReplyTo'] as String?)?.trim() ?? '';
     final replyPreview = widget.activity['fedi3InReplyToObject'];
     final quotePreview = widget.activity['fedi3QuoteObject'];
@@ -113,15 +119,20 @@ class _ActivityCardState extends State<ActivityCard> {
               actor: _actor,
               published: published,
               boosted: isBoost,
-              onOpenProfile: actorUrl.isEmpty ? null : () => widget.openActor(actorUrl),
+              onOpenProfile:
+                  actorUrl.isEmpty ? null : () => widget.openActor(actorUrl),
             ),
             const SizedBox(height: 10),
             if (replyPreview is Map || quotePreview is Map)
               _QuotedPreview(
                 label: context.l10n.noteInReplyTo,
                 inReplyTo: replyTo,
-                replyPreview: replyPreview is Map ? replyPreview.cast<String, dynamic>() : null,
-                quotePreview: quotePreview is Map ? quotePreview.cast<String, dynamic>() : null,
+                replyPreview: replyPreview is Map
+                    ? replyPreview.cast<String, dynamic>()
+                    : null,
+                quotePreview: quotePreview is Map
+                    ? quotePreview.cast<String, dynamic>()
+                    : null,
               ),
             if (content.isNotEmpty)
               HtmlWidget(
@@ -131,7 +142,7 @@ class _ActivityCardState extends State<ActivityCard> {
                     widget.openActor(url);
                     return true;
                   }
-                  return false;
+                  return UrlPolicy.handleTap(url);
                 },
               )
             else if (attachments.isEmpty)
@@ -140,14 +151,21 @@ class _ActivityCardState extends State<ActivityCard> {
                 children: [
                   Text(
                     context.l10n.activityUnsupported,
-                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                    style: TextStyle(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(179)),
                   ),
                   if (_activitySummary().isNotEmpty) ...[
                     const SizedBox(height: 6),
                     Text(
                       _activitySummary(),
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface.withAlpha(140),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(140),
                         fontSize: 12,
                       ),
                     ),
@@ -165,21 +183,26 @@ class _ActivityCardState extends State<ActivityCard> {
                   Tooltip(
                     message: context.l10n.activityReply,
                     child: IconButton(
-                      onPressed: canAct ? () => _reply(context, api, noteId, noteActor) : null,
+                      onPressed: canAct
+                          ? () => _reply(context, api, noteId, noteActor)
+                          : null,
                       icon: const Icon(Icons.reply),
                     ),
                   ),
                   Tooltip(
                     message: context.l10n.activityBoost,
                     child: IconButton(
-                      onPressed: canAct ? () => _boost(context, api, noteId) : null,
+                      onPressed:
+                          canAct ? () => _boost(context, api, noteId) : null,
                       icon: const Icon(Icons.repeat),
                     ),
                   ),
                   Tooltip(
                     message: context.l10n.activityLike,
                     child: IconButton(
-                      onPressed: (canAct && noteActor.isNotEmpty) ? () => _like(context, api, noteId, noteActor) : null,
+                      onPressed: (canAct && noteActor.isNotEmpty)
+                          ? () => _like(context, api, noteId, noteActor)
+                          : null,
                       icon: const Icon(Icons.favorite_border),
                     ),
                   ),
@@ -187,7 +210,12 @@ class _ActivityCardState extends State<ActivityCard> {
                   if (!canAct)
                     Text(
                       context.l10n.coreStart,
-                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                      style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(128),
+                          fontSize: 12),
                     ),
                 ],
               ),
@@ -197,7 +225,9 @@ class _ActivityCardState extends State<ActivityCard> {
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: () => setState(() => _showRaw = !_showRaw),
-                child: Text(_showRaw ? context.l10n.activityHideRaw : context.l10n.activityViewRaw),
+                child: Text(_showRaw
+                    ? context.l10n.activityHideRaw
+                    : context.l10n.activityViewRaw),
               ),
             ),
             if (_showRaw)
@@ -208,7 +238,8 @@ class _ActivityCardState extends State<ActivityCard> {
                   style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurface.withAlpha(204),
+                    color:
+                        Theme.of(context).colorScheme.onSurface.withAlpha(204),
                   ),
                 ),
               ),
@@ -218,7 +249,8 @@ class _ActivityCardState extends State<ActivityCard> {
     );
   }
 
-  Map<String, dynamic>? _unwrapNoteFromActivity(String type, Map<String, dynamic>? obj) {
+  Map<String, dynamic>? _unwrapNoteFromActivity(
+      String type, Map<String, dynamic>? obj) {
     if (obj == null) return null;
     if (type == 'Create') {
       final inner = obj['object'];
@@ -298,29 +330,36 @@ class _ActivityCardState extends State<ActivityCard> {
     return '';
   }
 
-  Future<void> _boost(BuildContext context, CoreApi api, String objectId) async {
+  Future<void> _boost(
+      BuildContext context, CoreApi api, String objectId) async {
     try {
       await api.boost(objectId: objectId, public: true);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     }
   }
 
-  Future<void> _like(BuildContext context, CoreApi api, String objectId, String objectActor) async {
+  Future<void> _like(BuildContext context, CoreApi api, String objectId,
+      String objectActor) async {
     try {
       await api.like(objectId: objectId, objectActor: objectActor);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     }
   }
 
-  Future<void> _reply(BuildContext context, CoreApi api, String inReplyTo, String replyToActor) async {
+  Future<void> _reply(BuildContext context, CoreApi api, String inReplyTo,
+      String replyToActor) async {
     final ctrl = TextEditingController();
     try {
       final text = await showDialog<String>(
@@ -329,24 +368,36 @@ class _ActivityCardState extends State<ActivityCard> {
           title: Text(context.l10n.activityReplyTitle),
           content: TextField(
             controller: ctrl,
-            decoration: InputDecoration(hintText: context.l10n.activityReplyHint),
+            decoration:
+                InputDecoration(hintText: context.l10n.activityReplyHint),
             maxLines: 5,
             minLines: 1,
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(context.l10n.activityCancel)),
-            FilledButton(onPressed: () => Navigator.of(context).pop(ctrl.text), child: Text(context.l10n.activitySend)),
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(context.l10n.activityCancel)),
+            FilledButton(
+                onPressed: () => Navigator.of(context).pop(ctrl.text),
+                child: Text(context.l10n.activitySend)),
           ],
         ),
       );
       final body = text?.trim() ?? '';
       if (body.isEmpty) return;
-      await api.postNote(content: body, public: true, mediaIds: const [], inReplyTo: inReplyTo, replyToActor: replyToActor);
+      await api.postNote(
+          content: body,
+          public: true,
+          mediaIds: const [],
+          inReplyTo: inReplyTo,
+          replyToActor: replyToActor);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
     } finally {
       ctrl.dispose();
     }
@@ -371,7 +422,9 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final display = actor?.displayName ?? _fallbackActorLabel(actorUrl);
-    final sub = actor?.preferredUsername.isNotEmpty == true ? actor!.preferredUsername : actorUrl;
+    final sub = actor?.preferredUsername.isNotEmpty == true
+        ? actor!.preferredUsername
+        : actorUrl;
     final onSurface = Theme.of(context).colorScheme.onSurface;
 
     return Row(
@@ -421,7 +474,8 @@ class _Header extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       _formatPublished(published),
-                      style: TextStyle(color: onSurface.withAlpha(128), fontSize: 12),
+                      style: TextStyle(
+                          color: onSurface.withAlpha(128), fontSize: 12),
                     ),
                   ],
                 ],
@@ -448,7 +502,9 @@ class _Header extends StatelessWidget {
     final uri = Uri.tryParse(url);
     if (uri == null) return url;
     final host = uri.host;
-    if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'users' && uri.pathSegments.length >= 2) {
+    if (uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.first == 'users' &&
+        uri.pathSegments.length >= 2) {
       return '${uri.pathSegments[1]}@$host';
     }
     return host;
@@ -517,7 +573,8 @@ class _AttachmentsGrid extends StatelessWidget {
                   errorBuilder: (_, __, ___) => Container(
                     width: count == 1 ? w : cell,
                     height: count == 1 ? w * 0.6 : cell,
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
                     child: const Icon(Icons.broken_image_outlined),
                   ),
                 ),
@@ -546,28 +603,40 @@ class _QuotedPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final prev = replyPreview ?? quotePreview;
     if (prev == null) return const SizedBox.shrink();
-    final inner = (prev['content'] as String?)?.trim() ?? (prev['name'] as String?)?.trim() ?? '';
+    final inner = (prev['content'] as String?)?.trim() ??
+        (prev['name'] as String?)?.trim() ??
+        '';
     if (inner.isEmpty) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Container(
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(130),
+          color: Theme.of(context)
+              .colorScheme
+              .surfaceContainerHighest
+              .withAlpha(130),
           borderRadius: BorderRadius.circular(12),
         ),
         padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12)),
+            Text(label,
+                style: TextStyle(
+                    color:
+                        Theme.of(context).colorScheme.onSurface.withAlpha(179),
+                    fontSize: 12)),
             const SizedBox(height: 6),
             HtmlWidget(inner),
             if (inReplyTo.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
                 inReplyTo,
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(128), fontSize: 12),
+                style: TextStyle(
+                    color:
+                        Theme.of(context).colorScheme.onSurface.withAlpha(128),
+                    fontSize: 12),
                 overflow: TextOverflow.ellipsis,
               ),
             ],

@@ -45,7 +45,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: Text(context.l10n.settingsCore),
                   subtitle: Text(
                     widget.appState.isRunning
-                        ? context.l10n.settingsCoreRunning(widget.appState.coreHandle ?? 0)
+                        ? context.l10n.settingsCoreRunning(
+                            widget.appState.coreHandle ?? 0)
                         : context.l10n.settingsCoreStopped,
                   ),
                   trailing: FilledButton(
@@ -56,7 +57,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         await widget.appState.startCore();
                       }
                     },
-                    child: Text(widget.appState.isRunning ? context.l10n.coreStop : context.l10n.coreStart),
+                    child: Text(widget.appState.isRunning
+                        ? context.l10n.coreStop
+                        : context.l10n.coreStart),
                   ),
                 ),
               ),
@@ -65,7 +68,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     widget.appState.lastError!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),
               const SizedBox(height: 10),
@@ -77,7 +81,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => ProfileEditScreen(appState: widget.appState),
+                        builder: (_) =>
+                            ProfileEditScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -92,7 +97,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => PrivacySettingsScreen(appState: widget.appState),
+                        builder: (_) =>
+                            PrivacySettingsScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -107,7 +113,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => SecuritySettingsScreen(appState: widget.appState),
+                        builder: (_) =>
+                            SecuritySettingsScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -122,7 +129,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => ModerationSettingsScreen(appState: widget.appState),
+                        builder: (_) =>
+                            ModerationSettingsScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -137,7 +145,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => NetworkingSettingsScreen(appState: widget.appState),
+                        builder: (_) =>
+                            NetworkingSettingsScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -167,7 +176,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => UiSettingsScreen(appState: widget.appState),
+                        builder: (_) =>
+                            UiSettingsScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -182,7 +192,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => TranslationSettingsScreen(appState: widget.appState),
+                        builder: (_) => TranslationSettingsScreen(
+                            appState: widget.appState),
                       ),
                     );
                   },
@@ -197,7 +208,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => EditConfigScreen(appState: widget.appState),
+                        builder: (_) =>
+                            EditConfigScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -212,7 +224,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => DevCoreScreen(appState: widget.appState),
+                        builder: (_) =>
+                            DevCoreScreen(appState: widget.appState),
                       ),
                     );
                   },

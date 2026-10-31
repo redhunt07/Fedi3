@@ -127,7 +127,9 @@ class _HoverCard extends StatelessWidget {
               final iconUrl = (p?.iconUrl ?? '').trim();
               final display = (p?.displayName ?? '').trim();
               final username = (p?.preferredUsername ?? '').trim();
-              final handle = (username.isNotEmpty && host.isNotEmpty) ? '@$username@$host' : actorUrl;
+              final handle = (username.isNotEmpty && host.isNotEmpty)
+                  ? '@$username@$host'
+                  : actorUrl;
               final summary = (p?.summary ?? '').trim();
 
               return InkWell(
@@ -152,13 +154,17 @@ class _HoverCard extends StatelessWidget {
                             children: [
                               Text(
                                 display.isNotEmpty ? display : handle,
-                                style: const TextStyle(fontWeight: FontWeight.w800),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800),
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 handle,
-                                style: TextStyle(color: theme.colorScheme.onSurface.withAlpha(170), fontSize: 12),
+                                style: TextStyle(
+                                    color: theme.colorScheme.onSurface
+                                        .withAlpha(170),
+                                    fontSize: 12),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ],
@@ -172,12 +178,17 @@ class _HoverCard extends StatelessWidget {
                         _stripHtml(summary),
                         maxLines: 5,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: theme.colorScheme.onSurface.withAlpha(200), fontSize: 12),
+                        style: TextStyle(
+                            color: theme.colorScheme.onSurface.withAlpha(200),
+                            fontSize: 12),
                       ),
                     ],
                     if (snap.connectionState == ConnectionState.waiting) ...[
                       const SizedBox(height: 10),
-                      const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
                     ],
                   ],
                 ),
@@ -190,7 +201,10 @@ class _HoverCard extends StatelessWidget {
   }
 
   static String _stripHtml(String s) {
-    return s.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', ' ').trim();
+    return s
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll('&nbsp;', ' ')
+        .trim();
   }
 }
 

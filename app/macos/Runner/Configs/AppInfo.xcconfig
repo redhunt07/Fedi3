@@ -8,7 +8,7 @@
 PRODUCT_NAME = fedi3
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.fedi3
+PRODUCT_BUNDLE_IDENTIFIER = org.fedi3.client
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 FEDI3 Project. All rights reserved.

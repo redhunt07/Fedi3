@@ -18,7 +18,8 @@ class NetworkingSettingsScreen extends StatefulWidget {
   final AppState appState;
 
   @override
-  State<NetworkingSettingsScreen> createState() => _NetworkingSettingsScreenState();
+  State<NetworkingSettingsScreen> createState() =>
+      _NetworkingSettingsScreenState();
 }
 
 class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
@@ -100,11 +101,13 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
           Card(
             child: ListTile(
               title: Text(context.l10n.networkingP2p),
-              subtitle: Text(cfg.p2pEnable ? context.l10n.enabled : context.l10n.disabled),
+              subtitle: Text(
+                  cfg.p2pEnable ? context.l10n.enabled : context.l10n.disabled),
             ),
           ),
           const SizedBox(height: 16),
-          Text(context.l10n.networkingRelaysTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.networkingRelaysTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           if (_relayError != null)
             NetworkErrorCard(
@@ -119,7 +122,10 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
               IconButton(
                 onPressed: _loadingRelays ? null : _refreshRelays,
                 icon: _loadingRelays
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.refresh),
               ),
             ],
@@ -133,7 +139,9 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => RelayAdminScreen(appState: widget.appState)),
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          RelayAdminScreen(appState: widget.appState)),
                 );
               },
             ),
@@ -142,12 +150,15 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
             for (final r in _relays)
               Card(
                 child: ListTile(
-                  title: Text((r['relay_base_url'] ?? r['relay_url'] ?? '').toString()),
-                  subtitle: Text((r['relay_ws_url'] ?? r['relay_ws'] ?? '').toString()),
+                  title: Text(
+                      (r['relay_base_url'] ?? r['relay_url'] ?? '').toString()),
+                  subtitle: Text(
+                      (r['relay_ws_url'] ?? r['relay_ws'] ?? '').toString()),
                 ),
               ),
           const SizedBox(height: 16),
-          Text(context.l10n.networkingApRelays, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.networkingApRelays,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           if (cfg.apRelays.isEmpty)
             Text(context.l10n.networkingApRelaysEmpty)
@@ -161,7 +172,8 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditConfigScreen(appState: widget.appState)));
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => EditConfigScreen(appState: widget.appState)));
             },
             icon: const Icon(Icons.tune),
             label: Text(context.l10n.networkingEditAccount),
@@ -169,7 +181,8 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
           const SizedBox(height: 16),
           Text(
             context.l10n.networkingHint,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
           ),
         ],
       ),

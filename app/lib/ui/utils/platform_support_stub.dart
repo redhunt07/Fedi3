@@ -5,4 +5,3 @@
 
 // Web / non-IO platforms.
 bool get supportsInlineVideoPlayer => true;
-

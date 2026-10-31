@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n_ext.dart';
 import '../utils/open_url.dart';
 import 'fedi_media_player.dart';
 
@@ -76,6 +77,7 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
           onTap: widget.onOpen,
           child: Image.network(
             url,
+            semanticLabel: context.l10n.semanticsMedia,
             fit: BoxFit.cover,
             cacheWidth: widget.cacheWidth,
             filterQuality: FilterQuality.low,
@@ -84,7 +86,10 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
               return Container(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 alignment: Alignment.center,
-                child: const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2)),
+                child: const SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
               );
             },
             errorBuilder: (_, __, ___) => Container(
@@ -119,7 +124,10 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
                 child: Container(
                   color: Colors.black.withAlpha(210),
                   alignment: Alignment.center,
-                  child: Icon(isAudio ? Icons.audiotrack : Icons.play_circle_fill, color: Colors.white, size: 46),
+                  child: Icon(
+                      isAudio ? Icons.audiotrack : Icons.play_circle_fill,
+                      color: Colors.white,
+                      size: 46),
                 ),
               ),
             Align(

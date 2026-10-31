@@ -8,6 +8,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../core/core_http.dart';
 import '../model/core_config.dart';
 
 class ActorProfile {
@@ -60,7 +61,8 @@ class ActorProfile {
     final id = (json['id'] as String?)?.trim() ?? '';
     if (id.isEmpty) return null;
 
-    final preferredUsername = (json['preferredUsername'] as String?)?.trim() ?? '';
+    final preferredUsername =
+        (json['preferredUsername'] as String?)?.trim() ?? '';
     final name = (json['name'] as String?)?.trim() ?? '';
     final summary = (json['summary'] as String?)?.trim() ?? '';
     final inbox = (json['inbox'] as String?)?.trim() ?? '';
@@ -173,15 +175,17 @@ class ActorRepository {
 
   static final ActorRepository instance = ActorRepository._();
 
-  final http.Client _client = http.Client();
+  http.Client get _client => CoreHttp.client;
 
   final LinkedHashMap<String, ActorProfile> _cache = LinkedHashMap();
-  final LinkedHashMap<String, Future<ActorProfile?>> _inflight = LinkedHashMap();
+  final LinkedHashMap<String, Future<ActorProfile?>> _inflight =
+      LinkedHashMap();
 
   int maxCacheEntries = 512;
 
   Map<String, String> get _acceptHeaders => const {
-        'Accept': 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
+        'Accept':
+            'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams", application/json',
       };
 
   Future<ActorProfile?> getActor(String actorUrl) async {
@@ -222,14 +226,17 @@ class ActorRepository {
   Future<ActorProfile?> _fetchActor(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
-    final resp = await _client.get(uri, headers: _acceptHeaders);
+    final resp = await _client
+        .get(uri, headers: _acceptHeaders)
+        .timeout(CoreHttp.totalTimeout);
     if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
     final json = jsonDecode(resp.body);
     if (json is! Map) return null;
     return ActorProfile.tryParse(json.cast<String, dynamic>());
   }
 
-  Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl, {int limit = 20}) async {
+  Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
+      {int limit = 20}) async {
     final first = await _fetchJson(outboxUrl);
     if (first == null) return const [];
 
@@ -238,7 +245,9 @@ class ActorRepository {
     if (firstLink is String && firstLink.trim().isNotEmpty) {
       page = await _fetchJson(firstLink.trim());
     } else if (firstLink is Map) {
-      final href = (firstLink['id'] as String?)?.trim() ?? (firstLink['href'] as String?)?.trim() ?? '';
+      final href = (firstLink['id'] as String?)?.trim() ??
+          (firstLink['href'] as String?)?.trim() ??
+          '';
       if (href.isNotEmpty) page = await _fetchJson(href);
     }
 
@@ -263,7 +272,9 @@ class ActorRepository {
   Future<Map<String, dynamic>?> _fetchJson(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
-    final resp = await _client.get(uri, headers: _acceptHeaders);
+    final resp = await _client
+        .get(uri, headers: _acceptHeaders)
+        .timeout(CoreHttp.totalTimeout);
     if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
     final json = jsonDecode(resp.body);
     if (json is! Map) return null;

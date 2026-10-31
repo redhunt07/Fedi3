@@ -82,19 +82,26 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
       final type = (a['type'] as String?)?.trim() ?? '';
       final actor = (a['actor'] as String?)?.trim() ?? '';
       final obj = a['object'];
-      final objType = (obj is Map) ? (obj['type'] as String?)?.trim() ?? '' : '';
+      final objType =
+          (obj is Map) ? (obj['type'] as String?)?.trim() ?? '' : '';
       var objId = '';
       if (obj is String) {
         objId = obj.trim();
       } else if (obj is Map) {
-        objId = (obj['id'] as String?)?.trim() ?? (obj['url'] as String?)?.trim() ?? '';
+        objId = (obj['id'] as String?)?.trim() ??
+            (obj['url'] as String?)?.trim() ??
+            '';
       }
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              if (_hydrating) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              if (_hydrating)
+                const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
               if (_hydrating) const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -104,21 +111,26 @@ class _TimelineActivityCardState extends State<TimelineActivityCard> {
                       type.isNotEmpty ? type : context.l10n.activityUnsupported,
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    if (objType.isNotEmpty) Text(objType, style: const TextStyle(fontSize: 12)),
-                    if (actor.isNotEmpty) Text(actor, style: const TextStyle(fontSize: 12)),
-                    if (objId.isNotEmpty) Text(objId, style: const TextStyle(fontSize: 12)),
+                    if (objType.isNotEmpty)
+                      Text(objType, style: const TextStyle(fontSize: 12)),
+                    if (actor.isNotEmpty)
+                      Text(actor, style: const TextStyle(fontSize: 12)),
+                    if (objId.isNotEmpty)
+                      Text(objId, style: const TextStyle(fontSize: 12)),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton(
                         onPressed: () {
-                          final raw = const JsonEncoder.withIndent('  ').convert(a);
+                          final raw =
+                              const JsonEncoder.withIndent('  ').convert(a);
                           showDialog<void>(
                             context: context,
                             builder: (context) => AlertDialog(
                               title: Text(context.l10n.activityViewRaw),
                               content: SizedBox(
                                 width: 520,
-                                child: SingleChildScrollView(child: SelectableText(raw)),
+                                child: SingleChildScrollView(
+                                    child: SelectableText(raw)),
                               ),
                             ),
                           );

@@ -44,7 +44,9 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
       appBar: AppBar(
         title: Text(context.l10n.securityTitle),
         actions: [
-          TextButton(onPressed: _saving ? null : _save, child: Text(context.l10n.save)),
+          TextButton(
+              onPressed: _saving ? null : _save,
+              child: Text(context.l10n.save)),
         ],
       ),
       body: ListView(
@@ -55,14 +57,19 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 _status!,
-                style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
+                style: TextStyle(
+                    color: _status!.startsWith('OK')
+                        ? null
+                        : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.securityInternalToken, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.securityInternalToken,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           TextField(
             controller: _internalToken,
-            decoration: InputDecoration(hintText: context.l10n.securityInternalTokenHint),
+            decoration: InputDecoration(
+                hintText: context.l10n.securityInternalTokenHint),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -73,7 +80,8 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                 onPressed: _saving
                     ? null
                     : () {
-                        setState(() => _internalToken.text = CoreConfig.randomToken());
+                        setState(() =>
+                            _internalToken.text = CoreConfig.randomToken());
                       },
                 icon: const Icon(Icons.autorenew),
                 label: Text(context.l10n.securityRegenerate),
@@ -97,7 +105,8 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
           const SizedBox(height: 16),
           Text(
             context.l10n.securityHintInternalEndpoints,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
           ),
         ],
       ),
@@ -143,9 +152,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         previousPublicBaseUrl: c.previousPublicBaseUrl,
         previousRelayToken: c.previousRelayToken,
       );
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(updated);
-      await widget.appState.startCore();
+      await widget.appState.replaceConfig(updated);
       if (!mounted) return;
       setState(() => _status = context.l10n.ok);
     } catch (e) {

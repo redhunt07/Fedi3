@@ -16,7 +16,10 @@ import '../../state/app_state.dart';
 enum OnboardingMode { loginExisting, createNew }
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key, required this.appState, this.mode = OnboardingMode.createNew});
+  const OnboardingScreen(
+      {super.key,
+      required this.appState,
+      this.mode = OnboardingMode.createNew});
 
   final AppState appState;
   final OnboardingMode mode;
@@ -41,6 +44,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _webrtcEnable = false;
   String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
   bool _customRelay = false;
+  String? _formError;
   bool _importing = false;
   bool _discovering = false;
   final List<_RelayOption> _relayOptions = [];
@@ -56,10 +60,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final isCreate = widget.mode == OnboardingMode.createNew;
     _username = TextEditingController(text: isCreate ? 'alice' : '');
     _domain = TextEditingController(text: isCreate ? 'example.invalid' : '');
-    _publicBaseUrl = TextEditingController(text: isCreate ? 'http://127.0.0.1:8787' : '');
-    _relayWs = TextEditingController(text: isCreate ? 'ws://127.0.0.1:8787' : '');
+    _publicBaseUrl =
+        TextEditingController(text: isCreate ? 'http://127.0.0.1:8787' : '');
+    _relayWs =
+        TextEditingController(text: isCreate ? 'ws://127.0.0.1:8787' : '');
     _relayToken = TextEditingController(text: CoreConfig.randomToken());
-    _bind = TextEditingController(text: isCreate ? '127.0.0.1:8788' : '127.0.0.1:8788');
+    _bind = TextEditingController(
+        text: isCreate ? '127.0.0.1:8788' : '127.0.0.1:8788');
     _internalToken = TextEditingController(text: CoreConfig.randomToken());
     _p2pRelayReserve = TextEditingController();
     _webrtcIceUrls = TextEditingController();
@@ -90,14 +97,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.mode == OnboardingMode.createNew ? context.l10n.onboardingCreateTitle : context.l10n.onboardingLoginTitle,
+          widget.mode == OnboardingMode.createNew
+              ? context.l10n.onboardingCreateTitle
+              : context.l10n.onboardingLoginTitle,
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            widget.mode == OnboardingMode.createNew ? context.l10n.onboardingCreateIntro : context.l10n.onboardingLoginIntro,
+            widget.mode == OnboardingMode.createNew
+                ? context.l10n.onboardingCreateIntro
+                : context.l10n.onboardingLoginIntro,
           ),
           if (widget.mode == OnboardingMode.loginExisting) ...[
             const SizedBox(height: 12),
@@ -125,7 +136,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           _field(context.l10n.onboardingRelayToken, _relayToken),
           _field(context.l10n.onboardingBind, _bind),
           _field(context.l10n.onboardingInternalToken, _internalToken),
-          _field('P2P relay reserve (multiaddr, una per riga)', _p2pRelayReserve, maxLines: 3),
+          _field(context.l10n.p2pRelayReserveLabel, _p2pRelayReserve,
+              maxLines: 3),
           SwitchListTile(
             title: Text(context.l10n.onboardingEnableP2p),
             value: _p2pEnable,
@@ -138,18 +150,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             }),
           ),
           DropdownButtonFormField<String>(
-            value: _postDeliveryMode,
-            decoration: const InputDecoration(
-              labelText: 'Modalità consegna post',
+            initialValue: _postDeliveryMode,
+            key: ValueKey(_postDeliveryMode),
+            decoration: InputDecoration(
+              labelText: context.l10n.postDeliveryModeLabel,
             ),
-            items: const [
+            items: [
               DropdownMenuItem(
                 value: CoreConfig.postDeliveryP2pRelay,
-                child: Text('P2P + Relay (fallback dopo 5s)'),
+                child: Text(context.l10n.postDeliveryP2pRelay),
               ),
               DropdownMenuItem(
                 value: CoreConfig.postDeliveryP2pOnly,
-                child: Text('Solo P2P (mai relay)'),
+                child: Text(context.l10n.postDeliveryP2pOnly),
               ),
             ],
             onChanged: (value) {
@@ -159,23 +172,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 6),
           SwitchListTile(
-            title: const Text('WebRTC (ICE/TURN)'),
-            subtitle: const Text('Usa TURN/STUN come fallback P2P (consigliato)'),
+            title: Text(context.l10n.webrtcSectionTitle),
+            subtitle: Text(context.l10n.webrtcSectionHint),
             value: _webrtcEnable,
             onChanged: (v) => setState(() => _webrtcEnable = v),
           ),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () => setState(() => _autofillNetworkingDefaults(force: true)),
+              onPressed: () =>
+                  setState(() => _autofillNetworkingDefaults(force: true)),
               icon: const Icon(Icons.bolt),
-              label: const Text('Auto-popola ICE da relay'),
+              label: Text(context.l10n.webrtcAutofill),
             ),
           ),
-          _field('WebRTC ICE URLs (una per riga)', _webrtcIceUrls, maxLines: 3),
-          _field('WebRTC ICE username', _webrtcIceUsername),
-          _field('WebRTC ICE credential', _webrtcIceCredential),
+          _field(context.l10n.webrtcIceUrlsLabel, _webrtcIceUrls, maxLines: 3),
+          _field(context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
+          _field(context.l10n.webrtcIceCredentialLabel, _webrtcIceCredential),
           const SizedBox(height: 12),
+          if (_formError != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                _formError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
           FilledButton(
             onPressed: _save,
             child: Text(context.l10n.onboardingSave),
@@ -185,7 +207,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController controller, {int maxLines = 1}) {
+  Widget _field(String label, TextEditingController controller,
+      {int maxLines = 1}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
@@ -202,7 +225,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(context.l10n.onboardingRelaySelect, style: Theme.of(context).textTheme.labelLarge),
+          Text(context.l10n.onboardingRelaySelect,
+              style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -212,7 +236,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   items: _relayOptions
                       .map((r) => DropdownMenuItem(
                             value: r,
-                            child: Text(r.label, overflow: TextOverflow.ellipsis),
+                            child:
+                                Text(r.label, overflow: TextOverflow.ellipsis),
                           ))
                       .toList(),
                   onChanged: _discovering
@@ -231,15 +256,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               const SizedBox(width: 10),
               FilledButton.icon(
                 onPressed: _discovering ? null : _discoverRelays,
-                icon: _discovering ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.public),
-                label: Text(_discovering ? context.l10n.onboardingRelayDiscovering : context.l10n.onboardingRelayDiscover),
+                icon: _discovering
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.public),
+                label: Text(_discovering
+                    ? context.l10n.onboardingRelayDiscovering
+                    : context.l10n.onboardingRelayDiscover),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
             context.l10n.onboardingRelayListHint,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+                fontSize: 12),
           ),
         ],
       ),
@@ -271,13 +305,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
         final json = jsonDecode(resp.body);
         if (json is! Map) continue;
-        final relays = (json['relays'] is List) ? json['relays'] : json['items'];
+        final relays =
+            (json['relays'] is List) ? json['relays'] : json['items'];
         if (relays is! List) continue;
         for (final item in relays) {
           if (item is! Map) continue;
-          final base = (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])?.toString().trim();
+          final base =
+              (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])
+                  ?.toString()
+                  .trim();
           if (base == null || base.isEmpty) continue;
-          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])?.toString().trim();
+          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])
+              ?.toString()
+              .trim();
           final opt = _relayOptionFromParts(base, ws);
           if (opt != null && seen.add(opt.publicUrl)) {
             found.add(opt);
@@ -312,9 +352,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final publicUrl = uri
+        .replace(scheme: scheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final wsScheme = scheme == 'https' ? 'wss' : 'ws';
-    final wsUrl = uri.replace(scheme: wsScheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final wsUrl = uri
+        .replace(scheme: wsScheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,
@@ -328,10 +376,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final uri = Uri.tryParse(base);
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri.replace(scheme: scheme).toString().trim().replaceAll(RegExp(r'/$'), '');
+    final publicUrl = uri
+        .replace(scheme: scheme)
+        .toString()
+        .trim()
+        .replaceAll(RegExp(r'/$'), '');
     final wsUrl = (ws != null && ws.trim().isNotEmpty)
         ? ws.trim().replaceAll(RegExp(r'/$'), '')
-        : (scheme == 'https' ? publicUrl.replaceFirst('https://', 'wss://') : publicUrl.replaceFirst('http://', 'ws://'));
+        : (scheme == 'https'
+            ? publicUrl.replaceFirst('https://', 'wss://')
+            : publicUrl.replaceFirst('http://', 'ws://'));
     final domain = uri.host;
     return _RelayOption(
       publicUrl: publicUrl,
@@ -359,11 +413,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _autofillP2pRelayReserve(force: force, domain: domain);
   }
 
-  Future<void> _autofillP2pRelayReserve({required bool force, required String domain}) async {
+  Future<void> _autofillP2pRelayReserve(
+      {required bool force, required String domain}) async {
     if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
       return;
     }
-    final base = _publicBaseUrl.text.trim().isNotEmpty ? _publicBaseUrl.text.trim() : 'https://$domain';
+    final base = _publicBaseUrl.text.trim().isNotEmpty
+        ? _publicBaseUrl.text.trim()
+        : 'https://$domain';
     final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
     if (uri == null) return;
     try {
@@ -385,6 +442,38 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  String? _validate() {
+    final l10n = context.l10n;
+    final username = _username.text.trim();
+    if (!RegExp(r'^[A-Za-z0-9_]{1,64}$').hasMatch(username)) {
+      return l10n.onboardingErrUsername;
+    }
+    final domain = _domain.text.trim();
+    if (domain.isEmpty ||
+        !RegExp(r'^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$')
+            .hasMatch(domain) ||
+        (!domain.contains('.') && domain != 'localhost')) {
+      return l10n.onboardingErrDomain;
+    }
+    final publicBase = Uri.tryParse(_publicBaseUrl.text.trim());
+    if (publicBase == null ||
+        publicBase.host.isEmpty ||
+        (publicBase.scheme != 'http' && publicBase.scheme != 'https')) {
+      return l10n.onboardingErrPublicUrl;
+    }
+    final relayWs = Uri.tryParse(_relayWs.text.trim());
+    if (relayWs == null ||
+        relayWs.host.isEmpty ||
+        (relayWs.scheme != 'ws' && relayWs.scheme != 'wss')) {
+      return l10n.onboardingErrRelayWs;
+    }
+    final bind = Uri.tryParse('http://${_bind.text.trim()}');
+    if (bind == null || bind.host.isEmpty || bind.port <= 0) {
+      return l10n.onboardingErrBind;
+    }
+    return null;
+  }
+
   Future<void> _save() async {
     final relayToken = _relayToken.text.trim();
     if (relayToken.length < 16) {
@@ -394,6 +483,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       return;
     }
+    final validationError = _validate();
+    if (validationError != null) {
+      setState(() => _formError = validationError);
+      return;
+    }
+    setState(() => _formError = null);
     _autofillNetworkingDefaults(force: false);
     final cfg = CoreConfig(
       username: _username.text.trim(),
@@ -415,8 +510,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toList(),
-      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty ? null : _webrtcIceUsername.text.trim(),
-      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty ? null : _webrtcIceCredential.text.trim(),
+      webrtcIceUsername: _webrtcIceUsername.text.trim().isEmpty
+          ? null
+          : _webrtcIceUsername.text.trim(),
+      webrtcIceCredential: _webrtcIceCredential.text.trim().isEmpty
+          ? null
+          : _webrtcIceCredential.text.trim(),
       apRelays: const [],
       displayName: '',
       summary: '',
@@ -441,21 +540,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _importing = true;
     });
     try {
-      const group = XTypeGroup(
-        label: 'JSON',
-        extensions: ['json'],
-        mimeTypes: ['application/json'],
-        uniformTypeIdentifiers: ['public.json'],
+      final group = XTypeGroup(
+        label: context.l10n.fileTypeJson,
+        extensions: const ['json'],
+        mimeTypes: const ['application/json'],
+        uniformTypeIdentifiers: const ['public.json'],
       );
       final file = await openFile(acceptedTypeGroups: [group]);
       if (file == null) return;
       final raw = await file.readAsString();
       final bundle = BackupCodec.decode(raw);
 
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(bundle.config);
-      await widget.appState.savePrefs(bundle.prefs);
-      await widget.appState.startCore();
+      final prevCfg = widget.appState.config;
+      final prevPrefs = widget.appState.prefs;
+      await widget.appState.replaceConfig(bundle.config);
+      try {
+        await widget.appState.savePrefs(bundle.prefs);
+      } catch (e) {
+        await widget.appState.savePrefs(prevPrefs);
+        if (prevCfg != null) await widget.appState.replaceConfig(prevCfg);
+        rethrow;
+      }
 
       if (!mounted) return;
       Navigator.of(context).popUntil((r) => r.isFirst);

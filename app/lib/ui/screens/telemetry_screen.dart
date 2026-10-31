@@ -96,7 +96,8 @@ class _TelemetryScreenState extends State<TelemetryScreen> {
                           children: [
                             Text(
                               '${ev.type} · ${ev.ts.toLocal().toIso8601String()}',
-                              style: const TextStyle(fontWeight: FontWeight.w700),
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 6),
                             Text(ev.message),
@@ -104,7 +105,11 @@ class _TelemetryScreenState extends State<TelemetryScreen> {
                               const SizedBox(height: 8),
                               Text(
                                 ev.data.toString(),
-                                style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(150)),
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withAlpha(150)),
                               ),
                             ],
                           ],

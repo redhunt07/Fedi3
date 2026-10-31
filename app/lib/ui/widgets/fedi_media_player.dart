@@ -63,7 +63,8 @@ class _FediMediaPlayerState extends State<FediMediaPlayer> {
     final u = widget.url.trim();
     if (u.isEmpty) return;
     try {
-      await _player.setPlaylistMode(widget.loop ? PlaylistMode.single : PlaylistMode.none);
+      await _player.setPlaylistMode(
+          widget.loop ? PlaylistMode.single : PlaylistMode.none);
       await _player.open(Media(u), play: widget.autoplay);
       await _applyVolume();
     } catch (_) {

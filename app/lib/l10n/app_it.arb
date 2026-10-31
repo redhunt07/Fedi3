@@ -100,6 +100,8 @@
   "chatAddMemberHint": "Cerca o incolla un actor",
   "chatRemoveMember": "Rimuovi membro",
   "chatReact": "Reagisci",
+  "chatDeleteThread": "Elimina chat",
+  "chatDeleteThreadHint": "Questo eliminerà l'intera chat per tutti.",
   "chatPin": "Fissa chat",
   "chatUnpin": "Rimuovi fissata",
   "chatTyping": "{name} sta scrivendo…",
@@ -172,6 +174,21 @@
   "noteContentWarning": "Contenuto sensibile",
   "noteShowContent": "Mostra",
   "noteHideContent": "Nascondi",
+
+  "noteActions": "Azioni",
+  "noteEdit": "Modifica",
+  "noteDelete": "Elimina",
+  "noteDeleted": "Nota eliminata",
+  "noteEditTitle": "Modifica nota",
+  "noteEditContentHint": "Modifica contenuto",
+  "noteEditSummaryHint": "Avviso contenuto (opzionale)",
+  "noteSensitiveLabel": "Contenuto sensibile",
+  "noteEditSave": "Salva",
+  "noteEditMissingAudience": "Destinatario mancante",
+  "noteDeleteTitle": "Elimina nota",
+  "noteDeleteHint": "Sei sicuro di voler eliminare questa nota?",
+  "noteDeleteConfirm": "Elimina",
+  "noteDeleteMissingAudience": "Destinatario mancante",
 
   "timeAgoJustNow": "adesso",
   "timeAgoMinutes": "{count,plural,=1{1 minuto fa}other{{count} minuti fa}}",
@@ -687,5 +704,74 @@
   "uiEmojiPickerPresetCompact": "Compatto",
   "uiEmojiPickerPresetComfort": "Comodo",
   "uiEmojiPickerPresetLarge": "Grande",
-  "uiEmojiPickerPreviewLabel": "Anteprima"
+  "uiEmojiPickerPreviewLabel": "Anteprima",
+
+  "p2pRelayReserveLabel": "P2P relay reserve (multiaddr, una per riga)",
+  "postDeliveryModeLabel": "Modalità consegna post",
+  "postDeliveryP2pRelay": "P2P + Relay (fallback dopo 5s)",
+  "postDeliveryP2pOnly": "Solo P2P (mai relay)",
+  "webrtcSectionTitle": "WebRTC (ICE/TURN)",
+  "webrtcSectionHint": "Usa TURN/STUN come fallback P2P (consigliato)",
+  "webrtcAutofill": "Auto-popola ICE da relay",
+  "webrtcIceUrlsLabel": "WebRTC ICE URLs (una per riga)",
+  "webrtcIceUsernameLabel": "WebRTC ICE username",
+  "webrtcIceCredentialLabel": "WebRTC ICE credential",
+  "fileTypeJson": "JSON",
+
+  "notificationsMarkAllRead": "Segna tutto come letto",
+  "notificationsFilterAll": "Tutte",
+  "notificationsFilterMentions": "Menzioni",
+  "notificationsFilterReactions": "Reazioni",
+  "notificationsFilterFollows": "Follow",
+  "notificationsFilterBoosts": "Boost",
+  "notificationsFilterLikes": "Like",
+  "notificationsFollowedBack": "Follow restituito",
+  "notificationsFollowBack": "Segui anche tu",
+  "notificationsFollowBackFailed": "Follow restituito fallito: {error}",
+  "@notificationsFollowBackFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "notificationsReply": "Rispondi",
+
+  "timelineFiltersTooltip": "Filtri",
+  "timelineFiltersTitle": "Filtri",
+  "timelineFilterMedia": "Media",
+  "timelineFilterReply": "Risposte",
+  "timelineFilterBoost": "Boost",
+  "timelineFilterMention": "Menzioni",
+
+  "mediaDownload": "Scarica",
+  "mediaShare": "Condividi",
+  "mediaAutoplayOn": "Riproduzione automatica attiva",
+  "mediaAutoplayOff": "Riproduzione automatica disattivata",
+  "mediaMuted": "Muto",
+  "mediaSoundOn": "Audio attivo",
+  "mediaOpenInBrowser": "Apri nel browser",
+  "mediaDownloaded": "Scaricato",
+  "mediaDownloadFailed": "Download fallito: {error}",
+  "@mediaDownloadFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "noteThreadMuted": "Thread silenziato",
+  "noteUnmute": "Riattiva audio",
+  "noteLinkCopied": "Link copiato",
+  "noteUsers": "Utenti",
+  "noteReactionsTitle": "Reazioni {label}",
+  "@noteReactionsTitle": {
+    "placeholders": {
+      "label": { "type": "String" }
+    }
+  },
+  "semanticsAvatar": "Avatar",
+  "semanticsMedia": "Allegato media",
+  "onboardingErrUsername": "Lo username deve avere 1-64 caratteri: lettere, cifre o underscore.",
+  "onboardingErrDomain": "Inserisci un dominio valido (es. example.com).",
+  "onboardingErrPublicUrl": "L'URL pubblico deve essere un URL http(s) assoluto.",
+  "onboardingErrRelayWs": "L'URL WebSocket del relay deve iniziare con ws:// o wss://.",
+  "onboardingErrBind": "L'indirizzo di bind deve essere host:porta (es. 127.0.0.1:8788)."
 }

@@ -15,14 +15,16 @@ class PeerPresenceStore {
 
   static final PeerPresenceStore instance = PeerPresenceStore._();
 
-  final ValueNotifier<Map<String, bool>> onlineByUsername = ValueNotifier(const {});
+  final ValueNotifier<Map<String, bool>> onlineByUsername =
+      ValueNotifier(const {});
 
   CoreConfig? _config;
   Timer? _timer;
   bool _loading = false;
 
   void start(CoreConfig config) {
-    final sameConfig = _config?.publicBaseUrl == config.publicBaseUrl && _config?.relayWs == config.relayWs;
+    final sameConfig = _config?.publicBaseUrl == config.publicBaseUrl &&
+        _config?.relayWs == config.relayWs;
     _config = config;
     if (sameConfig && _timer != null) return;
     _timer?.cancel();

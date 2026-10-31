@@ -23,7 +23,12 @@ class ReactionStore {
       final txt = await f.readAsString();
       final json = jsonDecode(txt);
       if (json is! List) return const [];
-      return json.whereType<String>().map((s) => s.trim()).where((s) => s.isNotEmpty).take(_max).toList();
+      return json
+          .whereType<String>()
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .take(_max)
+          .toList();
     } catch (_) {
       return const [];
     }
@@ -43,4 +48,3 @@ class ReactionStore {
     await f.writeAsString(jsonEncode(list));
   }
 }
-

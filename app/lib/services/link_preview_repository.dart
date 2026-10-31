@@ -1,3 +1,4 @@
+import '../core/core_http.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -33,7 +34,7 @@ class LinkPreviewRepository {
 
   static final LinkPreviewRepository instance = LinkPreviewRepository._();
 
-  final http.Client _client = http.Client();
+  http.Client get _client => CoreHttp.client;
 
   final LinkedHashMap<String, LinkPreview> _cache = LinkedHashMap();
   final LinkedHashMap<String, Future<LinkPreview?>> _inflight = LinkedHashMap();
@@ -83,14 +84,16 @@ class LinkPreviewRepository {
           'Accept': 'text/html,application/xhtml+xml',
           'User-Agent': 'Fedi3/0.1 (+https://fedi3)',
         },
-      );
+      ).timeout(CoreHttp.totalTimeout);
     } catch (_) {
       return null;
     }
 
     if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
     final ct = (resp.headers['content-type'] ?? '').toLowerCase();
-    if (!ct.contains('text/html') && !ct.contains('application/xhtml+xml')) return null;
+    if (!ct.contains('text/html') && !ct.contains('application/xhtml+xml')) {
+      return null;
+    }
 
     // Avoid keeping huge documents in memory.
     final bytes = resp.bodyBytes;
@@ -98,8 +101,11 @@ class LinkPreviewRepository {
     final clipped = bytes.length > max ? bytes.sublist(0, max) : bytes;
     final html = _decodeBestEffort(clipped);
 
-    final title = _firstMeta(html, property: 'og:title') ?? _titleTag(html) ?? '';
-    final description = _firstMeta(html, property: 'og:description') ?? _firstMeta(html, name: 'description') ?? '';
+    final title =
+        _firstMeta(html, property: 'og:title') ?? _titleTag(html) ?? '';
+    final description = _firstMeta(html, property: 'og:description') ??
+        _firstMeta(html, name: 'description') ??
+        '';
     final imageUrl = _firstMeta(html, property: 'og:image') ?? '';
     final siteName = _firstMeta(html, property: 'og:site_name') ?? '';
 
@@ -124,7 +130,7 @@ class LinkPreviewRepository {
           'Accept': 'application/json, */*',
           'User-Agent': 'Fedi3/0.1 (+https://fedi3)',
         },
-      );
+      ).timeout(CoreHttp.totalTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final map = jsonDecode(resp.body);
       if (map is! Map) return null;
@@ -208,7 +214,8 @@ class LinkPreviewRepository {
   }
 
   static String? _titleTag(String html) {
-    final m = RegExp(r'<title[^>]*>([^<]{1,300})</title>', caseSensitive: false).firstMatch(html);
+    final m = RegExp(r'<title[^>]*>([^<]{1,300})</title>', caseSensitive: false)
+        .firstMatch(html);
     return m?.group(1);
   }
 
@@ -223,7 +230,8 @@ class LinkPreviewRepository {
     );
     final tag = re.firstMatch(html)?.group(1);
     if (tag == null) return null;
-    final cm = RegExp("content=[\"']([^\"']{1,600})[\"']", caseSensitive: false).firstMatch(tag);
+    final cm = RegExp("content=[\"']([^\"']{1,600})[\"']", caseSensitive: false)
+        .firstMatch(tag);
     return cm?.group(1);
   }
 

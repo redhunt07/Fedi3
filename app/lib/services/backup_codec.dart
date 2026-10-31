@@ -33,9 +33,23 @@ class BackupCodec {
     final json = jsonDecode(txt);
     if (json is! Map) throw const FormatException('invalid json');
 
+    // AM-06/H-56: reject backups written by a newer app instead of silently
+    // dropping unknown fields.
+    final rawVersion = json['v'];
+    if (rawVersion is! num) {
+      throw const FormatException('missing backup version');
+    }
+    final version = rawVersion.toInt();
+    if (version > BackupCodec.version) {
+      throw FormatException(
+          'unsupported backup version: $version (max ${BackupCodec.version})');
+    }
+
     final cfgJson = (json['coreConfig'] as Map?)?.cast<String, dynamic>();
     final prefsJson = (json['uiPrefs'] as Map?)?.cast<String, dynamic>();
-    if (cfgJson == null || prefsJson == null) throw const FormatException('missing sections');
+    if (cfgJson == null || prefsJson == null) {
+      throw const FormatException('missing sections');
+    }
 
     return BackupBundle(
       config: CoreConfig.fromJson(cfgJson),
@@ -54,4 +68,3 @@ class BackupCodec {
     return 'fedi3-backup-$user@$domain.json';
   }
 }
-

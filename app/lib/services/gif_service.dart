@@ -5,8 +5,7 @@
 
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
-
+import '../core/core_http.dart';
 
 class GifResult {
   GifResult({
@@ -44,12 +43,18 @@ class GifService {
     return _searchGiphy(q, limit, key);
   }
 
-  static Future<List<GifResult>> _searchGiphy(String query, int limit, String apiKey) async {
+  static Future<List<GifResult>> _searchGiphy(
+      String query, int limit, String apiKey) async {
     final giphy = query.isEmpty
-        ? Uri.parse('https://api.giphy.com/v1/gifs/trending?api_key=$apiKey&limit=$limit')
-        : Uri.parse('https://api.giphy.com/v1/gifs/search?api_key=$apiKey&q=${Uri.encodeQueryComponent(query)}&limit=$limit');
-    final giphyResp = await http.get(giphy, headers: const {'User-Agent': 'Fedi3'});
-    if (giphyResp.statusCode < 200 || giphyResp.statusCode >= 300) return const [];
+        ? Uri.parse(
+            'https://api.giphy.com/v1/gifs/trending?api_key=$apiKey&limit=$limit')
+        : Uri.parse(
+            'https://api.giphy.com/v1/gifs/search?api_key=$apiKey&q=${Uri.encodeQueryComponent(query)}&limit=$limit');
+    final giphyResp = await CoreHttp.client.get(giphy,
+        headers: const {'User-Agent': 'Fedi3'}).timeout(CoreHttp.totalTimeout);
+    if (giphyResp.statusCode < 200 || giphyResp.statusCode >= 300) {
+      return const [];
+    }
     final json = jsonDecode(giphyResp.body);
     if (json is! Map) return const [];
     final data = json['data'];
@@ -79,5 +84,4 @@ class GifService {
     }
     return out;
   }
-
 }

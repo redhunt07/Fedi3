@@ -59,10 +59,14 @@ class _BackupScreenState extends State<BackupScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 _status!,
-                style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
+                style: TextStyle(
+                    color: _status!.startsWith('OK')
+                        ? null
+                        : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.backupExportTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.backupExportTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           Text(context.l10n.backupExportHint),
           const SizedBox(height: 8),
@@ -83,12 +87,14 @@ class _BackupScreenState extends State<BackupScreen> {
             ],
           ),
           const SizedBox(height: 24),
-          Text(context.l10n.backupImportTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.backupImportTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           TextField(
             controller: _import,
             maxLines: 10,
-            decoration: InputDecoration(hintText: context.l10n.backupImportHint),
+            decoration:
+                InputDecoration(hintText: context.l10n.backupImportHint),
           ),
           const SizedBox(height: 10),
           Wrap(
@@ -138,7 +144,9 @@ class _BackupScreenState extends State<BackupScreen> {
       if (result == null) return;
 
       final bytes = Uint8List.fromList(utf8.encode(text));
-      final xf = XFile.fromData(bytes, mimeType: 'application/json', name: BackupCodec.suggestedFileName(cfg));
+      final xf = XFile.fromData(bytes,
+          mimeType: 'application/json',
+          name: BackupCodec.suggestedFileName(cfg));
       await xf.saveTo(result.path);
 
       if (!mounted) return;
@@ -167,6 +175,23 @@ class _BackupScreenState extends State<BackupScreen> {
     }
   }
 
+  /// H-57/D3: apply a backup with rollback. replaceConfig already restores the
+  /// previous config and restarts the core if the new one fails to start.
+  Future<void> _applyBundle(BackupBundle bundle) async {
+    final prevCfg = widget.appState.config;
+    final prevPrefs = widget.appState.prefs;
+    await widget.appState.replaceConfig(bundle.config);
+    try {
+      await widget.appState.savePrefs(bundle.prefs);
+    } catch (e) {
+      await widget.appState.savePrefs(prevPrefs);
+      if (prevCfg != null) {
+        await widget.appState.replaceConfig(prevCfg);
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _importFromText() async {
     setState(() {
       _busy = true;
@@ -174,11 +199,7 @@ class _BackupScreenState extends State<BackupScreen> {
     });
     try {
       final bundle = BackupCodec.decode(_import.text);
-
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(bundle.config);
-      await widget.appState.savePrefs(bundle.prefs);
-      await widget.appState.startCore();
+      await _applyBundle(bundle);
 
       if (!mounted) return;
       setState(() {
@@ -202,11 +223,7 @@ class _BackupScreenState extends State<BackupScreen> {
       if (file == null) return;
       final raw = await file.readAsString();
       final bundle = BackupCodec.decode(raw);
-
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(bundle.config);
-      await widget.appState.savePrefs(bundle.prefs);
-      await widget.appState.startCore();
+      await _applyBundle(bundle);
 
       if (!mounted) return;
       setState(() {

@@ -33,7 +33,8 @@ class TranslationService {
     if (cached != null) return cached;
     final timeout = Duration(milliseconds: prefs.translationTimeoutMs);
     if (prefs.translationProvider == TranslationProvider.deeplx) {
-      final res = await _translateDeepLx(trimmed, targetLang, prefs.translationDeepLxUrl, timeout);
+      final res = await _translateDeepLx(
+          trimmed, targetLang, prefs.translationDeepLxUrl, timeout);
       _cache[cacheKey] = res;
       return res;
     }
@@ -41,21 +42,20 @@ class TranslationService {
     if (key.isEmpty) {
       throw const FormatException('missing auth key');
     }
-    final endpoint = prefs.translationUsePro ? 'api.deepl.com' : 'api-free.deepl.com';
+    final endpoint =
+        prefs.translationUsePro ? 'api.deepl.com' : 'api-free.deepl.com';
     final uri = Uri.https(endpoint, '/v2/translate');
-    final resp = await http
-        .post(
-          uri,
-          headers: {
-            'Authorization': 'DeepL-Auth-Key $key',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: {
-            'text': trimmed,
-            'target_lang': _normalizeLang(targetLang),
-          },
-        )
-        .timeout(timeout);
+    final resp = await http.post(
+      uri,
+      headers: {
+        'Authorization': 'DeepL-Auth-Key $key',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: {
+        'text': trimmed,
+        'target_lang': _normalizeLang(targetLang),
+      },
+    ).timeout(timeout);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('HTTP ${resp.statusCode}: ${resp.body}');
     }
@@ -105,10 +105,13 @@ class TranslationService {
         return TranslationResult(text: data.trim(), detectedSource: src);
       }
       final translations = json['translations'];
-      if (translations is List && translations.isNotEmpty && translations.first is Map) {
+      if (translations is List &&
+          translations.isNotEmpty &&
+          translations.first is Map) {
         final first = (translations.first as Map).cast<String, dynamic>();
         final text = (first['text'] as String?)?.trim() ?? '';
-        final src = (first['detected_source_language'] as String?)?.trim() ?? '';
+        final src =
+            (first['detected_source_language'] as String?)?.trim() ?? '';
         if (text.isEmpty) throw const FormatException('empty translation');
         return TranslationResult(text: text, detectedSource: src);
       }
@@ -119,7 +122,9 @@ class TranslationService {
   static String _cacheKey(String text, String targetLang, UiPrefs prefs) {
     final target = _normalizeLang(targetLang);
     final provider = prefs.translationProvider.name;
-    final endpoint = prefs.translationProvider == TranslationProvider.deeplx ? prefs.translationDeepLxUrl.trim() : '';
+    final endpoint = prefs.translationProvider == TranslationProvider.deeplx
+        ? prefs.translationDeepLxUrl.trim()
+        : '';
     return '$provider|$endpoint|$target|${text.hashCode}';
   }
 

@@ -54,7 +54,10 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 _status!,
-                style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
+                style: TextStyle(
+                    color: _status!.startsWith('OK')
+                        ? null
+                        : Theme.of(context).colorScheme.error),
               ),
             ),
           SwitchListTile(
@@ -64,26 +67,30 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
             onChanged: (v) => setState(() => _locked = v),
           ),
           const SizedBox(height: 12),
-          Text(context.l10n.telemetrySectionTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.telemetrySectionTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           SwitchListTile(
             title: Text(context.l10n.telemetryEnabled),
             subtitle: Text(context.l10n.telemetryEnabledHint),
             value: prefs.telemetryEnabled,
-            onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(telemetryEnabled: v)),
+            onChanged: (v) =>
+                widget.appState.savePrefs(prefs.copyWith(telemetryEnabled: v)),
           ),
           SwitchListTile(
             title: Text(context.l10n.telemetryMonitoringEnabled),
             subtitle: Text(context.l10n.telemetryMonitoringHint),
             value: prefs.clientMonitoringEnabled,
-            onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(clientMonitoringEnabled: v)),
+            onChanged: (v) => widget.appState
+                .savePrefs(prefs.copyWith(clientMonitoringEnabled: v)),
           ),
           if (kDebugMode || prefs.clientMonitoringEnabled)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: OutlinedButton(
                 onPressed: () {
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TelemetryScreen()));
+                  Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const TelemetryScreen()));
                 },
                 child: Text(context.l10n.telemetryOpen),
               ),
@@ -130,9 +137,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
         previousPublicBaseUrl: c.previousPublicBaseUrl,
         previousRelayToken: c.previousRelayToken,
       );
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(updated);
-      await widget.appState.startCore();
+      await widget.appState.replaceConfig(updated);
       if (!mounted) return;
       setState(() => _status = context.l10n.ok);
     } catch (e) {

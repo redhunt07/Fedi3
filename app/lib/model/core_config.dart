@@ -12,8 +12,8 @@ class ProfileFieldKV {
   final String value;
 
   factory ProfileFieldKV.fromJson(Map<String, dynamic> json) => ProfileFieldKV(
-        name: (json['name'] as String? ?? '').trim(),
-        value: (json['value'] as String? ?? '').trim(),
+        name: json['name'] is String ? (json['name'] as String).trim() : '',
+        value: json['value'] is String ? (json['value'] as String).trim() : '',
       );
 
   Map<String, dynamic> toJson() => {'name': name, 'value': value};
@@ -82,67 +82,153 @@ class CoreConfig {
 
   Uri get localBaseUri => Uri.parse('http://$bind');
 
+  /// H-64: screens used to rebuild the whole config field by field; a single
+  /// missing field silently reset it. `copyWith` keeps edits surgical.
+  CoreConfig copyWith({
+    String? username,
+    String? domain,
+    String? publicBaseUrl,
+    String? relayWs,
+    String? relayToken,
+    String? bind,
+    String? internalToken,
+    bool? p2pEnable,
+    List<String>? p2pRelayReserve,
+    bool? webrtcEnable,
+    List<String>? webrtcIceUrls,
+    Object? webrtcIceUsername = _unset,
+    Object? webrtcIceCredential = _unset,
+    List<String>? apRelays,
+    String? displayName,
+    String? summary,
+    String? iconUrl,
+    String? iconMediaType,
+    String? imageUrl,
+    String? imageMediaType,
+    List<ProfileFieldKV>? profileFields,
+    bool? manuallyApprovesFollowers,
+    List<String>? blockedDomains,
+    List<String>? blockedActors,
+    String? postDeliveryMode,
+    Object? p2pCacheTtlSecs = _unset,
+    Object? previousPublicBaseUrl = _unset,
+    Object? previousRelayToken = _unset,
+  }) {
+    return CoreConfig(
+      username: username ?? this.username,
+      domain: domain ?? this.domain,
+      publicBaseUrl: publicBaseUrl ?? this.publicBaseUrl,
+      relayWs: relayWs ?? this.relayWs,
+      relayToken: relayToken ?? this.relayToken,
+      bind: bind ?? this.bind,
+      internalToken: internalToken ?? this.internalToken,
+      p2pEnable: p2pEnable ?? this.p2pEnable,
+      p2pRelayReserve: p2pRelayReserve ?? this.p2pRelayReserve,
+      webrtcEnable: webrtcEnable ?? this.webrtcEnable,
+      webrtcIceUrls: webrtcIceUrls ?? this.webrtcIceUrls,
+      webrtcIceUsername: webrtcIceUsername == _unset
+          ? this.webrtcIceUsername
+          : webrtcIceUsername as String?,
+      webrtcIceCredential: webrtcIceCredential == _unset
+          ? this.webrtcIceCredential
+          : webrtcIceCredential as String?,
+      apRelays: apRelays ?? this.apRelays,
+      displayName: displayName ?? this.displayName,
+      summary: summary ?? this.summary,
+      iconUrl: iconUrl ?? this.iconUrl,
+      iconMediaType: iconMediaType ?? this.iconMediaType,
+      imageUrl: imageUrl ?? this.imageUrl,
+      imageMediaType: imageMediaType ?? this.imageMediaType,
+      profileFields: profileFields ?? this.profileFields,
+      manuallyApprovesFollowers:
+          manuallyApprovesFollowers ?? this.manuallyApprovesFollowers,
+      blockedDomains: blockedDomains ?? this.blockedDomains,
+      blockedActors: blockedActors ?? this.blockedActors,
+      postDeliveryMode: postDeliveryMode ?? this.postDeliveryMode,
+      p2pCacheTtlSecs: p2pCacheTtlSecs == _unset
+          ? this.p2pCacheTtlSecs
+          : p2pCacheTtlSecs as int?,
+      previousPublicBaseUrl: previousPublicBaseUrl == _unset
+          ? this.previousPublicBaseUrl
+          : previousPublicBaseUrl as String?,
+      previousRelayToken: previousRelayToken == _unset
+          ? this.previousRelayToken
+          : previousRelayToken as String?,
+    );
+  }
+
+  static const Object _unset = Object();
+
   static const String postDeliveryP2pRelay = 'p2p_relay';
   static const String postDeliveryP2pOnly = 'p2p_only';
 
+  static String _str(dynamic value) => value is String ? value.trim() : '';
+
+  static String? _strOrNull(dynamic value) {
+    if (value is! String) return null;
+    final v = value.trim();
+    return v.isEmpty ? null : v;
+  }
+
+  static bool _bool(dynamic value) => value is bool ? value : false;
+
+  static int? _intOrNull(dynamic value) => value is num ? value.toInt() : null;
+
+  static List<String> _stringList(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<String>()
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
+  /// AM-03/AM-04: missing or wrongly typed fields fall back to safe defaults
+  /// instead of throwing a `TypeError`.
   static CoreConfig fromJson(Map<String, dynamic> json) {
-    final rawMode = (json['postDeliveryMode'] as String?)?.trim().toLowerCase();
-    final postDeliveryMode = (rawMode == postDeliveryP2pOnly || rawMode == postDeliveryP2pRelay)
-        ? rawMode!
-        : postDeliveryP2pRelay;
+    final rawMode = _str(json['postDeliveryMode']).toLowerCase();
+    final postDeliveryMode =
+        (rawMode == postDeliveryP2pOnly || rawMode == postDeliveryP2pRelay)
+            ? rawMode
+            : postDeliveryP2pRelay;
+    final p2pEnable = _bool(json['p2pEnable']);
     return CoreConfig(
-      username: (json['username'] as String? ?? '').trim(),
-      domain: (json['domain'] as String? ?? '').trim(),
-      publicBaseUrl: (json['publicBaseUrl'] as String? ?? '').trim(),
-      relayWs: (json['relayWs'] as String? ?? '').trim(),
-      relayToken: (json['relayToken'] as String? ?? '').trim(),
-      bind: (json['bind'] as String? ?? '').trim(),
-      internalToken: (json['internalToken'] as String? ?? '').trim(),
-      p2pEnable: (json['p2pEnable'] as bool?) ?? false,
-      p2pRelayReserve: (json['p2pRelayReserve'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcEnable: (json['webrtcEnable'] as bool?) ?? ((json['p2pEnable'] as bool?) ?? false),
-      webrtcIceUrls: (json['webrtcIceUrls'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      webrtcIceUsername: (json['webrtcIceUsername'] as String?)?.trim(),
-      webrtcIceCredential: (json['webrtcIceCredential'] as String?)?.trim(),
-      apRelays: (json['apRelays'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      displayName: (json['displayName'] as String? ?? '').trim(),
-      summary: (json['summary'] as String? ?? '').trim(),
-      iconUrl: (json['iconUrl'] as String? ?? '').trim(),
-      iconMediaType: (json['iconMediaType'] as String? ?? '').trim(),
-      imageUrl: (json['imageUrl'] as String? ?? '').trim(),
-      imageMediaType: (json['imageMediaType'] as String? ?? '').trim(),
-      profileFields: (json['profileFields'] as List<dynamic>? ?? [])
-          .whereType<Map>()
-          .map((m) => ProfileFieldKV.fromJson(m.cast<String, dynamic>()))
-          .where((f) => f.name.isNotEmpty || f.value.isNotEmpty)
-          .toList(),
-      manuallyApprovesFollowers: (json['manuallyApprovesFollowers'] as bool?) ?? false,
-      blockedDomains: (json['blockedDomains'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
-      blockedActors: (json['blockedActors'] as List<dynamic>? ?? [])
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList(),
+      username: _str(json['username']),
+      domain: _str(json['domain']),
+      publicBaseUrl: _str(json['publicBaseUrl']),
+      relayWs: _str(json['relayWs']),
+      relayToken: _str(json['relayToken']),
+      bind: _str(json['bind']),
+      internalToken: _str(json['internalToken']),
+      p2pEnable: p2pEnable,
+      p2pRelayReserve: _stringList(json['p2pRelayReserve']),
+      webrtcEnable: json['webrtcEnable'] == null
+          ? p2pEnable
+          : _bool(json['webrtcEnable']),
+      webrtcIceUrls: _stringList(json['webrtcIceUrls']),
+      webrtcIceUsername: _strOrNull(json['webrtcIceUsername']),
+      webrtcIceCredential: _strOrNull(json['webrtcIceCredential']),
+      apRelays: _stringList(json['apRelays']),
+      displayName: _str(json['displayName']),
+      summary: _str(json['summary']),
+      iconUrl: _str(json['iconUrl']),
+      iconMediaType: _str(json['iconMediaType']),
+      imageUrl: _str(json['imageUrl']),
+      imageMediaType: _str(json['imageMediaType']),
+      profileFields: json['profileFields'] is List
+          ? (json['profileFields'] as List)
+              .whereType<Map>()
+              .map((m) => ProfileFieldKV.fromJson(m.cast<String, dynamic>()))
+              .where((f) => f.name.isNotEmpty || f.value.isNotEmpty)
+              .toList()
+          : const [],
+      manuallyApprovesFollowers: _bool(json['manuallyApprovesFollowers']),
+      blockedDomains: _stringList(json['blockedDomains']),
+      blockedActors: _stringList(json['blockedActors']),
       postDeliveryMode: postDeliveryMode,
-      p2pCacheTtlSecs: (json['p2pCacheTtlSecs'] as num?)?.toInt(),
-      previousPublicBaseUrl: (json['previousPublicBaseUrl'] as String?)?.trim(),
-      previousRelayToken: (json['previousRelayToken'] as String?)?.trim(),
+      p2pCacheTtlSecs: _intOrNull(json['p2pCacheTtlSecs']),
+      previousPublicBaseUrl: _strOrNull(json['previousPublicBaseUrl']),
+      previousRelayToken: _strOrNull(json['previousRelayToken']),
     );
   }
 
@@ -187,7 +273,10 @@ class CoreConfig {
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;')
           .replaceAll("'", '&#39;');
-      s = s.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replaceAll('\n', '<br>');
+      s = s
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .replaceAll('\n', '<br>');
       return '<p>$s</p>';
     }
 
@@ -207,16 +296,21 @@ class CoreConfig {
         if (webrtcIceUrls.isNotEmpty) 'webrtc_ice_urls': webrtcIceUrls,
         if (webrtcIceUsername != null && webrtcIceUsername!.trim().isNotEmpty)
           'webrtc_ice_username': webrtcIceUsername!.trim(),
-        if (webrtcIceCredential != null && webrtcIceCredential!.trim().isNotEmpty)
+        if (webrtcIceCredential != null &&
+            webrtcIceCredential!.trim().isNotEmpty)
           'webrtc_ice_credential': webrtcIceCredential!.trim(),
       },
     };
     if (displayName.trim().isNotEmpty) cfg['display_name'] = displayName.trim();
     if (summary.trim().isNotEmpty) cfg['summary'] = textToHtml(summary);
     if (iconUrl.trim().isNotEmpty) cfg['icon_url'] = iconUrl.trim();
-    if (iconMediaType.trim().isNotEmpty) cfg['icon_media_type'] = iconMediaType.trim();
+    if (iconMediaType.trim().isNotEmpty) {
+      cfg['icon_media_type'] = iconMediaType.trim();
+    }
     if (imageUrl.trim().isNotEmpty) cfg['image_url'] = imageUrl.trim();
-    if (imageMediaType.trim().isNotEmpty) cfg['image_media_type'] = imageMediaType.trim();
+    if (imageMediaType.trim().isNotEmpty) {
+      cfg['image_media_type'] = imageMediaType.trim();
+    }
     if (profileFields.isNotEmpty) {
       cfg['profile_fields'] = profileFields
           .map(
@@ -225,7 +319,9 @@ class CoreConfig {
               'value': textToHtml(f.value),
             },
           )
-          .where((m) => (m['name'] as String).isNotEmpty && (m['value'] as String).isNotEmpty)
+          .where((m) =>
+              (m['name'] as String).isNotEmpty &&
+              (m['value'] as String).isNotEmpty)
           .toList();
     }
     if (manuallyApprovesFollowers) {
@@ -239,7 +335,8 @@ class CoreConfig {
     if (p2pCacheTtlSecs != null && p2pCacheTtlSecs! > 0) {
       cfg['p2p_cache_ttl_secs'] = p2pCacheTtlSecs;
     }
-    if (previousPublicBaseUrl != null && previousPublicBaseUrl!.trim().isNotEmpty) {
+    if (previousPublicBaseUrl != null &&
+        previousPublicBaseUrl!.trim().isNotEmpty) {
       cfg['previous_public_base_url'] = previousPublicBaseUrl!.trim();
     }
     if (previousRelayToken != null && previousRelayToken!.trim().isNotEmpty) {
@@ -249,7 +346,8 @@ class CoreConfig {
   }
 
   static String randomToken() {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rnd = Random.secure();
     return List.generate(32, (_) => chars[rnd.nextInt(chars.length)]).join();
   }

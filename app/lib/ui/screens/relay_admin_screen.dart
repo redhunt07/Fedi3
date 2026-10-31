@@ -24,7 +24,8 @@ class RelayAdminScreen extends StatefulWidget {
   State<RelayAdminScreen> createState() => _RelayAdminScreenState();
 }
 
-class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerProviderStateMixin {
+class _RelayAdminScreenState extends State<RelayAdminScreen>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
   bool _loading = false;
   String? _error;
@@ -94,7 +95,11 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
       final items = await api.listUsers(limit: 200, offset: _usersOffset);
       final filtered = _userQuery.trim().isEmpty
           ? items
-          : items.where((u) => u['username']?.toString().contains(_userQuery.trim()) ?? false).toList();
+          : items
+              .where((u) =>
+                  u['username']?.toString().contains(_userQuery.trim()) ??
+                  false)
+              .toList();
       if (!mounted) return;
       setState(() {
         _users = reset ? filtered : [..._users, ...filtered];
@@ -141,7 +146,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
     if (_audit.isEmpty) return;
     final dir = await getTemporaryDirectory();
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}${Platform.pathSeparator}fedi3-relay-audit-$ts.json');
+    final file =
+        File('${dir.path}${Platform.pathSeparator}fedi3-relay-audit-$ts.json');
     await file.writeAsString(jsonEncode(_audit));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -191,7 +197,9 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
           title: Text(context.l10n.relayAdminRotate),
           content: SelectableText(token),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: Text(context.l10n.ok)),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(context.l10n.ok)),
           ],
         ),
       );
@@ -214,8 +222,12 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
         title: Text(context.l10n.relayAdminDelete),
         content: Text(context.l10n.relayAdminDeleteConfirm(username)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.l10n.cancel)),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.l10n.relayAdminDelete)),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(context.l10n.cancel)),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(context.l10n.relayAdminDelete)),
         ],
       ),
     );
@@ -261,7 +273,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
   void _generateToken() {
     final rand = Random.secure();
     final bytes = List<int>.generate(24, (_) => rand.nextInt(256));
-    _newToken.text = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    _newToken.text =
+        bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     setState(() {});
   }
 
@@ -308,7 +321,12 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               children: [
                 Text(context.l10n.relayAdminRelayWsLabel),
                 const SizedBox(height: 4),
-                Text(relayWs, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(150))),
+                Text(relayWs,
+                    style: TextStyle(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(150))),
                 const SizedBox(height: 12),
                 Text(context.l10n.relayAdminTokenLabel),
                 const SizedBox(height: 6),
@@ -339,7 +357,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       context.l10n.relayAdminTokenMissing,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error),
                     ),
                   ),
                 if (_error != null)
@@ -404,7 +423,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               if (index >= _users.length) {
                 return Center(
                   child: OutlinedButton(
-                    onPressed: _loading ? null : () => _refreshUsers(reset: false),
+                    onPressed:
+                        _loading ? null : () => _refreshUsers(reset: false),
                     child: Text(context.l10n.listLoadMore),
                   ),
                 );
@@ -415,7 +435,9 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               return Card(
                 child: ListTile(
                   title: Text(username),
-                  subtitle: Text(disabled ? context.l10n.relayAdminUserDisabled : context.l10n.relayAdminUserEnabled),
+                  subtitle: Text(disabled
+                      ? context.l10n.relayAdminUserDisabled
+                      : context.l10n.relayAdminUserEnabled),
                   trailing: Wrap(
                     spacing: 6,
                     children: [
@@ -425,8 +447,12 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
                         icon: const Icon(Icons.vpn_key_outlined),
                       ),
                       IconButton(
-                        tooltip: disabled ? context.l10n.relayAdminEnable : context.l10n.relayAdminDisable,
-                        onPressed: _loading ? null : () => _toggleDisable(user, !disabled),
+                        tooltip: disabled
+                            ? context.l10n.relayAdminEnable
+                            : context.l10n.relayAdminDisable,
+                        onPressed: _loading
+                            ? null
+                            : () => _toggleDisable(user, !disabled),
                         icon: Icon(disabled ? Icons.play_arrow : Icons.pause),
                       ),
                       IconButton(
@@ -449,7 +475,9 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
                               title: Text(username),
                               content: Text(detail.toString()),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(context), child: Text(context.l10n.ok)),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: Text(context.l10n.ok)),
                               ],
                             ),
                           );
@@ -466,7 +494,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
   Widget _buildStats(BuildContext context) {
     final totalUsers = _users.length;
     final disabled = _users.where((u) => u['disabled'] == true).length;
-    final lastAuditMs = _audit.isNotEmpty ? _audit.first['created_at_ms']?.toString() : null;
+    final lastAuditMs =
+        _audit.isNotEmpty ? _audit.first['created_at_ms']?.toString() : null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Wrap(
@@ -475,7 +504,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
         children: [
           _chip(context.l10n.relayAdminUsersCount(totalUsers)),
           _chip(context.l10n.relayAdminUsersDisabledCount(disabled)),
-          if (lastAuditMs != null) _chip('${context.l10n.relayAdminAuditLast}: $lastAuditMs'),
+          if (lastAuditMs != null)
+            _chip('${context.l10n.relayAdminAuditLast}: $lastAuditMs'),
         ],
       ),
     );
@@ -526,13 +556,17 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               const SizedBox(width: 8),
               IconButton(
                 tooltip: context.l10n.relayAdminAuditFailedOnly,
-                onPressed: () => setState(() => _auditOnlyFailed = !_auditOnlyFailed),
-                icon: Icon(_auditOnlyFailed ? Icons.filter_alt : Icons.filter_alt_outlined),
+                onPressed: () =>
+                    setState(() => _auditOnlyFailed = !_auditOnlyFailed),
+                icon: Icon(_auditOnlyFailed
+                    ? Icons.filter_alt
+                    : Icons.filter_alt_outlined),
               ),
               IconButton(
                 tooltip: context.l10n.relayAdminAuditReverse,
                 onPressed: () => setState(() => _auditReverse = !_auditReverse),
-                icon: Icon(_auditReverse ? Icons.swap_vert : Icons.swap_vert_outlined),
+                icon: Icon(
+                    _auditReverse ? Icons.swap_vert : Icons.swap_vert_outlined),
               ),
             ],
           ),
@@ -546,7 +580,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               if (index >= filtered.length) {
                 return Center(
                   child: OutlinedButton(
-                    onPressed: _loading ? null : () => _refreshAudit(reset: false),
+                    onPressed:
+                        _loading ? null : () => _refreshAudit(reset: false),
                     child: Text(context.l10n.listLoadMore),
                   ),
                 );
@@ -555,7 +590,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen> with SingleTickerPr
               final ok = ev['ok'] == true;
               return Card(
                 child: ListTile(
-                  title: Text('${ev['action']} · ${ok ? context.l10n.ok : context.l10n.relayAdminAuditFailed}'),
+                  title: Text(
+                      '${ev['action']} · ${ok ? context.l10n.ok : context.l10n.relayAdminAuditFailed}'),
                   subtitle: Text(ev.toString()),
                 ),
               );

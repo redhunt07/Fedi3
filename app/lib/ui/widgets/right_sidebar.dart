@@ -143,7 +143,8 @@ class _RightSidebarState extends State<RightSidebar> {
         _ensureDraft(cfg);
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(UiTokens.padCard, UiTokens.padCard, UiTokens.padScreen, UiTokens.padCard),
+          padding: const EdgeInsets.fromLTRB(UiTokens.padCard, UiTokens.padCard,
+              UiTokens.padScreen, UiTokens.padCard),
           children: [
             if (cfg != null) ...[
               Card(
@@ -154,10 +155,14 @@ class _RightSidebarState extends State<RightSidebar> {
                     children: [
                       Row(
                         children: [
-                          Text(context.l10n.composeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text(context.l10n.composeTitle,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w800)),
                           const Spacer(),
                           FilledButton.icon(
-                            onPressed: api == null ? null : () => _openComposerOverlay(context, api),
+                            onPressed: api == null
+                                ? null
+                                : () => _openComposerOverlay(context, api),
                             icon: const Icon(Icons.edit_note),
                             label: Text(context.l10n.composeExpand),
                           ),
@@ -166,18 +171,26 @@ class _RightSidebarState extends State<RightSidebar> {
                       const SizedBox(height: UiTokens.gapSm),
                       Text(
                         context.l10n.composeQuickHint,
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12),
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(179),
+                            fontSize: 12),
                       ),
                       if (_draft != null) ...[
                         const SizedBox(height: UiTokens.gapSm),
                         Row(
                           children: [
-                            Icon(Icons.description_outlined, size: 16, color: Theme.of(context).colorScheme.primary),
+                            Icon(Icons.description_outlined,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.primary),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 context.l10n.composeDraftSaved,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700),
                               ),
                             ),
                             Tooltip(
@@ -211,9 +224,15 @@ class _RightSidebarState extends State<RightSidebar> {
                   children: [
                     Row(
                       children: [
-                        Text(context.l10n.notificationsTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.notificationsTitle,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const Spacer(),
-                        if (_loading) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                        if (_loading)
+                          const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
                         IconButton(
                           tooltip: context.l10n.timelineRefreshTitle,
                           onPressed: _loading ? null : _refresh,
@@ -223,14 +242,27 @@ class _RightSidebarState extends State<RightSidebar> {
                     ),
                     const SizedBox(height: UiTokens.gapSm),
                     if (!widget.appState.isRunning)
-                      Text(context.l10n.notificationsCoreNotRunning, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12))
+                      Text(context.l10n.notificationsCoreNotRunning,
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(179),
+                              fontSize: 12))
                     else if (_items.isEmpty)
-                      Text(context.l10n.notificationsEmpty, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(179), fontSize: 12))
+                      Text(context.l10n.notificationsEmpty,
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(179),
+                              fontSize: 12))
                     else
                       Column(
                         children: [
                           for (final it in _items.take(8))
-                            _SidebarNotificationRow(item: it, lastSeenMs: lastSeen),
+                            _SidebarNotificationRow(
+                                item: it, lastSeenMs: lastSeen),
                         ],
                       ),
                   ],
@@ -241,7 +273,9 @@ class _RightSidebarState extends State<RightSidebar> {
             Card(
               child: ListTile(
                 title: Text(context.l10n.settingsAccount),
-                subtitle: Text(cfg == null ? context.l10n.statusUnknownShort : '${cfg.username}@${cfg.domain}'),
+                subtitle: Text(cfg == null
+                    ? context.l10n.statusUnknownShort
+                    : '${cfg.username}@${cfg.domain}'),
                 trailing: const Icon(Icons.person_outline),
               ),
             ),
@@ -267,9 +301,11 @@ class _RightSidebarState extends State<RightSidebar> {
         final maxWidth = size.width < 640 ? size.width - 32 : 620.0;
         final maxHeight = size.height * 0.9;
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
+            constraints:
+                BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(UiTokens.padCard),
               child: Column(
@@ -278,7 +314,9 @@ class _RightSidebarState extends State<RightSidebar> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(context.l10n.composeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        child: Text(context.l10n.composeTitle,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                       ),
                       IconButton(
                         tooltip: context.l10n.cancel,
@@ -317,7 +355,8 @@ class _RightSidebarState extends State<RightSidebar> {
   Future<void> _loadDraft() async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final draft = await DraftStore.read(username: cfg.username, domain: cfg.domain);
+    final draft =
+        await DraftStore.read(username: cfg.username, domain: cfg.domain);
     if (!mounted) return;
     setState(() {
       if (draft == null || draft.text.trim().isEmpty) {
@@ -330,7 +369,8 @@ class _RightSidebarState extends State<RightSidebar> {
 
   void _resumeDraft(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ComposeScreen(appState: widget.appState)),
+      MaterialPageRoute(
+          builder: (_) => ComposeScreen(appState: widget.appState)),
     );
   }
 
@@ -351,12 +391,17 @@ class _SidebarNotificationRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ts = (item['ts'] is num) ? (item['ts'] as num).toInt() : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
-    final activity = (item['activity'] is Map) ? (item['activity'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final ts = (item['ts'] is num)
+        ? (item['ts'] as num).toInt()
+        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+    final activity = (item['activity'] is Map)
+        ? (item['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     final type = _normalizeNotificationType(activity);
     final actor = (activity['actor'] as String?)?.trim() ?? '';
 
-    final when = ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
+    final when =
+        ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
     final isNew = ts > 0 && ts > lastSeenMs;
 
     IconData icon = Icons.notifications;
@@ -385,7 +430,9 @@ class _SidebarNotificationRow extends StatelessWidget {
             Container(
               width: 8,
               height: 8,
-              decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary, borderRadius: BorderRadius.circular(99)),
+              decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary,
+                  borderRadius: BorderRadius.circular(99)),
             )
           else
             const SizedBox(width: 8),
@@ -403,7 +450,10 @@ class _SidebarNotificationRow extends StatelessWidget {
           if (when != null)
             Text(
               formatTimeAgo(context, when),
-              style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withAlpha(128)),
+              style: TextStyle(
+                  fontSize: 11,
+                  color:
+                      Theme.of(context).colorScheme.onSurface.withAlpha(128)),
             ),
         ],
       ),
@@ -413,7 +463,9 @@ class _SidebarNotificationRow extends StatelessWidget {
   static String _shortActor(String actor) {
     final uri = Uri.tryParse(actor);
     if (uri == null || uri.host.isEmpty) return actor;
-    if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'users' && uri.pathSegments.length >= 2) {
+    if (uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.first == 'users' &&
+        uri.pathSegments.length >= 2) {
       return '@${uri.pathSegments[1]}@${uri.host}';
     }
     return '@${uri.host}';
@@ -439,7 +491,11 @@ class _SidebarNotificationRow extends StatelessWidget {
       final obj = activity['object'];
       if (obj is Map) {
         final inner = (obj['type'] as String?)?.trim() ?? '';
-        if (inner == 'Follow' || inner == 'Accept' || inner == 'Reject' || inner == 'Like' || inner == 'EmojiReact') {
+        if (inner == 'Follow' ||
+            inner == 'Accept' ||
+            inner == 'Reject' ||
+            inner == 'Like' ||
+            inner == 'EmojiReact') {
           return inner;
         }
       }

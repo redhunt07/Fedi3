@@ -4,5 +4,14 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- P0-03: outgoing connections (core HTTP API, relay, federation) -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- P0-03: the embedded core binds a local TCP listener -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- P0-03: file_selector (backup export/import, avatar, media download) -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 </dict>
 </plist>

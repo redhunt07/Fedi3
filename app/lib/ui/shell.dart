@@ -86,7 +86,8 @@ class _ShellState extends State<Shell> {
     if (identical(_chatStreamConfig, cfg) && _chatStream != null) return;
     _chatStreamConfig = cfg;
     _chatStream?.cancel();
-    _chatStream = CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
+    _chatStream =
+        CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'chat') return;
       final lastSeen = widget.appState.prefs.lastChatSeenMs;
@@ -126,7 +127,8 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
+    final isWide =
+        MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
     final unread = widget.appState.unreadNotifications;
     final unreadChats = widget.appState.unreadChats;
 
@@ -136,17 +138,29 @@ class _ShellState extends State<Shell> {
         bottomNavigationBar: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SafeArea(top: false, child: NerdStatusBar(appState: widget.appState)),
+            SafeArea(
+                top: false, child: NerdStatusBar(appState: widget.appState)),
             NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: (i) => setState(() => _index = i),
               destinations: [
-                NavigationDestination(icon: const Icon(Icons.dynamic_feed), label: context.l10n.navTimeline),
-                NavigationDestination(icon: const Icon(Icons.search), label: context.l10n.navSearch),
-                NavigationDestination(icon: _badge(Icons.forum, unreadChats), label: context.l10n.navChat),
-                NavigationDestination(icon: _badge(Icons.notifications, unread), label: context.l10n.navNotifications),
-                NavigationDestination(icon: const Icon(Icons.hub), label: context.l10n.navRelays),
-                NavigationDestination(icon: const Icon(Icons.settings), label: context.l10n.navSettings),
+                NavigationDestination(
+                    icon: const Icon(Icons.dynamic_feed),
+                    label: context.l10n.navTimeline),
+                NavigationDestination(
+                    icon: const Icon(Icons.search),
+                    label: context.l10n.navSearch),
+                NavigationDestination(
+                    icon: _badge(Icons.forum, unreadChats),
+                    label: context.l10n.navChat),
+                NavigationDestination(
+                    icon: _badge(Icons.notifications, unread),
+                    label: context.l10n.navNotifications),
+                NavigationDestination(
+                    icon: const Icon(Icons.hub), label: context.l10n.navRelays),
+                NavigationDestination(
+                    icon: const Icon(Icons.settings),
+                    label: context.l10n.navSettings),
               ],
             ),
           ],
@@ -162,12 +176,24 @@ class _ShellState extends State<Shell> {
             onDestinationSelected: (i) => setState(() => _index = i),
             labelType: NavigationRailLabelType.all,
             destinations: [
-              NavigationRailDestination(icon: const Icon(Icons.dynamic_feed), label: Text(context.l10n.navTimeline)),
-              NavigationRailDestination(icon: const Icon(Icons.search), label: Text(context.l10n.navSearch)),
-              NavigationRailDestination(icon: _badge(Icons.forum, unreadChats), label: Text(context.l10n.navChat)),
-              NavigationRailDestination(icon: _badge(Icons.notifications, unread), label: Text(context.l10n.navNotifications)),
-              NavigationRailDestination(icon: const Icon(Icons.hub), label: Text(context.l10n.navRelays)),
-              NavigationRailDestination(icon: const Icon(Icons.settings), label: Text(context.l10n.navSettings)),
+              NavigationRailDestination(
+                  icon: const Icon(Icons.dynamic_feed),
+                  label: Text(context.l10n.navTimeline)),
+              NavigationRailDestination(
+                  icon: const Icon(Icons.search),
+                  label: Text(context.l10n.navSearch)),
+              NavigationRailDestination(
+                  icon: _badge(Icons.forum, unreadChats),
+                  label: Text(context.l10n.navChat)),
+              NavigationRailDestination(
+                  icon: _badge(Icons.notifications, unread),
+                  label: Text(context.l10n.navNotifications)),
+              NavigationRailDestination(
+                  icon: const Icon(Icons.hub),
+                  label: Text(context.l10n.navRelays)),
+              NavigationRailDestination(
+                  icon: const Icon(Icons.settings),
+                  label: Text(context.l10n.navSettings)),
             ],
           ),
           const VerticalDivider(width: 1),
@@ -177,8 +203,11 @@ class _ShellState extends State<Shell> {
                 Expanded(
                   child: Column(
                     children: [
-                      Expanded(child: IndexedStack(index: _index, children: _pages)),
-                      SafeArea(top: false, child: NerdStatusBar(appState: widget.appState)),
+                      Expanded(
+                          child: IndexedStack(index: _index, children: _pages)),
+                      SafeArea(
+                          top: false,
+                          child: NerdStatusBar(appState: widget.appState)),
                     ],
                   ),
                 ),

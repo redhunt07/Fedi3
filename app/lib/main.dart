@@ -19,8 +19,12 @@ import 'services/telemetry_service.dart';
 Future<void> main(List<String> args) async {
   await runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
-    if (!Platform.isLinux || Platform.environment['FEDI3_ENABLE_MEDIA_KIT_LINUX'] == '1') {
+    // D6/H-55: media_kit ships libmpv on Linux too, so it must always be
+    // initialized. A failure here must not prevent the app from starting.
+    try {
       MediaKit.ensureInitialized();
+    } catch (_) {
+      // Media playback will degrade gracefully; the rest of the app works.
     }
     await NotificationService.init();
     if (!Platform.isLinux && runWebViewTitleBarWidget(args)) return;

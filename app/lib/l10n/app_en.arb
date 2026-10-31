@@ -100,6 +100,8 @@
   "chatAddMemberHint": "Search or paste an actor",
   "chatRemoveMember": "Remove member",
   "chatReact": "React",
+  "chatDeleteThread": "Delete chat",
+  "chatDeleteThreadHint": "This will delete the entire chat thread for everyone.",
   "chatPin": "Pin chat",
   "chatUnpin": "Unpin chat",
   "chatTyping": "{name} is typing…",
@@ -171,6 +173,20 @@
   "noteContentWarning": "Content warning",
   "noteShowContent": "Show",
   "noteHideContent": "Hide",
+  "noteActions": "Actions",
+  "noteEdit": "Edit",
+  "noteDelete": "Delete",
+  "noteDeleted": "Note deleted",
+  "noteEditTitle": "Edit note",
+  "noteEditContentHint": "Edit content",
+  "noteEditSummaryHint": "Content warning (optional)",
+  "noteSensitiveLabel": "Sensitive content",
+  "noteEditSave": "Save",
+  "noteEditMissingAudience": "Missing audience",
+  "noteDeleteTitle": "Delete note",
+  "noteDeleteHint": "Are you sure you want to delete this note?",
+  "noteDeleteConfirm": "Delete",
+  "noteDeleteMissingAudience": "Missing audience",
 
   "timeAgoJustNow": "just now",
   "timeAgoMinutes": "{count,plural,=1{1 minute ago}other{{count} minutes ago}}",
@@ -686,5 +702,74 @@
   "uiEmojiPickerPresetCompact": "Compact",
   "uiEmojiPickerPresetComfort": "Comfort",
   "uiEmojiPickerPresetLarge": "Large",
-  "uiEmojiPickerPreviewLabel": "Preview"
+  "uiEmojiPickerPreviewLabel": "Preview",
+
+  "p2pRelayReserveLabel": "P2P relay reserve (multiaddr, one per line)",
+  "postDeliveryModeLabel": "Post delivery mode",
+  "postDeliveryP2pRelay": "P2P + Relay (fallback after 5s)",
+  "postDeliveryP2pOnly": "P2P only (never relay)",
+  "webrtcSectionTitle": "WebRTC (ICE/TURN)",
+  "webrtcSectionHint": "Use TURN/STUN as P2P fallback (recommended)",
+  "webrtcAutofill": "Auto-fill ICE from relay",
+  "webrtcIceUrlsLabel": "WebRTC ICE URLs (one per line)",
+  "webrtcIceUsernameLabel": "WebRTC ICE username",
+  "webrtcIceCredentialLabel": "WebRTC ICE credential",
+  "fileTypeJson": "JSON",
+
+  "notificationsMarkAllRead": "Mark all read",
+  "notificationsFilterAll": "All",
+  "notificationsFilterMentions": "Mentions",
+  "notificationsFilterReactions": "Reactions",
+  "notificationsFilterFollows": "Follows",
+  "notificationsFilterBoosts": "Boosts",
+  "notificationsFilterLikes": "Likes",
+  "notificationsFollowedBack": "Followed back",
+  "notificationsFollowBack": "Follow back",
+  "notificationsFollowBackFailed": "Follow back failed: {error}",
+  "@notificationsFollowBackFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "notificationsReply": "Reply",
+
+  "timelineFiltersTooltip": "Filters",
+  "timelineFiltersTitle": "Filters",
+  "timelineFilterMedia": "Media",
+  "timelineFilterReply": "Reply",
+  "timelineFilterBoost": "Boost",
+  "timelineFilterMention": "Mention",
+
+  "mediaDownload": "Download",
+  "mediaShare": "Share",
+  "mediaAutoplayOn": "Autoplay on",
+  "mediaAutoplayOff": "Autoplay off",
+  "mediaMuted": "Muted",
+  "mediaSoundOn": "Sound on",
+  "mediaOpenInBrowser": "Open in browser",
+  "mediaDownloaded": "Downloaded",
+  "mediaDownloadFailed": "Download failed: {error}",
+  "@mediaDownloadFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "noteThreadMuted": "Thread muted",
+  "noteUnmute": "Unmute",
+  "noteLinkCopied": "Link copied",
+  "noteUsers": "Users",
+  "noteReactionsTitle": "Reactions {label}",
+  "@noteReactionsTitle": {
+    "placeholders": {
+      "label": { "type": "String" }
+    }
+  },
+  "semanticsAvatar": "Avatar",
+  "semanticsMedia": "Media attachment",
+  "onboardingErrUsername": "Username must be 1-64 characters: letters, digits or underscore.",
+  "onboardingErrDomain": "Enter a valid domain (e.g. example.com).",
+  "onboardingErrPublicUrl": "Public URL must be an absolute http(s) URL.",
+  "onboardingErrRelayWs": "Relay WebSocket URL must start with ws:// or wss://.",
+  "onboardingErrBind": "Bind address must be host:port (e.g. 127.0.0.1:8788)."
 }

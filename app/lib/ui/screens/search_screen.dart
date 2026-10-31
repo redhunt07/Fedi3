@@ -22,7 +22,11 @@ enum SearchTab { posts, users, hashtags }
 enum SearchSource { all, local, relay }
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key, required this.appState, this.initialQuery, this.initialTab = SearchTab.posts});
+  const SearchScreen(
+      {super.key,
+      required this.appState,
+      this.initialQuery,
+      this.initialTab = SearchTab.posts});
 
   final AppState appState;
   final String? initialQuery;
@@ -32,7 +36,8 @@ class SearchScreen extends StatefulWidget {
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
-class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderStateMixin {
+class _SearchScreenState extends State<SearchScreen>
+    with SingleTickerProviderStateMixin {
   late final TextEditingController _searchCtrl;
   late final TabController _tabs;
   Timer? _debounce;
@@ -56,7 +61,8 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     _query = widget.initialQuery?.trim() ?? '';
     _activeTab = widget.initialTab;
     _searchCtrl = TextEditingController(text: _query);
-    _tabs = TabController(length: 3, vsync: this, initialIndex: _tabIndex(_activeTab));
+    _tabs = TabController(
+        length: 3, vsync: this, initialIndex: _tabIndex(_activeTab));
     _searchCtrl.addListener(_onQueryChanged);
     _tabs.addListener(() {
       if (!_tabs.indexIsChanging) {
@@ -248,13 +254,16 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
 
   bool _looksLikeHandleOrUrl(String input) {
     final v = input.trim();
-    return v.contains('@') || v.startsWith('http://') || v.startsWith('https://');
+    return v.contains('@') ||
+        v.startsWith('http://') ||
+        v.startsWith('https://');
   }
 
   void _openProfile(ActorProfile profile) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ProfileScreen(appState: widget.appState, actorUrl: profile.id),
+        builder: (_) =>
+            ProfileScreen(appState: widget.appState, actorUrl: profile.id),
       ),
     );
   }
@@ -276,7 +285,8 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         alignment: Alignment.centerLeft,
         child: RichText(
           text: TextSpan(
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(180)),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(180)),
             children: [
               TextSpan(text: '${context.l10n.searchShowingFor} '),
               TextSpan(
@@ -304,7 +314,9 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         TextSpan(text: text.substring(0, idx)),
         TextSpan(
           text: text.substring(idx, idx + q.length),
-          style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w700),
+          style: TextStyle(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w700),
         ),
         TextSpan(text: text.substring(idx + q.length)),
       ],
@@ -312,7 +324,9 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 
   Widget _sourceBadge(BuildContext context, String? source) {
-    final label = source == 'relay' ? context.l10n.searchSourceRelay : context.l10n.searchSourceLocal;
+    final label = source == 'relay'
+        ? context.l10n.searchSourceRelay
+        : context.l10n.searchSourceLocal;
     return Chip(
       label: Text(label),
       visualDensity: VisualDensity.compact,
@@ -334,7 +348,8 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
               decoration: InputDecoration(
                 hintText: context.l10n.searchHint,
                 prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                 filled: true,
               ),
               textInputAction: TextInputAction.search,
@@ -348,9 +363,15 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
               child: SegmentedButton<SearchSource>(
                 showSelectedIcon: false,
                 segments: [
-                  ButtonSegment<SearchSource>(value: SearchSource.all, label: Text(context.l10n.searchSourceAll)),
-                  ButtonSegment<SearchSource>(value: SearchSource.local, label: Text(context.l10n.searchSourceLocal)),
-                  ButtonSegment<SearchSource>(value: SearchSource.relay, label: Text(context.l10n.searchSourceRelay)),
+                  ButtonSegment<SearchSource>(
+                      value: SearchSource.all,
+                      label: Text(context.l10n.searchSourceAll)),
+                  ButtonSegment<SearchSource>(
+                      value: SearchSource.local,
+                      label: Text(context.l10n.searchSourceLocal)),
+                  ButtonSegment<SearchSource>(
+                      value: SearchSource.relay,
+                      label: Text(context.l10n.searchSourceRelay)),
                 ],
                 selected: {_source},
                 onSelectionChanged: (next) {
@@ -494,7 +515,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
             overflow: TextOverflow.ellipsis,
           ),
           subtitle: RichText(
-            text: _highlightQuery(context, user.profile.preferredUsername.isNotEmpty ? user.profile.preferredUsername : user.profile.id),
+            text: _highlightQuery(
+                context,
+                user.profile.preferredUsername.isNotEmpty
+                    ? user.profile.preferredUsername
+                    : user.profile.id),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

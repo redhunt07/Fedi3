@@ -66,7 +66,8 @@ class ChatMessageItem {
       senderDevice: json['sender_device']?.toString() ?? '',
       createdAtMs: (json['created_at_ms'] as num?)?.toInt() ?? 0,
       editedAtMs: (json['edited_at_ms'] as num?)?.toInt(),
-      deleted: (json['deleted'] as bool?) ?? ((json['deleted'] as num?)?.toInt() ?? 0) != 0,
+      deleted: (json['deleted'] as bool?) ??
+          ((json['deleted'] as num?)?.toInt() ?? 0) != 0,
       bodyJson: json['body_json']?.toString() ?? '{}',
     );
   }
@@ -161,7 +162,8 @@ class ChatAttachment {
     return ChatAttachment(
       id: json['id']?.toString() ?? '',
       url: json['url']?.toString() ?? '',
-      mediaType: json['mediaType']?.toString() ?? json['media_type']?.toString() ?? '',
+      mediaType:
+          json['mediaType']?.toString() ?? json['media_type']?.toString() ?? '',
       name: json['name']?.toString(),
       width: (json['width'] as num?)?.toInt(),
       height: (json['height'] as num?)?.toInt(),

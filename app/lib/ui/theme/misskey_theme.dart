@@ -40,7 +40,9 @@ class MisskeyTheme {
         color: surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(UiTokens.radiusCard))),
+        shape: RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.all(Radius.circular(UiTokens.radiusCard))),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -84,7 +86,9 @@ class MisskeyTheme {
         color: surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(UiTokens.radiusCard))),
+        shape: RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.all(Radius.circular(UiTokens.radiusCard))),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,

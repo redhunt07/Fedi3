@@ -15,7 +15,8 @@ class ModerationSettingsScreen extends StatefulWidget {
   final AppState appState;
 
   @override
-  State<ModerationSettingsScreen> createState() => _ModerationSettingsScreenState();
+  State<ModerationSettingsScreen> createState() =>
+      _ModerationSettingsScreenState();
 }
 
 class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
@@ -29,7 +30,8 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
   void initState() {
     super.initState();
     _cfg = widget.appState.config!;
-    _blockedDomains = TextEditingController(text: _cfg.blockedDomains.join('\n'));
+    _blockedDomains =
+        TextEditingController(text: _cfg.blockedDomains.join('\n'));
     _blockedActors = TextEditingController(text: _cfg.blockedActors.join('\n'));
   }
 
@@ -46,7 +48,9 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
       appBar: AppBar(
         title: Text(context.l10n.moderationTitle),
         actions: [
-          TextButton(onPressed: _saving ? null : _save, child: Text(context.l10n.save)),
+          TextButton(
+              onPressed: _saving ? null : _save,
+              child: Text(context.l10n.save)),
         ],
       ),
       body: ListView(
@@ -57,28 +61,36 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 _status!,
-                style: TextStyle(color: _status!.startsWith('OK') ? null : Theme.of(context).colorScheme.error),
+                style: TextStyle(
+                    color: _status!.startsWith('OK')
+                        ? null
+                        : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.moderationBlockedDomains, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.moderationBlockedDomains,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           TextField(
             controller: _blockedDomains,
             maxLines: 6,
-            decoration: InputDecoration(hintText: context.l10n.moderationBlockedDomainsHint),
+            decoration: InputDecoration(
+                hintText: context.l10n.moderationBlockedDomainsHint),
           ),
           const SizedBox(height: 16),
-          Text(context.l10n.moderationBlockedActors, style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(context.l10n.moderationBlockedActors,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           TextField(
             controller: _blockedActors,
             maxLines: 6,
-            decoration: InputDecoration(hintText: context.l10n.moderationBlockedActorsHint),
+            decoration: InputDecoration(
+                hintText: context.l10n.moderationBlockedActorsHint),
           ),
           const SizedBox(height: 16),
           Text(
             context.l10n.moderationHint,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
           ),
         ],
       ),
@@ -135,9 +147,7 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
         previousPublicBaseUrl: c.previousPublicBaseUrl,
         previousRelayToken: c.previousRelayToken,
       );
-      await widget.appState.stopCore();
-      await widget.appState.saveConfig(updated);
-      await widget.appState.startCore();
+      await widget.appState.replaceConfig(updated);
       if (!mounted) return;
       setState(() => _status = context.l10n.ok);
     } catch (e) {

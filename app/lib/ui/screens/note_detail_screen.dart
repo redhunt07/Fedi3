@@ -196,7 +196,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
               appState: widget.appState,
               item: TimelineItem(
                 activityId: (widget.activity['id'] as String?)?.trim() ?? '',
-                activityType: (widget.activity['type'] as String?)?.trim() ?? '',
+                activityType:
+                    (widget.activity['type'] as String?)?.trim() ?? '',
                 actor: (widget.activity['actor'] as String?)?.trim() ?? '',
                 note: Note(
                   id: '',
@@ -233,14 +234,17 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
       final kids = _children[id] ?? const [];
       final sorted = kids.toList()
         ..sort((a, b) {
-          final da = DateTime.tryParse(_notes[a]?.published ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final db = DateTime.tryParse(_notes[b]?.published ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final da = DateTime.tryParse(_notes[a]?.published ?? '') ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final db = DateTime.tryParse(_notes[b]?.published ?? '') ??
+              DateTime.fromMillisecondsSinceEpoch(0);
           return da.compareTo(db);
         });
       for (final k in sorted) {
         walk(k, depth + 1);
       }
     }
+
     walk(rootId, 0);
     return out;
   }
@@ -252,7 +256,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     if (key == null) return;
     final ctx = key.currentContext;
     if (ctx == null) return;
-    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+    Scrollable.ensureVisible(ctx,
+        duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
   }
 }
 
@@ -293,7 +298,8 @@ class _ThreadNodeRow extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.only(left: pad),
       child: Card(
-        color: isRoot ? Theme.of(context).colorScheme.primary.withAlpha(20) : null,
+        color:
+            isRoot ? Theme.of(context).colorScheme.primary.withAlpha(20) : null,
         child: Column(
           children: [
             Row(
@@ -302,7 +308,8 @@ class _ThreadNodeRow extends StatelessWidget {
                   IconButton(
                     tooltip: collapsed ? 'Expand' : 'Collapse',
                     onPressed: onToggleCollapse,
-                    icon: Icon(collapsed ? Icons.chevron_right : Icons.expand_more),
+                    icon: Icon(
+                        collapsed ? Icons.chevron_right : Icons.expand_more),
                   )
                 else
                   const SizedBox(width: 40),

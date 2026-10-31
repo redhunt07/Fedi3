@@ -3,60 +3,354 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 
 import '../model/core_config.dart';
+import 'core_http.dart';
+
+/// Classification of every failure the app can get from the core or the relay.
+///
+/// AN-01..10: the UI must be able to tell a timeout from an auth problem and a
+/// server error, and decide whether a retry makes sense.
+enum CoreApiErrorKind {
+  timeout,
+  network,
+  unauthorized,
+  forbidden,
+  notFound,
+  badRequest,
+  server,
+  decode,
+  invalidConfig,
+}
+
+class CoreApiException implements Exception {
+  CoreApiException(
+    this.kind,
+    this.message, {
+    this.statusCode,
+    this.retryable = false,
+    this.cause,
+  });
+
+  final CoreApiErrorKind kind;
+  final String message;
+  final int? statusCode;
+  final bool retryable;
+  final Object? cause;
+
+  bool get isTimeout => kind == CoreApiErrorKind.timeout;
+
+  bool get isAuth =>
+      kind == CoreApiErrorKind.unauthorized ||
+      kind == CoreApiErrorKind.forbidden;
+
+  factory CoreApiException.invalidConfig(String message, {Object? cause}) =>
+      CoreApiException(CoreApiErrorKind.invalidConfig, message, cause: cause);
+
+  @override
+  String toString() {
+    final causeText = cause == null ? '' : ' ($cause)';
+    return 'CoreApiException(${kind.name}'
+        '${statusCode == null ? '' : ', status=$statusCode'}): $message$causeText';
+  }
+}
 
 class CoreApi {
-  CoreApi({required this.config});
+  CoreApi({
+    required this.config,
+    http.Client? client,
+    Duration? totalTimeout,
+  })  : _client = client,
+        _totalTimeout = totalTimeout ?? CoreHttp.totalTimeout;
 
   final CoreConfig config;
+  final http.Client? _client;
+  final Duration _totalTimeout;
+
+  http.Client get _http => _client ?? CoreHttp.client;
 
   Map<String, String> get _internalHeaders => {
-        if (config.internalToken.trim().isNotEmpty) 'X-Fedi3-Internal': config.internalToken.trim(),
+        if (config.internalToken.trim().isNotEmpty)
+          'X-Fedi3-Internal': config.internalToken.trim(),
       };
 
+  Map<String, String> get _jsonHeaders => {
+        ..._internalHeaders,
+        'Content-Type': 'application/json',
+      };
+
+  Map<String, String> get _activityHeaders => {
+        ..._internalHeaders,
+        'Content-Type': 'application/activity+json',
+        'Accept': 'application/activity+json',
+      };
+
+  Map<String, String> get _bearerHeaders => {
+        if (config.relayToken.trim().isNotEmpty)
+          'Authorization': 'Bearer ${config.relayToken.trim()}',
+      };
+
+  // ---------------------------------------------------------------------------
+  // URL construction (M-33: never let Uri.parse throw an unhandled
+  // FormatException on an empty or malformed configuration).
+  // ---------------------------------------------------------------------------
+
+  Uri get _localBaseUri {
+    final bind = config.bind.trim();
+    if (bind.isEmpty) {
+      throw CoreApiException.invalidConfig('core bind address is empty');
+    }
+    try {
+      return Uri.parse('http://$bind');
+    } on FormatException catch (e) {
+      throw CoreApiException.invalidConfig('invalid core bind address: $bind',
+          cause: e);
+    }
+  }
+
+  Uri get _relayBaseUri {
+    final raw = config.publicBaseUrl.trim();
+    if (raw.isEmpty) {
+      throw CoreApiException.invalidConfig('publicBaseUrl is empty');
+    }
+    Uri parsed;
+    try {
+      parsed = Uri.parse(raw);
+    } on FormatException catch (e) {
+      throw CoreApiException.invalidConfig('invalid publicBaseUrl: $raw',
+          cause: e);
+    }
+    if (parsed.host.isEmpty ||
+        (parsed.scheme != 'http' && parsed.scheme != 'https')) {
+      throw CoreApiException.invalidConfig(
+          'publicBaseUrl must be an absolute http(s) URL: $raw');
+    }
+    return parsed;
+  }
+
   bool get _bindLooksLocal {
-    final host = Uri.parse('http://${config.bind}').host.toLowerCase();
-    return host == '127.0.0.1' || host == 'localhost' || host == '0.0.0.0' || host == '::1';
+    try {
+      final host = _localBaseUri.host.toLowerCase();
+      return host == '127.0.0.1' ||
+          host == 'localhost' ||
+          host == '0.0.0.0' ||
+          host == '::1';
+    } on CoreApiException {
+      return true;
+    }
   }
 
-  Uri _baseLocalOrRelay() {
-    if (_bindLooksLocal) return config.localBaseUri;
-    return Uri.parse(config.publicBaseUrl.trim());
-  }
+  Uri _baseLocalOrRelay() => _bindLooksLocal ? _localBaseUri : _relayBaseUri;
 
-  Uri _internalBase(String path) {
-    return config.localBaseUri.replace(path: path);
+  Uri _internal(String path, [Map<String, String>? query]) {
+    return _localBaseUri.replace(path: path, queryParameters: query);
   }
 
   Uri _localOrRelay(String path, [Map<String, String>? query]) {
-    return _baseLocalOrRelay().replace(
-      path: path,
-      queryParameters: query,
-    );
+    return _baseLocalOrRelay().replace(path: path, queryParameters: query);
   }
 
-  Uri _internal(String path, [Map<String, String>? query]) {
-    return _internalBase(path).replace(
-      queryParameters: query,
-    );
+  Uri _relay(String path, [Map<String, String>? query]) {
+    return _relayBaseUri.replace(path: path, queryParameters: query);
   }
+
+  String get _publicBase =>
+      config.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+
+  String get _me =>
+      '$_publicBase/users/${Uri.encodeComponent(config.username.trim())}';
+
+  // ---------------------------------------------------------------------------
+  // Single request helper (D1/H-50/AN-01..10).
+  // ---------------------------------------------------------------------------
+
+  Future<http.Response> _request({
+    required String method,
+    required Uri uri,
+    Map<String, String>? headers,
+    Object? body,
+    Set<int> okStatus = const {200},
+    bool anySuccess = false,
+  }) async {
+    final request = http.Request(method, uri);
+    if (headers != null) request.headers.addAll(headers);
+    if (body != null) {
+      if (body is String) {
+        request.body = body;
+      } else if (body is List<int>) {
+        request.bodyBytes = body;
+      } else if (body is Uint8List) {
+        request.bodyBytes = body;
+      } else {
+        request.body = jsonEncode(body);
+      }
+    }
+
+    http.Response resp;
+    try {
+      final streamed = await _http.send(request).timeout(_totalTimeout);
+      resp = await http.Response.fromStream(streamed).timeout(_totalTimeout);
+    } on CoreApiException {
+      rethrow;
+    } on TimeoutException catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.timeout,
+        '$method $uri timed out after ${_totalTimeout.inSeconds}s',
+        retryable: true,
+        cause: e,
+      );
+    } on SocketException catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.network,
+        '$method $uri failed: $e',
+        retryable: true,
+        cause: e,
+      );
+    } on http.ClientException catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.network,
+        '$method $uri failed: $e',
+        retryable: true,
+        cause: e,
+      );
+    } on IOException catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.network,
+        '$method $uri failed: $e',
+        retryable: true,
+        cause: e,
+      );
+    } catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.network,
+        '$method $uri failed: $e',
+        retryable: true,
+        cause: e,
+      );
+    }
+
+    final status = resp.statusCode;
+    if (okStatus.contains(status) ||
+        (anySuccess && status >= 200 && status < 300)) {
+      return resp;
+    }
+    throw _statusException(method, uri, resp);
+  }
+
+  CoreApiException _statusException(
+      String method, Uri uri, http.Response resp) {
+    final status = resp.statusCode;
+    final snippet = _bodySnippet(resp.body);
+    final detail =
+        '$method $uri returned $status${snippet.isEmpty ? '' : ': $snippet'}';
+    if (status == 401) {
+      return CoreApiException(CoreApiErrorKind.unauthorized, detail,
+          statusCode: status);
+    }
+    if (status == 403) {
+      return CoreApiException(CoreApiErrorKind.forbidden, detail,
+          statusCode: status);
+    }
+    if (status == 404) {
+      return CoreApiException(CoreApiErrorKind.notFound, detail,
+          statusCode: status);
+    }
+    if (status == 400 || status == 409 || status == 413 || status == 422) {
+      return CoreApiException(CoreApiErrorKind.badRequest, detail,
+          statusCode: status);
+    }
+    if (status >= 500) {
+      return CoreApiException(
+        CoreApiErrorKind.server,
+        detail,
+        statusCode: status,
+        retryable: true,
+      );
+    }
+    return CoreApiException(CoreApiErrorKind.server, detail,
+        statusCode: status);
+  }
+
+  String _bodySnippet(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed.length <= 512 ? trimmed : '${trimmed.substring(0, 512)}…';
+  }
+
+  Map<String, dynamic> _decodeMap(http.Response resp, String operation) {
+    try {
+      final json = jsonDecode(resp.body);
+      if (json is Map) return json.cast<String, dynamic>();
+      throw const FormatException('expected a JSON object');
+    } on FormatException catch (e) {
+      throw CoreApiException(
+        CoreApiErrorKind.decode,
+        '$operation returned invalid JSON',
+        cause: e,
+      );
+    }
+  }
+
+  /// Percent-encodes a header value when it contains non-ASCII bytes.
+  ///
+  /// H-66: `dart:io` rejects header values with non-ASCII bytes, so uploading
+  /// `città.jpg` used to fail with an opaque `HttpException`.
+  static String encodeHeaderValue(String value) {
+    final asciiPrintable = RegExp(r'^[\x20-\x7E]*$');
+    if (asciiPrintable.hasMatch(value)) return value;
+    return Uri.encodeComponent(value);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Health (C12/H-51 watchdog).
+  // ---------------------------------------------------------------------------
+
+  /// GET /_fedi3/health. Throws [CoreApiException] on failure.
+  Future<Map<String, dynamic>> health() async {
+    final resp = await _request(
+      method: 'GET',
+      uri: _internal('/_fedi3/health'),
+      headers: _internalHeaders,
+    );
+    return _decodeMap(resp, 'health');
+  }
+
+  /// Non-throwing health probe used by the watchdog.
+  Future<bool> pingHealth() async {
+    try {
+      await health();
+      return true;
+    } on CoreApiException {
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Actors / webfinger.
+  // ---------------------------------------------------------------------------
 
   Future<String> _resolveActorInput(String input) async {
     var v = input.trim();
-    if (v.isEmpty) throw StateError('missing actor');
+    if (v.isEmpty) {
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing actor');
+    }
 
     var user = '';
     var host = '';
 
     if (v.startsWith('http://') || v.startsWith('https://')) {
       final uri = Uri.tryParse(v);
-      if (uri == null || uri.host.isEmpty) throw StateError('invalid url');
+      if (uri == null || uri.host.isEmpty) {
+        throw CoreApiException(
+            CoreApiErrorKind.badRequest, 'invalid actor URL: $v');
+      }
       host = uri.host;
 
       final path = uri.path;
@@ -71,34 +365,53 @@ class CoreApi {
     } else if (v.contains('@')) {
       v = v.startsWith('@') ? v.substring(1) : v;
       final parts = v.split('@').where((p) => p.trim().isNotEmpty).toList();
-      if (parts.length < 2) throw StateError('invalid handle');
+      if (parts.length < 2) {
+        throw CoreApiException(
+            CoreApiErrorKind.badRequest, 'invalid handle: $v');
+      }
       user = parts.first;
       host = parts.last;
     } else {
-      throw StateError('unsupported actor format');
+      throw CoreApiException(
+          CoreApiErrorKind.badRequest, 'unsupported actor format: $v');
     }
 
     if (user.isEmpty || host.isEmpty) {
-      throw StateError('invalid actor');
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'invalid actor: $v');
     }
 
     final wf = Uri.parse('https://$host/.well-known/webfinger')
         .replace(queryParameters: {'resource': 'acct:$user@$host'});
 
-    final resp = await http.get(wf, headers: {'Accept': 'application/jrd+json, application/json'});
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('webfinger failed: ${resp.statusCode} ${resp.body}');
+    final resp = await _request(
+      method: 'GET',
+      uri: wf,
+      headers: {'Accept': 'application/jrd+json, application/json'},
+    );
+
+    Map<String, dynamic> json;
+    try {
+      final decoded = jsonDecode(resp.body);
+      if (decoded is! Map) {
+        throw const FormatException('expected a JSON object');
+      }
+      json = decoded.cast<String, dynamic>();
+    } on FormatException catch (e) {
+      throw CoreApiException(
+          CoreApiErrorKind.decode, 'webfinger returned invalid JSON',
+          cause: e);
     }
-    final json = jsonDecode(resp.body);
-    if (json is! Map) throw StateError('webfinger invalid json');
-    final links = (json['links'] as List<dynamic>? ?? []);
+
+    final links = (json['links'] as List<dynamic>? ?? const []);
     for (final link in links) {
       if (link is! Map) continue;
       final rel = link['rel']?.toString();
       final href = link['href']?.toString();
       final type = link['type']?.toString() ?? '';
       if (rel == 'self' && href != null && href.isNotEmpty) {
-        if (type.contains('activity+json') || type.contains('application/json') || type.isEmpty) {
+        if (type.contains('activity+json') ||
+            type.contains('application/json') ||
+            type.isEmpty) {
           return href.replaceAll(RegExp(r'/+$'), '');
         }
       }
@@ -106,84 +419,130 @@ class CoreApi {
     for (final link in links) {
       if (link is! Map) continue;
       final href = link['href']?.toString();
-      if (href != null && href.isNotEmpty) return href.replaceAll(RegExp(r'/+$'), '');
+      if (href != null && href.isNotEmpty) {
+        return href.replaceAll(RegExp(r'/+$'), '');
+      }
     }
-    throw StateError('webfinger: no actor link');
+    throw CoreApiException(
+        CoreApiErrorKind.decode, 'webfinger: no actor link for $v');
   }
 
   Future<String> resolveActorInput(String input) async {
     return _resolveActorInput(input);
   }
 
-  Future<Map<String, dynamic>> fetchTimeline(String kind, {String? cursor, int limit = 50}) async {
+  // ---------------------------------------------------------------------------
+  // Timelines, objects, search, notifications.
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> fetchTimeline(String kind,
+      {String? cursor, int limit = 50}) async {
     final uri = _internal('/_fedi3/timeline/$kind', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('timeline $kind failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'timeline $kind');
   }
 
-  Future<void> triggerLegacySync({int pages = 6, int itemsPerActor = 200}) async {
+  Future<void> triggerLegacySync(
+      {int pages = 6, int itemsPerActor = 200}) async {
     final uri = _internal('/_fedi3/sync/legacy', {
       'pages': pages.toString(),
       'items': itemsPerActor.toString(),
     });
-    final resp = await http.post(uri, headers: {..._internalHeaders, 'Content-Type': 'application/json'}, body: '{}');
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('legacy sync failed: ${resp.statusCode} ${resp.body}');
-    }
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: '{}',
+      anySuccess: true,
+    );
   }
 
   Future<Map<String, dynamic>?> fetchCachedObject(String url) async {
     final u = url.trim();
     if (u.isEmpty) return null;
     final uri = _internal('/_fedi3/object', {'url': u});
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode == 404) return null;
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('object fetch failed: ${resp.statusCode} ${resp.body}');
+    try {
+      final resp = await _request(
+        method: 'GET',
+        uri: uri,
+        headers: _internalHeaders,
+        okStatus: const {200, 404},
+      );
+      if (resp.statusCode == 404) return null;
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return null;
+      return json.cast<String, dynamic>();
+    } on FormatException catch (e) {
+      throw CoreApiException(
+          CoreApiErrorKind.decode, 'object fetch returned invalid JSON',
+          cause: e);
     }
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return null;
-    return json.cast<String, dynamic>();
   }
 
-  Future<Map<String, dynamic>> fetchNoteReplies(String noteId, {String? cursor, int limit = 20}) async {
+  Future<Map<String, dynamic>> fetchNoteReplies(String noteId,
+      {String? cursor, int limit = 20}) async {
     final uri = _internal('/_fedi3/note/replies', {
       'note': noteId,
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('note replies failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'note replies');
   }
 
-  Future<Map<String, dynamic>> fetchReactions(String objectId, {int limit = 50}) async {
+  Future<Map<String, dynamic>> fetchReactions(String objectId,
+      {int limit = 50}) async {
     final uri = _internal('/_fedi3/reactions', {
       'object': objectId,
       'limit': limit.toString(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('reactions failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'reactions');
   }
 
   Future<Map<String, dynamic>> fetchMyReactions(String objectId) async {
     final uri = _internal('/_fedi3/reactions/me', {'object': objectId});
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('my reactions failed: ${resp.statusCode} ${resp.body}');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'my reactions');
+  }
+
+  Future<List<String>> fetchReactionActors({
+    required String objectId,
+    required String type,
+    String? content,
+    int limit = 50,
+  }) async {
+    final uri = _internal('/_fedi3/reactions/actors', {
+      'object': objectId,
+      'type': type,
+      if (content != null && content.trim().isNotEmpty)
+        'content': content.trim(),
+      'limit': limit.toString(),
+    });
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    try {
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return const [];
+      final items = json['items'];
+      if (items is! List) return const [];
+      return items
+          .whereType<String>()
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } on FormatException catch (e) {
+      throw CoreApiException(
+          CoreApiErrorKind.decode, 'reaction actors returned invalid JSON',
+          cause: e);
     }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> searchNotes({
@@ -199,15 +558,14 @@ class CoreApi {
       if (tag != null && tag.trim().isNotEmpty) 'tag': tag.trim(),
       'limit': limit.toString(),
       if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     };
     final uri = _internal('/_fedi3/search/notes', params);
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('search notes failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'search notes');
   }
 
   Future<Map<String, dynamic>> searchUsers({
@@ -221,39 +579,86 @@ class CoreApi {
       'q': query,
       'limit': limit.toString(),
       if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     };
     final uri = _internal('/_fedi3/search/users', params);
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('search users failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'search users');
   }
 
-  Future<Map<String, dynamic>> fetchChatThreads({String? cursor, int limit = 50}) async {
+  Future<Map<String, dynamic>> searchHashtags({
+    required String query,
+    String? source,
+    String? consistency,
+    int limit = 30,
+  }) async {
+    final params = <String, String>{
+      'q': query,
+      'limit': limit.toString(),
+      if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
+      if (consistency != null && consistency.trim().isNotEmpty)
+        'consistency': consistency.trim(),
+    };
+    final uri = _internal('/_fedi3/search/hashtags', params);
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'search hashtags');
+  }
+
+  Future<Map<String, dynamic>> fetchNotifications(
+      {String? cursor, int limit = 50}) async {
+    final uri = _internal('/_fedi3/notifications', {
+      'limit': limit.toString(),
+      if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
+    });
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'notifications');
+  }
+
+  Future<Map<String, dynamic>> fetchNetMetrics() async {
+    final uri = _internal('/_fedi3/net/metrics');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'net metrics');
+  }
+
+  Future<void> refreshProfile() async {
+    final uri = _internal('/_fedi3/profile/refresh');
+    await _request(
+        method: 'POST', uri: uri, headers: _internalHeaders, anySuccess: true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chat. Thread ids are opaque and may contain `/` or `%` (AN-07/H-66).
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> fetchChatThreads(
+      {String? cursor, int limit = 50}) async {
     final uri = _internal('/_fedi3/chat/threads', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat threads failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'chat threads');
   }
 
-  Future<Map<String, dynamic>> fetchChatMembers({required String threadId}) async {
-    final uri = _internal('/_fedi3/chat/thread/members', {'thread_id': threadId});
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode == 404) {
-      return {'items': []};
-    }
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat members failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> fetchChatMembers(
+      {required String threadId}) async {
+    final uri =
+        _internal('/_fedi3/chat/thread/members', {'thread_id': threadId});
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return {'items': const []};
+    return _decodeMap(resp, 'chat members');
   }
 
   Future<Map<String, dynamic>> fetchChatMessages({
@@ -261,15 +666,14 @@ class CoreApi {
     String? cursor,
     int limit = 50,
   }) async {
-    final uri = _internal('/_fedi3/chat/threads/$threadId', {
+    final uri =
+        _internal('/_fedi3/chat/threads/${Uri.encodeComponent(threadId)}', {
       'limit': limit.toString(),
       if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat messages failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'chat messages');
   }
 
   Future<Map<String, dynamic>> sendChatMessage({
@@ -282,48 +686,47 @@ class CoreApi {
   }) async {
     final uri = _internal('/_fedi3/chat/send');
     final body = jsonEncode({
-      if (threadId != null && threadId.trim().isNotEmpty) 'thread_id': threadId.trim(),
+      if (threadId != null && threadId.trim().isNotEmpty)
+        'thread_id': threadId.trim(),
       'recipients': recipients,
       'text': text,
-      if (replyTo != null && replyTo.trim().isNotEmpty) 'reply_to': replyTo.trim(),
+      if (replyTo != null && replyTo.trim().isNotEmpty)
+        'reply_to': replyTo.trim(),
       if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
-      if (attachments != null && attachments.isNotEmpty) 'attachments': attachments,
+      if (attachments != null && attachments.isNotEmpty)
+        'attachments': attachments,
     });
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
       body: body,
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat send failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    return _decodeMap(resp, 'chat send');
   }
 
-  Future<void> updateChatThreadTitle({required String threadId, required String title}) async {
+  Future<void> updateChatThreadTitle(
+      {required String threadId, required String title}) async {
     final uri = _internal('/_fedi3/chat/thread/update');
-    final body = jsonEncode({'thread_id': threadId, 'title': title});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'thread_id': threadId, 'title': title}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread update failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
   Future<void> deleteChatThread({required String threadId}) async {
     final uri = _internal('/_fedi3/chat/thread/delete');
-    final body = jsonEncode({'thread_id': threadId});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'thread_id': threadId}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread delete failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
   Future<void> updateChatThreadMembers({
@@ -337,57 +740,35 @@ class CoreApi {
       if (add != null && add.isNotEmpty) 'add': add,
       if (remove != null && remove.isNotEmpty) 'remove': remove,
     });
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
-    );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat thread members failed: ${resp.statusCode} ${resp.body}');
-    }
+    await _request(
+        method: 'POST',
+        uri: uri,
+        headers: _jsonHeaders,
+        body: body,
+        anySuccess: true);
   }
 
   Future<void> sendChatTyping({required String threadId}) async {
     final uri = _internal('/_fedi3/chat/typing');
-    final body = jsonEncode({'thread_id': threadId});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'thread_id': threadId}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat typing failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
-  Future<void> editChatMessage({required String messageId, required String text}) async {
+  Future<void> editChatMessage(
+      {required String messageId, required String text}) async {
     final uri = _internal('/_fedi3/chat/edit');
-    final body = jsonEncode({'message_id': messageId, 'text': text});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'message_id': messageId, 'text': text}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat edit failed: ${resp.statusCode} ${resp.body}');
-    }
-  }
-
-  Future<Map<String, dynamic>> fetchRelays({int limit = 200}) async {
-    final uri = _internal('/_fedi3/relays', {'limit': limit.toString()});
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relays failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<void> refreshRelays() async {
-    final uri = _internal('/_fedi3/relays/refresh');
-    final resp = await http.post(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relays refresh failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
   Future<void> sendChatReaction({
@@ -396,116 +777,140 @@ class CoreApi {
     bool remove = false,
   }) async {
     final uri = _internal('/_fedi3/chat/react');
-    final body = jsonEncode({
-      'message_id': messageId,
-      'reaction': reaction,
-      if (remove) 'remove': true,
-    });
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'message_id': messageId,
+        'reaction': reaction,
+        if (remove) 'remove': true,
+      }),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat react failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
-  Future<Map<String, dynamic>> fetchChatReactions({required List<String> messageIds}) async {
+  Future<Map<String, dynamic>> fetchChatReactions(
+      {required List<String> messageIds}) async {
     final uri = _internal('/_fedi3/chat/reactions');
-    final body = jsonEncode({'message_ids': messageIds});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'message_ids': messageIds}),
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat reactions failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    return _decodeMap(resp, 'chat reactions');
   }
 
   Future<void> deleteChatMessage({required String messageId}) async {
     final uri = _internal('/_fedi3/chat/delete');
-    final body = jsonEncode({'message_id': messageId});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'message_id': messageId}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat delete failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
-  Future<void> markChatSeen({required String threadId, required String messageId}) async {
+  Future<void> markChatSeen(
+      {required String threadId, required String messageId}) async {
     final uri = _internal('/_fedi3/chat/seen');
-    final body = jsonEncode({'thread_id': threadId, 'message_id': messageId});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'thread_id': threadId, 'message_id': messageId}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat seen failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
-  Future<Map<String, dynamic>> fetchChatStatuses({required List<String> messageIds}) async {
+  Future<Map<String, dynamic>> fetchChatStatuses(
+      {required List<String> messageIds}) async {
     final uri = _internal('/_fedi3/chat/status');
-    final body = jsonEncode({'message_ids': messageIds});
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
-      body: body,
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'message_ids': messageIds}),
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('chat status failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    return _decodeMap(resp, 'chat status');
   }
 
-  Future<Map<String, dynamic>> searchHashtags({
-    required String query,
-    String? source,
-    String? consistency,
-    int limit = 30,
-  }) async {
-    final params = <String, String>{
-      'q': query,
-      'limit': limit.toString(),
-      if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
-      if (consistency != null && consistency.trim().isNotEmpty) 'consistency': consistency.trim(),
-    };
-    final uri = _internal('/_fedi3/search/hashtags', params);
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('search hashtags failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+  // ---------------------------------------------------------------------------
+  // Relays.
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> fetchRelays({int limit = 200}) async {
+    final uri = _internal('/_fedi3/relays', {'limit': limit.toString()});
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'relays');
   }
 
-  Future<List<String>> fetchReactionActors({
-    required String objectId,
-    required String type,
-    String? content,
-    int limit = 50,
-  }) async {
-    final uri = _internal('/_fedi3/reactions/actors', {
-      'object': objectId,
-      'type': type,
-      if (content != null && content.trim().isNotEmpty) 'content': content.trim(),
-      'limit': limit.toString(),
-    });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('reaction actors failed: ${resp.statusCode} ${resp.body}');
+  Future<void> refreshRelays() async {
+    final uri = _internal('/_fedi3/relays/refresh');
+    await _request(
+        method: 'POST', uri: uri, headers: _internalHeaders, anySuccess: true);
+  }
+
+  Future<Map<String, dynamic>> fetchRelayList() async {
+    final uri = _relay('/_fedi3/relay/relays');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _bearerHeaders);
+    return _decodeMap(resp, 'relay list');
+  }
+
+  Future<Map<String, dynamic>> fetchRelayStats() async {
+    final uri = _relay('/_fedi3/relay/stats');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _bearerHeaders);
+    return _decodeMap(resp, 'relay stats');
+  }
+
+  Future<Map<String, dynamic>> fetchRelayCoverage() async {
+    final uri = _relay(
+        '/_fedi3/relay/search/coverage', {'username': config.username.trim()});
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _bearerHeaders);
+    return _decodeMap(resp, 'relay coverage');
+  }
+
+  Future<Map<String, dynamic>> fetchRelayPeers(
+      {String? query, int limit = 200}) async {
+    final params = <String, String>{'limit': limit.toString()};
+    if (query != null && query.trim().isNotEmpty) {
+      params['q'] = query.trim();
     }
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return const [];
-    final items = json['items'];
-    if (items is! List) return const [];
-    return items.whereType<String>().map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final uri = _relay('/_fedi3/relay/peers', params);
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _bearerHeaders);
+    return _decodeMap(resp, 'relay peers');
+  }
+
+  Future<Map<String, dynamic>> fetchRelayMe() async {
+    final uri =
+        _relay('/_fedi3/relay/me', {'username': config.username.trim()});
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _bearerHeaders);
+    return _decodeMap(resp, 'relay me');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Social actions (outbox).
+  // ---------------------------------------------------------------------------
+
+  Future<void> _postOutbox(Map<String, dynamic> activity) async {
+    final user = Uri.encodeComponent(config.username.trim());
+    final uri = _localOrRelay('/users/$user/outbox');
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _activityHeaders,
+      body: jsonEncode(activity),
+      okStatus: const {202},
+      anySuccess: true,
+    );
   }
 
   Future<void> undoReaction({
@@ -515,55 +920,32 @@ class CoreApi {
     String? innerId,
     String? content,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
     final toActor = objectActor.trim();
-    if (toActor.isEmpty) throw StateError('missing object actor');
+    if (toActor.isEmpty) {
+      throw CoreApiException(
+          CoreApiErrorKind.badRequest, 'missing object actor');
+    }
     final innerTypeNorm = innerType.trim();
-    if (innerTypeNorm.isEmpty) throw StateError('missing innerType');
+    if (innerTypeNorm.isEmpty) {
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing innerType');
+    }
 
     final inner = <String, dynamic>{
       'type': innerTypeNorm,
-      'actor': me,
+      'actor': _me,
       'object': objectId,
       if (innerId != null && innerId.trim().isNotEmpty) 'id': innerId.trim(),
-      if (content != null && content.trim().isNotEmpty) 'content': content.trim(),
+      if (content != null && content.trim().isNotEmpty)
+        'content': content.trim(),
     };
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Undo',
-      'actor': me,
+      'actor': _me,
       'object': inner,
       'to': [toActor],
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('undo failed: ${resp.statusCode} ${resp.body}');
-    }
-  }
-
-  Future<Map<String, dynamic>> fetchNotifications({String? cursor, int limit = 50}) async {
-    final uri = _internal('/_fedi3/notifications', {
-      'limit': limit.toString(),
-      if (cursor != null && cursor.trim().isNotEmpty) 'cursor': cursor.trim(),
     });
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('notifications failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   Future<void> react({
@@ -571,100 +953,92 @@ class CoreApi {
     required String objectActor,
     required String emoji,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
     final toActor = objectActor.trim();
-    if (toActor.isEmpty) throw StateError('missing object actor');
+    if (toActor.isEmpty) {
+      throw CoreApiException(
+          CoreApiErrorKind.badRequest, 'missing object actor');
+    }
     final e = emoji.trim();
-    if (e.isEmpty) throw StateError('missing emoji');
+    if (e.isEmpty) {
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing emoji');
+    }
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'EmojiReact',
-      'actor': me,
+      'actor': _me,
       'to': [toActor],
       'object': objectId,
       'content': e,
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('react failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 
   Future<void> follow(String actorUrl) async {
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final uri = _internal('/_fedi3/social/follow');
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
       body: jsonEncode({'actor': actor}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('follow failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
   Future<void> unfollow(String actorUrl) async {
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final uri = _internal('/_fedi3/social/unfollow');
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
-    final resp = await http.post(
-      uri,
-      headers: {..._internalHeaders, 'Content-Type': 'application/json'},
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
       body: jsonEncode({'actor': actor}),
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('unfollow failed: ${resp.statusCode} ${resp.body}');
-    }
   }
 
   Future<String> fetchFollowingStatus(String actorUrl) async {
-    final actor = (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
+    final actor =
+        (await _resolveActorInput(actorUrl)).replaceAll(RegExp(r'/+$'), '');
     final uri = _internal('/_fedi3/social/status', {'actor': actor});
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('follow status failed: ${resp.statusCode} ${resp.body}');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    try {
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return 'none';
+      final s = (json['status'] as String?)?.trim().toLowerCase() ?? '';
+      if (s == 'pending' || s == 'accepted') return s;
+      if (s == 'requested') return 'pending';
+      if (s == 'following' || s == 'approved') return 'accepted';
+      return 'none';
+    } on FormatException catch (e) {
+      throw CoreApiException(
+          CoreApiErrorKind.decode, 'follow status returned invalid JSON',
+          cause: e);
     }
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return 'none';
-    final s = (json['status'] as String?)?.trim().toLowerCase() ?? '';
-    if (s == 'pending' || s == 'accepted') return s;
-    if (s == 'requested') return 'pending';
-    if (s == 'following' || s == 'approved') return 'accepted';
-    return 'none';
   }
 
   Future<Map<String, dynamic>> uploadMedia({
     required Uint8List bytes,
     required String filename,
   }) async {
-    final user = config.username.trim();
+    final user = Uri.encodeComponent(config.username.trim());
     final uri = _localOrRelay('/users/$user/media');
     final mime = lookupMimeType(filename) ?? 'application/octet-stream';
-    final resp = await http.post(
-      uri,
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
       headers: {
         ..._internalHeaders,
-        'X-Filename': filename,
+        'X-Filename': encodeHeaderValue(filename),
         'Content-Type': mime,
       },
       body: bytes,
+      anySuccess: true,
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('media upload failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
+    return _decodeMap(resp, 'media upload');
   }
 
   Future<void> postNote({
@@ -678,10 +1052,7 @@ class CoreApi {
     String? inReplyTo,
     String? replyToActor,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
-    final followers = '$me/followers';
+    final followers = '$_me/followers';
 
     final mode = visibility.trim().isEmpty ? 'public' : visibility.trim();
     final to = <String>[];
@@ -690,11 +1061,14 @@ class CoreApi {
     if (mode == 'direct') {
       final targetInput = directTo?.trim() ?? '';
       if (targetInput.isEmpty) {
-        throw StateError('direct target missing');
+        throw CoreApiException(
+            CoreApiErrorKind.badRequest, 'direct target missing');
       }
       final resolved = await _resolveActorInput(targetInput);
       to.add(resolved);
-      if (replyActor != null && replyActor.isNotEmpty && replyActor != resolved) {
+      if (replyActor != null &&
+          replyActor.isNotEmpty &&
+          replyActor != resolved) {
         to.add(replyActor);
       }
     } else if (mode == 'home' || mode == 'followers') {
@@ -712,35 +1086,23 @@ class CoreApi {
       cc.add(followers);
     }
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Create',
-      'actor': me,
+      'actor': _me,
       'to': to,
       if (cc.isNotEmpty) 'cc': cc,
       'object': {
         'type': 'Note',
         'content': content,
-        if (summary != null && summary.trim().isNotEmpty) 'summary': summary.trim(),
+        if (summary != null && summary.trim().isNotEmpty)
+          'summary': summary.trim(),
         if (sensitive) 'sensitive': true,
-        if (inReplyTo != null && inReplyTo.trim().isNotEmpty) 'inReplyTo': inReplyTo.trim(),
+        if (inReplyTo != null && inReplyTo.trim().isNotEmpty)
+          'inReplyTo': inReplyTo.trim(),
         if (mediaIds.isNotEmpty) 'attachment': mediaIds,
       },
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('post failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 
   Future<void> editNote({
@@ -753,14 +1115,10 @@ class CoreApi {
     String? inReplyTo,
     List<dynamic>? attachments,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
-
     final toList = to.where((v) => v.trim().isNotEmpty).toList();
     final ccList = (cc ?? const []).where((v) => v.trim().isNotEmpty).toList();
     if (toList.isEmpty && ccList.isEmpty) {
-      throw StateError('missing recipients');
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing recipients');
     }
 
     final object = <String, dynamic>{
@@ -781,28 +1139,14 @@ class CoreApi {
       object['attachment'] = attachments;
     }
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Update',
-      'actor': me,
+      'actor': _me,
       'to': toList,
       if (ccList.isNotEmpty) 'cc': ccList,
       'object': object,
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('edit failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 
   Future<void> deleteNote({
@@ -811,14 +1155,10 @@ class CoreApi {
     List<String>? cc,
     String objectType = 'Note',
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
-
     final toList = to.where((v) => v.trim().isNotEmpty).toList();
     final ccList = (cc ?? const []).where((v) => v.trim().isNotEmpty).toList();
     if (toList.isEmpty && ccList.isEmpty) {
-      throw StateError('missing recipients');
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing recipients');
     }
 
     final tombstone = {
@@ -828,182 +1168,51 @@ class CoreApi {
       'deleted': DateTime.now().toUtc().toIso8601String(),
     };
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Delete',
-      'actor': me,
+      'actor': _me,
       'to': toList,
       if (ccList.isNotEmpty) 'cc': ccList,
       'object': tombstone,
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('delete failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 
   Future<void> boost({
     required String objectId,
     bool public = true,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
-    final followers = '$me/followers';
-    final to = public ? ['https://www.w3.org/ns/activitystreams#Public'] : [followers];
+    final followers = '$_me/followers';
+    final to =
+        public ? ['https://www.w3.org/ns/activitystreams#Public'] : [followers];
     final cc = public ? [followers] : null;
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Announce',
-      'actor': me,
+      'actor': _me,
       'to': to,
       if (cc != null) 'cc': cc,
       'object': objectId,
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('boost failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 
   Future<void> like({
     required String objectId,
     required String objectActor,
   }) async {
-    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final user = config.username.trim();
-    final me = '$base/users/$user';
     final toActor = objectActor.trim();
-    if (toActor.isEmpty) throw StateError('missing object actor');
+    if (toActor.isEmpty) {
+      throw CoreApiException(
+          CoreApiErrorKind.badRequest, 'missing object actor');
+    }
 
-    final activity = {
+    await _postOutbox({
       '@context': 'https://www.w3.org/ns/activitystreams',
       'type': 'Like',
-      'actor': me,
+      'actor': _me,
       'to': [toActor],
       'object': objectId,
-    };
-
-    final uri = _localOrRelay('/users/$user/outbox');
-    final resp = await http.post(
-      uri,
-      headers: {
-        ..._internalHeaders,
-        'Content-Type': 'application/activity+json',
-        'Accept': 'application/activity+json',
-      },
-      body: jsonEncode(activity),
-    );
-    if (resp.statusCode != 202 && (resp.statusCode < 200 || resp.statusCode >= 300)) {
-      throw StateError('like failed: ${resp.statusCode} ${resp.body}');
-    }
-  }
-
-  Future<Map<String, dynamic>> fetchRelayList() async {
-    final base = Uri.parse(config.publicBaseUrl.trim());
-    final uri = base.replace(path: '/_fedi3/relay/relays');
-    final resp = await http.get(uri);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay list failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> fetchRelayStats() async {
-    final base = Uri.parse(config.publicBaseUrl.trim());
-    final uri = base.replace(path: '/_fedi3/relay/stats');
-    final resp = await http.get(uri);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay stats failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> fetchRelayCoverage() async {
-    final base = Uri.parse(config.publicBaseUrl.trim());
-    final uri = base.replace(
-      path: '/_fedi3/relay/search/coverage',
-      queryParameters: {'username': config.username.trim()},
-    );
-    final resp = await http.get(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${config.relayToken.trim()}',
-      },
-    );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay coverage failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> fetchRelayPeers({String? query, int limit = 200}) async {
-    final base = Uri.parse(config.publicBaseUrl.trim());
-    final params = <String, String>{'limit': limit.toString()};
-    if (query != null && query.trim().isNotEmpty) {
-      params['q'] = query.trim();
-    }
-    final uri = base.replace(path: '/_fedi3/relay/peers', queryParameters: params);
-    final resp = await http.get(uri);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay peers failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> fetchRelayMe() async {
-    final base = Uri.parse(config.publicBaseUrl.trim());
-    final uri = base.replace(
-      path: '/_fedi3/relay/me',
-      queryParameters: {'username': config.username.trim()},
-    );
-    final resp = await http.get(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${config.relayToken.trim()}',
-      },
-    );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('relay me failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> fetchNetMetrics() async {
-    final uri = _internal('/_fedi3/net/metrics');
-    final resp = await http.get(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('net metrics failed: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  Future<void> refreshProfile() async {
-    final uri = _internal('/_fedi3/profile/refresh');
-    final resp = await http.post(uri, headers: _internalHeaders);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw StateError('profile refresh failed: ${resp.statusCode} ${resp.body}');
-    }
+    });
   }
 }

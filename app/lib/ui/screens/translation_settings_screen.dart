@@ -15,7 +15,8 @@ class TranslationSettingsScreen extends StatefulWidget {
   final AppState appState;
 
   @override
-  State<TranslationSettingsScreen> createState() => _TranslationSettingsScreenState();
+  State<TranslationSettingsScreen> createState() =>
+      _TranslationSettingsScreenState();
 }
 
 class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
@@ -39,10 +40,12 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
       animation: widget.appState,
       builder: (context, _) {
         final prefs = widget.appState.prefs;
-        if (!_authFocus.hasFocus && _authKeyCtrl.text != prefs.translationAuthKey) {
+        if (!_authFocus.hasFocus &&
+            _authKeyCtrl.text != prefs.translationAuthKey) {
           _authKeyCtrl.text = prefs.translationAuthKey;
         }
-        if (!_deeplxFocus.hasFocus && _deeplxCtrl.text != prefs.translationDeepLxUrl) {
+        if (!_deeplxFocus.hasFocus &&
+            _deeplxCtrl.text != prefs.translationDeepLxUrl) {
           _deeplxCtrl.text = prefs.translationDeepLxUrl;
         }
         final target = _targetLabel(context, prefs.localeTag);
@@ -59,22 +62,35 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(context.l10n.translationProviderLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(context.l10n.translationProviderLabel,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
                       SegmentedButton<TranslationProvider>(
                         segments: [
-                          ButtonSegment(value: TranslationProvider.deepl, label: Text(context.l10n.translationProviderDeepL)),
-                          ButtonSegment(value: TranslationProvider.deeplx, label: Text(context.l10n.translationProviderDeepLX)),
+                          ButtonSegment(
+                              value: TranslationProvider.deepl,
+                              label:
+                                  Text(context.l10n.translationProviderDeepL)),
+                          ButtonSegment(
+                              value: TranslationProvider.deeplx,
+                              label:
+                                  Text(context.l10n.translationProviderDeepLX)),
                         ],
                         selected: {provider},
                         onSelectionChanged: (v) {
-                          widget.appState.savePrefs(prefs.copyWith(translationProvider: v.first));
+                          widget.appState.savePrefs(
+                              prefs.copyWith(translationProvider: v.first));
                         },
                       ),
                       const SizedBox(height: 10),
                       Text(
                         context.l10n.translationTargetLabel(target),
-                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(160), fontSize: 12),
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(160),
+                            fontSize: 12),
                       ),
                     ],
                   ),
@@ -88,13 +104,16 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(context.l10n.translationAuthKeyLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.translationAuthKeyLabel,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _authKeyCtrl,
                           focusNode: _authFocus,
                           obscureText: true,
-                          onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(translationAuthKey: v.trim())),
+                          onChanged: (v) => widget.appState.savePrefs(
+                              prefs.copyWith(translationAuthKey: v.trim())),
                           decoration: InputDecoration(
                             hintText: context.l10n.translationAuthKeyHint,
                             border: const OutlineInputBorder(),
@@ -103,7 +122,8 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                         const SizedBox(height: 8),
                         SwitchListTile(
                           value: prefs.translationUsePro,
-                          onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(translationUsePro: v)),
+                          onChanged: (v) => widget.appState
+                              .savePrefs(prefs.copyWith(translationUsePro: v)),
                           title: Text(context.l10n.translationUseProLabel),
                           subtitle: Text(context.l10n.translationUseProHint),
                         ),
@@ -120,12 +140,15 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(context.l10n.translationDeepLXUrlLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.l10n.translationDeepLXUrlLabel,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _deeplxCtrl,
                           focusNode: _deeplxFocus,
-                          onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(translationDeepLxUrl: v.trim())),
+                          onChanged: (v) => widget.appState.savePrefs(
+                              prefs.copyWith(translationDeepLxUrl: v.trim())),
                           decoration: InputDecoration(
                             hintText: context.l10n.translationDeepLXUrlHint,
                             border: const OutlineInputBorder(),
@@ -143,15 +166,20 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(context.l10n.translationTimeoutLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(context.l10n.translationTimeoutLabel,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
                       Slider(
-                        value: prefs.translationTimeoutMs.toDouble().clamp(2000, 60000),
+                        value: prefs.translationTimeoutMs
+                            .toDouble()
+                            .clamp(2000, 60000),
                         min: 2000,
                         max: 60000,
                         divisions: 29,
-                        label: context.l10n.translationTimeoutValue((prefs.translationTimeoutMs / 1000).round()),
-                        onChanged: (v) => widget.appState.savePrefs(prefs.copyWith(translationTimeoutMs: v.round())),
+                        label: context.l10n.translationTimeoutValue(
+                            (prefs.translationTimeoutMs / 1000).round()),
+                        onChanged: (v) => widget.appState.savePrefs(
+                            prefs.copyWith(translationTimeoutMs: v.round())),
                       ),
                     ],
                   ),

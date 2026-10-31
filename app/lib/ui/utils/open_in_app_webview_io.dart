@@ -16,7 +16,10 @@ String _massageForWebView(String url) {
   if (uri == null) return u;
 
   final host = uri.host.toLowerCase();
-  final isYouTube = host.contains('youtube.com') || host.contains('youtube-nocookie.com') || host == 'youtu.be' || host.endsWith('.youtu.be');
+  final isYouTube = host.contains('youtube.com') ||
+      host.contains('youtube-nocookie.com') ||
+      host == 'youtu.be' ||
+      host.endsWith('.youtu.be');
   if (!isYouTube) return u;
 
   String? id;
@@ -29,7 +32,11 @@ String _massageForWebView(String url) {
       final iEmbed = seg.indexOf('embed');
       if (iEmbed >= 0 && iEmbed + 1 < seg.length) id = seg[iEmbed + 1];
       final iShorts = seg.indexOf('shorts');
-      if ((id == null || id.isEmpty) && iShorts >= 0 && iShorts + 1 < seg.length) id = seg[iShorts + 1];
+      if ((id == null || id.isEmpty) &&
+          iShorts >= 0 &&
+          iShorts + 1 < seg.length) {
+        id = seg[iShorts + 1];
+      }
     }
   }
   id = id?.trim();
@@ -49,15 +56,16 @@ Future<bool> openInAppWebView(String url) async {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     try {
       if (Platform.isLinux) {
-        return launchUrl(uri, mode: LaunchMode.externalApplication);
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
       if (Platform.isWindows && !(await WebviewWindow.isWebviewAvailable())) {
-        return launchUrl(uri, mode: LaunchMode.externalApplication);
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
 
       final cfg = Platform.isWindows
           ? CreateConfiguration(
-              userDataFolderWindows: (await getApplicationSupportDirectory()).path,
+              userDataFolderWindows:
+                  (await getApplicationSupportDirectory()).path,
               titleBarHeight: 44,
             )
           : const CreateConfiguration();
@@ -65,7 +73,7 @@ Future<bool> openInAppWebView(String url) async {
       webview.launch(u);
       return true;
     } catch (_) {
-      return launchUrl(uri, mode: LaunchMode.externalApplication);
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
