@@ -23,6 +23,7 @@ Thumbs.db
 *.swp
 .env
 .env.*
+!.env.example
 backups/
 dist/
 *.AppImage
