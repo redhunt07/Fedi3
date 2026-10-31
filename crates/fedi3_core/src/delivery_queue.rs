@@ -136,7 +136,7 @@ impl DeliveryQueue {
         private_key_pem: String,
         key_id: String,
         settings: QueueSettings,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let queue = self.clone();
         tokio::spawn(async move {
             // Supervisor: a transient DB error must never stop federation for the whole session.
@@ -161,7 +161,7 @@ impl DeliveryQueue {
                     }
                 }
             }
-        });
+        })
     }
 
     async fn run_loop(

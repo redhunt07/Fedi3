@@ -39,11 +39,14 @@ impl Default for TunnelOptions {
     }
 }
 
-pub async fn run_tunnel(
+pub async fn run_tunnel<C>(
     user: &str,
     relay_ws_url: &str,
     relay_token: &str,
-    handler: impl Clone
+    handler: C,
+) -> anyhow::Result<()>
+where
+    C: Clone
         + Send
         + 'static
         + tower::Service<
@@ -51,7 +54,8 @@ pub async fn run_tunnel(
             Response = http::Response<Body>,
             Error = std::convert::Infallible,
         >,
-) -> anyhow::Result<()> {
+    C::Future: Send + 'static,
+{
     let (_tx, rx) = watch::channel(false);
     run_tunnel_with_shutdown(
         user,
@@ -64,11 +68,16 @@ pub async fn run_tunnel(
     .await
 }
 
-pub async fn run_tunnel_with_shutdown(
+pub async fn run_tunnel_with_shutdown<C>(
     user: &str,
     relay_ws_url: &str,
     relay_token: &str,
-    handler: impl Clone
+    handler: C,
+    shutdown: watch::Receiver<bool>,
+    metrics: std::sync::Arc<NetMetrics>,
+) -> anyhow::Result<()>
+where
+    C: Clone
         + Send
         + 'static
         + tower::Service<
@@ -76,9 +85,8 @@ pub async fn run_tunnel_with_shutdown(
             Response = http::Response<Body>,
             Error = std::convert::Infallible,
         >,
-    shutdown: watch::Receiver<bool>,
-    metrics: std::sync::Arc<NetMetrics>,
-) -> anyhow::Result<()> {
+    C::Future: Send + 'static,
+{
     run_tunnel_with_options(
         user,
         relay_ws_url,
@@ -91,11 +99,17 @@ pub async fn run_tunnel_with_shutdown(
     .await
 }
 
-pub async fn run_tunnel_with_options(
+pub async fn run_tunnel_with_options<C>(
     user: &str,
     relay_ws_url: &str,
     relay_token: &str,
-    mut handler: impl Clone
+    handler: C,
+    mut shutdown: watch::Receiver<bool>,
+    metrics: std::sync::Arc<NetMetrics>,
+    options: TunnelOptions,
+) -> anyhow::Result<()>
+where
+    C: Clone
         + Send
         + 'static
         + tower::Service<
@@ -103,10 +117,8 @@ pub async fn run_tunnel_with_options(
             Response = http::Response<Body>,
             Error = std::convert::Infallible,
         >,
-    mut shutdown: watch::Receiver<bool>,
-    metrics: std::sync::Arc<NetMetrics>,
-    options: TunnelOptions,
-) -> anyhow::Result<()> {
+    C::Future: Send + 'static,
+{
     let token = urlencoding::encode(relay_token);
     let url = format!("{relay_ws_url}/tunnel/{user}?token={token}");
 
@@ -138,8 +150,14 @@ pub async fn run_tunnel_with_options(
             Ok(Ok((ws, _))) => {
                 metrics.set_relay_connected(true);
                 info!("tunnel connected");
-                let reason =
-                    run_connection(ws, &mut shutdown, &mut handler, &metrics, &options).await;
+                let reason = run_connection(
+                    ws,
+                    &mut shutdown,
+                    handler.clone(),
+                    metrics.clone(),
+                    &options,
+                )
+                .await;
                 metrics.set_relay_connected(false);
 
                 if *shutdown.borrow() {
@@ -179,13 +197,21 @@ pub async fn run_tunnel_with_options(
     Ok(())
 }
 
+/// Outbound websocket frames produced by the tunnel.
+enum TunnelOut {
+    Text(String),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+    Close,
+}
+
 async fn run_connection<S>(
     ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     shutdown: &mut watch::Receiver<bool>,
-    handler: &mut S,
-    metrics: &NetMetrics,
+    handler: S,
+    metrics: std::sync::Arc<NetMetrics>,
     options: &TunnelOptions,
 ) -> anyhow::Result<()>
 where
@@ -193,43 +219,74 @@ where
             Request<Body>,
             Response = http::Response<Body>,
             Error = std::convert::Infallible,
-        > + Clone,
+        > + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
 {
     let (mut ws_tx, mut ws_rx) = ws.split();
+    // All writes go through a single writer task: requests are handled concurrently (a nested
+    // federation fetch must never block the tunnel read loop, otherwise two peers fetching each
+    // other's keys deadlock until the relay timeout), while the websocket sink stays single-owner.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<TunnelOut>(128);
+    let writer = tokio::spawn(async move {
+        while let Some(out) = out_rx.recv().await {
+            let msg = match out {
+                TunnelOut::Text(t) => tungstenite::Message::Text(t),
+                TunnelOut::Ping(p) => tungstenite::Message::Ping(p),
+                TunnelOut::Pong(p) => tungstenite::Message::Pong(p),
+                TunnelOut::Close => tungstenite::Message::Close(None),
+            };
+            if let Err(e) = ws_tx.send(msg).await {
+                error!("tunnel write failed: {e}");
+                break;
+            }
+        }
+    });
+
     let mut ping = tokio::time::interval(options.ping_interval);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_pong = std::time::Instant::now();
 
+    let mut result: anyhow::Result<()> = Ok(());
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
                 if *shutdown.borrow() {
-                    let _ = ws_tx.send(tungstenite::Message::Close(None)).await;
-                    return Ok(());
+                    let _ = out_tx.send(TunnelOut::Close).await;
+                    break;
                 }
             }
             _ = ping.tick() => {
                 // Watchdog: a half-open tunnel that never answers pings must be replaced.
                 if last_pong.elapsed() > options.pong_timeout {
-                    return Err(anyhow::anyhow!(
+                    result = Err(anyhow::anyhow!(
                         "no pong for {:?} (watchdog)",
                         last_pong.elapsed()
                     ));
+                    break;
                 }
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
                 let payload = now_ms.to_be_bytes().to_vec();
-                if let Err(e) = ws_tx.send(tungstenite::Message::Ping(payload)).await {
-                    return Err(anyhow::anyhow!("tunnel ping failed: {e}"));
+                if out_tx.send(TunnelOut::Ping(payload)).await.is_err() {
+                    result = Err(anyhow::anyhow!("tunnel writer stopped"));
+                    break;
                 }
             }
             msg = ws_rx.next() => {
                 let Some(msg) = msg else {
-                    return Ok(());
+                    break;
                 };
-                let msg = msg.map_err(|e| anyhow::anyhow!("tunnel read failed: {e}"))?;
+                let msg = match msg {
+                    Ok(m) => m,
+                    Err(e) => {
+                        result = Err(anyhow::anyhow!("tunnel read failed: {e}"));
+                        break;
+                    }
+                };
                 let text = match msg {
                     tungstenite::Message::Text(t) => t,
                     tungstenite::Message::Pong(p) => {
@@ -247,10 +304,10 @@ where
                         continue;
                     }
                     tungstenite::Message::Ping(p) => {
-                        let _ = ws_tx.send(tungstenite::Message::Pong(p)).await;
+                        let _ = out_tx.send(TunnelOut::Pong(p)).await;
                         continue;
                     }
-                    tungstenite::Message::Close(_) => return Ok(()),
+                    tungstenite::Message::Close(_) => break,
                     _ => continue,
                 };
                 metrics.relay_rx_add(text.as_bytes().len() as u64);
@@ -262,17 +319,27 @@ where
                     }
                 };
 
-                let response = handle_relay_http_request(handler, req.clone()).await;
-                let json = serde_json::to_string(&response)
-                    .map_err(|e| anyhow::anyhow!("encode tunnel response: {e}"))?;
-                metrics.relay_tx_add(json.as_bytes().len() as u64);
-                ws_tx
-                    .send(tungstenite::Message::Text(json))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("tunnel write failed: {e}"))?;
+                // Dispatch concurrently: a request handler may itself perform a federation
+                // fetch that comes back through this tunnel.
+                let mut h = handler.clone();
+                let out = out_tx.clone();
+                let metrics_task = metrics.clone();
+                tokio::spawn(async move {
+                    let response = handle_relay_http_request(&mut h, req).await;
+                    match serde_json::to_string(&response) {
+                        Ok(json) => {
+                            metrics_task.relay_tx_add(json.as_bytes().len() as u64);
+                            let _ = out.send(TunnelOut::Text(json)).await;
+                        }
+                        Err(e) => error!("encode tunnel response: {e}"),
+                    }
+                });
             }
         }
     }
+    drop(out_tx);
+    let _ = writer.await;
+    result
 }
 
 fn backoff_delay(attempt: u32, options: &TunnelOptions) -> std::time::Duration {

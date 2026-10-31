@@ -116,6 +116,43 @@ fn sanitized_ext(filename: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// H-05: hard cap on a single decoded image dimension.
+pub const MAX_IMAGE_DIM: u32 = 8192;
+/// H-05: hard cap on decoder allocations (guards decompression bombs).
+pub const MAX_IMAGE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
+
+/// H-05: validate image magic bytes before handing the buffer to the decoder.
+pub fn is_supported_image(bytes: &[u8]) -> bool {
+    if bytes.len() >= 8 && bytes[0..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+        return true;
+    }
+    if bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF] {
+        return true;
+    }
+    if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        return true;
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return true;
+    }
+    false
+}
+
+/// H-05: decode an image with strict dimension and allocation limits.
+///
+/// `ImageReader::decode` without limits can allocate hundreds of MB for a small compressed
+/// PNG; the limits here reject oversized images before decoding instead of OOMing the core.
+pub fn decode_image_limited(bytes: &[u8]) -> anyhow::Result<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    reader = reader.with_guessed_format().context("guess image format")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIM);
+    limits.max_image_height = Some(MAX_IMAGE_DIM);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOC_BYTES);
+    reader.limits(limits);
+    reader.decode().context("decode image")
+}
+
 pub fn probe_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     // PNG: signature + IHDR
     if bytes.len() >= 24 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {

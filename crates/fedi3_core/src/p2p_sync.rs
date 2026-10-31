@@ -18,14 +18,18 @@ struct SyncOutboxResp {
     latest_ms: i64,
 }
 
-pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch::Receiver<bool>) {
+pub fn start_p2p_sync_worker(
+    state: ApState,
+    cfg: P2pConfig,
+    mut shutdown: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enable || !cfg.sync_enable.unwrap_or(true) {
-        return;
+        return None;
     }
     let interval_secs = cfg.sync_poll_secs.unwrap_or(30).max(5).min(3600);
     let batch_limit = cfg.sync_batch_limit.unwrap_or(50).max(1).min(200);
 
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -126,7 +130,7 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
                 }
             }
         }
-    });
+    }))
 }
 
 fn now_ms() -> i64 {

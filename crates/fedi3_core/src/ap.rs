@@ -290,6 +290,14 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/search/hashtags") => search_hashtags(state, req).await,
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
+        // H-44: locked-account Follow requests (internal UI endpoints).
+        ("GET", "/_fedi3/follow_requests") => follow_requests_list(state, req).await,
+        ("POST", p) if p.starts_with("/_fedi3/follow_requests/") && p.ends_with("/approve") => {
+            follow_request_approve(state, req).await
+        }
+        ("POST", p) if p.starts_with("/_fedi3/follow_requests/") && p.ends_with("/reject") => {
+            follow_request_reject(state, req).await
+        }
         ("GET", "/_fedi3/chat/threads") => chat_threads_get(state, req).await,
         ("GET", p) if p.starts_with("/_fedi3/chat/threads/") => {
             chat_thread_messages_get(state, req).await
@@ -505,6 +513,26 @@ async fn verify_signature_if_present(
     Ok(())
 }
 
+/// H-39: best-effort requester actor from a (already verified) HTTP Signature keyId.
+fn signature_requester_actor(headers: &HeaderMap) -> Option<String> {
+    let raw = headers
+        .get("Signature")
+        .or_else(|| headers.get("signature"))
+        .and_then(|v| v.to_str().ok())?;
+    let params = parse_signature_header(raw).ok()?;
+    let key_id = params.key_id.trim();
+    let actor = key_id
+        .split('#')
+        .next()
+        .unwrap_or(key_id)
+        .trim_end_matches('/');
+    if actor.starts_with("http://") || actor.starts_with("https://") {
+        Some(actor.to_string())
+    } else {
+        None
+    }
+}
+
 fn nodeinfo_links(cfg: &ApConfig) -> Response<Body> {
     let base = cfg.public_base_url.trim_end_matches('/');
     let body = serde_json::json!({
@@ -626,6 +654,18 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
     if let Err(resp) = require_internal(state, &parts.headers) {
         return resp;
     }
+    // H-05: reject before buffering when the client declares an oversized body. The streamed
+    // `to_bytes` cap below still protects against a missing or lying Content-Length.
+    if let Some(declared) = parts
+        .headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if declared > state.max_body_bytes as u64 {
+            return simple(StatusCode::PAYLOAD_TOO_LARGE, "body too large");
+        }
+    }
     let bytes = match axum::body::to_bytes(body, state.max_body_bytes).await {
         Ok(b) => b.to_vec(),
         Err(_) => return simple(StatusCode::PAYLOAD_TOO_LARGE, "body too large"),
@@ -661,6 +701,36 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    let effective_media_type = content_type.clone().unwrap_or_else(|| {
+        mime_guess::from_path(&filename)
+            .first()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string())
+    });
+
+    // H-05: magic-byte validation and bounded decoding before the bytes are persisted.
+    let decoded_image = if effective_media_type
+        .to_ascii_lowercase()
+        .starts_with("image/")
+    {
+        if !media_store::is_supported_image(&bytes) {
+            return simple(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported or non-image payload",
+            );
+        }
+        match media_store::decode_image_limited(&bytes) {
+            Ok(img) => Some(img),
+            Err(e) => {
+                return simple(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    &format!("image decode failed: {e}"),
+                )
+            }
+        }
+    } else {
+        None
+    };
 
     let saved = if should_mirror_to_relay(state) {
         match relay_upload_and_cache(state, &filename, content_type.as_deref(), &bytes).await {
@@ -703,17 +773,11 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
     };
 
     let mut response = saved.response.clone();
-    if response
-        .media_type
-        .to_ascii_lowercase()
-        .starts_with("image/")
-    {
-        if let Some((w, h)) = media_store::probe_image_dimensions(&bytes) {
-            response.width = Some(w);
-            response.height = Some(h);
-        }
+    if let Some(img) = decoded_image.as_ref() {
+        response.width = Some(img.width());
+        response.height = Some(img.height());
         if response.blurhash.is_none() {
-            response.blurhash = compute_blurhash(&bytes);
+            response.blurhash = compute_blurhash(img);
         }
     }
 
@@ -818,8 +882,7 @@ async fn relay_upload_and_cache(
     })
 }
 
-fn compute_blurhash(bytes: &[u8]) -> Option<String> {
-    let img = image::load_from_memory(bytes).ok()?;
+fn compute_blurhash(img: &image::DynamicImage) -> Option<String> {
     let mut rgb = img.to_rgb8();
     let (mut w, mut h) = rgb.dimensions();
     if w == 0 || h == 0 {
@@ -1975,6 +2038,206 @@ fn require_internal(
         return Err(simple(StatusCode::FORBIDDEN, "forbidden"));
     }
     Ok(())
+}
+
+/// H-44: extract the percent-encoded actor URL from `/_fedi3/follow_requests/<actor>/{approve|reject}`.
+fn follow_request_actor_from_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/_fedi3/follow_requests/")?;
+    let rest = rest
+        .strip_suffix("/approve")
+        .or_else(|| rest.strip_suffix("/reject"))?;
+    let decoded = urlencoding::decode(rest)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| rest.to_string());
+    let actor = decoded.trim().trim_end_matches('/').to_string();
+    if actor.is_empty() {
+        None
+    } else {
+        Some(actor)
+    }
+}
+
+/// H-44: list pending Follow requests for a locked account.
+///
+/// Response JSON: `[{"actor": "<actor id>", "created_at_ms": <i64>, "state": "pending",
+/// "follow_activity": <stored Follow activity or null>}]`
+async fn follow_requests_list(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    match state.social.list_follow_requests() {
+        Ok(requests) => {
+            let items = requests
+                .into_iter()
+                .map(|r| {
+                    let follow_activity = r
+                        .activity_json
+                        .as_deref()
+                        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok());
+                    serde_json::json!({
+                        "actor": r.actor_id,
+                        "created_at_ms": r.created_at_ms,
+                        "state": r.state,
+                        "follow_activity": follow_activity,
+                    })
+                })
+                .collect::<Vec<_>>();
+            axum::Json(items).into_response()
+        }
+        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
+}
+
+/// H-44: approve a pending Follow: add the follower and send the Accept.
+pub(crate) async fn approve_follow_request(
+    state: &ApState,
+    actor: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let actor = actor.trim().trim_end_matches('/');
+    let request = state
+        .social
+        .get_follow_request(actor)?
+        .ok_or_else(|| anyhow::anyhow!("no pending follow request for {actor}"))?;
+    let follow = request
+        .activity_json
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .unwrap_or_else(|| {
+            let base = state.cfg.public_base_url.trim_end_matches('/');
+            let me = format!("{base}/users/{}", state.cfg.username);
+            serde_json::json!({"type": "Follow", "actor": actor, "object": me})
+        });
+
+    state.social.add_follower(actor)?;
+    state.social.remove_follow_request(actor)?;
+
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
+    let accept_id = state.social.new_activity_id(&me);
+    let accept = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": accept_id,
+        "type": "Accept",
+        "actor": me,
+        "object": follow,
+        "to": [actor],
+    });
+    let bytes = serde_json::to_vec(&accept)?;
+    if let Some(id) = accept.get("id").and_then(|v| v.as_str()) {
+        let _ = state.social.store_outbox(id, bytes.clone());
+    }
+    if let Err(e) = state
+        .queue
+        .enqueue_activity(bytes, vec![actor.to_string()])
+        .await
+    {
+        warn!(actor=%actor, "follow accept enqueue failed: {e}");
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "timeline",
+        Some("Accept".to_string()),
+        accept
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    ));
+    Ok(accept)
+}
+
+/// H-44: reject a pending Follow: drop the request and send a Reject.
+pub(crate) async fn reject_follow_request(
+    state: &ApState,
+    actor: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let actor = actor.trim().trim_end_matches('/');
+    let request = state
+        .social
+        .get_follow_request(actor)?
+        .ok_or_else(|| anyhow::anyhow!("no pending follow request for {actor}"))?;
+    let follow = request
+        .activity_json
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .unwrap_or_else(|| {
+            let base = state.cfg.public_base_url.trim_end_matches('/');
+            let me = format!("{base}/users/{}", state.cfg.username);
+            serde_json::json!({"type": "Follow", "actor": actor, "object": me})
+        });
+
+    state.social.remove_follow_request(actor)?;
+
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    let me = format!("{base}/users/{}", state.cfg.username);
+    let reject_id = state.social.new_activity_id(&me);
+    let reject = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": reject_id,
+        "type": "Reject",
+        "actor": me,
+        "object": follow,
+        "to": [actor],
+    });
+    let bytes = serde_json::to_vec(&reject)?;
+    if let Some(id) = reject.get("id").and_then(|v| v.as_str()) {
+        let _ = state.social.store_outbox(id, bytes.clone());
+    }
+    if let Err(e) = state
+        .queue
+        .enqueue_activity(bytes, vec![actor.to_string()])
+        .await
+    {
+        warn!(actor=%actor, "follow reject enqueue failed: {e}");
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "timeline",
+        Some("Reject".to_string()),
+        reject
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    ));
+    Ok(reject)
+}
+
+async fn follow_request_approve(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let Some(actor) = follow_request_actor_from_path(parts.uri.path()) else {
+        return simple(StatusCode::BAD_REQUEST, "missing actor");
+    };
+    match approve_follow_request(state, &actor).await {
+        Ok(accept) => axum::Json(serde_json::json!({
+            "ok": true,
+            "actor": actor,
+            "accepted": true,
+            "accept": accept,
+        }))
+        .into_response(),
+        Err(e) => simple(StatusCode::NOT_FOUND, &format!("{e}")),
+    }
+}
+
+async fn follow_request_reject(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let Some(actor) = follow_request_actor_from_path(parts.uri.path()) else {
+        return simple(StatusCode::BAD_REQUEST, "missing actor");
+    };
+    match reject_follow_request(state, &actor).await {
+        Ok(reject) => axum::Json(serde_json::json!({
+            "ok": true,
+            "actor": actor,
+            "rejected": true,
+            "reject": reject,
+        }))
+        .into_response(),
+        Err(e) => simple(StatusCode::NOT_FOUND, &format!("{e}")),
+    }
 }
 
 async fn p2p_sync_outbox(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -3370,7 +3633,7 @@ async fn chat_reactions_post(state: &ApState, req: Request<Body>) -> Response<Bo
     axum::Json(serde_json::json!({ "items": items })).into_response()
 }
 
-fn chat_dm_thread_id(members: &[String]) -> String {
+pub fn chat_dm_thread_id(members: &[String]) -> String {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
     for (idx, member) in members.iter().enumerate() {
@@ -4206,7 +4469,11 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
     let outbox = format!("{id}/outbox");
     let followers = format!("{id}/followers");
     let following = format!("{id}/following");
-    let shared_inbox = format!("{base}/inbox");
+    // A shared inbox is only useful when the receiving instance can expand collection
+    // recipients (e.g. `.../followers`). The relay has no follow graph, so its shared inbox
+    // rejects followers-only deliveries with "no local recipients". Advertising the user's own
+    // inbox keeps every delivery correct: the relay routes by path to the right tunnel.
+    let shared_inbox = format!("{id}/inbox");
     let key_id = format!("{id}#main-key");
 
     let icon = cfg
@@ -4485,6 +4752,12 @@ async fn outbox_get(
     if let Err(resp) = verify_signature_if_present(state, &parts).await {
         return resp;
     }
+    // H-39: a signed requester that is a follower may see followers-only items.
+    let requester = signature_requester_actor(&parts.headers);
+    let requester_is_follower = requester
+        .as_deref()
+        .map(|actor| state.social.is_follower(actor).unwrap_or(false))
+        .unwrap_or(false);
     let req = Request::from_parts(parts, body);
     let base = state.cfg.public_base_url.trim_end_matches('/');
     let col = format!("{base}/users/{}/outbox", state.cfg.username);
@@ -4499,7 +4772,7 @@ async fn outbox_get(
     if !is_page {
         let total = state
             .social
-            .list_outbox(0, None)
+            .list_outbox_visible(0, None, requester.as_deref(), requester_is_follower)
             .map(|p| p.total)
             .unwrap_or(0);
         let body = OrderedCollection {
@@ -4513,7 +4786,12 @@ async fn outbox_get(
     }
 
     let limit = 20;
-    let page = match state.social.list_outbox(limit, cursor.clone()) {
+    let page = match state.social.list_outbox_visible(
+        limit,
+        cursor.clone(),
+        requester.as_deref(),
+        requester_is_follower,
+    ) {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
@@ -6445,10 +6723,28 @@ pub(crate) async fn process_inbox_activity(
                 Some("Follow".to_string()),
                 act_id,
             ));
-            state.social.add_follower(actor)?;
             if let Some(fid) = activity.get("id").and_then(|v| v.as_str()) {
                 let _ = state.social.remember_inbox_follow(fid, actor);
             }
+
+            // H-44: a locked account keeps the Follow pending until the owner approves it. No
+            // Accept is sent yet and the actor is not added to followers.
+            if state.cfg.manually_approves_followers {
+                if !state.social.is_follower(actor)? {
+                    let activity_bytes = serde_json::to_vec(activity).ok();
+                    state
+                        .social
+                        .upsert_follow_request(actor, activity_bytes.as_deref())?;
+                    let _ = state.ui_events.send(UiEvent::new(
+                        "notification",
+                        Some("FollowRequest".to_string()),
+                        Some(actor.to_string()),
+                    ));
+                }
+                return Ok(());
+            }
+
+            state.social.add_follower(actor)?;
 
             // Invia Accept al follower.
             let accept_id = state.social.new_activity_id(&me);

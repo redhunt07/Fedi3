@@ -26,7 +26,7 @@ use std::{
 };
 use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -334,8 +334,13 @@ fn run_core(
         let queue = Arc::new(DeliveryQueue::open(&db_path)?);
         let social = Arc::new(SocialDb::open(&db_path)?);
         let http_timeout_secs = cfg.http_timeout_secs.unwrap_or(30).clamp(5, 120);
+        // Federation fetches share one policy: bounded redirects and an explicit user agent
+        // (the per-request body caps live in net_policy).
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(http_timeout_secs))
+            .connect_timeout(Duration::from_secs(10))
+            .redirect(crate::net_policy::redirect_policy())
+            .user_agent(format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .context("build http client")?;
 
@@ -591,6 +596,8 @@ fn run_core(
         };
 
         net.set_p2p_enabled(p2p_cfg.enable);
+        // H-42: every background worker is registered here so shutdown can join it.
+        let mut shutdown_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         // Seed relay registry and start relay discovery sync.
         let _ = state
             .social
@@ -599,7 +606,10 @@ fn run_core(
                 Some(&cfg.relay_ws),
                 "self",
             );
-        crate::relay_sync::start_relay_sync_worker(state.clone(), shutdown_rx.clone());
+        shutdown_handles.push(crate::relay_sync::start_relay_sync_worker(
+            state.clone(),
+            shutdown_rx.clone(),
+        ));
 
         if p2p_cfg.enable {
             if let Some(relays) = p2p_cfg.relay_reserve.clone() {
@@ -610,13 +620,13 @@ fn run_core(
             }
         }
 
-        crate::legacy_sync::start_legacy_sync_worker(
+        shutdown_handles.push(crate::legacy_sync::start_legacy_sync_worker(
             state.clone(),
             state.delivery.clone(),
             state.social.clone(),
             state.http.clone(),
             shutdown_rx.clone(),
-        );
+        ));
 
         // Aggressive "catch up" on startup: pull from followed legacy actors to fill the
         // home/unified/federated feeds after the device was offline.
@@ -662,13 +672,13 @@ fn run_core(
             .social
             .set_local_meta("public_base_url", &public_base_url_norm);
 
-        crate::storage_gc::start_storage_gc_worker(
+        shutdown_handles.push(crate::storage_gc::start_storage_gc_worker(
             storage_cfg,
             state.social.clone(),
             queue.clone(),
             data_dir.clone(),
             shutdown_rx.clone(),
-        );
+        ));
 
         // One-time best-effort backfill: ensure our own older public outbox items appear in the
         // local DHT/global timeline (useful after upgrades).
@@ -680,13 +690,13 @@ fn run_core(
         }
 
         let key_id_for_queue = key_id.clone();
-        queue.start_worker(
+        shutdown_handles.push(queue.start_worker(
             shutdown_rx.clone(),
             state.delivery.clone(),
             state.private_key_pem.clone(),
             key_id_for_queue,
             queue_settings,
-        );
+        ));
 
         // Optional ActivityPub relay subscriptions (Misskey-style):
         // follow a relay actor to receive a broader firehose into our inbox.
@@ -772,7 +782,7 @@ fn run_core(
             }
         }
 
-        state.object_fetch.start_with_signing(
+        shutdown_handles.push(state.object_fetch.start_with_signing(
             shutdown_rx.clone(),
             state.social.clone(),
             state.http.clone(),
@@ -780,7 +790,7 @@ fn run_core(
                 private_key_pem: state.private_key_pem.clone(),
                 key_id: key_id_for_fetch,
             }),
-        );
+        ));
 
         let state_for_router = state.clone();
         let router = Router::new().fallback(any(move |req| {
@@ -894,8 +904,16 @@ fn run_core(
                 )?
             {
                 state.delivery.set_p2p(Some(handle)).await;
-                crate::p2p_sync::start_p2p_sync_worker(state.clone(), p2p_cfg_for_sync, shutdown_rx.clone());
-                crate::device_sync::start_device_sync_worker(state.clone(), p2p_cfg_for_device, shutdown_rx.clone());
+                if let Some(h) =
+                    crate::p2p_sync::start_p2p_sync_worker(state.clone(), p2p_cfg_for_sync, shutdown_rx.clone())
+                {
+                    shutdown_handles.push(h);
+                }
+                if let Some(h) =
+                    crate::device_sync::start_device_sync_worker(state.clone(), p2p_cfg_for_device, shutdown_rx.clone())
+                {
+                    shutdown_handles.push(h);
+                }
             }
         }
 
@@ -935,10 +953,33 @@ fn run_core(
         }
         let _ = server_shutdown_tx.send(true);
 
-        if let Some(tunnel) = tunnel {
-            let _ = tunnel.await;
+        // H-42: join every registered worker before tearing down the runtime, with a global
+        // deadline so a stuck worker cannot block the app exit forever. The shutdown watch has
+        // already been signalled, so workers observe it at their next select.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut joined = 0usize;
+        for handle in shutdown_handles {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                handle.abort();
+                warn!("shutdown deadline reached: aborting remaining workers");
+                continue;
+            }
+            match tokio::time::timeout(remaining, handle).await {
+                Ok(Ok(())) => joined += 1,
+                Ok(Err(e)) => warn!("worker join error: {e}"),
+                Err(_) => warn!("worker did not stop within the shutdown deadline"),
+            }
         }
-        let _ = server.await;
+        debug!("joined {joined} background workers");
+
+        if let Some(tunnel) = tunnel {
+            let _ = tokio::time::timeout(Duration::from_secs(5), tunnel).await;
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+
+        // Flush the SQLite WAL so an immediate restart never races the old writer.
+        let _ = state.social.checkpoint();
         Ok::<(), anyhow::Error>(())
     })
 }

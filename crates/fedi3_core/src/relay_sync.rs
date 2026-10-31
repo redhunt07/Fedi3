@@ -32,7 +32,10 @@ struct PeerRelayListResponse {
     items: Option<Vec<RelayListItem>>,
 }
 
-pub fn start_relay_sync_worker(state: ApState, mut shutdown: watch::Receiver<bool>) {
+pub fn start_relay_sync_worker(
+    state: ApState,
+    mut shutdown: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
     let interval_secs = 300;
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
@@ -51,7 +54,7 @@ pub fn start_relay_sync_worker(state: ApState, mut shutdown: watch::Receiver<boo
                 info!("relay sync error: {e:#}");
             }
         }
-    });
+    })
 }
 
 pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {

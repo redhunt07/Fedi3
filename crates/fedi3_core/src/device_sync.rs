@@ -46,9 +46,9 @@ pub fn start_device_sync_worker(
     state: ApState,
     cfg: P2pConfig,
     mut shutdown: watch::Receiver<bool>,
-) {
+) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enable || !cfg.device_sync_enable.unwrap_or(false) {
-        return;
+        return None;
     }
     let interval_secs = cfg.device_sync_poll_secs.unwrap_or(30).max(5).min(3600);
     let batch_limit = cfg.sync_batch_limit.unwrap_or(50).max(1).min(200);
@@ -59,11 +59,9 @@ pub fn start_device_sync_worker(
         .iter()
         .find(|s| s.starts_with("did:fedi3:"))
         .cloned();
-    let Some(did) = did else {
-        return;
-    };
+    let did = did?;
 
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -85,7 +83,7 @@ pub fn start_device_sync_worker(
                 info!("device sync failed: {e:#}");
             }
         }
-    });
+    }))
 }
 
 async fn sync_with_did_record(

@@ -18,7 +18,7 @@ use tracing::warn;
 
 use crate::ap::ApState;
 use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
-use crate::social_db::{ChatMessage, ChatThread, CollectionPage};
+use crate::social_db::{ChatMessage, ChatThread, CollectionPage, SocialDb};
 use fedi3_protocol::RelayHttpRequest;
 
 const CHAT_VERSION: u32 = 1;
@@ -262,15 +262,98 @@ pub async fn store_incoming_payload(
     env: &ChatEnvelope,
     payload: &ChatPayload,
 ) -> Result<()> {
+    let local_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    store_incoming_payload_db(&state.social, &local_actor, env, payload)
+}
+
+/// H-17: DB-only implementation of inbound chat storage, shared by every inbound path.
+///
+/// A message is only stored when the thread already exists and the envelope sender is a member.
+/// The only exception is the legitimate first DM: an unknown thread is created only when its id
+/// is the deterministic hash of the sender and the local actor (i.e. the envelope recipient is
+/// the local user). Everything else is logged and skipped, so no ghost threads are created.
+pub fn store_incoming_payload_db(
+    social: &SocialDb,
+    local_actor: &str,
+    env: &ChatEnvelope,
+    payload: &ChatPayload,
+) -> Result<()> {
     let thread_id = env.thread_id.trim();
     if thread_id.is_empty() {
         return Err(anyhow::anyhow!("missing thread_id"));
     }
+    let sender = env.sender_actor.trim();
+    if sender.is_empty() {
+        warn!(thread=%thread_id, "chat envelope without sender_actor; skipping");
+        return Ok(());
+    }
+    let thread_exists = social.chat_thread_exists(thread_id)?;
+    if !thread_exists {
+        if payload.op == "message" {
+            let mut members = vec![
+                sender.to_string(),
+                local_actor.trim_end_matches('/').to_string(),
+            ];
+            members.sort();
+            members.dedup();
+            let expected_thread = crate::ap::chat_dm_thread_id(&members);
+            let sender_is_local = sender.trim_end_matches('/') == local_actor.trim_end_matches('/');
+            if sender_is_local || thread_id != expected_thread {
+                warn!(
+                    thread=%thread_id,
+                    sender=%sender,
+                    expected=%expected_thread,
+                    "chat message for unknown thread from a non-participant; skipping"
+                );
+                return Ok(());
+            }
+            social.create_chat_thread(thread_id, "dm", None)?;
+            social.upsert_chat_member(thread_id, sender, "member")?;
+            social.upsert_chat_member(thread_id, local_actor, "owner")?;
+        } else if payload.op == "system" {
+            // A group can be introduced by its creator: accept the first system message only if
+            // the sender is in the announced member list and the local actor is a member too.
+            let members = payload.members.clone().unwrap_or_default();
+            let sender_listed = members
+                .iter()
+                .any(|m| m.trim_end_matches('/') == sender.trim_end_matches('/'));
+            let local_listed = members
+                .iter()
+                .any(|m| m.trim_end_matches('/') == local_actor.trim_end_matches('/'));
+            if !sender_listed || !local_listed {
+                warn!(
+                    thread=%thread_id,
+                    sender=%sender,
+                    "chat system message for unknown thread without valid membership; skipping"
+                );
+                return Ok(());
+            }
+        } else {
+            warn!(
+                thread=%thread_id,
+                sender=%sender,
+                op=%payload.op,
+                "chat payload for unknown thread; skipping"
+            );
+            return Ok(());
+        }
+    } else if social.get_chat_member_role(thread_id, sender)?.is_none() {
+        warn!(
+            thread=%thread_id,
+            sender=%sender,
+            op=%payload.op,
+            "chat payload from non-member; skipping"
+        );
+        return Ok(());
+    }
+
     if payload.op == "message" {
-        state.social.create_chat_thread(thread_id, "dm", None)?;
-        state
-            .social
-            .upsert_chat_member(thread_id, &env.sender_actor, "member")?;
+        social.create_chat_thread(thread_id, "dm", None)?;
+        social.upsert_chat_member(thread_id, sender, "member")?;
         let msg = ChatMessage {
             message_id: env.message_id.clone(),
             thread_id: thread_id.to_string(),
@@ -281,43 +364,41 @@ pub async fn store_incoming_payload(
             deleted: false,
             body_json: serde_json::to_string(payload)?,
         };
-        state.social.insert_chat_message(&msg)?;
-        state.social.touch_chat_thread(thread_id)?;
+        social.insert_chat_message(&msg)?;
+        social.touch_chat_thread(thread_id)?;
     } else if payload.op == "edit" {
         if let Some(message_id) = payload.message_id.as_deref() {
-            state
-                .social
-                .update_chat_message_edit(message_id, &serde_json::to_string(payload)?)?;
+            social.update_chat_message_edit(message_id, &serde_json::to_string(payload)?)?;
         }
     } else if payload.op == "delete" {
         if let Some(message_id) = payload.message_id.as_deref() {
-            state.social.mark_chat_message_deleted(message_id)?;
+            social.mark_chat_message_deleted(message_id)?;
         }
     } else if payload.op == "system" {
         let title = payload.title.as_deref();
-        state.social.create_chat_thread(thread_id, "group", title)?;
+        social.create_chat_thread(thread_id, "group", title)?;
         if let Some(members) = payload.members.as_ref() {
-            state.social.set_chat_members(thread_id, members)?;
+            social.set_chat_members(thread_id, members)?;
         }
         if let Some(action) = payload.action.as_deref() {
             if action == "delete_thread" {
-                let _ = state.social.delete_chat_thread(thread_id);
+                let _ = social.delete_chat_thread(thread_id);
                 return Ok(());
             }
             if action == "add_member" {
                 if let Some(targets) = payload.targets.as_ref() {
                     for actor in targets {
-                        let _ = state.social.upsert_chat_member(thread_id, actor, "member");
+                        let _ = social.upsert_chat_member(thread_id, actor, "member");
                     }
                 }
             } else if action == "remove_member" {
                 if let Some(targets) = payload.targets.as_ref() {
                     for actor in targets {
-                        let _ = state.social.remove_chat_member(thread_id, actor);
+                        let _ = social.remove_chat_member(thread_id, actor);
                     }
                 }
             } else if action == "rename" {
-                let _ = state.social.update_chat_thread_title(thread_id, title);
+                let _ = social.update_chat_thread_title(thread_id, title);
             }
         }
         let msg = ChatMessage {
@@ -330,15 +411,13 @@ pub async fn store_incoming_payload(
             deleted: false,
             body_json: serde_json::to_string(payload)?,
         };
-        state.social.insert_chat_message(&msg)?;
-        state.social.touch_chat_thread(thread_id)?;
+        social.insert_chat_message(&msg)?;
+        social.touch_chat_thread(thread_id)?;
     } else if payload.op == "receipt" {
         if let (Some(message_id), Some(status)) =
             (payload.message_id.as_deref(), payload.status.as_deref())
         {
-            state
-                .social
-                .upsert_chat_message_status(message_id, &env.sender_actor, status)?;
+            social.upsert_chat_message_status(message_id, &env.sender_actor, status)?;
         }
     } else if payload.op == "react" {
         if let (Some(message_id), Some(reaction)) =
@@ -346,16 +425,12 @@ pub async fn store_incoming_payload(
         {
             let action = payload.action.as_deref().unwrap_or("add");
             if action == "remove" {
-                let _ = state
-                    .social
-                    .remove_chat_reaction(message_id, &env.sender_actor, reaction);
+                let _ = social.remove_chat_reaction(message_id, &env.sender_actor, reaction);
             } else {
-                let _ = state
-                    .social
-                    .add_chat_reaction(message_id, &env.sender_actor, reaction);
+                let _ = social.add_chat_reaction(message_id, &env.sender_actor, reaction);
             }
-            if let Ok(Some(thread_id)) = state.social.get_chat_message_thread_id(message_id) {
-                let _ = state.social.touch_chat_thread(&thread_id);
+            if let Ok(Some(thread_id)) = social.get_chat_message_thread_id(message_id) {
+                let _ = social.touch_chat_thread(&thread_id);
             }
         }
     }

@@ -97,7 +97,7 @@ pub fn start_storage_gc_worker(
     queue: std::sync::Arc<crate::delivery_queue::DeliveryQueue>,
     data_dir: PathBuf,
     mut shutdown: watch::Receiver<bool>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let interval = cfg.gc_interval_secs.unwrap_or(300).max(30);
         let mut tick = tokio::time::interval(Duration::from_secs(interval));
@@ -119,7 +119,7 @@ pub fn start_storage_gc_worker(
                 warn!("storage gc error: {e:#}");
             }
         }
-    });
+    })
 }
 
 async fn run_once(

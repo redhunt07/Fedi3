@@ -40,7 +40,7 @@ pub fn start_legacy_sync_worker(
     social: Arc<SocialDb>,
     http: reqwest::Client,
     mut shutdown: watch::Receiver<bool>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Misskey-like "home enrichment" requires that the instance keeps pulling what it follows
         // even if it missed inbox deliveries while offline.
@@ -61,7 +61,7 @@ pub fn start_legacy_sync_worker(
                 warn!("legacy sync error: {e:#}");
             }
         }
-    });
+    })
 }
 
 pub async fn run_legacy_sync_now(
@@ -143,6 +143,9 @@ async fn poll_actor_outbox(
         return Ok(());
     }
 
+    // H-03: followed actors and their outbox/page URLs come from remote servers.
+    crate::net_policy::check_url_allowed(actor_url).await?;
+
     // Best-effort: resolve actor and fetch outbox URL.
     let actor_doc = http
         .get(actor_url)
@@ -163,6 +166,7 @@ async fn poll_actor_outbox(
     let Some(outbox_url) = actor_doc.outbox else {
         return Ok(());
     };
+    crate::net_policy::check_url_allowed(&outbox_url).await?;
 
     // Step 1: fetch outbox collection to find its first page.
     let col = http
@@ -195,17 +199,20 @@ async fn poll_actor_outbox(
             break;
         }
 
-        let page_json = http
-            .get(&page_url)
-            .header(ACCEPT, "application/activity+json")
-            .header(USER_AGENT, format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
-            .send()
-            .await
-            .with_context(|| format!("fetch outbox page: {page_url}"))?
-            .error_for_status()
-            .with_context(|| format!("outbox page not ok: {page_url}"))?
-            .bytes()
-            .await?;
+        let page_json = {
+            // H-03/H-04: every `next` URL is remote-controlled and the page is unbounded.
+            crate::net_policy::check_url_allowed(&page_url).await?;
+            let resp = http
+                .get(&page_url)
+                .header(ACCEPT, "application/activity+json")
+                .header(USER_AGENT, format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
+                .send()
+                .await
+                .with_context(|| format!("fetch outbox page: {page_url}"))?
+                .error_for_status()
+                .with_context(|| format!("outbox page not ok: {page_url}"))?;
+            crate::net_policy::read_capped(resp, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?
+        };
 
         let parsed_page = serde_json::from_slice::<OrderedCollectionPage>(&page_json).ok();
         let items = parsed_page

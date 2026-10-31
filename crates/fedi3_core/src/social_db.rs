@@ -90,6 +90,16 @@ pub struct RelayEntry {
     pub source: String,
 }
 
+/// H-44: an inbound Follow awaiting manual approval on a locked account.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FollowRequest {
+    pub actor_id: String,
+    pub created_at_ms: i64,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_json: Option<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChatMessage {
     pub message_id: String,
@@ -202,7 +212,8 @@ impl SocialDb {
             CREATE TABLE IF NOT EXISTS outbox_items (
               id TEXT PRIMARY KEY,
               created_at_ms INTEGER NOT NULL,
-              activity_json BLOB NOT NULL
+              activity_json BLOB NOT NULL,
+              visibility TEXT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox_items(created_at_ms DESC);
@@ -316,6 +327,14 @@ impl SocialDb {
               created_at_ms INTEGER NOT NULL
             );
 
+            -- H-44: inbound Follow requests waiting for manual approval (locked accounts).
+            CREATE TABLE IF NOT EXISTS follow_requests (
+              actor_id TEXT PRIMARY KEY,
+              created_at_ms INTEGER NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending',
+              activity_json BLOB NULL
+            );
+
             CREATE TABLE IF NOT EXISTS local_meta (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
@@ -391,7 +410,11 @@ impl SocialDb {
             ],
         )?;
         ensure_columns(&conn, "reactions", &[("content", "TEXT NULL")])?;
+        // H-39 migration: databases created before visibility support have no column. NULL is
+        // interpreted as "public" by the queries below, so old rows stay visible.
+        ensure_columns(&conn, "outbox_items", &[("visibility", "TEXT NULL")])?;
         migrate(&mut conn)?;
+        secure_db_permissions(&path);
         Ok(Self { path })
     }
 
@@ -402,6 +425,16 @@ impl SocialDb {
     pub fn health_check(&self) -> Result<()> {
         let conn = self.connect()?;
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Flush the WAL into the main database file. Called on shutdown so an immediate restart
+    /// never races the previous writer (H-42).
+    pub fn checkpoint(&self) -> Result<()> {
+        let conn = self.connect()?;
+        let _: (i64, i64, i64) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
         Ok(())
     }
 
@@ -524,6 +557,76 @@ impl SocialDb {
         conn.execute(
             "INSERT OR IGNORE INTO followers(actor_id, created_at_ms) VALUES (?1, ?2)",
             params![actor_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// H-44: store (or refresh) a pending Follow request for a locked account.
+    pub fn upsert_follow_request(
+        &self,
+        actor_id: &str,
+        activity_json: Option<&[u8]>,
+    ) -> Result<()> {
+        let actor_id = actor_id.trim().trim_end_matches('/');
+        if actor_id.is_empty() {
+            return Ok(());
+        }
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO follow_requests(actor_id, created_at_ms, state, activity_json) VALUES (?1, ?2, 'pending', ?3)\n             ON CONFLICT(actor_id) DO UPDATE SET\n               state='pending',\n               activity_json=COALESCE(excluded.activity_json, follow_requests.activity_json)",
+            params![actor_id, now_ms(), activity_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_follow_requests(&self) -> Result<Vec<FollowRequest>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT actor_id, created_at_ms, state, activity_json FROM follow_requests WHERE state='pending' ORDER BY created_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(FollowRequest {
+                actor_id: r.get(0)?,
+                created_at_ms: r.get(1)?,
+                state: r.get(2)?,
+                activity_json: r.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_follow_request(&self, actor_id: &str) -> Result<Option<FollowRequest>> {
+        let actor_id = actor_id.trim().trim_end_matches('/');
+        if actor_id.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT actor_id, created_at_ms, state, activity_json FROM follow_requests WHERE actor_id=?1 AND state='pending'",
+            params![actor_id],
+            |r| {
+                Ok(FollowRequest {
+                    actor_id: r.get(0)?,
+                    created_at_ms: r.get(1)?,
+                    state: r.get(2)?,
+                    activity_json: r.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn remove_follow_request(&self, actor_id: &str) -> Result<()> {
+        let actor_id = actor_id.trim().trim_end_matches('/');
+        if actor_id.is_empty() {
+            return Ok(());
+        }
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM follow_requests WHERE actor_id=?1",
+            params![actor_id],
         )?;
         Ok(())
     }
@@ -1915,11 +2018,73 @@ impl SocialDb {
         Ok(())
     }
 
+    /// H-39: derive the outbox visibility from the note audience (`to`/`cc`).
+    ///
+    /// Only `Create` activities wrapping a Note/Article are audience-scoped. Everything else
+    /// (Follow/Accept/Undo/Like/...) is a control activity and stays public so federation and
+    /// legacy clients keep seeing it.
+    fn derive_outbox_visibility(activity_json: &[u8]) -> &'static str {
+        let Ok(activity) = serde_json::from_slice::<serde_json::Value>(activity_json) else {
+            return "public";
+        };
+        let activity_type = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if activity_type != "Create" {
+            return "public";
+        }
+        let object = activity.get("object");
+        let object_type = object
+            .and_then(|o| o.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !matches!(object_type, "Note" | "Article" | "Page") {
+            return "public";
+        }
+
+        let mut to_public = false;
+        let mut cc_public = false;
+        let mut followers = false;
+        let mut has_audience = false;
+        for (field, public_flag) in [("to", &mut to_public), ("cc", &mut cc_public)] {
+            let values = object
+                .and_then(|o| o.get(field))
+                .or_else(|| activity.get(field));
+            let Some(values) = values else { continue };
+            let Some(list) = values.as_array() else {
+                continue;
+            };
+            for v in list {
+                let Some(s) = v.as_str() else { continue };
+                if s.contains("activitystreams#Public") {
+                    *public_flag = true;
+                    has_audience = true;
+                } else if s.ends_with("/followers") {
+                    followers = true;
+                    has_audience = true;
+                } else if s.starts_with("http://") || s.starts_with("https://") {
+                    has_audience = true;
+                }
+            }
+        }
+
+        if to_public {
+            "public"
+        } else if cc_public {
+            "unlisted"
+        } else if followers {
+            "followers"
+        } else if has_audience {
+            "direct"
+        } else {
+            "public"
+        }
+    }
+
     pub fn store_outbox(&self, id: &str, activity_json: Vec<u8>) -> Result<()> {
+        let visibility = Self::derive_outbox_visibility(&activity_json);
         let conn = self.connect()?;
         conn.execute(
-            "INSERT OR REPLACE INTO outbox_items(id, created_at_ms, activity_json) VALUES (?1, ?2, ?3)",
-            params![id, now_ms(), activity_json],
+            "INSERT OR REPLACE INTO outbox_items(id, created_at_ms, activity_json, visibility) VALUES (?1, ?2, ?3, ?4)",
+            params![id, now_ms(), activity_json, visibility],
         )?;
         Ok(())
     }
@@ -1930,12 +2095,45 @@ impl SocialDb {
         created_at_ms: i64,
         activity_json: Vec<u8>,
     ) -> Result<()> {
+        let visibility = Self::derive_outbox_visibility(&activity_json);
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO outbox_items(id, created_at_ms, activity_json) VALUES (?1, ?2, ?3)\n             ON CONFLICT(id) DO UPDATE SET\n               activity_json=excluded.activity_json,\n               created_at_ms=(CASE WHEN excluded.created_at_ms < outbox_items.created_at_ms THEN excluded.created_at_ms ELSE outbox_items.created_at_ms END)",
-            params![id, created_at_ms, activity_json],
+            "INSERT INTO outbox_items(id, created_at_ms, activity_json, visibility) VALUES (?1, ?2, ?3, ?4)\n             ON CONFLICT(id) DO UPDATE SET\n               activity_json=excluded.activity_json,\n               visibility=excluded.visibility,\n               created_at_ms=(CASE WHEN excluded.created_at_ms < outbox_items.created_at_ms THEN excluded.created_at_ms ELSE outbox_items.created_at_ms END)",
+            params![id, created_at_ms, activity_json, visibility],
         )?;
         Ok(())
+    }
+
+    pub fn is_follower(&self, actor_id: &str) -> Result<bool> {
+        let actor_id = actor_id.trim().trim_end_matches('/');
+        if actor_id.is_empty() {
+            return Ok(false);
+        }
+        let conn = self.connect()?;
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT actor_id FROM followers WHERE actor_id=?1",
+                params![actor_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
+    }
+
+    pub fn chat_thread_exists(&self, thread_id: &str) -> Result<bool> {
+        let thread_id = thread_id.trim();
+        if thread_id.is_empty() {
+            return Ok(false);
+        }
+        let conn = self.connect()?;
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT thread_id FROM chat_threads WHERE thread_id=?1",
+                params![thread_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
     }
 
     pub fn get_outbox(&self, id: &str) -> Result<Option<Vec<u8>>> {
@@ -2154,27 +2352,67 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
+    /// H-39: public outbox view without a requester. Only public and unlisted items are visible;
+    /// followers-only items need a follower requester (see `list_outbox_visible`).
     pub fn list_outbox(
         &self,
         limit: u32,
         cursor: Option<String>,
     ) -> Result<CollectionPage<Vec<u8>>> {
+        self.list_outbox_visible(limit, cursor, None, false)
+    }
+
+    /// H-39: visibility-filtered outbox.
+    ///
+    /// - `public` and `unlisted` are always returned;
+    /// - `followers` only when `requester_is_follower` is true and a requester actor is given;
+    /// - `direct` is never returned (delivered through inboxes).
+    /// - Rows written before the migration have NULL visibility and are treated as public.
+    pub fn list_outbox_visible(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+        requester_actor: Option<&str>,
+        requester_is_follower: bool,
+    ) -> Result<CollectionPage<Vec<u8>>> {
+        let followers_visible = requester_is_follower && requester_actor.is_some();
+        let visible_clause = |n: usize| {
+            format!(
+                "COALESCE(visibility,'public') IN ('public','unlisted') OR (COALESCE(visibility,'public')='followers' AND ?{n})"
+            )
+        };
         let conn = self.connect()?;
-        let total: u64 = conn.query_row("SELECT COUNT(*) FROM outbox_items", [], |r| r.get(0))?;
+        let total: u64 = conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM outbox_items WHERE {}",
+                visible_clause(1)
+            ),
+            params![followers_visible],
+            |r| r.get(0),
+        )?;
 
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) =
             cursor.as_deref().and_then(parse_cursor)
         {
             (
-                "SELECT activity_json, created_at_ms, id FROM outbox_items WHERE (created_at_ms < ?1 OR (created_at_ms = ?1 AND id < ?2)) ORDER BY created_at_ms DESC, id DESC LIMIT ?3"
-                    .to_string(),
-                vec![c.0.into(), c.1.into(), (limit as i64).into()],
+                format!(
+                    "SELECT activity_json, created_at_ms, id FROM outbox_items WHERE (created_at_ms < ?1 OR (created_at_ms = ?1 AND id < ?2)) AND ({}) ORDER BY created_at_ms DESC, id DESC LIMIT ?4",
+                    visible_clause(3)
+                ),
+                vec![
+                    c.0.into(),
+                    c.1.into(),
+                    followers_visible.into(),
+                    (limit as i64).into(),
+                ],
             )
         } else {
             (
-                "SELECT activity_json, created_at_ms, id FROM outbox_items ORDER BY created_at_ms DESC, id DESC LIMIT ?1"
-                    .to_string(),
-                vec![(limit as i64).into()],
+                format!(
+                    "SELECT activity_json, created_at_ms, id FROM outbox_items WHERE {} ORDER BY created_at_ms DESC, id DESC LIMIT ?2",
+                    visible_clause(1)
+                ),
+                vec![followers_visible.into(), (limit as i64).into()],
             )
         };
 
@@ -2202,7 +2440,7 @@ impl SocialDb {
         let conn = self.connect()?;
         let limit = limit.max(1).min(500) as i64;
         let mut stmt = conn.prepare(
-            "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 ORDER BY created_at_ms ASC LIMIT ?2",
+            "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 AND COALESCE(visibility,'public') != 'direct' ORDER BY created_at_ms ASC LIMIT ?2",
         )?;
         let mut rows = stmt.query(params![since_ms, limit])?;
         let mut items = Vec::new();
@@ -2226,7 +2464,7 @@ impl SocialDb {
         let conn = self.connect()?;
         let limit = limit.max(1).min(500) as i64;
         let mut stmt = conn.prepare(
-            "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 ORDER BY created_at_ms ASC LIMIT ?2",
+            "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 AND COALESCE(visibility,'public') != 'direct' ORDER BY created_at_ms ASC LIMIT ?2",
         )?;
         let mut rows = stmt.query(params![since_ms, limit])?;
         let mut items: Vec<(Vec<u8>, i64)> = Vec::new();
@@ -3937,6 +4175,11 @@ fn parse_url_field(
 }
 
 /// Current schema version. Bump when adding a numbered migration below.
+///
+/// Note: `delivery_queue` shares this `schema_version` table and rewrites it with its own
+/// `DELIVERY_SCHEMA_VERSION` (currently 2) on every open, so this constant must stay in sync
+/// with that value. New social columns are therefore added through the idempotent
+/// `ensure_columns` migration above instead of a version bump.
 pub const SCHEMA_VERSION: u32 = 2;
 
 fn open_with_pragmas(path: &Path) -> Result<Connection> {
@@ -3944,8 +4187,36 @@ fn open_with_pragmas(path: &Path) -> Result<Connection> {
     // SQLITE_BUSY is expected under concurrent writers; wait instead of failing immediately.
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+    // H-19: SQLite creates the database with the process umask (usually 0644). Restrict it to
+    // the owner as soon as the file exists; WAL/SHM siblings are handled by
+    // `secure_db_permissions` after the journal mode is enabled.
+    secure_db_permissions(path);
     Ok(conn)
 }
+
+/// H-19: restrict the database and its SQLite journal siblings to owner read/write (0600).
+#[cfg(unix)]
+fn secure_db_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = path.to_string_lossy();
+    for candidate in [
+        base.to_string(),
+        format!("{base}-wal"),
+        format!("{base}-shm"),
+        format!("{base}-journal"),
+    ] {
+        let p = Path::new(&candidate);
+        if p.exists() {
+            let perms = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(p, perms) {
+                tracing::warn!(path=%candidate, "cannot set db permissions: {e}");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn secure_db_permissions(_path: &Path) {}
 
 fn migrate(conn: &mut Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
@@ -3964,11 +4235,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     if version == 0 {
         version = 1;
     }
+    // The outbox visibility column and follow_requests table are created above with
+    // CREATE TABLE IF NOT EXISTS / ensure_columns; nothing else to migrate yet.
+    let _ = version;
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM schema_version", [])?;
     tx.execute(
         "INSERT INTO schema_version(version) VALUES (?1)",
-        params![version],
+        params![SCHEMA_VERSION],
     )?;
     tx.commit()?;
     Ok(())

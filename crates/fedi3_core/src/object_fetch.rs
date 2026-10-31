@@ -43,17 +43,22 @@ impl ObjectFetchWorker {
         db: Arc<SocialDb>,
         http: reqwest::Client,
         signed: Option<SignedFetchConfig>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = this.run_loop(shutdown, db, http, signed).await {
                 warn!("object fetch worker stopped: {e:#}");
             }
-        });
+        })
     }
 
-    pub fn start(&self, shutdown: watch::Receiver<bool>, db: Arc<SocialDb>, http: reqwest::Client) {
-        self.start_with_signing(shutdown, db, http, None);
+    pub fn start(
+        &self,
+        shutdown: watch::Receiver<bool>,
+        db: Arc<SocialDb>,
+        http: reqwest::Client,
+    ) -> tokio::task::JoinHandle<()> {
+        self.start_with_signing(shutdown, db, http, None)
     }
 
     async fn run_loop(
@@ -173,12 +178,15 @@ pub struct SignedFetchConfig {
     pub key_id: String,
 }
 
-async fn fetch_one(
+pub async fn fetch_one(
     http: &reqwest::Client,
     signed: &Option<SignedFetchConfig>,
     url: &str,
 ) -> Result<Option<(String, Vec<u8>, bool)>> {
     let accept = "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"";
+
+    // H-03: object URLs are announced by remote peers.
+    crate::net_policy::check_url_allowed(url).await?;
 
     let resp = if let Some(s) = signed {
         if let Ok(uri) = url.parse::<Uri>() {
@@ -215,7 +223,9 @@ async fn fetch_one(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    let bytes = resp.bytes().await?;
+    // H-04: capped streaming read instead of `bytes()`, which buffers whatever arrives.
+    let bytes =
+        crate::net_policy::read_capped(resp, crate::net_policy::MAX_OBJECT_DOC_BYTES).await?;
     let v: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(_) => return Ok(None),

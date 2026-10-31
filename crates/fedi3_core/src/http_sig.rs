@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 /// Hard cap on the key cache so an attacker using endless `keyId` paths cannot grow it forever.
 const KEY_CACHE_MAX: usize = 10_000;
 /// Hard cap on the actor document size fetched while resolving a key.
-const MAX_ACTOR_DOC_BYTES: usize = 256 * 1024;
+const MAX_ACTOR_DOC_BYTES: usize = crate::net_policy::MAX_ACTOR_DOC_BYTES;
 
 #[derive(Clone)]
 pub struct KeyResolver {
@@ -35,15 +35,14 @@ struct CachedActor {
     key_id: String,
     is_fedi3: bool,
     expires_at: std::time::Instant,
+    /// Last time this entry was served, used for LRU eviction (H-46).
+    last_used: std::time::Instant,
 }
 
 impl KeyResolver {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        // Shared federation client: bounded timeouts and redirects, explicit user agent.
+        let client = crate::net_policy::federation_client();
         Self {
             client,
             cache: Arc::new(RwLock::new(HashMap::new())),
@@ -78,6 +77,9 @@ impl KeyResolver {
             }
         }
 
+        // SSRF guard: the actor URL comes from an attacker-controlled keyId.
+        crate::net_policy::check_url_allowed(&actor_url).await?;
+
         let resp = self
             .client
             .get(&actor_url)
@@ -91,7 +93,9 @@ impl KeyResolver {
             .error_for_status()
             .with_context(|| format!("actor not ok: {actor_url}"))?;
 
-        let text = resp.text().await?;
+        // Streamed, capped read: a hostile server cannot make us buffer gigabytes.
+        let body = crate::net_policy::read_capped(resp, MAX_ACTOR_DOC_BYTES).await?;
+        let text = String::from_utf8_lossy(&body).into_owned();
         if text.len() > MAX_ACTOR_DOC_BYTES {
             return Err(anyhow!("actor document too large: {} bytes", text.len()));
         }
@@ -161,8 +165,9 @@ impl KeyResolver {
     async fn get_cached(&self, actor_url: &str) -> Option<CachedActor> {
         let mut cache = self.cache.write().await;
         let now = std::time::Instant::now();
-        if let Some(v) = cache.get(actor_url) {
+        if let Some(v) = cache.get_mut(actor_url) {
             if v.expires_at > now {
+                v.last_used = now;
                 return Some(v.clone());
             }
         }
@@ -181,12 +186,17 @@ impl KeyResolver {
         let mut cache = self.cache.write().await;
         let now = std::time::Instant::now();
         if cache.len() >= KEY_CACHE_MAX {
-            // Evict expired entries first, then arbitrary entries until under the cap.
+            // Drop expired entries first, then the least recently used ones (H-46: LRU, not
+            // arbitrary eviction, so hot actors survive a keyId flood).
             cache.retain(|_, v| v.expires_at > now);
             if cache.len() >= KEY_CACHE_MAX {
                 let overflow = cache.len() - KEY_CACHE_MAX + 1;
-                let victims: Vec<String> = cache.keys().take(overflow).cloned().collect();
-                for k in victims {
+                let mut victims: Vec<(String, std::time::Instant)> = cache
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.last_used))
+                    .collect();
+                victims.sort_by_key(|(_, used)| *used);
+                for (k, _) in victims.into_iter().take(overflow) {
                     cache.remove(&k);
                 }
             }
@@ -198,6 +208,7 @@ impl KeyResolver {
                 key_id,
                 is_fedi3,
                 expires_at: now + ttl,
+                last_used: now,
             },
         );
     }
@@ -755,5 +766,44 @@ mod tests {
         require_min_signed_headers(&ok).unwrap();
         let missing = vec!["date".to_string()];
         assert!(require_min_signed_headers(&missing).is_err());
+    }
+
+    /// H-46: the key cache must evict the least recently used entry, never a hot one.
+    #[tokio::test]
+    async fn key_cache_evicts_lru_entry() {
+        let resolver = KeyResolver::new();
+        let ttl = Duration::from_secs(300);
+        for i in 0..KEY_CACHE_MAX {
+            resolver
+                .put_cached(
+                    &format!("https://peer{i}.example/users/u"),
+                    "pem".to_string(),
+                    format!("https://peer{i}.example/users/u#main-key"),
+                    false,
+                    ttl,
+                )
+                .await;
+        }
+        // Touch the first entry so it becomes the most recently used.
+        let hot = "https://peer0.example/users/u";
+        assert!(resolver.get_cached(hot).await.is_some());
+
+        resolver
+            .put_cached(
+                "https://new.example/users/u",
+                "pem".to_string(),
+                "https://new.example/users/u#main-key".to_string(),
+                false,
+                ttl,
+            )
+            .await;
+
+        let cache = resolver.cache.read().await;
+        assert!(cache.len() <= KEY_CACHE_MAX, "cache must stay bounded");
+        assert!(cache.contains_key(hot), "recently used entry must survive");
+        assert!(
+            !cache.contains_key("https://peer1.example/users/u"),
+            "the least recently used entry must be evicted"
+        );
     }
 }

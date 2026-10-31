@@ -33,7 +33,7 @@ pub struct Delivery {
 impl Delivery {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: crate::net_policy::federation_client(),
             p2p: Arc::new(RwLock::new(None)),
             webrtc: Arc::new(RwLock::new(None)),
             mailbox_targets: Arc::new(RwLock::new(Vec::new())),
@@ -76,6 +76,8 @@ impl Delivery {
     }
 
     pub async fn resolve_actor_info(&self, actor_url: &str) -> Result<ActorInfo> {
+        // H-03: the actor URL is attacker-controlled, never fetch private addresses.
+        crate::net_policy::check_url_allowed(actor_url).await?;
         let resp = self
             .client
             .get(actor_url)
@@ -89,7 +91,10 @@ impl Delivery {
             .error_for_status()
             .with_context(|| format!("actor not ok: {actor_url}"))?;
 
-        let text = resp.text().await?;
+        // H-04: capped streaming read instead of an unbounded `text()`.
+        let body =
+            crate::net_policy::read_capped(resp, crate::net_policy::MAX_ACTOR_DOC_BYTES).await?;
+        let text = String::from_utf8_lossy(&body);
         let actor: ActorDoc = serde_json::from_str(&text)
             .with_context(|| format!("parse actor json from {actor_url}"))?;
         let public_key_pem = actor.publicKey.as_ref().map(|p| p.public_key_pem.clone());
@@ -119,6 +124,8 @@ impl Delivery {
         key_id: &str,
         actor_url: &str,
     ) -> Result<ActorInfo> {
+        // H-03: guard before the signed GET, the URL comes from a peer.
+        crate::net_policy::check_url_allowed(actor_url).await?;
         let uri: Uri = actor_url.parse().context("parse actor url")?;
 
         let mut headers = HeaderMap::new();
@@ -154,7 +161,10 @@ impl Delivery {
             .error_for_status()
             .with_context(|| format!("actor not ok (signed): {actor_url}"))?;
 
-        let text = resp.text().await?;
+        // H-04: capped streaming read.
+        let body =
+            crate::net_policy::read_capped(resp, crate::net_policy::MAX_ACTOR_DOC_BYTES).await?;
+        let text = String::from_utf8_lossy(&body);
         let actor: ActorDoc = serde_json::from_str(&text)
             .with_context(|| format!("parse actor json from {actor_url}"))?;
         let public_key_pem = actor.publicKey.as_ref().map(|p| p.public_key_pem.clone());
@@ -185,6 +195,8 @@ impl Delivery {
         inbox_url: &str,
         body: &[u8],
     ) -> Result<()> {
+        // H-03: the inbox URL comes from a remote actor document.
+        crate::net_policy::check_url_allowed(inbox_url).await?;
         let uri: Uri = inbox_url.parse().context("parse inbox url")?;
 
         let mut headers = HeaderMap::new();
@@ -219,7 +231,11 @@ impl Delivery {
         let resp = send_with_retry(|| req.try_clone().unwrap().body(body.to_vec()), 3).await?;
         let status = resp.status();
         if !status.is_success() && status.as_u16() != 202 {
-            let text = resp.text().await.unwrap_or_default();
+            // H-04: the error body of a remote server is unbounded too.
+            let text = crate::net_policy::read_capped(resp, 8 * 1024)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(anyhow!("delivery failed: {} {}", status, text));
         }
         Ok(())

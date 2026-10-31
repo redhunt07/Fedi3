@@ -25,6 +25,15 @@ pub fn free_port() -> u16 {
     port
 }
 
+/// Federation code rejects private addresses (SSRF guard) by default; the test harness runs
+/// everything on loopback, so the escape hatch is enabled once per test binary.
+pub fn ensure_test_env() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
+    });
+}
+
 /// A real core runtime on a temporary data dir and an ephemeral local port.
 pub struct TestCore {
     pub port: u16,
@@ -42,6 +51,7 @@ impl TestCore {
     pub fn with_config(
         mut f: impl FnMut(&mut fedi3_core::runtime::CoreStartConfig),
     ) -> anyhow::Result<Self> {
+        ensure_test_env();
         let dir = fedi3_core::test_support::TempDir::new("core");
         let port = free_port();
         let username = "alice".to_string();
@@ -268,6 +278,36 @@ impl Signer {
         }
         req
     }
+
+    /// GET with an HTTP Signature covering `(request-target)`, `host` and `date`.
+    pub fn signed_get(&self, url: &str) -> reqwest::RequestBuilder {
+        let uri: Uri = url.parse().expect("valid url");
+        let mut headers = HeaderMap::new();
+        if let Some(auth) = uri.authority() {
+            headers.insert("host", auth.as_str().parse().expect("host"));
+        }
+        headers.insert(
+            "date",
+            httpdate::fmt_http_date(std::time::SystemTime::now())
+                .parse()
+                .expect("date"),
+        );
+        fedi3_core::http_sig::sign_request_rsa_sha256(
+            &self.private_pem,
+            &self.key_id,
+            &Method::GET,
+            &uri,
+            &mut headers,
+            b"",
+            &["(request-target)", "host", "date"],
+        )
+        .expect("sign");
+        let mut req = TestCore::client().get(url);
+        for (k, v) in headers.iter() {
+            req = req.header(k, v);
+        }
+        req
+    }
 }
 
 /// A mock remote actor server: serves the actor document + public key so the core can
@@ -284,6 +324,7 @@ pub struct MockActorServer {
 
 impl MockActorServer {
     pub async fn new(username: &str) -> anyhow::Result<Self> {
+        ensure_test_env();
         let port = free_port();
         let base_url = format!("http://127.0.0.1:{port}");
         let actor_url = format!("{base_url}/users/{username}");
