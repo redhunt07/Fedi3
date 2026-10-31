@@ -3325,6 +3325,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Bind address must be host:port (e.g. 127.0.0.1:8788).'**
   String get onboardingErrBind;
+
+  /// No description provided for @settingsFollowRequests.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow requests'**
+  String get settingsFollowRequests;
+
+  /// No description provided for @settingsFollowRequestsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve or reject people who want to follow this locked account.'**
+  String get settingsFollowRequestsHint;
+
+  /// No description provided for @followRequestsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow requests'**
+  String get followRequestsTitle;
+
+  /// No description provided for @followRequestsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No pending requests.'**
+  String get followRequestsEmpty;
+
+  /// No description provided for @followRequestsApprove.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve'**
+  String get followRequestsApprove;
+
+  /// No description provided for @followRequestsReject.
+  ///
+  /// In en, this message translates to:
+  /// **'Reject'**
+  String get followRequestsReject;
+
+  /// No description provided for @followRequestsApproved.
+  ///
+  /// In en, this message translates to:
+  /// **'Approved {handle}'**
+  String followRequestsApproved(String handle);
+
+  /// No description provided for @followRequestsRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Rejected {handle}'**
+  String followRequestsRejected(String handle);
+
+  /// No description provided for @followRequestsLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not load follow requests: {error}'**
+  String followRequestsLoadFailed(String error);
+
+  /// No description provided for @followRequestsCoreStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Start the core to see follow requests.'**
+  String get followRequestsCoreStopped;
 }
 
 class _AppLocalizationsDelegate

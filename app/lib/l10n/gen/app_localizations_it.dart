@@ -1786,4 +1786,42 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get onboardingErrBind =>
       'L\'indirizzo di bind deve essere host:porta (es. 127.0.0.1:8788).';
+
+  @override
+  String get settingsFollowRequests => 'Richieste di follow';
+
+  @override
+  String get settingsFollowRequestsHint =>
+      'Approva o rifiuta chi vuole seguire questo account bloccato.';
+
+  @override
+  String get followRequestsTitle => 'Richieste di follow';
+
+  @override
+  String get followRequestsEmpty => 'Nessuna richiesta in attesa.';
+
+  @override
+  String get followRequestsApprove => 'Approva';
+
+  @override
+  String get followRequestsReject => 'Rifiuta';
+
+  @override
+  String followRequestsApproved(String handle) {
+    return 'Approvato $handle';
+  }
+
+  @override
+  String followRequestsRejected(String handle) {
+    return 'Rifiutato $handle';
+  }
+
+  @override
+  String followRequestsLoadFailed(String error) {
+    return 'Impossibile caricare le richieste di follow: $error';
+  }
+
+  @override
+  String get followRequestsCoreStopped =>
+      'Avvia il core per vedere le richieste di follow.';
 }

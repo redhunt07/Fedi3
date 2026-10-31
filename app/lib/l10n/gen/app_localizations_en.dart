@@ -1775,4 +1775,42 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get onboardingErrBind =>
       'Bind address must be host:port (e.g. 127.0.0.1:8788).';
+
+  @override
+  String get settingsFollowRequests => 'Follow requests';
+
+  @override
+  String get settingsFollowRequestsHint =>
+      'Approve or reject people who want to follow this locked account.';
+
+  @override
+  String get followRequestsTitle => 'Follow requests';
+
+  @override
+  String get followRequestsEmpty => 'No pending requests.';
+
+  @override
+  String get followRequestsApprove => 'Approve';
+
+  @override
+  String get followRequestsReject => 'Reject';
+
+  @override
+  String followRequestsApproved(String handle) {
+    return 'Approved $handle';
+  }
+
+  @override
+  String followRequestsRejected(String handle) {
+    return 'Rejected $handle';
+  }
+
+  @override
+  String followRequestsLoadFailed(String error) {
+    return 'Could not load follow requests: $error';
+  }
+
+  @override
+  String get followRequestsCoreStopped =>
+      'Start the core to see follow requests.';
 }

@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 
 import '../model/core_config.dart';
+import '../model/follow_request.dart';
 import 'core_http.dart';
 
 /// Classification of every failure the app can get from the core or the relay.
@@ -1018,6 +1019,64 @@ class CoreApi {
           CoreApiErrorKind.decode, 'follow status returned invalid JSON',
           cause: e);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // H-44: pending follow requests for locked accounts.
+  // ---------------------------------------------------------------------------
+
+  /// GET /_fedi3/follow_requests. Returns the pending requests only.
+  Future<List<FollowRequest>> fetchFollowRequests() async {
+    final resp = await _request(
+      method: 'GET',
+      uri: _internal('/_fedi3/follow_requests'),
+      headers: _internalHeaders,
+    );
+    try {
+      final json = jsonDecode(resp.body);
+      if (json is! List) {
+        throw const FormatException('expected a JSON array');
+      }
+      return json
+          .whereType<Map>()
+          .map((e) => FollowRequest.fromJson(e.cast<String, dynamic>()))
+          .where((r) => r.actor.isNotEmpty)
+          .toList(growable: false);
+    } on FormatException catch (e) {
+      throw CoreApiException(
+          CoreApiErrorKind.decode, 'follow requests returned invalid JSON',
+          cause: e);
+    }
+  }
+
+  /// POST /_fedi3/follow_requests/<actor>/approve.
+  Future<void> approveFollowRequest(String actor) async {
+    final trimmed = actor.trim();
+    if (trimmed.isEmpty) {
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing actor');
+    }
+    final encoded = Uri.encodeComponent(trimmed);
+    await _request(
+      method: 'POST',
+      uri: _internal('/_fedi3/follow_requests/$encoded/approve'),
+      headers: _internalHeaders,
+      anySuccess: true,
+    );
+  }
+
+  /// POST /_fedi3/follow_requests/<actor>/reject.
+  Future<void> rejectFollowRequest(String actor) async {
+    final trimmed = actor.trim();
+    if (trimmed.isEmpty) {
+      throw CoreApiException(CoreApiErrorKind.badRequest, 'missing actor');
+    }
+    final encoded = Uri.encodeComponent(trimmed);
+    await _request(
+      method: 'POST',
+      uri: _internal('/_fedi3/follow_requests/$encoded/reject'),
+      headers: _internalHeaders,
+      anySuccess: true,
+    );
   }
 
   Future<Map<String, dynamic>> uploadMedia({

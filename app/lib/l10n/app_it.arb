@@ -1,8 +1,6 @@
 {
   "@@locale": "it",
-
   "appTitle": "Fedi3",
-
   "navTimeline": "Timeline",
   "navCompose": "Componi",
   "navNotifications": "Notifiche",
@@ -10,14 +8,15 @@
   "navChat": "Chat",
   "navRelays": "Relay",
   "navSettings": "Configurazioni",
-
   "save": "Salva",
   "cancel": "Annulla",
   "ok": "OK",
   "err": "Errore: {error}",
   "@err": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "copy": "Copia",
@@ -27,7 +26,6 @@
   "networkErrorTitle": "Problema di rete",
   "networkErrorHint": "Controlla la connessione e riprova.",
   "networkErrorRetry": "Riprova",
-
   "timelineTitle": "Timeline",
   "timelineTabHome": "Home",
   "timelineTabLocal": "Locale",
@@ -47,10 +45,11 @@
   "searchTagCount": "{count} post",
   "@searchTagCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
-
   "chatTitle": "Chat",
   "chatThreadTitle": "Conversazione",
   "chatNewTitle": "Nuova chat",
@@ -107,41 +106,42 @@
   "chatTyping": "{name} sta scrivendo…",
   "@chatTyping": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "chatTypingMany": "{names} stanno scrivendo…",
   "@chatTypingMany": {
     "placeholders": {
-      "names": { "type": "String" }
+      "names": {
+        "type": "String"
+      }
     }
   },
-
   "timelineHomeTooltip": "Timeline Generica (P2P rete globale + Legacy). Mostra anche interazioni in ingresso/uscita con utenti che non segui e non ti seguono.",
   "timelineLocalTooltip": "Timeline Follower/Follow (P2P + Legacy). Solo profili con cui hai relazione follow/follower.",
   "timelineSocialTooltip": "Timeline Sociale (P2P). Contenuti best-effort diffusi via gossip/DHT (scoperta peer oltre i legacy).",
   "timelineFederatedTooltip": "Timeline Federata (P2P + Legacy). Mostra contenuti pubblici visti dalla tua istanza nella federazione.",
   "timelineLayoutColumns": "Passa alle colonne",
   "timelineLayoutTabs": "Passa alle tab",
-
   "coreStart": "Avvia core",
   "coreStop": "Ferma core",
-
   "listNoItems": "Nessun elemento",
   "listEnd": "Fine",
   "listLoadMore": "Carica altro",
-
   "timelineNewPosts": "{count} nuovi post",
   "@timelineNewPosts": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "timelineShowNewPosts": "Mostra",
   "timelineShowNewPostsHint": "Clicca per mostrare senza ricaricare",
   "timelineRefreshTitle": "Aggiorna",
   "timelineRefreshHint": "Forza ricarica e pull dai legacy mentre eri offline",
-
   "activityBoost": "Boost",
   "activityReply": "Rispondi",
   "activityLike": "Mi piace",
@@ -150,7 +150,6 @@
   "activityReplyHint": "Scrivi una risposta…",
   "activityCancel": "Annulla",
   "activitySend": "Invia",
-
   "activityUnsupported": "Elemento non supportato",
   "activityViewRaw": "Mostra raw",
   "activityHideRaw": "Nascondi raw",
@@ -158,7 +157,9 @@
   "noteBoostedBy": "Boost di {name}",
   "@noteBoostedBy": {
     "placeholders": {
-      "name": { "type": "String" }
+      "name": {
+        "type": "String"
+      }
     }
   },
   "noteThreadTitle": "Thread",
@@ -174,7 +175,6 @@
   "noteContentWarning": "Contenuto sensibile",
   "noteShowContent": "Mostra",
   "noteHideContent": "Nascondi",
-
   "noteActions": "Azioni",
   "noteEdit": "Modifica",
   "noteDelete": "Elimina",
@@ -189,19 +189,47 @@
   "noteDeleteHint": "Sei sicuro di voler eliminare questa nota?",
   "noteDeleteConfirm": "Elimina",
   "noteDeleteMissingAudience": "Destinatario mancante",
-
   "timeAgoJustNow": "adesso",
   "timeAgoMinutes": "{count,plural,=1{1 minuto fa}other{{count} minuti fa}}",
-  "@timeAgoMinutes": { "placeholders": { "count": { "type": "int" } } },
+  "@timeAgoMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "timeAgoHours": "{count,plural,=1{1 ora fa}other{{count} ore fa}}",
-  "@timeAgoHours": { "placeholders": { "count": { "type": "int" } } },
+  "@timeAgoHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "timeAgoDays": "{count,plural,=1{1 giorno fa}other{{count} giorni fa}}",
-  "@timeAgoDays": { "placeholders": { "count": { "type": "int" } } },
+  "@timeAgoDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "timeAgoMonths": "{count,plural,=1{1 mese fa}other{{count} mesi fa}}",
-  "@timeAgoMonths": { "placeholders": { "count": { "type": "int" } } },
+  "@timeAgoMonths": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "timeAgoYears": "{count,plural,=1{1 anno fa}other{{count} anni fa}}",
-  "@timeAgoYears": { "placeholders": { "count": { "type": "int" } } },
-
+  "@timeAgoYears": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "firstRunTitle": "Benvenuto",
   "firstRunIntro": "Vuoi fare il login con un account esistente oppure crearne uno nuovo?",
   "firstRunLoginTitle": "Login (config esistente)",
@@ -213,7 +241,6 @@
   "firstRunRelayPreviewPeers": "Peer",
   "firstRunRelayPreviewEmpty": "Nessun dato disponibile",
   "firstRunRelayPreviewError": "Impossibile caricare l'anteprima relay.",
-
   "onboardingCreateTitle": "Crea account",
   "onboardingCreateIntro": "Compila i campi necessari. Il core verrà avviato automaticamente dopo il salvataggio.",
   "onboardingLoginTitle": "Login",
@@ -225,20 +252,27 @@
   "onboardingRelayListHint": "Scegli un relay dalla lista condivisa o inseriscilo manualmente.",
   "onboardingRelayPick": "Seleziona un relay",
   "onboardingRelayCustom": "Usa impostazioni relay personalizzate",
-
   "composeTitle": "Componi",
   "composeCharCount": "{used}/{max}",
   "@composeCharCount": {
     "placeholders": {
-      "used": { "type": "int" },
-      "max": { "type": "int" }
+      "used": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
     }
   },
   "composeCoreNotRunning": "Core non avviato: vai in {settings} e premi {start}.",
   "@composeCoreNotRunning": {
     "placeholders": {
-      "settings": { "type": "String" },
-      "start": { "type": "String" }
+      "settings": {
+        "type": "String"
+      },
+      "start": {
+        "type": "String"
+      }
     }
   },
   "composeWhatsHappening": "Scrivi cosa pensi.",
@@ -306,7 +340,9 @@
   "composeMediaId": "mediaId={id}",
   "@composeMediaId": {
     "placeholders": {
-      "id": { "type": "String" }
+      "id": {
+        "type": "String"
+      }
     }
   },
   "composeFileFallback": "file",
@@ -318,34 +354,43 @@
   "composeErrUnableReadFile": "ERR: impossibile leggere il file: {error}",
   "@composeErrUnableReadFile": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "composeErrUnablePickFile": "ERR: selezione file fallita: {error}",
   "@composeErrUnablePickFile": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "composeErrInvalidMediaType": "ERR: tipo media non valido: {type}",
   "@composeErrInvalidMediaType": {
     "placeholders": {
-      "type": { "type": "String" }
+      "type": {
+        "type": "String"
+      }
     }
   },
   "composeErrGeneric": "ERR: {error}",
   "@composeErrGeneric": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
-
   "settingsTitle": "Configurazioni",
   "settingsCore": "Core",
   "settingsCoreRunning": "In esecuzione (handle={handle})",
   "@settingsCoreRunning": {
     "placeholders": {
-      "handle": { "type": "int" }
+      "handle": {
+        "type": "int"
+      }
     }
   },
   "settingsCoreStopped": "Fermo",
@@ -357,7 +402,6 @@
   "settingsAdvancedDev": "Avanzate (dev)",
   "settingsAdvancedDevHint": "Start/Stop + status migrazione",
   "settingsResetApp": "Reset app (cancella config)",
-
   "profileEditTitle": "Profilo",
   "profileEditHint": "Profilo pubblico, avatar, banner, campi",
   "profileDisplayName": "Nome visualizzato",
@@ -375,13 +419,17 @@
   "profileErrSave": "Salvataggio fallito: {error}",
   "@profileErrSave": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "profileErrUpload": "Upload fallito: {error}",
   "@profileErrUpload": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "profileErrCoreNotRunning": "Core non avviato.",
@@ -391,7 +439,6 @@
   "profileFieldName": "Nome",
   "profileFieldValue": "Valore",
   "profileFieldNameEmpty": "(vuoto)",
-
   "privacyTitle": "Privacy",
   "privacyHint": "Impostazioni privacy account",
   "privacyLockedAccount": "Account privato (approvazione follow manuale)",
@@ -408,14 +455,12 @@
   "telemetryExportEmpty": "Nessuna diagnostica da esportare",
   "telemetryClear": "Svuota",
   "telemetryEmpty": "Nessuna diagnostica",
-
   "securityTitle": "Sicurezza",
   "securityHint": "Token e endpoint interni",
   "securityInternalToken": "Token interno",
   "securityInternalTokenHint": "Usato per proteggere gli endpoint interni",
   "securityRegenerate": "Rigenera",
   "securityHintInternalEndpoints": "Tieni questo token privato. Se esposto, altri nella tua rete potrebbero chiamare endpoint interni.",
-
   "moderationTitle": "Moderazione",
   "moderationHintTitle": "Liste di blocco e policy",
   "moderationBlockedDomains": "Domini bloccati",
@@ -423,7 +468,6 @@
   "moderationBlockedActors": "Actor bloccati",
   "moderationBlockedActorsHint": "Un URL actor per riga",
   "moderationHint": "I blocchi si applicano a interazioni in ingresso e in uscita.",
-
   "networkingTitle": "Networking",
   "networkingHintTitle": "Relay, P2P e AP relays",
   "networkingRelay": "Relay public base URL",
@@ -434,7 +478,9 @@
   "networkingRelaysCount": "{count} relay noti",
   "@networkingRelaysCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "networkingRelaysEmpty": "Nessun relay",
@@ -461,14 +507,18 @@
   "relayAdminDeleteConfirm": "Eliminare l'utente {username}?",
   "@relayAdminDeleteConfirm": {
     "placeholders": {
-      "username": { "type": "String" }
+      "username": {
+        "type": "String"
+      }
     }
   },
   "relayAdminAuditExport": "Esporta audit",
   "relayAdminAuditExported": "Audit esportato: {path}",
   "@relayAdminAuditExported": {
     "placeholders": {
-      "path": { "type": "String" }
+      "path": {
+        "type": "String"
+      }
     }
   },
   "relayAdminAuditSearchHint": "Cerca audit…",
@@ -477,13 +527,17 @@
   "relayAdminUsersCount": "Utenti: {count}",
   "@relayAdminUsersCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "relayAdminUsersDisabledCount": "Disattivi: {count}",
   "@relayAdminUsersDisabledCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "relayAdminAuditLast": "Ultimo audit",
@@ -492,7 +546,6 @@
   "networkingApRelaysEmpty": "Nessun AP relay configurato",
   "networkingEditAccount": "Modifica account/networking",
   "networkingHint": "Alcune modifiche richiedono il riavvio del core.",
-
   "backupTitle": "Backup",
   "backupHint": "Esporta/importa profilo e impostazioni Fedi3",
   "backupExportTitle": "Esporta",
@@ -509,10 +562,11 @@
   "backupErr": "Errore backup: {error}",
   "@backupErr": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
-
   "statusRelay": "Relay",
   "statusP2p": "P2P",
   "statusMailbox": "Mailbox",
@@ -533,10 +587,11 @@
   "settingsErr": "ERR: {error}",
   "@settingsErr": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
-
   "relaysTitle": "Relay",
   "relaysCurrent": "Relay attuale",
   "relaysTelemetry": "Telemetria",
@@ -544,7 +599,9 @@
   "relaysLastSeen": "last_seen={ms}",
   "@relaysLastSeen": {
     "placeholders": {
-      "ms": { "type": "String" }
+      "ms": {
+        "type": "String"
+      }
     }
   },
   "relaysPeersTitle": "Peer conosciuti",
@@ -554,24 +611,31 @@
   "relaysLatency": "Latenza: {ms} ms",
   "@relaysLatency": {
     "placeholders": {
-      "ms": { "type": "int" }
+      "ms": {
+        "type": "int"
+      }
     }
   },
   "relaysCoverageTitle": "Copertura ricerca",
   "relaysCoverageUsers": "{indexed}/{total} utenti indicizzati",
   "@relaysCoverageUsers": {
     "placeholders": {
-      "indexed": { "type": "int" },
-      "total": { "type": "int" }
+      "indexed": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "relaysCoverageLast": "Ultima indicizzazione: {ms}",
   "@relaysCoverageLast": {
     "placeholders": {
-      "ms": { "type": "String" }
+      "ms": {
+        "type": "String"
+      }
     }
   },
-
   "onboardingTitle": "Setup Fedi3",
   "onboardingIntro": "Crea la tua istanza locale e collegala a un relay (per compatibilità con le istanze legacy).",
   "onboardingUsername": "Username",
@@ -584,14 +648,12 @@
   "onboardingEnableP2p": "Abilita P2P",
   "onboardingSave": "Salva e apri app",
   "onboardingRelayTokenTooShort": "Relay token troppo corto (min 16 caratteri).",
-
   "editAccountTitle": "Modifica account",
   "editAccountSave": "Salva",
   "editAccountCoreRunningWarning": "Core in esecuzione: verrà fermato automaticamente prima di salvare per evitare incoerenze.",
   "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
   "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
   "editAccountRegenerateInternal": "Rigenera internal token",
-
   "devCoreTitle": "Dev core controls",
   "devCoreConfigSaved": "Config (salvata)",
   "devCoreStart": "Start",
@@ -600,16 +662,19 @@
   "devCoreVersion": "Versione core: {version}",
   "@devCoreVersion": {
     "placeholders": {
-      "version": { "type": "String" }
+      "version": {
+        "type": "String"
+      }
     }
   },
   "devCoreNotLoaded": "Core non caricato: {error}",
   "@devCoreNotLoaded": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
-
   "notificationsTitle": "Notifiche",
   "notificationsEmpty": "Nessuna notifica",
   "notificationsCoreNotRunning": "Core non avviato.",
@@ -621,7 +686,6 @@
   "notificationsReact": "Ha reagito al post",
   "notificationsBoost": "Ha boostato il post",
   "notificationsMentionOrReply": "Menzione / risposta",
-
   "uiSettingsTitle": "Aspetto e lingua",
   "uiSettingsHint": "Tema, lingua, densità, dimensione testo",
   "uiLanguage": "Lingua",
@@ -646,7 +710,6 @@
   "gifApiKeyHint": "Incolla la API key di Giphy",
   "gifSettingsDefaultHint": "Puoi usare la key predefinita di Giphy per ora.",
   "gifSettingsUseDefault": "Usa key predefinita",
-
   "composeContentWarningTitle": "Content warning",
   "composeContentWarningHint": "Nascondi il contenuto dietro un avviso",
   "composeContentWarningTextLabel": "Testo avviso",
@@ -668,14 +731,12 @@
   "composeVisibilityDirectMissing": "Serve un destinatario diretto",
   "composeExpand": "Espandi",
   "composeExpandTitle": "Editor",
-
   "uiEmojiPaletteTitle": "Palette emoji",
   "uiEmojiPaletteHint": "Modifica emoji rapide",
   "emojiPaletteAddLabel": "Aggiungi emoji",
   "emojiPaletteAddHint": "😀 o :shortcode:",
   "emojiPaletteAddButton": "Aggiungi",
   "emojiPaletteEmpty": "Nessuna emoji.",
-
   "emojiPickerTitle": "Emoji",
   "emojiPickerClose": "Chiudi",
   "emojiPickerSearchLabel": "Cerca",
@@ -684,7 +745,6 @@
   "emojiPickerRecent": "Recenti",
   "emojiPickerCommon": "Comuni",
   "emojiPickerCustom": "Emoji custom",
-
   "reactionPickerTitle": "Reazioni",
   "reactionPickerClose": "Chiudi",
   "reactionPickerSearchLabel": "Cerca o personalizza",
@@ -693,7 +753,6 @@
   "reactionPickerCommon": "Comuni",
   "reactionPickerNoteEmojis": "Emoji della nota",
   "reactionPickerGlobalEmojis": "Emoji globali",
-
   "uiEmojiPickerTitle": "Selettore emoji",
   "uiEmojiPickerSizeLabel": "Dimensione",
   "uiEmojiPickerColumnsLabel": "Colonne",
@@ -705,7 +764,6 @@
   "uiEmojiPickerPresetComfort": "Comodo",
   "uiEmojiPickerPresetLarge": "Grande",
   "uiEmojiPickerPreviewLabel": "Anteprima",
-
   "p2pRelayReserveLabel": "P2P relay reserve (multiaddr, una per riga)",
   "postDeliveryModeLabel": "Modalità consegna post",
   "postDeliveryP2pRelay": "P2P + Relay (fallback dopo 5s)",
@@ -717,7 +775,6 @@
   "webrtcIceUsernameLabel": "WebRTC ICE username",
   "webrtcIceCredentialLabel": "WebRTC ICE credential",
   "fileTypeJson": "JSON",
-
   "notificationsMarkAllRead": "Segna tutto come letto",
   "notificationsFilterAll": "Tutte",
   "notificationsFilterMentions": "Menzioni",
@@ -730,18 +787,18 @@
   "notificationsFollowBackFailed": "Follow restituito fallito: {error}",
   "@notificationsFollowBackFailed": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
   "notificationsReply": "Rispondi",
-
   "timelineFiltersTooltip": "Filtri",
   "timelineFiltersTitle": "Filtri",
   "timelineFilterMedia": "Media",
   "timelineFilterReply": "Risposte",
   "timelineFilterBoost": "Boost",
   "timelineFilterMention": "Menzioni",
-
   "mediaDownload": "Scarica",
   "mediaShare": "Condividi",
   "mediaAutoplayOn": "Riproduzione automatica attiva",
@@ -753,10 +810,11 @@
   "mediaDownloadFailed": "Download fallito: {error}",
   "@mediaDownloadFailed": {
     "placeholders": {
-      "error": { "type": "String" }
+      "error": {
+        "type": "String"
+      }
     }
   },
-
   "noteThreadMuted": "Thread silenziato",
   "noteUnmute": "Riattiva audio",
   "noteLinkCopied": "Link copiato",
@@ -764,7 +822,9 @@
   "noteReactionsTitle": "Reazioni {label}",
   "@noteReactionsTitle": {
     "placeholders": {
-      "label": { "type": "String" }
+      "label": {
+        "type": "String"
+      }
     }
   },
   "semanticsAvatar": "Avatar",
@@ -773,5 +833,36 @@
   "onboardingErrDomain": "Inserisci un dominio valido (es. example.com).",
   "onboardingErrPublicUrl": "L'URL pubblico deve essere un URL http(s) assoluto.",
   "onboardingErrRelayWs": "L'URL WebSocket del relay deve iniziare con ws:// o wss://.",
-  "onboardingErrBind": "L'indirizzo di bind deve essere host:porta (es. 127.0.0.1:8788)."
+  "onboardingErrBind": "L'indirizzo di bind deve essere host:porta (es. 127.0.0.1:8788).",
+  "settingsFollowRequests": "Richieste di follow",
+  "settingsFollowRequestsHint": "Approva o rifiuta chi vuole seguire questo account bloccato.",
+  "followRequestsTitle": "Richieste di follow",
+  "followRequestsEmpty": "Nessuna richiesta in attesa.",
+  "followRequestsApprove": "Approva",
+  "followRequestsReject": "Rifiuta",
+  "followRequestsApproved": "Approvato {handle}",
+  "@followRequestsApproved": {
+    "placeholders": {
+      "handle": {
+        "type": "String"
+      }
+    }
+  },
+  "followRequestsRejected": "Rifiutato {handle}",
+  "@followRequestsRejected": {
+    "placeholders": {
+      "handle": {
+        "type": "String"
+      }
+    }
+  },
+  "followRequestsLoadFailed": "Impossibile caricare le richieste di follow: {error}",
+  "@followRequestsLoadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "followRequestsCoreStopped": "Avvia il core per vedere le richieste di follow."
 }
