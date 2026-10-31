@@ -597,39 +597,56 @@ I test scritti prima dei fix devono essere marcati come `#[ignore]` con un comme
 
 ## 11. Stato di implementazione
 
-Implementato il 2026-10-31. Conteggi reali verificati con l'esecuzione della suite:
+Implementato il 2026-10-31 in due iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:
 
 | Area | Casi implementati | Dove |
 |---|---|---|
-| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p) | 30 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
+| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy) | 39 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
 | Integrazione core — ActivityPub e sicurezza | 41 | `crates/fedi3_core/tests/ap_security.rs` |
 | Integrazione core — database e coda di consegna | 19 | `crates/fedi3_core/tests/db_queue.rs` |
 | Integrazione core — FFI e runtime | 12 | `crates/fedi3_core/tests/runtime_ffi.rs` |
 | Integrazione core — tunnel | 4 | `crates/fedi3_core/tests/tunnel.rs` |
-| Unit relay | 32 | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
-| Integrazione relay | 27 | `crates/fedi3_relay/tests/relay_http.rs` |
-| **Totale Rust** | **165** | |
-| Unit app (modelli, MFM, store, core API, stato) | 27 | `app/test/unit/` |
-| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio) | 40 | `app/test/widget/`, `app/test/widget_test.dart` |
+| Integrazione core — gap semantici (chat, outbox, account bloccati, media, permessi DB) | 19 | `crates/fedi3_core/tests/semantics.rs` |
+| Integrazione core — policy di rete e cap dei corpi | 6 | `crates/fedi3_core/tests/net_policy.rs` |
+| Unit relay | 35 | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
+| Integrazione relay | 29 | `crates/fedi3_relay/tests/relay_http.rs` |
+| **End-to-end federazione (relay reale + due core reali)** | **1** | `crates/fedi3_relay/tests/e2e_federation.rs` |
+| **Totale Rust** | **205** | |
+| Unit app (modelli, MFM, store, core API, stato, follow request) | 27 | `app/test/unit/` |
+| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio, richieste di follow) | 46 | `app/test/widget/`, `app/test/widget_test.dart` |
 | l10n e configurazione di piattaforma | 9 | `app/test/l10n/`, `app/test/platform_config_test.dart` |
-| **Totale Flutter** | **76** | |
+| **Totale Flutter** | **82** | |
 
-Gate eseguiti con output reale:
+### Scenario end-to-end implementato (X-01…X-07)
+
+`crates/fedi3_relay/tests/e2e_federation.rs` avvia il binario reale del relay con SQLite e due runtime core reali in-process (identità, database e tunnel separati), poi verifica:
+
+1. i due tunnel si connettono e il relay serve l'actor document di entrambi;
+2. bob segue alice attraverso il relay: Follow firmato, verifica della firma, Accept consegnato, stato `accepted` su bob;
+3. alice pubblica una nota pubblica dal proprio outbox;
+4. la Create firmata arriva nell'inbox di bob e compare nella sua home timeline;
+5. l'outbox pubblico è leggibile attraverso il relay e contiene la nota.
+
+Il test ha fatto emergere due difetti reali (deadlock del tunnel su fetch annidati, shared inbox del relay incapace di espandere `followers`), entrambi corretti.
+
+Gate eseguiti con output reale sullo stato finale:
 
 | Gate | Comando | Esito |
 |---|---|---|
 | Formattazione Rust | `cargo fmt --all -- --check` | ✅ |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warning |
 | Build | `cargo build --workspace --locked` | ✅ |
-| Test Rust | `cargo test --workspace --locked` | ✅ 165/165 |
+| Test Rust | `cargo test --workspace --locked` | ✅ 205/205 |
+| End-to-end | `cargo test -p fedi3_relay --test e2e_federation` | ✅ 1/1 |
 | Analisi app | `flutter analyze --fatal-infos` | ✅ |
 | Formattazione app | `dart format --set-exit-if-changed lib test` | ✅ |
-| Test app | `flutter test` | ✅ 76/76 |
+| Test app | `flutter test` | ✅ 82/82 |
 | Configurazione piattaforma | `scripts/verify_platform_config.sh` | ✅ 9/9 |
 
 ### Scostamenti dal piano
 
-- I casi di integrazione del relay sono 27 invece dei ~35 previsti: i casi di configurazione, token, `client_ip`, rate limiter, firme e migrazioni sono coperti come unit test dentro `main.rs` (32 casi), quindi la copertura delle sezioni §4.1–§4.10 è completa anche se distribuita diversamente.
-- I test end-to-end X-01…X-07 sono coperti indirettamente: X-03/X-04 dal test di spool e tunnel del relay, X-01/X-02 dai test di inbox firmata del core con `MockActorServer`, X-06/X-07 dai test di chat e media. Non esiste un binario e2e separato: aggiungerlo è il prossimo passo naturale.
+- I casi di integrazione del relay sono 29: i casi di configurazione, token, `client_ip`, rate limiter, firme e migrazioni sono coperti come unit test dentro `main.rs` (35 casi), quindi la copertura delle sezioni §4.1–§4.10 è completa anche se distribuita diversamente.
+- X-01…X-07 sono ora coperti dal test end-to-end reale, non solo indirettamente.
 - Il Dockerfile del relay non è stato costruito (Docker non disponibile nell'ambiente): il tag `rust:1.99-bookworm` è stato verificato esistente sul registry e allineato al toolchain usato per i test.
+- La migrazione PostgreSQL è coperta da asserzioni sul testo SQL, non da un database live.
 - Alcuni lint clippy preesistenti di tipo stilistico sono stati silenziati a livello di crate (`manual_clamp`, `result_large_err`, `too_many_arguments`, …). I lint di correttezza restano attivi e bloccanti.

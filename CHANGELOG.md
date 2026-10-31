@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- End-to-end federation test: a real relay binary plus two real core runtimes (Follow, Accept, public note delivery, outbox).
+- Outbound fetch policy with SSRF protection, bounded redirects and streamed body caps (`net_policy`).
+- Pending follow requests for locked accounts, with internal endpoints and a Flutter screen to approve or reject them.
+- Outbox visibility: direct messages never appear in the public outbox, followers-only notes are served only to followers.
+- Chat membership enforcement on every inbound payload path.
+- Media upload limits: byte cap, magic-byte validation and bounded image decoding.
+- Idempotent PostgreSQL `search_tsv` migration for existing databases.
 - Test infrastructure for the core and the relay: in-process mock ActivityPub servers, request signers, ephemeral-port harnesses.
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
@@ -25,6 +32,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Post text is always converted to escaped HTML before publishing.
 
 ### Fixed
+- Two real bugs found by the end-to-end test: the tunnel deadlocked on nested federation fetches (now dispatched concurrently), and the actor document advertised the relay shared inbox, which cannot expand `followers` collections, silently losing followers-only deliveries.
+- The core now joins every background worker on shutdown and checkpoints the SQLite WAL.
+- The key resolver cache evicts least-recently-used entries instead of arbitrary ones.
 - Android release builds had no `INTERNET` permission.
 - Android cleartext traffic to the loopback core was blocked on API 28+.
 - macOS release entitlements granted no network or file access.
@@ -35,6 +45,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Backup scripts ignored the configured PostgreSQL user/database and nested media archives incorrectly.
 
 ### Security
+- SSRF guard on all peer-controlled fetches (core and relay), with body caps against memory exhaustion.
+- SQLite database, WAL and SHM files are created with `0600` permissions.
 - Panics no longer cross the FFI boundary.
 - Actor impersonation through unbound HTTP signatures is rejected.
 - Admin and user tokens are compared in constant time.

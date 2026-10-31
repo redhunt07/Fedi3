@@ -57,6 +57,7 @@ Out of scope:
 - Private keys live in the core data directory with restrictive permissions; the relay never sees them.
 - Chat uses per-message AES-256-GCM keys wrapped with RSA-OAEP; this provides confidentiality and integrity but **not forward secrecy** (documented limitation).
 - The relay stores tokens as SHA-256 hashes; admin access requires a bearer token of at least 32 characters.
+- Outbound federation fetches (actor documents, keys, objects, outbox pages, peer relays) go through a shared policy: only `http`/`https`, at most 3–5 redirects, and a DNS check that rejects private, loopback, link-local, unique-local, CGNAT and documentation addresses. Bodies are streamed with a hard cap (256 KiB for actor/key metadata, 2 MiB for objects and pages). The escape hatches `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH` (core) and `FEDI3_ALLOW_PRIVATE_REMOTE_FETCH` (relay) are off by default and exist only for loopback/LAN deployments.
 
 ## Hardening checklist for operators
 
@@ -66,3 +67,8 @@ Out of scope:
 - Keep `FEDI3_RELAY_HSTS_MAX_AGE_SECS` above zero in production.
 - Run `scripts/relay_smoke_test.sh` after every deployment.
 - Keep `cargo audit` clean and rebuild images with `--locked`.
+- Leave `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH` / `FEDI3_ALLOW_PRIVATE_REMOTE_FETCH` off unless the instance legitimately talks to a LAN peer; they disable the SSRF address check.
+
+### Known residual risk (SSRF)
+
+The address check runs before the request. A redirect to a *hostname* that resolves to a private address is not re-evaluated (reqwest resolves it internally); redirects to literal private IPs are rejected by the redirect policy, and the number of hops is capped. This is an accepted trade-off, comparable to other ActivityPub implementations.

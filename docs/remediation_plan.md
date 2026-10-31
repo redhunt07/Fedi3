@@ -212,32 +212,47 @@ Se un punto non è raggiungibile (es. toolchain assente), va dichiarato esplicit
 
 ## 7. Stato di implementazione
 
-Eseguito il 2026-10-31. Gate verificati con output reale:
+Eseguito il 2026-10-31, in due iterazioni. Gate verificati con output reale sullo stato finale del codice:
 
 | Gate | Comando | Esito |
 |---|---|---|
 | Formattazione Rust | `cargo fmt --all -- --check` | ✅ nessuna differenza |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warning |
 | Build | `cargo build --workspace --locked` | ✅ |
-| Test Rust | `cargo test --workspace --locked` | ✅ 165 test verdi, 0 falliti |
+| Test Rust | `cargo test --workspace --locked` | ✅ 205 test verdi, 0 falliti (17 binari) |
+| End-to-end federazione | `cargo test -p fedi3_relay --test e2e_federation` | ✅ relay reale + due core reali |
 | Analisi app | `flutter analyze --fatal-infos` | ✅ nessun problema |
 | Formattazione app | `dart format --set-exit-if-changed lib test` | ✅ 0 file cambiati |
-| Test app | `flutter test` | ✅ 76 test verdi |
+| Test app | `flutter test` | ✅ 82 test verdi |
 | Configurazione piattaforma | `scripts/verify_platform_config.sh` | ✅ 9/9 controlli |
 
-Fasi completate: **A** (blocker di piattaforma), **B** (federazione e autenticazione), **C** (disponibilità), **D** (app), **E** (CI, igiene, docs), e le parti di **F**/**G** elencate nei task dei tre agenti.
+Fasi completate: **A** (blocker di piattaforma), **B** (federazione e autenticazione), **C** (disponibilità), **D** (app), **E** (CI, igiene, docs), **F**/**G** (gap residui).
 
-### Non affrontato in questa iterazione
+### Seconda iterazione — gap chiusi
 
-Restano aperti, con impatto minore e senza regressioni:
+| Gap | Correzione | Verifica |
+|---|---|---|
+| `H-17` | Chat: il payload in ingresso richiede un thread esistente e l'appartenenza del mittente; il primo DM crea il thread solo se l'id corrisponde alla coppia mittente/destinatario locale; i messaggi di sistema di gruppo creano il thread solo se entrambi i partecipanti sono annunciati. | 4 test in `tests/semantics.rs` |
+| `H-39` | Outbox: colonna `visibility` derivata dall'audience (public/unlisted/followers/direct), `list_outbox_visible` con richiedente e stato follower, i DM non compaiono mai nell'outbox pubblico; le righe legacy NULL restano pubbliche. | 6 test |
+| `H-44` | Account bloccati: tabella `follow_requests`, Follow → pending senza Accept, endpoint interni `GET /_fedi3/follow_requests` e `POST .../<actor>/approve|reject`, UI Flutter dedicata raggiungibile dalle impostazioni. | 4 test Rust + 6 test widget |
+| `H-05` | Media: precheck su `Content-Length`, lettura streamed con cap, validazione dei magic bytes, decodifica con `ImageReader::with_limits` (8192×8192). | 4 test |
+| `H-03`/`H-04` | Nuovo modulo `net_policy`: solo http(s), risoluzione DNS e rifiuto di indirizzi privati/loopback/link-local/unique-local/CGNAT/documentation, redirect limitati, lettura del corpo con cap (256 KiB attori, 2 MiB oggetti/pagine). Applicato a `KeyResolver`, `Delivery`, `object_fetch`, `legacy_sync`, client del runtime. Escape hatch `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH`. | 6 test di integrazione + unit test sugli intervalli IP |
+| `H-46` | `KeyResolver`: LRU reale (10k) invece di eviction arbitraria, `keyId`/`actor.id` già validati. | unit test sull'eviction |
+| `H-42` | Shutdown: tutti i worker registrati e joinati con deadline di 10 s, `PRAGMA wal_checkpoint(TRUNCATE)` prima dell'uscita. | verificato dai test runtime/FFI |
+| `H-19` | Permessi `0600` su DB e `-wal`/`-shm`/`-journal`. | test unix-only |
+| Postgres `search_tsv` | Migrazione idempotente all'avvio (colonna, backfill, indice GIN, trigger) e schema aggiornato. | asserzioni sul SQL (nessun Postgres live) |
+| Relay SSRF (`H-35`) | Policy condivisa per i fetch innescati dal relay (telemetria, `next`, sync): IP pubblici, redirect ≤3, cap 2 MiB/256 KiB, escape hatch `FEDI3_ALLOW_PRIVATE_REMOTE_FETCH`. | unit + 2 test di integrazione |
 
-- `H-17` chat: verifica di appartenenza al thread su tutti i percorsi (parziale).
-- `H-39` visibilità dell'outbox per le note non elencate (filtro base presente).
-- `H-03`/`H-04` SSRF completa su tutti i fetch remoti: coperto `KeyResolver`, non ogni `object_fetch`.
-- `H-05` limiti di decodifica immagini oltre al cap di byte.
-- `H-42` `JoinSet` completo allo shutdown: solo tunnel e server sono joinati.
-- `H-44` stati `locked`/`pending` dell'account.
-- `H-46` eviction FIFO invece di LRU nelle cache.
-- Permessi `0600` sui file DB/WAL (la directory è già `0700`).
-- Migrazione `search_tsv` per database PostgreSQL esistenti (i DB nuovi sono corretti).
-- Il Dockerfile del relay non è stato costruito in questa sessione: Docker non era disponibile. Il tag `rust:1.99-bookworm` è stato verificato esistente sul registry ed è allineato al toolchain usato per i test.
+### Bug reali scoperti dai test end-to-end
+
+Il test `e2e_federation.rs` (relay reale, due core reali, Follow firmato, Accept, nota pubblica consegnata) ha fatto emergere due difetti non visibili nei test con mock:
+
+1. **Deadlock del tunnel**: il loop del tunnel gestiva una richiesta alla volta, quindi due peer che si risolvevano la chiave a vicenda si bloccavano fino al timeout del relay. Ora ogni richiesta è dispatchata in un task concorrente con un writer unico per il socket.
+2. **Shared inbox inutilizzabile dietro il relay**: l'actor document annunciava `{base}/inbox` (l'inbox condiviso del relay), che non ha un grafo dei follow e quindi non sa espandere le collezioni `followers`: le consegne followers-only venivano perse. L'actor document ora annuncia l'inbox personale; il relay instrada per path verso il tunnel corretto.
+
+### Residuo noto
+
+- Il Dockerfile del relay non è stato costruito in questa sessione (Docker non disponibile); il tag `rust:1.99-bookworm` è verificato sul registry ed è allineato al toolchain dei test.
+- La migrazione PostgreSQL è coperta da asserzioni sul SQL, non da un database live.
+- Il controllo SSRF avviene prima della richiesta; un redirect verso un hostname che risolve a un IP privato non viene rivalutato (i redirect verso IP letterali privati sono rifiutati). Documentato in `SECURITY.md`.
+- Il DB SQLite può ricreare `-wal` con l'umask per un breve intervallo dopo un checkpoint, fino alla connessione successiva che riapplica `0600`.
