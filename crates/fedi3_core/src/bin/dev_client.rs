@@ -107,6 +107,9 @@ async fn main() -> anyhow::Result<()> {
         max_body_bytes: 20 * 1024 * 1024,
     };
 
+    // The token is random per run; log it so curl can drive the internal API.
+    info!("internal token: {}", state.internal_token);
+
     // Start queue worker (dev). Shutdown isn't wired here; stop the process to stop.
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let key_id = format!(
