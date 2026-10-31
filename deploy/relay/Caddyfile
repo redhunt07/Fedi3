@@ -4,5 +4,13 @@
   request_body {
     max_size 64MB
   }
-  reverse_proxy relay:8787
+  reverse_proxy relay:8787 {
+    # Only trust forwarding headers coming from private ranges (the compose
+    # network). Caddy appends the real client IP to X-Forwarded-For; the relay
+    # reads the last element, so a spoofed prefix cannot change the rate-limit
+    # key (H-13 / C5).
+    trusted_proxies private_ranges
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
 }

@@ -1,9 +1,16 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   relay:
     build:
       context: .
       dockerfile: deploy/relay/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file:
       - ./.env
     environment:
@@ -19,17 +26,25 @@ services:
       - FEDI3_P2P_INFRA_MULTIADDRS=${FEDI3_P2P_INFRA_MULTIADDRS:-}
       - FEDI3_P2P_INFRA_HOST=${FEDI3_P2P_INFRA_HOST:-}
       - FEDI3_P2P_INFRA_PORT=${FEDI3_P2P_INFRA_PORT:-4001}
+      # The relay is only reachable through Caddy; the proxy appends the real
+      # client address to X-Forwarded-For.
       - FEDI3_RELAY_TRUST_PROXY_HEADERS=true
       - FEDI3_RELAY_ALLOW_SELF_REGISTER=${FEDI3_RELAY_ALLOW_SELF_REGISTER:-false}
       - FEDI3_RELAY_ADMIN_TOKEN=${FEDI3_RELAY_ADMIN_TOKEN}
-      - FEDI3_RELAY_TELEMETRY_TOKEN=${FEDI3_RELAY_TELEMETRY_TOKEN}
-      - FEDI3_RELAY_HSTS_MAX_AGE_SECS=31536000
+      - FEDI3_RELAY_TELEMETRY_TOKEN=${FEDI3_RELAY_TELEMETRY_TOKEN:-}
+      - FEDI3_RELAY_HSTS_MAX_AGE_SECS=${FEDI3_RELAY_HSTS_MAX_AGE_SECS:-31536000}
+      - FEDI3_RELAY_CSP=${FEDI3_RELAY_CSP:-}
       - FEDI3_RELAY_RL_ADMIN_PER_MIN=${FEDI3_RELAY_RL_ADMIN_PER_MIN:-60}
       - FEDI3_RELAY_RL_REGISTER_PER_MIN=${FEDI3_RELAY_RL_REGISTER_PER_MIN:-20}
       - FEDI3_RELAY_RL_TUNNEL_PER_MIN=${FEDI3_RELAY_RL_TUNNEL_PER_MIN:-60}
       - FEDI3_RELAY_RL_INBOX_PER_MIN=${FEDI3_RELAY_RL_INBOX_PER_MIN:-120}
       - FEDI3_RELAY_RL_FORWARD_PER_MIN=${FEDI3_RELAY_RL_FORWARD_PER_MIN:-240}
+      - FEDI3_RELAY_MAX_BODY_BYTES=${FEDI3_RELAY_MAX_BODY_BYTES:-67108864}
+      - FEDI3_RELAY_MAX_INBOX_FANOUT=${FEDI3_RELAY_MAX_INBOX_FANOUT:-20}
+      - FEDI3_RELAY_MAX_INFLIGHT_PER_USER=${FEDI3_RELAY_MAX_INFLIGHT_PER_USER:-4}
+      - FEDI3_RELAY_TUNNEL_TIMEOUT_SECS=${FEDI3_RELAY_TUNNEL_TIMEOUT_SECS:-30}
       - FEDI3_RELAY_MEDIA_BACKEND=${FEDI3_RELAY_MEDIA_BACKEND:-local}
+      - FEDI3_RELAY_MEDIA_DIR=${FEDI3_RELAY_MEDIA_DIR:-/data/media}
       - FEDI3_RELAY_MEDIA_PREFIX=${FEDI3_RELAY_MEDIA_PREFIX:-}
       - FEDI3_RELAY_MEDIA_S3_BUCKET=${FEDI3_RELAY_MEDIA_S3_BUCKET:-}
       - FEDI3_RELAY_MEDIA_S3_REGION=${FEDI3_RELAY_MEDIA_S3_REGION:-}
@@ -53,7 +68,6 @@ services:
       - FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS:-10}
       - FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS:-90}
       - FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST=${FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST:-8}
-      - FEDI3_RELAY_MAX_BODY_BYTES=${FEDI3_RELAY_MAX_BODY_BYTES:-67108864}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}
@@ -62,18 +76,28 @@ services:
       - p2p_infra_data:/p2p_infra:ro
     expose:
       - "8787"
+    # Published only on loopback: Caddy reaches the relay over the compose
+    # network, this mapping exists for host-side diagnostics.
     ports:
-      - "0.0.0.0:8787:8787"
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-m", "5", "http://127.0.0.1:8787/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    logging: *default-logging
     depends_on:
       dragonfly:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      meilisearch:
-        condition: service_healthy
 
   dragonfly:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
     restart: unless-stopped
     command:
       - "--maxmemory=512mb"
@@ -87,6 +111,8 @@ services:
       start_period: 5s
     expose:
       - "6379"
+    mem_limit: 768m
+    logging: *default-logging
 
   postgres:
     image: postgres:16
@@ -94,7 +120,8 @@ services:
     environment:
       - POSTGRES_DB=${FEDI3_RELAY_PG_DB:-fedi3_relay}
       - POSTGRES_USER=${FEDI3_RELAY_PG_USER:-fedi3}
-      - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:-fedi3}
+      # Fails fast instead of silently using a well-known password.
+      - POSTGRES_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:?set FEDI3_RELAY_PG_PASSWORD in .env}
     volumes:
       - relay_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -104,6 +131,8 @@ services:
       retries: 10
     expose:
       - "5432"
+    mem_limit: 1g
+    logging: *default-logging
 
   meilisearch:
     image: getmeili/meilisearch:v1.10
@@ -120,12 +149,14 @@ services:
       retries: 10
     expose:
       - "7700"
+    mem_limit: 1g
+    logging: *default-logging
 
   caddy:
     image: caddy:2
     restart: unless-stopped
     environment:
-      - FEDI3_DOMAIN=${FEDI3_DOMAIN}
+      - FEDI3_DOMAIN=${FEDI3_DOMAIN:?set FEDI3_DOMAIN in .env}
     ports:
       - "80:80"
       - "443:443"
@@ -133,8 +164,12 @@ services:
       - ./deploy/relay/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
     depends_on:
-      - relay
+      relay:
+        condition: service_healthy
 
   p2p_infra:
     build:
@@ -163,9 +198,11 @@ services:
       - "4001:4001/tcp"
       - "4001:4001/udp"
     restart: unless-stopped
+    mem_limit: 512m
+    logging: *default-logging
 
   turn:
-    image: instrumentisto/coturn:latest
+    image: instrumentisto/coturn:4.5.2
     restart: unless-stopped
     network_mode: host
     env_file:
@@ -175,14 +212,15 @@ services:
       - "--log-file=stdout"
       - "--fingerprint"
       - "--no-cli"
-      - "--realm=${TURN_REALM:-relay.fedi3.com}"
+      - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
       - "--min-port=${TURN_MIN_PORT:-49152}"
       - "--max-port=${TURN_MAX_PORT:-65535}"
       - "--lt-cred-mech"
-      - "--user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}"
+      - "--user=${TURN_USER:-relay}:${TURN_PASS:?set TURN_PASS in .env}"
       - "--no-tlsv1"
       - "--no-tlsv1_1"
+    logging: *default-logging
 
 volumes:
   relay_data:
