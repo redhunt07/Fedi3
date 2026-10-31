@@ -1,119 +1,69 @@
-# App guide
+# Guida all'app FEDI3
 
-## Login / relay
+FEDI3 è composta da due parti che girano sulla tua macchina:
 
-- Seleziona il relay dalla lista.
-- Inserisci il token o crea account se abilitato.
+- l'**app** Flutter, che è l'interfaccia;
+- il **core** Rust locale, che gestisce identità, crittografia, cache e federazione.
+
+Il core ascolta su `127.0.0.1` ed è protetto da un token interno generato automaticamente. Il relay è opzionale: senza relay puoi comunque usare P2P e chat, ma non sei raggiungibile dalle istanze del fediverso tradizionale.
+
+## Primo avvio
+
+1. Apri l'app. Se non esiste una configurazione, viene mostrata la schermata di benvenuto.
+2. Compila:
+   - **Dominio pubblico**: l'hostname con cui vuoi essere raggiungibile (es. `mio.nome`). Deve puntare alla tua istanza o al relay che usi.
+   - **Username**: solo lettere, cifre e `_`, da 1 a 64 caratteri. Non può essere cambiato senza migrare l'account.
+   - **Bind locale**: lascia `127.0.0.1` a meno che tu non voglia esporre il core in LAN.
+   - **Relay**: URL del relay (`https://relay.example.org`) e token ottenuto dalla registrazione. Puoi lasciarlo vuoto per una modalità solo-P2P.
+3. Premi **Avvia**. L'app attende che il core sia effettivamente in ascolto prima di mostrare la timeline. Se il core non parte, l'errore viene mostrato nella schermata di setup.
+
+La configurazione viene salvata in modo atomico nella directory dati dell'app, con permessi `600` su POSIX. Se il file è corrotto, l'app prova a recuperarlo dal backup e, se non ci riesce, ti avvisa invece di sovrascrivere silenziosamente.
 
 ## Timeline
 
-- Filtri rapidi, popup reazioni, azioni inline.
-- Media viewer con swipe e toggle audio.
+- Le timeline federate, locali e "following" sono separate.
+- I filtri rapidi permettono di vedere solo media, solo risposte o solo boost.
+- Le azioni (like, boost, risposta, elimina) sono disponibili dal menu della nota.
+- I media si aprono nel viewer integrato: swipe per navigare, tap per il toggle audio.
+
+## Pubblicare
+
+- Il composer accetta testo, media e visibilità (pubblico, non in elenco, follower, diretto).
+- Il testo viene sempre convertito in HTML con escaping: i caratteri `<`, `>`, `&`, `"` e `'` non rompono il rendering né aprono injection.
+- La sintassi MFM (`**grassetto**`, `:emoji:`) è supportata.
+- Le note dirette non compaiono nella outbox pubblica.
 
 ## Chat
 
-- 1:1 e gruppi P2P.
-- Reazioni, GIF, file e stato lettura.
+- Le chat sono 1:1 o di gruppo, con trasporto P2P quando possibile.
+- I messaggi sono cifrati con AES-256-GCM e chiavi per messaggio avvolte con RSA-OAEP. Il relay non vede il contenuto.
+- Supporta reazioni, file, GIF e stato di lettura.
+- Limite noto: non c'è *forward secrecy*. Se una chiave privata viene compromessa, i messaggi passati diventano leggibili.
+
+## Notifiche
+
+- Le notifiche sono locali; non serve un servizio push esterno.
+- Su Android serve il permesso `POST_NOTIFICATIONS` (richiesto al primo utilizzo) e il permesso `INTERNET`.
+- La lista delle notifiche si aggiorna in testa senza azzerare quelle già lette.
 
 ## Impostazioni
 
-- Lingua IT/EN.
-- Telemetria opzionale (consenso).
-- Traduzione dei post (Deepl/Giphy).
+- **Sicurezza**: token del relay, rotazione della chiave, visibilità del profilo.
+- **Privacy**: consenso alla telemetria (opzionale), cache dei media, blocco per dominio.
+- **Moderazione**: liste di attori e domini bloccati.
+- **Backup**: esporta e importa configurazione e preferenze in JSON. Il backup **non** contiene la chiave privata: quella vive nella directory dati del core e va salvata separatamente se vuoi poter migrare.
+- **Lingua**: italiano e inglese.
 
-# linux deploy app
-sudo pacman -Syu --needed \
-  base-devel git curl unzip xz zip \
-  clang cmake ninja pkgconf \
-  gtk3 gsettings-desktop-schemas \
-  libxkbcommon libxss libxrandr libxcursor libxinerama libxi \
-  mesa libglvnd \
-  pango cairo gdk-pixbuf2 glib2 \
-  alsa-lib pulseaudio \
-  mpv ffmpeg
+Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se il nuovo valore non funziona, l'app ripristina la configurazione precedente.
 
-sudo pacman -S --needed flutter
-flutter config --enable-linux-desktop
-flutter doctor
+## Problemi comuni
 
-cd ~
-git clone https://github.com/flutter/flutter.git -b stable
-export PATH="$HOME/flutter/bin:$PATH"
-flutter config --enable-linux-desktop
-flutter doctor
+| Sintomo | Causa probabile | Rimedio |
+|---|---|---|
+| "Core non avviato" | porta occupata o username non valido | cambia il bind o correggi lo username |
+| Timeline vuota | relay non raggiungibile o token errato | verifica il token nelle impostazioni |
+| Nessuna federazione in ingresso | dominio pubblico non risolve verso il relay | controlla DNS e il tunnel |
+| Spinner infinito | il core non risponde | l'app rileva il guasto entro pochi secondi e tenta il riavvio |
+| Media non visibili | backend media del relay non configurato | controlla `FEDI3_RELAY_MEDIA_BACKEND` |
 
-cd /path/to/Fedi3/app
-flutter pub get
-flutter build linux --release
-
-yay -S --needed linuxdeploy linuxdeploy-plugin-gtk appimagetool
-
-paru -S --needed linuxdeploy linuxdeploy-plugin-gtk appimagetool
-
-# appdir
-cd /path/to/Fedi3/app
-APPDIR=AppDir
-rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr"
-
-cp -r build/linux/x64/release/bundle/* "$APPDIR/usr/"
-
-# Desktop entry
-cat > fedi3.desktop <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Fedi3
-Exec=fedi3
-Icon=fedi3
-Categories=Network;
-Terminal=false
-EOF
-
-# Icona (usa un png 256x256 reale del progetto)
-mkdir -p "$APPDIR/usr/share/applications"
-mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-cp fedi3.desktop "$APPDIR/usr/share/applications/"
-
-# Sostituisci con la tua icona reale
-cp /path/to/icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/fedi3.png"
-# fine appdir
-
-linuxdeploy \
-  --appdir "$APPDIR" \
-  --desktop-file fedi3.desktop \
-  --icon-file /path/to/icon.png \
-  --output appimage
-
-
-ldd build/linux/x64/release/bundle/fedi3 | rg "not found"
-
-cp /usr/lib/libmpv.so* "$APPDIR/usr/lib/"
-
-------------------
-
-# pulizia completa dei file generati
-rm -rf .dart_tool build linux/flutter/ephemeral linux/build
-find linux -name CMakeCache.txt -delete
-find linux -name CMakeFiles -type d -prune -exec rm -rf {} +
-
-# rigenera i file di piattaforma Linux
-flutter config --enable-linux-desktop
-flutter create --platforms=linux .
-
-# ricrea i symlink dei plugin
-flutter pub get
-
-# build
-flutter build linux --release
-
-Se ancora dà lo stesso errore, vuol dire che i plugin non hanno la cartella linux/ (o non sono risolti). In quel caso, prova:
-
-flutter pub cache repair
-flutter pub get
-e poi ricompila.
-
-Se vuoi, incolla l’output di:
-
-ls -la linux/flutter/ephemeral/.plugin_symlinks
-flutter doctor -v
-e ti dico il punto esatto che manca.
+Per il relay vedi [deploy_relay.md](deploy_relay.md) e [troubleshooting.md](troubleshooting.md). Per compilare l'app da sorgente vedi [build_linux.md](build_linux.md).
