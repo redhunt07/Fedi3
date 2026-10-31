@@ -6,7 +6,7 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -52,6 +52,8 @@ impl TestRelay {
         let base_url = format!("http://127.0.0.1:{port}");
 
         let stderr = std::fs::File::create(&stderr_path).unwrap();
+        let stdout_path = dir.join("stdout.log");
+        let stdout = std::fs::File::create(&stdout_path).unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_fedi3_relay"));
         cmd.env_clear()
             .env("FEDI3_RELAY_BIND", format!("127.0.0.1:{port}"))
@@ -62,6 +64,9 @@ impl TestRelay {
             .env("FEDI3_RELAY_ALLOW_SELF_REGISTER", "true")
             .env("FEDI3_RELAY_PUBLIC_URL", &base_url)
             .env("FEDI3_RELAY_ALLOW_PRIVATE_ACTOR_FETCH", "true")
+            // The harness servers live on loopback, so the SSRF guard needs the
+            // escape hatch unless a test explicitly overrides it to "false".
+            .env("FEDI3_ALLOW_PRIVATE_REMOTE_FETCH", "true")
             .env("FEDI3_RELAY_MEDIA_DIR", &media_dir)
             .env("FEDI3_RELAY_RL_REGISTER_PER_MIN", "10000")
             .env("FEDI3_RELAY_RL_TUNNEL_PER_MIN", "10000")
@@ -69,7 +74,7 @@ impl TestRelay {
             .env("FEDI3_RELAY_RL_FORWARD_PER_MIN", "10000")
             .env("FEDI3_RELAY_RL_ADMIN_PER_MIN", "10000")
             .env("RUST_LOG", "warn")
-            .stdout(Stdio::null())
+            .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         for (k, v) in extra {
             cmd.env(k, v);
@@ -380,5 +385,54 @@ impl Signer {
             headers.push(("Digest".to_string(), digest));
         }
         headers
+    }
+}
+
+/// Minimal HTTP server that counts every request it receives. Used to prove
+/// that relay-initiated fetches are skipped by the SSRF policy.
+pub struct CountingServer {
+    pub base_url: String,
+    hits: std::sync::Arc<AtomicUsize>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl CountingServer {
+    pub fn hits(&self) -> usize {
+        self.hits.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for CountingServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+pub async fn spawn_counting_server() -> CountingServer {
+    use axum::Router;
+
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let served = hits.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // A bare handler in `fallback` matches every method; the relay sync worker
+    // issues GETs and the telemetry worker issues POSTs against the same URL.
+    let app = Router::new().fallback(move || {
+        let served = served.clone();
+        async move {
+            served.fetch_add(1, Ordering::Relaxed);
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"items":[],"next":null}"#,
+            )
+        }
+    });
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    CountingServer {
+        base_url: format!("http://127.0.0.1:{port}"),
+        hits,
+        handle,
     }
 }

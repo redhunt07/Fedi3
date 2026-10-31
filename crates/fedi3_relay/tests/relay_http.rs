@@ -688,3 +688,42 @@ async fn signed_move_notice_fanout_is_accepted_by_peer_relay() {
         "signed fan-out was not accepted by the peer relay"
     );
 }
+
+#[tokio::test]
+async fn loopback_relay_url_is_skipped_without_private_fetch_escape_hatch() {
+    let mock = common::spawn_counting_server().await;
+    let relay = TestRelay::start_with_env(&[
+        ("FEDI3_RELAY_SEED_RELAYS", mock.base_url.as_str()),
+        ("FEDI3_ALLOW_PRIVATE_REMOTE_FETCH", "false"),
+    ])
+    .await;
+
+    // Both the telemetry and relay-sync workers tick immediately on startup.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(
+        mock.hits(),
+        0,
+        "relay fetched a loopback URL even though private remote fetch is disabled"
+    );
+    drop(relay);
+}
+
+#[tokio::test]
+async fn loopback_relay_url_is_fetched_with_private_fetch_escape_hatch() {
+    let mock = common::spawn_counting_server().await;
+    let relay = TestRelay::start_with_env(&[
+        ("FEDI3_RELAY_SEED_RELAYS", mock.base_url.as_str()),
+        ("FEDI3_ALLOW_PRIVATE_REMOTE_FETCH", "true"),
+    ])
+    .await;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mock.hits() == 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        mock.hits() > 0,
+        "relay did not fetch the loopback URL despite the escape hatch"
+    );
+    drop(relay);
+}

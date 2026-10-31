@@ -1482,6 +1482,7 @@ dependencies = [
  "deadpool",
  "deadpool-postgres",
  "ed25519-dalek",
+ "fedi3_core",
  "fedi3_protocol",
  "futures-util",
  "http 1.4.0",

@@ -46,7 +46,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{NoTls, Row};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use ed25519_dalek::{Signer as _, Verifier as _};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -473,6 +473,9 @@ struct RelayConfig {
     relay_sync_interval_secs: u64,
     relay_sync_limit: u32,
     allow_private_actor_fetch: bool,
+    /// Allow relay-initiated fetches to resolve to loopback/private/link-local
+    /// addresses (LAN-only federation). Off by default (SSRF guard, H-35).
+    allow_private_remote_fetch: bool,
     forward_send_timeout_ms: u64,
     inbox_dedupe_ttl_secs: u64,
     admin_audit_ttl_secs: u64,
@@ -949,6 +952,7 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
     let base_url = cfg.meili_url.as_ref()?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(cfg.meili_timeout_secs))
+        .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
         .build()
         .ok()?;
     let search = MeiliSearch {
@@ -1001,6 +1005,7 @@ async fn main() {
         .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
         .pool_idle_timeout(Duration::from_secs(cfg.http_pool_idle_timeout_secs))
         .pool_max_idle_per_host(cfg.http_pool_max_idle_per_host)
+        .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
         .build()
         .expect("http client init");
     let media_cfg = media_store::MediaConfig {
@@ -1708,6 +1713,12 @@ fn load_config() -> Result<RelayConfig> {
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    // Escape hatch for LAN-only deployments: when false (default), every
+    // relay-initiated fetch must resolve exclusively to public addresses.
+    let allow_private_remote_fetch = std::env::var("FEDI3_ALLOW_PRIVATE_REMOTE_FETCH")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let forward_send_timeout_ms = std::env::var("FEDI3_RELAY_FORWARD_SEND_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -1842,6 +1853,7 @@ fn load_config() -> Result<RelayConfig> {
         relay_sync_interval_secs,
         relay_sync_limit,
         allow_private_actor_fetch,
+        allow_private_remote_fetch,
         forward_send_timeout_ms,
         inbox_dedupe_ttl_secs,
         admin_audit_ttl_secs,
@@ -3677,17 +3689,14 @@ fn next_url_from_collection(
 }
 
 async fn fetch_json_url(state: &AppState, url: &str) -> Option<serde_json::Value> {
-    let resp = state
-        .http
-        .get(url)
-        .header(header::ACCEPT, "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json")
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+    const ACCEPT: &str = "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json";
+    match fetch_peer_json::<serde_json::Value>(state, url, ACCEPT, MAX_PEER_PAGE_BYTES).await {
+        Ok(value) => Some(value),
+        Err(e) => {
+            debug!(%url, "peer JSON fetch skipped: {e:#}");
+            None
+        }
     }
-    resp.json::<serde_json::Value>().await.ok()
 }
 
 fn relay_self_base(cfg: &RelayConfig) -> String {
@@ -4074,6 +4083,117 @@ fn migrate_sqlite_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// PostgreSQL `search_tsv`/`tag_tsv` migration for databases created by an
+/// older schema. Fresh databases get generated columns from
+/// `sql/postgres_schema.sql`; upgraded databases may have a plain `tsvector`
+/// column (or none), which makes search silently return nothing.
+///
+/// The statements below are idempotent and safe to run on every startup. Docker
+/// is not available in this test environment, so the live Postgres path is
+/// covered only by unit tests asserting the shape of these statements; run the
+/// upgrade once against a staging database before production rollout.
+const PG_SEARCH_TSV_ADD_COLUMN_SQL: &str = r#"ALTER TABLE relay_notes
+  ADD COLUMN IF NOT EXISTS search_tsv tsvector GENERATED ALWAYS AS (
+    to_tsvector('simple', coalesce(content_text, ''))
+  ) STORED"#;
+
+const PG_SEARCH_TSV_BACKFILL_SQL: &str = r#"UPDATE relay_notes
+SET search_tsv = to_tsvector('simple', coalesce(content_text, ''))
+WHERE search_tsv IS DISTINCT FROM to_tsvector('simple', coalesce(content_text, ''))"#;
+
+const PG_SEARCH_TSV_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_relay_notes_search_tsv ON relay_notes USING GIN (search_tsv)";
+
+const PG_SEARCH_TSV_TRIGGER_SQL: &str = r#"CREATE OR REPLACE FUNCTION relay_notes_search_tsv_sync() RETURNS trigger AS $$
+BEGIN
+  NEW.search_tsv := to_tsvector('simple', coalesce(NEW.content_text, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS relay_notes_search_tsv_tr ON relay_notes;
+CREATE TRIGGER relay_notes_search_tsv_tr
+  BEFORE INSERT OR UPDATE OF content_text ON relay_notes
+  FOR EACH ROW EXECUTE FUNCTION relay_notes_search_tsv_sync()"#;
+
+const PG_TAG_TSV_ADD_COLUMN_SQL: &str = r#"ALTER TABLE relay_note_tags
+  ADD COLUMN IF NOT EXISTS tag_tsv tsvector GENERATED ALWAYS AS (
+    to_tsvector('simple', coalesce(tag, ''))
+  ) STORED"#;
+
+const PG_TAG_TSV_BACKFILL_SQL: &str = r#"UPDATE relay_note_tags
+SET tag_tsv = to_tsvector('simple', coalesce(tag, ''))
+WHERE tag_tsv IS DISTINCT FROM to_tsvector('simple', coalesce(tag, ''))"#;
+
+const PG_TAG_TSV_INDEX_SQL: &str =
+    "CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tsv ON relay_note_tags USING GIN (tag_tsv)";
+
+const PG_TAG_TSV_TRIGGER_SQL: &str = r#"CREATE OR REPLACE FUNCTION relay_note_tags_tag_tsv_sync() RETURNS trigger AS $$
+BEGIN
+  NEW.tag_tsv := to_tsvector('simple', coalesce(NEW.tag, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS relay_note_tags_tag_tsv_tr ON relay_note_tags;
+CREATE TRIGGER relay_note_tags_tag_tsv_tr
+  BEFORE INSERT OR UPDATE OF tag ON relay_note_tags
+  FOR EACH ROW EXECUTE FUNCTION relay_note_tags_tag_tsv_sync()"#;
+
+/// Returns `Some(true)` for a generated column, `Some(false)` for a plain
+/// column, and `None` when the column does not exist.
+fn pg_column_is_generated(conn: &mut PgConn, table: &str, column: &str) -> Result<Option<bool>> {
+    // Avoid a `$1::regclass` cast: tokio-postgres would infer the parameter as
+    // `regclass` while we send text. `to_regclass` resolves the unqualified name
+    // through the same search_path as the DDL in the schema file.
+    let row = conn.query_opt(
+        "SELECT a.attgenerated <> '' AS generated
+         FROM pg_attribute a
+         WHERE a.attrelid = to_regclass($1)
+           AND a.attname::text = $2
+           AND NOT a.attisdropped",
+        &[&table, &column],
+    )?;
+    Ok(row.map(|r| r.get(0)))
+}
+
+fn migrate_postgres_search_tsv(conn: &mut PgConn) -> Result<()> {
+    match pg_column_is_generated(conn, "relay_notes", "search_tsv")? {
+        None => {
+            conn.batch_execute(PG_SEARCH_TSV_ADD_COLUMN_SQL)?;
+            info!("postgres migration: added generated relay_notes.search_tsv column");
+        }
+        Some(true) => {
+            debug!("postgres migration: relay_notes.search_tsv is already generated");
+        }
+        Some(false) => {
+            conn.batch_execute(PG_SEARCH_TSV_BACKFILL_SQL)?;
+            conn.batch_execute(PG_SEARCH_TSV_TRIGGER_SQL)?;
+            info!(
+                "postgres migration: backfilled relay_notes.search_tsv and installed sync trigger"
+            );
+        }
+    }
+    conn.batch_execute(PG_SEARCH_TSV_INDEX_SQL)?;
+
+    match pg_column_is_generated(conn, "relay_note_tags", "tag_tsv")? {
+        None => {
+            conn.batch_execute(PG_TAG_TSV_ADD_COLUMN_SQL)?;
+            info!("postgres migration: added generated relay_note_tags.tag_tsv column");
+        }
+        Some(true) => {
+            debug!("postgres migration: relay_note_tags.tag_tsv is already generated");
+        }
+        Some(false) => {
+            conn.batch_execute(PG_TAG_TSV_BACKFILL_SQL)?;
+            conn.batch_execute(PG_TAG_TSV_TRIGGER_SQL)?;
+            info!(
+                "postgres migration: backfilled relay_note_tags.tag_tsv and installed sync trigger"
+            );
+        }
+    }
+    conn.batch_execute(PG_TAG_TSV_INDEX_SQL)?;
+    Ok(())
+}
+
 impl Db {
     fn open_sqlite_conn(&self) -> Result<Connection> {
         let conn = Connection::open(&self.path)?;
@@ -4350,6 +4470,7 @@ impl Db {
                     match self.open_pg_conn() {
                         Ok(mut conn) => {
                             conn.batch_execute(include_str!("../sql/postgres_schema.sql"))?;
+                            migrate_postgres_search_tsv(&mut conn)?;
                             // Reject databases written by a newer binary instead of
                             // silently running against an unknown schema (RD-03).
                             if let Some(row) = conn
@@ -9560,6 +9681,12 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
 
     for relay_url in targets {
         let url = format!("{}/_fedi3/relay/telemetry", relay_url.trim_end_matches('/'));
+        if let Err(e) =
+            ensure_fetch_target_allowed(&url, state.cfg.allow_private_remote_fetch).await
+        {
+            debug!(relay_url = %relay_url, "telemetry push skipped: {e:#}");
+            continue;
+        }
         let mut req = state.http.post(url).json(&telemetry);
         if let Some(tok) = &state.cfg.telemetry_token {
             req = req.header("X-Fedi3-Telemetry-Token", tok);
@@ -9571,7 +9698,16 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
         if !resp.status().is_success() {
             continue;
         }
-        if let Ok(remote) = resp.json::<RelayTelemetry>().await {
+        // Telemetry replies can carry hundreds of relay/user/peer entries, so
+        // treat them as a collection page rather than tiny metadata.
+        let body = match read_body_capped(resp, MAX_PEER_PAGE_BYTES).await {
+            Ok(body) => body,
+            Err(e) => {
+                debug!(relay_url = %relay_url, "telemetry response skipped: {e:#}");
+                continue;
+            }
+        };
+        if let Ok(remote) = serde_json::from_slice::<RelayTelemetry>(&body) {
             if verify_telemetry_signature(&remote).is_err() {
                 continue;
             }
@@ -9686,16 +9822,20 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
         if let Some(c) = cursor {
             url.push_str(&format!("&cursor={c}"));
         }
-        let resp = match state.http.get(url).send().await {
-            Ok(r) => r,
-            Err(_) => break,
-        };
-        if !resp.status().is_success() {
-            break;
-        }
-        let data = match resp.json::<RelaySyncNotesResponse>().await {
+        let accept = "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/json";
+        let data = match fetch_peer_json::<RelaySyncNotesResponse>(
+            state,
+            &url,
+            accept,
+            MAX_PEER_PAGE_BYTES,
+        )
+        .await
+        {
             Ok(v) => v,
-            Err(_) => break,
+            Err(e) => {
+                debug!(%url, "relay sync page skipped: {e:#}");
+                break;
+            }
         };
         if data.items.is_empty() {
             break;
@@ -10138,6 +10278,12 @@ async fn fanout_move_notice_to_relay(
         "{}/_fedi3/relay/move_notice",
         relay_url.trim_end_matches('/')
     );
+    if let Err(e) = ensure_fetch_target_allowed(&url, state.cfg.allow_private_remote_fetch).await {
+        debug!(relay_url = %relay_url, "move notice fan-out skipped: {e:#}");
+        let db = state.db.lock().await;
+        let _ = db.record_fanout_attempt(notice_id, relay_url, false);
+        return Ok(false);
+    }
     let target: http::Uri = url
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid relay URL {url:?}: {e}"))?;
@@ -10159,11 +10305,13 @@ async fn fanout_move_notice_to_relay(
     for (name, value) in signed_headers {
         req = req.header(name, value);
     }
-    let resp = req.send().await;
-    let ok = resp
-        .as_ref()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
+    let ok = match req.send().await {
+        Ok(resp) if resp.status().is_success() => read_body_capped(resp, MAX_PEER_METADATA_BYTES)
+            .await
+            .is_ok(),
+        Ok(_) => false,
+        Err(_) => false,
+    };
     let db = state.db.lock().await;
     let _ = db.record_fanout_attempt(notice_id, relay_url, ok);
     Ok(ok)
@@ -10508,41 +10656,165 @@ fn relay_origin_from_key_id(key_id: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}"))
 }
 
-fn is_private_ip(ip: &IpAddr) -> bool {
+/// Maximum redirects followed by any relay-initiated fetch.
+const MAX_PEER_FETCH_REDIRECTS: usize = 3;
+/// Cap for paginated ActivityPub collections (sync pages, outbox pages).
+const MAX_PEER_PAGE_BYTES: usize = 2 * 1024 * 1024;
+/// Cap for small peer metadata (actor documents, telemetry, receipts).
+const MAX_PEER_METADATA_BYTES: usize = 256 * 1024;
+
+/// True only for addresses that are globally routable. Conservative on
+/// purpose: a single non-public resolution result is enough to reject a URL.
+fn is_public_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_private()
+            // 100.64.0.0/10 is carrier-grade NAT, not reachable from the
+            // public Internet even though `Ipv4Addr::is_private` says no.
+            let shared = {
+                let o = v4.octets();
+                o[0] == 100 && (64..=127).contains(&o[1])
+            };
+            !(v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || shared)
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback()
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_ip(&IpAddr::V4(v4));
+            }
+            !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
+                || v6.is_multicast())
         }
     }
 }
 
-/// Fetch an actor document for key resolution, rejecting private targets
-/// (SSRF, SEC-07) and capping the response size.
-async fn fetch_actor_document(state: &AppState, url: &str) -> Result<String> {
-    let uri: http::Uri = url
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid keyId URL {url:?}: {e}"))?;
-    let scheme = uri.scheme_str().unwrap_or("");
-    if scheme != "http" && scheme != "https" {
-        anyhow::bail!("unsupported keyId scheme: {scheme:?}");
-    }
-    if let Some(host) = uri.host() {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            if is_private_ip(&ip) && !state.cfg.allow_private_actor_fetch {
-                anyhow::bail!("keyId points to a private address: {ip}");
+/// Redirect policy shared by every relay-initiated HTTP client: at most three
+/// hops, http(s) only, and no hop to a literal non-public address.
+fn peer_fetch_redirect_policy(allow_private: bool) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= MAX_PEER_FETCH_REDIRECTS {
+            return attempt.error("too many redirects");
+        }
+        let url = attempt.url();
+        if !matches!(url.scheme(), "http" | "https") {
+            return attempt.error("redirect to unsupported scheme");
+        }
+        if !allow_private {
+            if let Some(host) = url.host_str() {
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                if let Ok(ip) = host.parse::<IpAddr>() {
+                    if !is_public_ip(&ip) {
+                        return attempt.error("redirect to non-public address");
+                    }
+                }
             }
         }
+        attempt.follow()
+    })
+}
+
+/// SSRF guard for URLs announced by remote peers (H-35): only http(s), and
+/// unless the escape hatch is set, every resolved address must be public.
+async fn ensure_fetch_target_allowed(url: &str, allow_private: bool) -> Result<()> {
+    let uri: http::Uri = url
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid fetch URL {url:?}: {e}"))?;
+    let scheme = uri.scheme_str().unwrap_or("");
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("unsupported fetch scheme {scheme:?} for {url:?}");
     }
+    if allow_private {
+        return Ok(());
+    }
+    let host = uri
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("fetch URL has no host: {url:?}"))?;
+    // `http::Uri::host` keeps IPv6 brackets; strip them before parsing.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !is_public_ip(&ip) {
+            anyhow::bail!("fetch URL {url:?} points to non-public address {ip}");
+        }
+        return Ok(());
+    }
+    let port = uri
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let mut resolved = false;
+    for addr in tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to resolve {host:?}: {e}"))?
+    {
+        resolved = true;
+        if !is_public_ip(&addr.ip()) {
+            anyhow::bail!(
+                "fetch URL {url:?} resolves to non-public address {}",
+                addr.ip()
+            );
+        }
+    }
+    if !resolved {
+        anyhow::bail!("fetch URL host {host:?} did not resolve");
+    }
+    Ok(())
+}
+
+/// Read a response body with a hard streaming cap. `Content-Length` is checked
+/// first, but the streaming limit is authoritative (a peer can lie or omit it).
+async fn read_body_capped(resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length() {
+        if len > max_bytes as u64 {
+            anyhow::bail!("response body too large: {len} bytes > {max_bytes}");
+        }
+    }
+    let mut body = Vec::new();
+    let mut resp = resp;
+    while let Some(chunk) = resp.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            anyhow::bail!("response body exceeded {max_bytes} bytes");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Fetch and parse JSON from a peer URL under the shared SSRF/body policy.
+async fn fetch_peer_json<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    url: &str,
+    accept: &str,
+    max_bytes: usize,
+) -> Result<T> {
+    ensure_fetch_target_allowed(url, state.cfg.allow_private_remote_fetch).await?;
+    let resp = state
+        .http
+        .get(url)
+        .header(header::ACCEPT, accept)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("fetch {url:?} failed with status {status}");
+    }
+    let body = read_body_capped(resp, max_bytes).await?;
+    serde_json::from_slice(&body).map_err(|e| anyhow::anyhow!("invalid JSON from {url:?}: {e}"))
+}
+
+/// Fetch an actor document for key resolution, rejecting non-public targets
+/// (SSRF, SEC-07) and capping the response size. The legacy
+/// `FEDI3_RELAY_ALLOW_PRIVATE_ACTOR_FETCH` flag still applies here so existing
+/// deployments keep working; the new global escape hatch also unlocks it.
+async fn fetch_actor_document(state: &AppState, url: &str) -> Result<String> {
+    let allow_private = state.cfg.allow_private_remote_fetch || state.cfg.allow_private_actor_fetch;
+    ensure_fetch_target_allowed(url, allow_private).await?;
     let resp = state
         .http
         .get(url)
@@ -10555,11 +10827,8 @@ async fn fetch_actor_document(state: &AppState, url: &str) -> Result<String> {
     if !resp.status().is_success() {
         anyhow::bail!("actor fetch failed with status {}", resp.status());
     }
-    let bytes = resp.bytes().await?;
-    if bytes.len() > 1024 * 1024 {
-        anyhow::bail!("actor document too large");
-    }
-    Ok(String::from_utf8(bytes.to_vec())?)
+    let bytes = read_body_capped(resp, MAX_PEER_METADATA_BYTES).await?;
+    Ok(String::from_utf8(bytes)?)
 }
 
 async fn verify_actor_signature_for_request(
@@ -10883,6 +11152,7 @@ mod tests {
             relay_sync_interval_secs: 120,
             relay_sync_limit: 200,
             allow_private_actor_fetch: true,
+            allow_private_remote_fetch: true,
             forward_send_timeout_ms: 50,
             inbox_dedupe_ttl_secs: 3600,
             admin_audit_ttl_secs: 3600,
@@ -11568,5 +11838,99 @@ mod tests {
         assert!(inflight.read().await.is_empty());
         let db = state.db.lock().await;
         assert_eq!(db.list_spool("alice", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn public_ip_classification_rejects_ssrf_targets() {
+        let public = ["8.8.8.8", "1.1.1.1", "2001:4860::1", "2606:4700::1111"];
+        let non_public = [
+            "127.0.0.1",
+            "127.0.0.2",
+            "::1",
+            "0.0.0.0",
+            "::",
+            "10.0.0.1",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.0.1",
+            "192.168.255.254",
+            "169.254.169.254",
+            "100.64.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "fc00::1",
+            "fd12:3456:789a::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ];
+        for raw in public {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(is_public_ip(&ip), "{raw} should be public");
+        }
+        for raw in non_public {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(!is_public_ip(&ip), "{raw} should be rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_policy_rejects_non_http_and_private_literals() {
+        assert!(ensure_fetch_target_allowed("ftp://example.com/x", false)
+            .await
+            .is_err());
+        assert!(
+            ensure_fetch_target_allowed("http://127.0.0.1:5432/x", false)
+                .await
+                .is_err()
+        );
+        assert!(ensure_fetch_target_allowed("http://[::1]:8080/x", false)
+            .await
+            .is_err());
+        // The escape hatch bypasses only the address check, never the scheme.
+        assert!(ensure_fetch_target_allowed("http://127.0.0.1:5432/x", true)
+            .await
+            .is_ok());
+        assert!(ensure_fetch_target_allowed("ftp://127.0.0.1/x", true)
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn postgres_search_tsv_migration_is_idempotent_and_complete() {
+        // Live Postgres is unavailable in this environment (no Docker), so the
+        // migration statements themselves are asserted here.
+        assert!(
+            PG_SEARCH_TSV_ADD_COLUMN_SQL.contains("ADD COLUMN IF NOT EXISTS search_tsv tsvector")
+        );
+        assert!(PG_SEARCH_TSV_ADD_COLUMN_SQL.contains("GENERATED ALWAYS AS"));
+        assert!(PG_SEARCH_TSV_ADD_COLUMN_SQL.contains("to_tsvector('simple'"));
+        assert!(PG_SEARCH_TSV_BACKFILL_SQL.contains("UPDATE relay_notes"));
+        assert!(PG_SEARCH_TSV_BACKFILL_SQL.contains("IS DISTINCT FROM"));
+        assert!(PG_SEARCH_TSV_INDEX_SQL.contains("CREATE INDEX IF NOT EXISTS"));
+        assert!(PG_SEARCH_TSV_INDEX_SQL.contains("USING GIN (search_tsv)"));
+        assert!(PG_SEARCH_TSV_TRIGGER_SQL.contains("CREATE OR REPLACE FUNCTION"));
+        assert!(PG_SEARCH_TSV_TRIGGER_SQL.contains("DROP TRIGGER IF EXISTS"));
+        assert!(PG_SEARCH_TSV_TRIGGER_SQL.contains("CREATE TRIGGER relay_notes_search_tsv_tr"));
+        assert!(PG_SEARCH_TSV_TRIGGER_SQL.contains("BEFORE INSERT OR UPDATE OF content_text"));
+
+        assert!(PG_TAG_TSV_ADD_COLUMN_SQL.contains("ADD COLUMN IF NOT EXISTS tag_tsv tsvector"));
+        assert!(PG_TAG_TSV_BACKFILL_SQL.contains("UPDATE relay_note_tags"));
+        assert!(PG_TAG_TSV_INDEX_SQL.contains("CREATE INDEX IF NOT EXISTS"));
+        assert!(PG_TAG_TSV_INDEX_SQL.contains("USING GIN (tag_tsv)"));
+        assert!(PG_TAG_TSV_TRIGGER_SQL.contains("CREATE OR REPLACE FUNCTION"));
+        assert!(PG_TAG_TSV_TRIGGER_SQL.contains("DROP TRIGGER IF EXISTS"));
+        assert!(PG_TAG_TSV_TRIGGER_SQL.contains("CREATE TRIGGER relay_note_tags_tag_tsv_tr"));
+
+        // Fresh installs must get the same DDL from the shipped schema.
+        let schema = include_str!("../sql/postgres_schema.sql");
+        assert!(schema.contains("ADD COLUMN IF NOT EXISTS search_tsv tsvector"));
+        assert!(schema.contains("ADD COLUMN IF NOT EXISTS tag_tsv tsvector"));
+        assert!(schema.contains("idx_relay_notes_search_tsv"));
+        assert!(schema.contains("idx_relay_note_tags_tsv"));
+        assert!(schema.contains("relay_notes_search_tsv_sync"));
+        assert!(schema.contains("relay_note_tags_tag_tsv_sync"));
+        assert!(schema.contains("CREATE TRIGGER relay_notes_search_tsv_tr"));
+        assert!(schema.contains("CREATE TRIGGER relay_note_tags_tag_tsv_tr"));
     }
 }

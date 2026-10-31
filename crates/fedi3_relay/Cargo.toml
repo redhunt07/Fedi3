@@ -37,3 +37,4 @@ deadpool = "0.10"
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"
+fedi3_core = { path = "../fedi3_core" }

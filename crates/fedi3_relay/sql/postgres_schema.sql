@@ -146,7 +146,6 @@ CREATE TABLE IF NOT EXISTS relay_notes (
 CREATE INDEX IF NOT EXISTS idx_relay_notes_created ON relay_notes(created_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_relay_notes_actor ON relay_notes(actor_id);
 CREATE INDEX IF NOT EXISTS idx_relay_notes_published ON relay_notes(published_ms DESC);
-CREATE INDEX IF NOT EXISTS idx_relay_notes_search_tsv ON relay_notes USING GIN (search_tsv);
 
 CREATE TABLE IF NOT EXISTS relay_note_tags (
   note_id TEXT NOT NULL,
@@ -156,7 +155,6 @@ CREATE TABLE IF NOT EXISTS relay_note_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tag ON relay_note_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tag_lower ON relay_note_tags (lower(tag));
-CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tsv ON relay_note_tags USING GIN (tag_tsv);
 
 CREATE TABLE IF NOT EXISTS relay_tag_counts (
   tag TEXT PRIMARY KEY,
@@ -241,6 +239,66 @@ ALTER TABLE relay_notes
   ) STORED;
 ALTER TABLE relay_note_tags
   ADD COLUMN IF NOT EXISTS tag_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(tag, ''))) STORED;
+
+-- Indexes are created only after the columns above are guaranteed to exist:
+-- an old database without these columns would otherwise fail on startup.
+CREATE INDEX IF NOT EXISTS idx_relay_notes_search_tsv ON relay_notes USING GIN (search_tsv);
+CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tsv ON relay_note_tags USING GIN (tag_tsv);
+
+-- Keep upgraded databases searchable: if the column exists as a plain
+-- tsvector (older schema) rather than a generated one, backfill it and install
+-- the trigger that maintains it. Both blocks are idempotent.
+CREATE OR REPLACE FUNCTION relay_notes_search_tsv_sync() RETURNS trigger AS $$
+BEGIN
+  NEW.search_tsv := to_tsvector('simple', coalesce(NEW.content_text, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION relay_note_tags_tag_tsv_sync() RETURNS trigger AS $$
+BEGIN
+  NEW.tag_tsv := to_tsvector('simple', coalesce(NEW.tag, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'relay_notes'::regclass
+      AND attname = 'search_tsv'
+      AND attgenerated = 's'
+  ) THEN
+    UPDATE relay_notes
+      SET search_tsv = to_tsvector('simple', coalesce(content_text, ''))
+      WHERE search_tsv IS DISTINCT FROM to_tsvector('simple', coalesce(content_text, ''));
+    DROP TRIGGER IF EXISTS relay_notes_search_tsv_tr ON relay_notes;
+    CREATE TRIGGER relay_notes_search_tsv_tr
+      BEFORE INSERT OR UPDATE OF content_text ON relay_notes
+      FOR EACH ROW EXECUTE FUNCTION relay_notes_search_tsv_sync();
+  END IF;
+END;
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'relay_note_tags'::regclass
+      AND attname = 'tag_tsv'
+      AND attgenerated = 's'
+  ) THEN
+    UPDATE relay_note_tags
+      SET tag_tsv = to_tsvector('simple', coalesce(tag, ''))
+      WHERE tag_tsv IS DISTINCT FROM to_tsvector('simple', coalesce(tag, ''));
+    DROP TRIGGER IF EXISTS relay_note_tags_tag_tsv_tr ON relay_note_tags;
+    CREATE TRIGGER relay_note_tags_tag_tsv_tr
+      BEFORE INSERT OR UPDATE OF tag ON relay_note_tags
+      FOR EACH ROW EXECUTE FUNCTION relay_note_tags_tag_tsv_sync();
+  END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS relay_outbox_index (
   username TEXT PRIMARY KEY,
