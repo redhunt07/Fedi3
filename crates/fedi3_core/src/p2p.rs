@@ -11,37 +11,34 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use futures_util::{future::Either, StreamExt};
 use http::Request;
-use libp2p::{
-    core::upgrade,
-    gossipsub,
-    identify, identity,
-    kad,
-    autonat,
-    relay, dcutr,
-    mdns,
-    noise,
-    ping,
-    request_response,
-    quic,
-    websocket,
-    core::muxing::StreamMuxerBox,
-    swarm::{derive_prelude::*, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, Swarm,
-};
-use libp2p::Transport;
+use libp2p::kad::{Quorum, Record};
 use libp2p::multiaddr::Protocol;
-use libp2p::kad::{Record, Quorum};
-use std::{collections::{HashMap, HashSet}, time::Duration};
+use libp2p::Transport;
+use libp2p::{
+    autonat,
+    core::muxing::StreamMuxerBox,
+    core::upgrade,
+    dcutr, gossipsub, identify, identity, kad, mdns, noise, ping, quic, relay, request_response,
+    swarm::{derive_prelude::*, SwarmEvent},
+    tcp, websocket, yamux, Multiaddr, PeerId, Swarm,
+};
+use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use tokio::sync::watch;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info};
 use tower::util::ServiceExt;
-use std::sync::Arc;
+use tracing::{error, info};
 
-use crate::social_db::SocialDb;
 use crate::net_metrics::NetMetrics;
+use crate::social_db::SocialDb;
 
-#[derive(Clone, Debug, serde::Deserialize)]
+/// Maximum accepted P2P frame size (H-06).
+pub const MAX_P2P_FRAME: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct P2pConfig {
     pub enable: bool,
     pub listen: Option<String>,
@@ -310,9 +307,17 @@ where
     let mut len_buf = [0u8; 4];
     io.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    // H-06/P-01: never allocate the length declared by the peer before validating it.
+    if len > MAX_P2P_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("p2p frame too large: {len} bytes (max {MAX_P2P_FRAME})"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
-    serde_json::from_slice(&buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 async fn write_len_prefixed_json<T, V>(io: &mut T, value: &V) -> std::io::Result<()>
@@ -321,7 +326,14 @@ where
     V: serde::Serialize,
 {
     use futures_util::AsyncWriteExt as _;
-    let bytes = serde_json::to_vec(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if bytes.len() > MAX_P2P_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("p2p frame too large: {} bytes", bytes.len()),
+        ));
+    }
     let len = (bytes.len() as u32).to_be_bytes();
     io.write_all(&len).await?;
     io.write_all(&bytes).await?;
@@ -434,7 +446,11 @@ async fn run_p2p_with_shutdown(
     mut handler: impl Clone
         + Send
         + 'static
-        + tower::Service<Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     if !cfg.enable {
@@ -463,9 +479,12 @@ async fn run_p2p_with_shutdown(
 
     // Circuit relay transport must be combined at the "raw" (pre-upgrade) layer, then upgraded.
     let raw_tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
-    let raw_ws = websocket::WsConfig::new(tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)));
+    let raw_ws = websocket::WsConfig::new(tcp::tokio::Transport::new(
+        tcp::Config::default().nodelay(true),
+    ));
     let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws, raw_tcp);
-    let raw_stream = libp2p::core::transport::choice::OrTransport::new(relay_transport, raw_ws_or_tcp);
+    let raw_stream =
+        libp2p::core::transport::choice::OrTransport::new(relay_transport, raw_ws_or_tcp);
     let tcp_transport = raw_stream
         .upgrade(upgrade::Version::V1)
         .authenticate(noise::Config::new(&keypair)?)
@@ -474,12 +493,13 @@ async fn run_p2p_with_shutdown(
         .boxed();
 
     let quic_transport = quic::tokio::Transport::new(quic::Config::new(&keypair));
-    let transport = libp2p::core::transport::choice::OrTransport::new(quic_transport, tcp_transport)
-        .map(|either, _| match either {
-            Either::Left((peer, conn)) => (peer, StreamMuxerBox::new(conn)),
-            Either::Right((peer, muxer)) => (peer, muxer),
-        })
-        .boxed();
+    let transport =
+        libp2p::core::transport::choice::OrTransport::new(quic_transport, tcp_transport)
+            .map(|either, _| match either {
+                Either::Left((peer, conn)) => (peer, StreamMuxerBox::new(conn)),
+                Either::Right((peer, muxer)) => (peer, muxer),
+            })
+            .boxed();
 
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?;
     let identify = identify::Behaviour::new(identify::Config::new(
@@ -519,11 +539,20 @@ async fn run_p2p_with_shutdown(
         gossip,
     };
 
-    let mut swarm = Swarm::new(transport, behaviour, peer_id, libp2p::swarm::Config::with_tokio_executor());
+    let mut swarm = Swarm::new(
+        transport,
+        behaviour,
+        peer_id,
+        libp2p::swarm::Config::with_tokio_executor(),
+    );
 
     if !force_relay_only {
         if let Some(listen) = cfg.listen.as_deref() {
-            for s in listen.split(',').map(|v| v.trim()).filter(|v| !v.is_empty()) {
+            for s in listen
+                .split(',')
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty())
+            {
                 let addr: Multiaddr = s.parse()?;
                 swarm.listen_on(addr)?;
             }
@@ -577,7 +606,11 @@ async fn run_p2p_with_shutdown(
     }
 
     // DHT self discovery record (best-effort).
-    let mut self_addrs: Vec<String> = if force_relay_only { Vec::new() } else { cfg.announce.clone().unwrap_or_default() };
+    let mut self_addrs: Vec<String> = if force_relay_only {
+        Vec::new()
+    } else {
+        cfg.announce.clone().unwrap_or_default()
+    };
     if let Some(relays) = cfg.relay_reserve.as_ref() {
         for r in relays {
             let r = r.trim();
@@ -635,10 +668,18 @@ async fn run_p2p_with_shutdown(
     let mut mailbox_pending: HashMap<request_response::OutboundRequestId, PeerId> = HashMap::new();
     // Persist mailbox dedup using the main inbox_seen table via a reserved namespace.
 
-    let mut pending: HashMap<request_response::OutboundRequestId, oneshot::Sender<Result<RelayHttpResponse>>> =
-        HashMap::new();
-    let mut kad_pending: HashMap<kad::QueryId, oneshot::Sender<Result<Option<PeerDiscoveryRecord>>>> = HashMap::new();
-    let mut kad_pending_did: HashMap<kad::QueryId, oneshot::Sender<Result<Option<DidDiscoveryRecord>>>> = HashMap::new();
+    let mut pending: HashMap<
+        request_response::OutboundRequestId,
+        oneshot::Sender<Result<RelayHttpResponse>>,
+    > = HashMap::new();
+    let mut kad_pending: HashMap<
+        kad::QueryId,
+        oneshot::Sender<Result<Option<PeerDiscoveryRecord>>>,
+    > = HashMap::new();
+    let mut kad_pending_did: HashMap<
+        kad::QueryId,
+        oneshot::Sender<Result<Option<DidDiscoveryRecord>>>,
+    > = HashMap::new();
     let mut did_publish_pending: HashSet<kad::QueryId> = HashSet::new();
     let mut kad_bootstrapped = false;
 
@@ -857,13 +898,17 @@ async fn run_p2p_with_shutdown(
                                     let mut ack_ids: Vec<String> = Vec::new();
                                     for msg in poll.messages {
                                         let dedup_key = format!("urn:fedi3:mbx:{}", msg.id);
-                                        if !social.mark_inbox_seen(&dedup_key).unwrap_or(false) {
+                                        if social.has_inbox_seen(&dedup_key).unwrap_or(false) {
+                                            // Already processed: acknowledge so the peer stops redelivering.
+                                            ack_ids.push(msg.id);
                                             continue;
                                         }
                                         metrics.mailbox_peer_seen(&mbx_peer.to_string());
                                         let req = maybe_decrypt(&private_key_pem, msg.req);
                                         let resp = handle_relay_http_request(&mut handler, req).await;
                                         if (200..300).contains(&resp.status) || resp.status == 202 {
+                                            // H-37: mark as seen only after successful processing.
+                                            let _ = social.mark_inbox_seen(&dedup_key);
                                             ack_ids.push(msg.id);
                                         }
                                     }
@@ -1015,7 +1060,11 @@ where
     S: Clone
         + Send
         + 'static
-        + tower::Service<Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
     S::Future: Send,
 {
     if !cfg.enable {
@@ -1024,21 +1073,20 @@ where
     let peer_id = PeerId::from(keypair.public()).to_string();
     let (tx, rx) = mpsc::channel::<OutboundMsg>(64);
     tokio::spawn(async move {
-        if let Err(e) =
-            run_p2p_with_shutdown(
-                cfg,
-                keypair,
-                did,
-                self_actor_url,
-                internal_token,
-                private_key_pem,
-                social,
-                metrics,
-                rx,
-                handler,
-                shutdown,
-            )
-                .await
+        if let Err(e) = run_p2p_with_shutdown(
+            cfg,
+            keypair,
+            did,
+            self_actor_url,
+            internal_token,
+            private_key_pem,
+            social,
+            metrics,
+            rx,
+            handler,
+            shutdown,
+        )
+        .await
         {
             error!("p2p task stopped: {e:#}");
         }
@@ -1056,7 +1104,11 @@ fn kad_key_for_did(did: &str) -> kad::RecordKey {
     kad::RecordKey::new(&format!("/fedi3/did/{did}"))
 }
 
-fn merge_did_record(existing: Option<&[u8]>, did: &str, self_record: &PeerDiscoveryRecord) -> DidDiscoveryRecord {
+fn merge_did_record(
+    existing: Option<&[u8]>,
+    did: &str,
+    self_record: &PeerDiscoveryRecord,
+) -> DidDiscoveryRecord {
     let now = now_ms();
     let mut peers: Vec<DidPeer> = Vec::new();
     let mut actor: Option<String> = None;
@@ -1130,14 +1182,42 @@ pub fn load_or_generate_keypair(data_dir: &std::path::Path) -> Result<identity::
     let path = data_dir.join("p2p_keypair.pb");
     if let Ok(bytes) = std::fs::read(&path) {
         let kp = identity::Keypair::from_protobuf_encoding(&bytes).context("decode p2p keypair")?;
+        let _ = crate::keys::secure_file(&path);
         return Ok(kp);
     }
     let kp = identity::Keypair::generate_ed25519();
     let bytes = kp.to_protobuf_encoding().context("encode p2p keypair")?;
-    std::fs::write(&path, bytes).context("write p2p keypair")?;
+    crate::keys::write_secret_atomic(&path, &bytes).context("write p2p keypair")?;
     Ok(kp)
 }
 
 pub fn peer_id_string(keypair: &identity::Keypair) -> String {
     PeerId::from(keypair.public()).to_string()
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn oversized_frame_header_is_rejected_without_allocation() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut cursor = futures_util::io::Cursor::new(buf);
+        let res: std::io::Result<serde_json::Value> = read_len_prefixed_json(&mut cursor).await;
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn valid_frame_round_trips() {
+        let value = serde_json::json!({"hello": "world"});
+        let mut writer = futures_util::io::Cursor::new(Vec::<u8>::new());
+        write_len_prefixed_json(&mut writer, &value).await.unwrap();
+        let bytes = writer.into_inner();
+        let mut reader = futures_util::io::Cursor::new(bytes);
+        let out: serde_json::Value = read_len_prefixed_json(&mut reader).await.unwrap();
+        assert_eq!(out, value);
+    }
 }

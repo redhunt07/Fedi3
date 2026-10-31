@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 fn now_ms() -> u64 {
@@ -50,6 +50,24 @@ pub struct NetMetrics {
     webrtc_seen: Mutex<HashMap<String, u64>>,
 }
 
+/// H-48: hard cap on the peer maps so a flood of unique peer ids cannot grow memory without bound.
+const MAX_SEEN_ENTRIES: usize = 10_000;
+
+fn insert_capped(map: &mut HashMap<String, u64>, peer_id: &str) {
+    let now = now_ms();
+    map.insert(peer_id.to_string(), now);
+    if map.len() > MAX_SEEN_ENTRIES {
+        map.retain(|_, t| now.saturating_sub(*t) < 60_000);
+        if map.len() > MAX_SEEN_ENTRIES {
+            let overflow = map.len() - MAX_SEEN_ENTRIES;
+            let victims: Vec<String> = map.keys().take(overflow).cloned().collect();
+            for k in victims {
+                map.remove(&k);
+            }
+        }
+    }
+}
+
 impl NetMetrics {
     pub fn new() -> Self {
         Self::default()
@@ -59,14 +77,20 @@ impl NetMetrics {
         self.relay_connected.store(v, Ordering::Relaxed);
         self.relay_last_change_ms.store(now_ms(), Ordering::Relaxed);
         if v {
-            let mut g = self.relay_last_error.lock().unwrap();
+            let mut g = self
+                .relay_last_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *g = None;
         }
     }
 
     pub fn set_relay_error(&self, err: String) {
         self.set_relay_connected(false);
-        let mut g = self.relay_last_error.lock().unwrap();
+        let mut g = self
+            .relay_last_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *g = Some(err);
     }
 
@@ -83,7 +107,11 @@ impl NetMetrics {
             return;
         }
         let prev = self.relay_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.relay_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
@@ -96,9 +124,10 @@ impl NetMetrics {
     }
 
     pub fn p2p_peer_seen(&self, peer_id: &str) {
-        let mut g = self.p2p_seen.lock().unwrap();
-        g.insert(peer_id.to_string(), now_ms());
-        self.p2p_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        let mut g = self.p2p_seen.lock().unwrap_or_else(|e| e.into_inner());
+        insert_capped(&mut g, peer_id);
+        self.p2p_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn p2p_rx_add(&self, n: u64) {
@@ -114,14 +143,19 @@ impl NetMetrics {
             return;
         }
         let prev = self.p2p_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.p2p_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
     pub fn mailbox_peer_seen(&self, peer_id: &str) {
-        let mut g = self.mailbox_seen.lock().unwrap();
-        g.insert(peer_id.to_string(), now_ms());
-        self.mailbox_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        let mut g = self.mailbox_seen.lock().unwrap_or_else(|e| e.into_inner());
+        insert_capped(&mut g, peer_id);
+        self.mailbox_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn mailbox_rx_add(&self, n: u64) {
@@ -137,7 +171,11 @@ impl NetMetrics {
             return;
         }
         let prev = self.mailbox_rtt_ema_ms.load(Ordering::Relaxed);
-        let next = if prev == 0 { ms } else { (prev.saturating_mul(7).saturating_add(ms)) / 8 };
+        let next = if prev == 0 {
+            ms
+        } else {
+            (prev.saturating_mul(7).saturating_add(ms)) / 8
+        };
         self.mailbox_rtt_ema_ms.store(next, Ordering::Relaxed);
     }
 
@@ -146,9 +184,10 @@ impl NetMetrics {
     }
 
     pub fn webrtc_peer_seen(&self, peer_id: &str) {
-        let mut g = self.webrtc_seen.lock().unwrap();
-        g.insert(peer_id.to_string(), now_ms());
-        self.webrtc_active_peers.store(g.len() as u64, Ordering::Relaxed);
+        let mut g = self.webrtc_seen.lock().unwrap_or_else(|e| e.into_inner());
+        insert_capped(&mut g, peer_id);
+        self.webrtc_active_peers
+            .store(g.len() as u64, Ordering::Relaxed);
     }
 
     pub fn webrtc_rx_add(&self, n: u64) {
@@ -178,24 +217,31 @@ impl NetMetrics {
     pub fn prune_seen(&self, window_ms: u64) {
         let cutoff = now_ms().saturating_sub(window_ms);
         {
-            let mut g = self.p2p_seen.lock().unwrap();
+            let mut g = self.p2p_seen.lock().unwrap_or_else(|e| e.into_inner());
             g.retain(|_, t| *t >= cutoff);
-            self.p2p_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.p2p_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
         {
-            let mut g = self.mailbox_seen.lock().unwrap();
+            let mut g = self.mailbox_seen.lock().unwrap_or_else(|e| e.into_inner());
             g.retain(|_, t| *t >= cutoff);
-            self.mailbox_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.mailbox_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
         {
-            let mut g = self.webrtc_seen.lock().unwrap();
+            let mut g = self.webrtc_seen.lock().unwrap_or_else(|e| e.into_inner());
             g.retain(|_, t| *t >= cutoff);
-            self.webrtc_active_peers.store(g.len() as u64, Ordering::Relaxed);
+            self.webrtc_active_peers
+                .store(g.len() as u64, Ordering::Relaxed);
         }
     }
 
     pub fn snapshot_json(&self) -> serde_json::Value {
-        let last_error = self.relay_last_error.lock().unwrap().clone();
+        let last_error = self
+            .relay_last_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         self.prune_seen(60_000);
         serde_json::json!({
             "ts_ms": now_ms(),
@@ -234,5 +280,50 @@ impl NetMetrics {
                 "http_errors": self.http_errors.load(Ordering::Relaxed),
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_contains_expected_fields() {
+        let m = NetMetrics::new();
+        m.set_relay_connected(true);
+        m.relay_rx_add(10);
+        let v = m.snapshot_json();
+        assert!(v["relay"]["connected"].as_bool().unwrap());
+        assert_eq!(v["relay"]["rx_bytes"].as_u64().unwrap(), 10);
+        assert!(v.get("p2p").is_some());
+        assert!(v.get("errors").is_some());
+    }
+
+    #[test]
+    fn prune_removes_old_entries() {
+        let m = NetMetrics::new();
+        m.p2p_peer_seen("peer-a");
+        {
+            let mut g = m.p2p_seen.lock().unwrap_or_else(|e| e.into_inner());
+            g.insert("peer-old".to_string(), 0);
+        }
+        m.prune_seen(60_000);
+        let g = m.p2p_seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(g.contains_key("peer-a"));
+        assert!(!g.contains_key("peer-old"));
+    }
+
+    #[test]
+    fn poisoned_mutex_does_not_panic() {
+        let m = std::sync::Arc::new(NetMetrics::new());
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = m2.p2p_seen.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        m.p2p_peer_seen("peer-b");
+        let v = m.snapshot_json();
+        assert!(v["p2p"]["active_peers"].as_u64().unwrap() >= 1);
     }
 }

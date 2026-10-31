@@ -64,10 +64,17 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
     if let Some(base) = state.cfg.relay_base_url.as_ref() {
         let url = format!("{}/_fedi3/relay/relays", base.trim_end_matches('/'));
         let mut req = state.http.get(&url);
-        if let Some(tok) = state.cfg.relay_token.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(tok) = state
+            .cfg
+            .relay_token
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             req = req.header("Authorization", format!("Bearer {}", tok));
         }
-        if let Ok(resp) = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await {
+        if let Ok(resp) = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await
+        {
             if resp.status().is_success() {
                 if let Ok(body) = resp.json::<RelayListResponse>().await {
                     if let Some(items) = body.relays.or(body.items) {
@@ -133,7 +140,13 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
                     })
                     .collect::<Vec<_>>()
             }));
-            if let Some(tok) = state.cfg.relay_token.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(tok) = state
+                .cfg
+                .relay_token
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
                 req = req.header("Authorization", format!("Bearer {}", tok));
             }
             let _ = send_with_retry_metrics(|| req.try_clone().unwrap(), 3, &state.net).await;
@@ -159,7 +172,9 @@ fn store_relay_items(state: &ApState, items: Vec<RelayListItem>, source: &str) {
             let ws_url = ws
                 .map(|v| v.to_string())
                 .or_else(|| infer_ws_from_base(base_url));
-            let _ = state.social.upsert_relay_entry(base_url, ws_url.as_deref(), source);
+            let _ = state
+                .social
+                .upsert_relay_entry(base_url, ws_url.as_deref(), source);
         }
     }
 }

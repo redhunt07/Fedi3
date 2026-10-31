@@ -14,9 +14,9 @@ use tracing::{info, warn};
 use crate::crypto_envelope::decrypt_relay_http_request_body;
 use crate::http_retry::send_with_retry;
 use crate::http_sig::sign_request_rsa_sha256;
-use crate::relay_bridge::handle_relay_http_request;
-use crate::p2p::P2pConfig;
 use crate::net_metrics::NetMetrics;
+use crate::p2p::P2pConfig;
+use crate::relay_bridge::handle_relay_http_request;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,7 +37,12 @@ pub struct WebrtcHandle {
 }
 
 impl WebrtcHandle {
-    pub async fn request(&self, peer_actor_url: &str, peer_id: &str, req: RelayHttpRequest) -> Result<RelayHttpResponse> {
+    pub async fn request(
+        &self,
+        peer_actor_url: &str,
+        peer_id: &str,
+        req: RelayHttpRequest,
+    ) -> Result<RelayHttpResponse> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(OutboundMsg::Request {
@@ -189,7 +194,8 @@ struct Assembly {
 impl Assembler {
     fn cleanup(&mut self) {
         let now = now_ms();
-        self.parts.retain(|_, a| now.saturating_sub(a.created_at_ms) < ASSEMBLY_TTL_MS);
+        self.parts
+            .retain(|_, a| now.saturating_sub(a.created_at_ms) < ASSEMBLY_TTL_MS);
         // Bound the number of in-flight assemblies.
         if self.parts.len() > MAX_INFLIGHT_ASSEMBLIES {
             let mut keys = self
@@ -198,7 +204,10 @@ impl Assembler {
                 .map(|(k, v)| (k.clone(), v.created_at_ms))
                 .collect::<Vec<_>>();
             keys.sort_by_key(|(_, ts)| *ts);
-            for (k, _) in keys.into_iter().take(self.parts.len().saturating_sub(MAX_INFLIGHT_ASSEMBLIES)) {
+            for (k, _) in keys
+                .into_iter()
+                .take(self.parts.len().saturating_sub(MAX_INFLIGHT_ASSEMBLIES))
+            {
                 self.parts.remove(&k);
             }
         }
@@ -263,9 +272,15 @@ impl Assembler {
     }
 }
 
-async fn send_bytes_chunked(dc: &webrtc::data_channel::RTCDataChannel, payload: &[u8]) -> Result<()> {
+async fn send_bytes_chunked(
+    dc: &webrtc::data_channel::RTCDataChannel,
+    payload: &[u8],
+) -> Result<()> {
     if payload.len() > MAX_WIRE_BYTES {
-        return Err(anyhow!("payload too large for webrtc: {} bytes", payload.len()));
+        return Err(anyhow!(
+            "payload too large for webrtc: {} bytes",
+            payload.len()
+        ));
     }
     let msg_id = random_msg_id_16();
     let total_len = payload.len() as u32;
@@ -273,7 +288,9 @@ async fn send_bytes_chunked(dc: &webrtc::data_channel::RTCDataChannel, payload: 
     while offset < payload.len() {
         let end = (offset + CHUNK_PAYLOAD_MAX).min(payload.len());
         let frame = build_frame(&msg_id, total_len, offset as u32, &payload[offset..end]);
-        dc.send(&frame).await.map_err(|e| anyhow!("dc send: {e:#}"))?;
+        dc.send(&frame)
+            .await
+            .map_err(|e| anyhow!("dc send: {e:#}"))?;
         offset = end;
     }
     Ok(())
@@ -296,7 +313,10 @@ async fn signed_json_post(
     let body = serde_json::to_vec(&body_json).unwrap_or_default();
     let uri: Uri = url.parse().context("parse url")?;
     let mut headers = HeaderMap::new();
-    headers.insert("content-type", "application/json".parse().expect("static header"));
+    headers.insert(
+        "content-type",
+        "application/json".parse().expect("static header"),
+    );
     sign_request_rsa_sha256(
         private_key_pem,
         key_id,
@@ -365,7 +385,10 @@ async fn send_signal(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<()> {
-    let url = format!("{}/_fedi3/webrtc/send", remote_relay_base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/webrtc/send",
+        remote_relay_base.trim_end_matches('/')
+    );
     let body = serde_json::json!({
       "to_peer_id": to_peer_id,
       "session_id": session_id,
@@ -380,7 +403,10 @@ async fn ack_signals(http: &reqwest::Client, cfg: &ManagerCfg, ids: Vec<String>)
     if ids.is_empty() {
         return Ok(());
     }
-    let url = format!("{}/_fedi3/webrtc/ack", cfg.self_relay_base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/webrtc/ack",
+        cfg.self_relay_base.trim_end_matches('/')
+    );
     let body = serde_json::json!({
       "to_peer_id": cfg.self_peer_id,
       "ids": ids,
@@ -413,7 +439,10 @@ async fn new_peer_connection(cfg: &ManagerCfg) -> Result<Arc<RTCPeerConnection>>
     Ok(Arc::new(pc))
 }
 
-async fn resolve_peer_id_from_actor(http: &reqwest::Client, actor_url: &str) -> Result<Option<String>> {
+async fn resolve_peer_id_from_actor(
+    http: &reqwest::Client,
+    actor_url: &str,
+) -> Result<Option<String>> {
     let resp = send_with_retry(
         || {
             http.get(actor_url).header(
@@ -447,7 +476,11 @@ async fn handle_incoming_wire_message<H>(
     H: Clone
         + Send
         + 'static
-        + tower::Service<http::Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+        + tower::Service<
+            http::Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
 {
     match msg {
         WireMsg::Req { id, req } => {
@@ -480,7 +513,11 @@ where
         + Send
         + Sync
         + 'static
-        + tower::Service<http::Request<Body>, Response = http::Response<Body>, Error = std::convert::Infallible>,
+        + tower::Service<
+            http::Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
     <H as tower::Service<http::Request<Body>>>::Future: Send,
 {
     let enabled = p2p_cfg.webrtc_enable.unwrap_or(false);
@@ -495,17 +532,34 @@ where
         private_key_pem,
         key_id,
         poll_secs: p2p_cfg.webrtc_poll_secs.unwrap_or(2).max(1).min(30),
-        connect_timeout_secs: p2p_cfg.webrtc_connect_timeout_secs.unwrap_or(20).max(5).min(120),
-        idle_ttl_secs: p2p_cfg.webrtc_idle_ttl_secs.unwrap_or(300).max(30).min(3600),
+        connect_timeout_secs: p2p_cfg
+            .webrtc_connect_timeout_secs
+            .unwrap_or(20)
+            .max(5)
+            .min(120),
+        idle_ttl_secs: p2p_cfg
+            .webrtc_idle_ttl_secs
+            .unwrap_or(300)
+            .max(30)
+            .min(3600),
         ice_urls,
-        ice_username: p2p_cfg.webrtc_ice_username.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        ice_credential: p2p_cfg.webrtc_ice_credential.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        ice_username: p2p_cfg
+            .webrtc_ice_username
+            .clone()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        ice_credential: p2p_cfg
+            .webrtc_ice_credential
+            .clone()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     };
 
     let (tx, mut rx) = mpsc::channel::<OutboundMsg>(128);
     let handle = WebrtcHandle { tx };
 
-    let sessions: Arc<tokio::sync::Mutex<HashMap<String, Session>>> = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let sessions: Arc<tokio::sync::Mutex<HashMap<String, Session>>> =
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let pending_candidates: Arc<tokio::sync::Mutex<HashMap<String, Vec<RTCIceCandidateInit>>>> =
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
@@ -544,13 +598,14 @@ where
                     cfg.self_relay_base.trim_end_matches('/'),
                     urlencoding::encode(&cfg.self_peer_id)
                 );
-                let json = match signed_get_json(&http, &cfg.private_key_pem, &cfg.key_id, &url).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("webrtc poll failed: {e:#}");
-                        continue;
-                    }
-                };
+                let json =
+                    match signed_get_json(&http, &cfg.private_key_pem, &cfg.key_id, &url).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("webrtc poll failed: {e:#}");
+                            continue;
+                        }
+                    };
                 let poll: PollResp = match serde_json::from_value(json) {
                     Ok(v) => v,
                     Err(e) => {
@@ -571,7 +626,9 @@ where
                     }
 
                     // Ensure we know the remote peer id to respond.
-                    let remote_peer_id = match resolve_peer_id_from_actor(&http, &m.from_actor).await {
+                    let remote_peer_id = match resolve_peer_id_from_actor(&http, &m.from_actor)
+                        .await
+                    {
                         Ok(Some(pid)) => pid,
                         _ => {
                             warn!(from_actor=%m.from_actor, "webrtc signal ignored: cannot resolve remote peer id");
@@ -596,7 +653,9 @@ where
                         }
                         drop(guard);
 
-                        let offer = match serde_json::from_value::<RTCSessionDescription>(m.payload.clone()) {
+                        let offer = match serde_json::from_value::<RTCSessionDescription>(
+                            m.payload.clone(),
+                        ) {
                             Ok(v) => v,
                             Err(_) => {
                                 ack_ids.push(m.id);
@@ -638,7 +697,7 @@ where
                             }
                         })
                     }));
-                }
+                        }
 
                         // Incoming data channel: respond to requests.
                         {
@@ -653,7 +712,8 @@ where
                                 let remote_peer_id_in = remote_peer_id_in.clone();
                                 Box::pin(async move {
                                     let dc2 = dc.clone();
-                                    let assembler = Arc::new(tokio::sync::Mutex::new(Assembler::default()));
+                                    let assembler =
+                                        Arc::new(tokio::sync::Mutex::new(Assembler::default()));
                                     let handler3 = handler2.clone();
                                     let cfg3 = cfg2.clone();
                                     let metrics3 = metrics2.clone();
@@ -674,8 +734,18 @@ where
                                                 a.ingest(&frame_bytes)
                                             };
                                             let Some(payload) = payload else { return };
-                                            if let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) {
-                                                handle_incoming_wire_message(&cfg3, handler3, w, dc2.clone(), metrics3, &remote_peer_id3).await;
+                                            if let Ok(w) =
+                                                serde_json::from_slice::<WireMsg>(&payload)
+                                            {
+                                                handle_incoming_wire_message(
+                                                    &cfg3,
+                                                    handler3,
+                                                    w,
+                                                    dc2.clone(),
+                                                    metrics3,
+                                                    &remote_peer_id3,
+                                                )
+                                                .await;
                                             }
                                         })
                                     }));
@@ -701,8 +771,19 @@ where
                             ack_ids.push(m.id);
                             continue;
                         }
-                        let payload = serde_json::to_value(&answer).unwrap_or(serde_json::Value::Null);
-                        if let Err(e) = send_signal(&http, &cfg, &remote_relay_base, &remote_peer_id, &session_id, "answer", payload).await {
+                        let payload =
+                            serde_json::to_value(&answer).unwrap_or(serde_json::Value::Null);
+                        if let Err(e) = send_signal(
+                            &http,
+                            &cfg,
+                            &remote_relay_base,
+                            &remote_peer_id,
+                            &session_id,
+                            "answer",
+                            payload,
+                        )
+                        .await
+                        {
                             warn!("webrtc send answer failed: {e:#}");
                         }
 
@@ -735,7 +816,9 @@ where
                     }
 
                     if kind == "answer" {
-                        let answer = match serde_json::from_value::<RTCSessionDescription>(m.payload.clone()) {
+                        let answer = match serde_json::from_value::<RTCSessionDescription>(
+                            m.payload.clone(),
+                        ) {
                             Ok(v) => v,
                             Err(_) => {
                                 ack_ids.push(m.id);
@@ -752,7 +835,9 @@ where
                     }
 
                     if kind == "candidate" {
-                        let cand = match serde_json::from_value::<RTCIceCandidateInit>(m.payload.clone()) {
+                        let cand = match serde_json::from_value::<RTCIceCandidateInit>(
+                            m.payload.clone(),
+                        ) {
                             Ok(v) => v,
                             Err(_) => {
                                 ack_ids.push(m.id);
@@ -788,7 +873,12 @@ where
         let metrics = metrics.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let OutboundMsg::Request { peer_actor_url, peer_id, req, resp_tx } = msg;
+                let OutboundMsg::Request {
+                    peer_actor_url,
+                    peer_id,
+                    req,
+                    resp_tx,
+                } = msg;
 
                 let remote_relay_base = match relay_base_from_actor(&peer_actor_url) {
                     Some(v) => v,
@@ -870,7 +960,9 @@ where
                                 a.ingest(&frame_bytes)
                             };
                             let Some(payload) = payload else { return };
-                            let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else { return };
+                            let Ok(w) = serde_json::from_slice::<WireMsg>(&payload) else {
+                                return;
+                            };
                             match w {
                                 WireMsg::Resp { id: _, resp } => {
                                     let mut guard = sessions2.lock().await;
@@ -901,7 +993,17 @@ where
                     continue;
                 }
                 let payload = serde_json::to_value(&offer).unwrap_or(serde_json::Value::Null);
-                if let Err(e) = send_signal(&http, &cfg, &remote_relay_base, &peer_id, &session_id, "offer", payload).await {
+                if let Err(e) = send_signal(
+                    &http,
+                    &cfg,
+                    &remote_relay_base,
+                    &peer_id,
+                    &session_id,
+                    "offer",
+                    payload,
+                )
+                .await
+                {
                     let _ = resp_tx.send(Err(e));
                     continue;
                 }
@@ -935,7 +1037,10 @@ where
                 }
 
                 // Wait for open, then send the request.
-                let open_ok = tokio::time::timeout(Duration::from_secs(cfg.connect_timeout_secs), open_rx).await.is_ok();
+                let open_ok =
+                    tokio::time::timeout(Duration::from_secs(cfg.connect_timeout_secs), open_rx)
+                        .await
+                        .is_ok();
                 if !open_ok {
                     let mut guard = sessions.lock().await;
                     if let Some(s) = guard.remove(&session_id) {
@@ -947,7 +1052,10 @@ where
                     continue;
                 }
 
-                let wire = WireMsg::Req { id: req.id.clone(), req };
+                let wire = WireMsg::Req {
+                    id: req.id.clone(),
+                    req,
+                };
                 if let Ok(bytes) = serde_json::to_vec(&wire) {
                     metrics.webrtc_tx_add(bytes.len() as u64);
                     metrics.webrtc_peer_seen(&peer_id);
@@ -969,18 +1077,22 @@ where
                     let sessions3 = sessions.clone();
                     let session_id3 = session_id.clone();
                     let metrics3 = metrics.clone();
-                    pc.on_peer_connection_state_change(Box::new(move |st: RTCPeerConnectionState| {
-                        let sessions3 = sessions3.clone();
-                        let session_id3 = session_id3.clone();
-                        let metrics3 = metrics3.clone();
-                        Box::pin(async move {
-                            if st == RTCPeerConnectionState::Failed || st == RTCPeerConnectionState::Closed {
-                                let mut guard = sessions3.lock().await;
-                                let _ = guard.remove(&session_id3);
-                                metrics3.webrtc_sessions_set(guard.len() as u64);
-                            }
-                        })
-                    }));
+                    pc.on_peer_connection_state_change(Box::new(
+                        move |st: RTCPeerConnectionState| {
+                            let sessions3 = sessions3.clone();
+                            let session_id3 = session_id3.clone();
+                            let metrics3 = metrics3.clone();
+                            Box::pin(async move {
+                                if st == RTCPeerConnectionState::Failed
+                                    || st == RTCPeerConnectionState::Closed
+                                {
+                                    let mut guard = sessions3.lock().await;
+                                    let _ = guard.remove(&session_id3);
+                                    metrics3.webrtc_sessions_set(guard.len() as u64);
+                                }
+                            })
+                        },
+                    ));
                 }
             }
         });

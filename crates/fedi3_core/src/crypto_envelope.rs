@@ -7,7 +7,10 @@ use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
 
-pub fn decrypt_relay_http_request_body(private_key_pem: &str, mut req: RelayHttpRequest) -> RelayHttpRequest {
+pub fn decrypt_relay_http_request_body(
+    private_key_pem: &str,
+    mut req: RelayHttpRequest,
+) -> RelayHttpRequest {
     let enc = req
         .headers
         .iter()
@@ -22,35 +25,63 @@ pub fn decrypt_relay_http_request_body(private_key_pem: &str, mut req: RelayHttp
     use rsa::{Oaep, RsaPrivateKey};
     use sha2::Sha256;
 
-    let Ok(env_bytes) = B64.decode(req.body_b64.as_bytes()) else { return req };
-    let Ok(env) = serde_json::from_slice::<serde_json::Value>(&env_bytes) else { return req };
-    let Some(ek_b64) = env.get("ek_b64").and_then(|v| v.as_str()) else { return req };
-    let Some(nonce_b64) = env.get("nonce_b64").and_then(|v| v.as_str()) else { return req };
-    let Some(ct_b64) = env.get("ct_b64").and_then(|v| v.as_str()) else { return req };
+    let Ok(env_bytes) = B64.decode(req.body_b64.as_bytes()) else {
+        return req;
+    };
+    let Ok(env) = serde_json::from_slice::<serde_json::Value>(&env_bytes) else {
+        return req;
+    };
+    let Some(ek_b64) = env.get("ek_b64").and_then(|v| v.as_str()) else {
+        return req;
+    };
+    let Some(nonce_b64) = env.get("nonce_b64").and_then(|v| v.as_str()) else {
+        return req;
+    };
+    let Some(ct_b64) = env.get("ct_b64").and_then(|v| v.as_str()) else {
+        return req;
+    };
 
-    let Ok(ek) = B64.decode(ek_b64.as_bytes()) else { return req };
-    let Ok(nonce_bytes) = B64.decode(nonce_b64.as_bytes()) else { return req };
-    let Ok(ct) = B64.decode(ct_b64.as_bytes()) else { return req };
+    let Ok(ek) = B64.decode(ek_b64.as_bytes()) else {
+        return req;
+    };
+    let Ok(nonce_bytes) = B64.decode(nonce_b64.as_bytes()) else {
+        return req;
+    };
+    let Ok(ct) = B64.decode(ct_b64.as_bytes()) else {
+        return req;
+    };
     if nonce_bytes.len() != 12 {
         return req;
     }
 
-    let Ok(privkey) = RsaPrivateKey::from_pkcs8_pem(private_key_pem) else { return req };
-    let Ok(key) = privkey.decrypt(Oaep::new::<Sha256>(), &ek) else { return req };
+    let Ok(privkey) = RsaPrivateKey::from_pkcs8_pem(private_key_pem) else {
+        return req;
+    };
+    let Ok(key) = privkey.decrypt(Oaep::new::<Sha256>(), &ek) else {
+        return req;
+    };
     if key.len() != 32 {
         return req;
     }
-    let Ok(cipher) = Aes256Gcm::new_from_slice(&key) else { return req };
+    let Ok(cipher) = Aes256Gcm::new_from_slice(&key) else {
+        return req;
+    };
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let Ok(pt) = cipher.decrypt(nonce, ct.as_ref()) else { return req };
+    let Ok(pt) = cipher.decrypt(nonce, ct.as_ref()) else {
+        return req;
+    };
 
     // Remove encryption marker header before handing to HTTP handler.
-    req.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-fedi3-encrypted"));
+    req.headers
+        .retain(|(k, _)| !k.eq_ignore_ascii_case("x-fedi3-encrypted"));
     req.body_b64 = B64.encode(pt);
     req
 }
 
-pub fn encrypt_relay_http_request_body(public_key_pem: &str, mut req: RelayHttpRequest) -> Result<RelayHttpRequest> {
+pub fn encrypt_relay_http_request_body(
+    public_key_pem: &str,
+    mut req: RelayHttpRequest,
+) -> Result<RelayHttpRequest> {
     // Encrypt only the body; keep headers/method/path for routing.
     // Envelope: {v, alg, ek_b64, nonce_b64, ct_b64}
     use aes_gcm::{aead::Aead, aead::KeyInit, Aes256Gcm, Nonce};
@@ -88,8 +119,10 @@ pub fn encrypt_relay_http_request_body(public_key_pem: &str, mut req: RelayHttpR
       "ct_b64": B64.encode(ciphertext),
     });
     let env_bytes = serde_json::to_vec(&env).unwrap_or_default();
-    req.headers.push(("x-fedi3-encrypted".to_string(), "1".to_string()));
-    req.headers.push(("content-type".to_string(), "application/json".to_string()));
+    req.headers
+        .push(("x-fedi3-encrypted".to_string(), "1".to_string()));
+    req.headers
+        .push(("content-type".to_string(), "application/json".to_string()));
     req.body_b64 = B64.encode(env_bytes);
     Ok(req)
 }

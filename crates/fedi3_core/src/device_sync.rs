@@ -42,7 +42,11 @@ struct DeviceInboxResp {
     latest_ms: i64,
 }
 
-pub fn start_device_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch::Receiver<bool>) {
+pub fn start_device_sync_worker(
+    state: ApState,
+    cfg: P2pConfig,
+    mut shutdown: watch::Receiver<bool>,
+) {
     if !cfg.enable || !cfg.device_sync_enable.unwrap_or(false) {
         return;
     }
@@ -84,7 +88,12 @@ pub fn start_device_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: wa
     });
 }
 
-async fn sync_with_did_record(state: &ApState, did: &str, rec: &DidDiscoveryRecord, limit: u32) -> Result<()> {
+async fn sync_with_did_record(
+    state: &ApState,
+    did: &str,
+    rec: &DidDiscoveryRecord,
+    limit: u32,
+) -> Result<()> {
     let self_peer = state.cfg.p2p_peer_id.as_deref().unwrap_or("");
     let mut peers = rec.peers.clone();
     peers.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
@@ -95,7 +104,10 @@ async fn sync_with_did_record(state: &ApState, did: &str, rec: &DidDiscoveryReco
             continue;
         }
         if !p.addrs.is_empty() {
-            let _ = state.delivery.p2p_add_peer_addrs(&p.peer_id, p.addrs.clone()).await;
+            let _ = state
+                .delivery
+                .p2p_add_peer_addrs(&p.peer_id, p.addrs.clone())
+                .await;
         }
 
         let since_key = format!("device_sync_since:{}", p.peer_id);
@@ -171,7 +183,9 @@ async fn sync_with_did_record(state: &ApState, did: &str, rec: &DidDiscoveryReco
         }
 
         if out.latest_ms > since {
-            let _ = state.social.set_local_meta(&since_key, &out.latest_ms.to_string());
+            let _ = state
+                .social
+                .set_local_meta(&since_key, &out.latest_ms.to_string());
         }
         if stored > 0 {
             info!(peer=%p.peer_id, stored, "device sync stored");
@@ -252,15 +266,21 @@ async fn sync_with_did_record(state: &ApState, did: &str, rec: &DidDiscoveryReco
             }
             let actor = it.activity.get("actor").and_then(|v| v.as_str());
             let ty = it.activity.get("type").and_then(|v| v.as_str());
-            let _ = state
-                .social
-                .store_inbox_activity_at(&id, it.created_at_ms, actor, ty, bytes.clone());
+            let _ = state.social.store_inbox_activity_at(
+                &id,
+                it.created_at_ms,
+                actor,
+                ty,
+                bytes.clone(),
+            );
             let _ = state.social.insert_federated_feed_item(&id, actor, bytes);
             stored_inbox = stored_inbox.saturating_add(1);
         }
 
         if inbox.latest_ms > since {
-            let _ = state.social.set_local_meta(&since_key, &inbox.latest_ms.to_string());
+            let _ = state
+                .social
+                .set_local_meta(&since_key, &inbox.latest_ms.to_string());
         }
         if stored_inbox > 0 {
             info!(peer=%p.peer_id, stored=stored_inbox, "device inbox sync stored");

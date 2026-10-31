@@ -3,15 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use crate::http_retry::send_with_retry;
+use crate::http_sig::sign_request_rsa_sha256;
 use crate::social_db::{ObjectFetchJob, SocialDb};
 use anyhow::Result;
+use http::{HeaderMap, Method, Uri};
 use rand::{rngs::OsRng, RngCore};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{watch, Notify};
 use tracing::warn;
-use http::{HeaderMap, Method, Uri};
-use crate::http_sig::sign_request_rsa_sha256;
-use crate::http_retry::send_with_retry;
 
 #[derive(Clone)]
 pub struct ObjectFetchWorker {
@@ -52,12 +52,7 @@ impl ObjectFetchWorker {
         });
     }
 
-    pub fn start(
-        &self,
-        shutdown: watch::Receiver<bool>,
-        db: Arc<SocialDb>,
-        http: reqwest::Client,
-    ) {
+    pub fn start(&self, shutdown: watch::Receiver<bool>, db: Arc<SocialDb>, http: reqwest::Client) {
         self.start_with_signing(shutdown, db, http, None);
     }
 
@@ -118,7 +113,11 @@ impl ObjectFetchWorker {
                     let url = job.object_url.clone();
                     let actor_id = extract_actor_id_from_object_json(&json_bytes);
                     move || -> Result<()> {
-                        let _ = db.upsert_object_with_actor(&id, actor_id.as_deref(), json_bytes.clone());
+                        let _ = db.upsert_object_with_actor(
+                            &id,
+                            actor_id.as_deref(),
+                            json_bytes.clone(),
+                        );
                         if is_tombstone {
                             let _ = db.mark_object_deleted(&id);
                         }
@@ -131,15 +130,20 @@ impl ObjectFetchWorker {
             }
             Ok(None) => {
                 // Not fetchable (yet): schedule retry.
-                self.reschedule(db, &job.object_url, attempt_no, "fetch failed").await
+                self.reschedule(db, &job.object_url, attempt_no, "fetch failed")
+                    .await
             }
-            Err(e) => self.reschedule(db, &job.object_url, attempt_no, &format!("{e:#}")).await,
+            Err(e) => {
+                self.reschedule(db, &job.object_url, attempt_no, &format!("{e:#}"))
+                    .await
+            }
         }
     }
 
     async fn reschedule(&self, db: &SocialDb, url: &str, attempt_no: u32, err: &str) -> Result<()> {
         let next = now_ms().saturating_add(
-            next_backoff(attempt_no, self.base_backoff_secs, self.max_backoff_secs).as_millis() as i64,
+            next_backoff(attempt_no, self.base_backoff_secs, self.max_backoff_secs).as_millis()
+                as i64,
         );
         if attempt_no >= self.max_attempts {
             tokio::task::spawn_blocking({
@@ -216,7 +220,11 @@ async fn fetch_one(
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
-    let id = v.get("id").and_then(|vv| vv.as_str()).unwrap_or(url).to_string();
+    let id = v
+        .get("id")
+        .and_then(|vv| vv.as_str())
+        .unwrap_or(url)
+        .to_string();
     let ty = v.get("type").and_then(|vv| vv.as_str()).unwrap_or("");
     let is_tombstone = ty == "Tombstone";
     Ok(Some((id, bytes.to_vec(), is_tombstone)))

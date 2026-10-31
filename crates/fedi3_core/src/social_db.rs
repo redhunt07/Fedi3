@@ -105,7 +105,7 @@ pub struct ChatMessage {
 impl SocialDb {
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let path = db_path.as_ref().to_path_buf();
-        let conn = Connection::open(&path).with_context(|| format!("open db: {}", path.display()))?;
+        let mut conn = open_with_pragmas(&path)?;
         conn.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
@@ -361,31 +361,46 @@ impl SocialDb {
 
             "#,
         )?;
-        ensure_columns(&conn, "object_attachments", &[
-            ("blurhash", "TEXT"),
-            ("width", "INTEGER"),
-            ("height", "INTEGER"),
-        ])?;
-        ensure_columns(&conn, "media_items", &[
-            ("last_access_ms", "INTEGER NOT NULL DEFAULT 0"),
-            ("width", "INTEGER NULL"),
-            ("height", "INTEGER NULL"),
-            ("blurhash", "TEXT NULL"),
-        ])?;
-        ensure_columns(&conn, "objects", &[
-            ("pinned", "INTEGER NOT NULL DEFAULT 0"),
-            ("actor_id", "TEXT NULL"),
-            ("size_bytes", "INTEGER NOT NULL DEFAULT 0"),
-            ("last_access_ms", "INTEGER NOT NULL DEFAULT 0"),
-        ])?;
-        ensure_columns(&conn, "reactions", &[
-            ("content", "TEXT NULL"),
-        ])?;
+        ensure_columns(
+            &conn,
+            "object_attachments",
+            &[
+                ("blurhash", "TEXT"),
+                ("width", "INTEGER"),
+                ("height", "INTEGER"),
+            ],
+        )?;
+        ensure_columns(
+            &conn,
+            "media_items",
+            &[
+                ("last_access_ms", "INTEGER NOT NULL DEFAULT 0"),
+                ("width", "INTEGER NULL"),
+                ("height", "INTEGER NULL"),
+                ("blurhash", "TEXT NULL"),
+            ],
+        )?;
+        ensure_columns(
+            &conn,
+            "objects",
+            &[
+                ("pinned", "INTEGER NOT NULL DEFAULT 0"),
+                ("actor_id", "TEXT NULL"),
+                ("size_bytes", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_access_ms", "INTEGER NOT NULL DEFAULT 0"),
+            ],
+        )?;
+        ensure_columns(&conn, "reactions", &[("content", "TEXT NULL")])?;
+        migrate(&mut conn)?;
         Ok(Self { path })
     }
 
+    fn connect(&self) -> Result<Connection> {
+        open_with_pragmas(&self.path)
+    }
+
     pub fn health_check(&self) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row("SELECT 1", [], |_| Ok(()))?;
         Ok(())
     }
@@ -396,7 +411,7 @@ impl SocialDb {
             return Ok(None);
         }
         let now = now_ms();
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let until: Option<i64> = conn
             .query_row(
                 "SELECT block_until_ms FROM abuse_strikes WHERE abuse_key=?1",
@@ -421,7 +436,7 @@ impl SocialDb {
         const BLOCK_THRESHOLD: i64 = 10;
         const BLOCK_MS: i64 = 3600 * 1000;
 
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
 
         let row: Option<(i64, i64, i64)> = tx
@@ -455,11 +470,15 @@ impl SocialDb {
         )?;
         tx.commit()?;
 
-        Ok(if block_until_ms > now { Some(block_until_ms) } else { None })
+        Ok(if block_until_ms > now {
+            Some(block_until_ms)
+        } else {
+            None
+        })
     }
 
     pub fn mark_inbox_seen(&self, activity_id: &str) -> Result<bool> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let exists: Option<String> = conn
             .query_row(
                 "SELECT activity_id FROM inbox_seen WHERE activity_id=?1",
@@ -477,8 +496,31 @@ impl SocialDb {
         Ok(true)
     }
 
+    /// Check whether an activity was already processed, without inserting the marker.
+    pub fn has_inbox_seen(&self, activity_id: &str) -> Result<bool> {
+        let conn = self.connect()?;
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT activity_id FROM inbox_seen WHERE activity_id=?1",
+                params![activity_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
+    }
+
+    /// Remove a dedup marker (used when processing failed so the sender can retry).
+    pub fn forget_inbox_seen(&self, activity_id: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM inbox_seen WHERE activity_id=?1",
+            params![activity_id],
+        )?;
+        Ok(())
+    }
+
     pub fn add_follower(&self, actor_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR IGNORE INTO followers(actor_id, created_at_ms) VALUES (?1, ?2)",
             params![actor_id, now_ms()],
@@ -490,7 +532,7 @@ impl SocialDb {
         if activity_id.trim().is_empty() || actor_id.trim().is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO inbox_follows(activity_id, actor_id, created_at_ms) VALUES (?1, ?2, ?3)",
             params![activity_id, actor_id, now_ms()],
@@ -499,7 +541,7 @@ impl SocialDb {
     }
 
     pub fn get_inbox_follow_actor(&self, activity_id: &str) -> Result<Option<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT actor_id FROM inbox_follows WHERE activity_id=?1",
             params![activity_id],
@@ -510,8 +552,11 @@ impl SocialDb {
     }
 
     pub fn forget_inbox_follow(&self, activity_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
-        let _ = conn.execute("DELETE FROM inbox_follows WHERE activity_id=?1", params![activity_id])?;
+        let conn = self.connect()?;
+        let _ = conn.execute(
+            "DELETE FROM inbox_follows WHERE activity_id=?1",
+            params![activity_id],
+        )?;
         Ok(())
     }
 
@@ -520,7 +565,7 @@ impl SocialDb {
         if actor_id.is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO blocked_actors(actor_id, created_at_ms) VALUES (?1, ?2)",
             params![actor_id, now_ms()],
@@ -529,13 +574,16 @@ impl SocialDb {
     }
 
     pub fn unblock_actor(&self, actor_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
-        let _ = conn.execute("DELETE FROM blocked_actors WHERE actor_id=?1", params![actor_id])?;
+        let conn = self.connect()?;
+        let _ = conn.execute(
+            "DELETE FROM blocked_actors WHERE actor_id=?1",
+            params![actor_id],
+        )?;
         Ok(())
     }
 
     pub fn is_actor_blocked(&self, actor_id: &str) -> Result<bool> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let v: Option<String> = conn
             .query_row(
                 "SELECT actor_id FROM blocked_actors WHERE actor_id=?1",
@@ -547,7 +595,7 @@ impl SocialDb {
     }
 
     pub fn list_blocked_actors(&self, limit: u32, offset: u32) -> Result<Vec<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.max(1).min(10_000) as i64;
         let offset = offset.min(100_000) as i64;
         let mut stmt = conn.prepare(
@@ -560,7 +608,7 @@ impl SocialDb {
     }
 
     pub fn upsert_actor_meta(&self, actor_id: &str, is_fedi3: bool) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO actor_meta(actor_id, is_fedi3, last_seen_ms)
@@ -575,7 +623,7 @@ impl SocialDb {
     }
 
     pub fn get_actor_meta(&self, actor_id: &str) -> Result<Option<ActorMeta>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT actor_id, is_fedi3, last_seen_ms FROM actor_meta WHERE actor_id=?1",
             params![actor_id],
@@ -599,7 +647,7 @@ impl SocialDb {
         ty: Option<&str>,
         activity_json: Vec<u8>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO inbox_items(activity_id, created_at_ms, actor_id, type, activity_json) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![activity_id, now_ms(), actor_id, ty, activity_json],
@@ -607,9 +655,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_inbox_notifications(&self, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<(Vec<u8>, i64)>> {
+    pub fn list_inbox_notifications(
+        &self,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<(Vec<u8>, i64)>> {
         let limit = limit.min(200);
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let before = cursor.unwrap_or(i64::MAX);
         let mut stmt = conn.prepare(
             r#"
@@ -621,10 +673,16 @@ impl SocialDb {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(params![before, limit], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))?;
+        let rows = stmt.query_map(params![before, limit], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))
+        })?;
         let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         let next = items.last().map(|(_, ts)| ts.to_string());
-        Ok(CollectionPage { total: 0, items, next })
+        Ok(CollectionPage {
+            total: 0,
+            items,
+            next,
+        })
     }
 
     pub fn store_inbox_activity_at(
@@ -635,7 +693,7 @@ impl SocialDb {
         ty: Option<&str>,
         activity_json: Vec<u8>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT INTO inbox_items(activity_id, created_at_ms, actor_id, type, activity_json) VALUES (?1, ?2, ?3, ?4, ?5)\n             ON CONFLICT(activity_id) DO UPDATE SET\n               activity_json=excluded.activity_json,\n               actor_id=COALESCE(excluded.actor_id, inbox_items.actor_id),\n               type=COALESCE(excluded.type, inbox_items.type),\n               created_at_ms=(CASE WHEN excluded.created_at_ms < inbox_items.created_at_ms THEN excluded.created_at_ms ELSE inbox_items.created_at_ms END)",
             params![activity_id, created_at_ms, actor_id, ty, activity_json],
@@ -643,8 +701,12 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_inbox_since_with_ts(&self, since_ms: i64, limit: u32) -> Result<(Vec<(Vec<u8>, i64)>, i64)> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_inbox_since_with_ts(
+        &self,
+        since_ms: i64,
+        limit: u32,
+    ) -> Result<(Vec<(Vec<u8>, i64)>, i64)> {
+        let conn = self.connect()?;
         let limit = limit.max(1).min(500) as i64;
         let mut stmt = conn.prepare(
             "SELECT activity_json, created_at_ms FROM inbox_items WHERE created_at_ms > ?1 ORDER BY created_at_ms ASC LIMIT ?2",
@@ -673,7 +735,7 @@ impl SocialDb {
         status: Option<&str>,
         detail: Option<&str>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT INTO audit_events(kind, created_at_ms, actor_id, key_id, activity_id, ok, status, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
@@ -692,7 +754,7 @@ impl SocialDb {
 
     pub fn list_audit_events(&self, limit: u32) -> Result<Vec<AuditEvent>> {
         let limit = limit.max(1).min(500);
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT id, kind, created_at_ms, actor_id, key_id, activity_id, ok, status, detail
@@ -737,14 +799,20 @@ impl SocialDb {
         let max_bytes = max_bytes.max(1024);
         let now = now_ms();
 
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
 
         let row: Option<(i64, u32, u64)> = tx
             .query_row(
                 "SELECT window_start_ms, reqs, bytes FROM inbox_quota WHERE quota_key=?1",
                 params![quota_key],
-                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, i64>(2)? as u64)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get::<_, i64>(1)? as u32,
+                        r.get::<_, i64>(2)? as u64,
+                    ))
+                },
             )
             .optional()?;
 
@@ -783,13 +851,19 @@ impl SocialDb {
     }
 
     pub fn prune_inbox_quota_before(&self, cutoff_ms: i64) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
-        Ok(conn.execute("DELETE FROM inbox_quota WHERE updated_at_ms < ?1", params![cutoff_ms])? as u64)
+        let conn = self.connect()?;
+        Ok(conn.execute(
+            "DELETE FROM inbox_quota WHERE updated_at_ms < ?1",
+            params![cutoff_ms],
+        )? as u64)
     }
 
     pub fn prune_audit_events_before(&self, cutoff_ms: i64) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
-        Ok(conn.execute("DELETE FROM audit_events WHERE created_at_ms < ?1", params![cutoff_ms])? as u64)
+        let conn = self.connect()?;
+        Ok(conn.execute(
+            "DELETE FROM audit_events WHERE created_at_ms < ?1",
+            params![cutoff_ms],
+        )? as u64)
     }
 
     pub fn insert_global_feed_item(
@@ -798,7 +872,7 @@ impl SocialDb {
         actor_id: Option<&str>,
         activity_json: Vec<u8>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let now = now_ms();
         let size_bytes: i64 = activity_json.len().try_into().unwrap_or(i64::MAX);
         conn.execute(
@@ -817,7 +891,7 @@ impl SocialDb {
         actor_id: Option<&str>,
         activity_json: Vec<u8>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let now = now_ms();
         let size_bytes: i64 = activity_json.len().try_into().unwrap_or(i64::MAX);
         conn.execute(
@@ -830,8 +904,12 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn global_feed_actor_stats_since(&self, actor_id: &str, since_ms: i64) -> Result<(u64, u64)> {
-        let conn = Connection::open(&self.path)?;
+    pub fn global_feed_actor_stats_since(
+        &self,
+        actor_id: &str,
+        since_ms: i64,
+    ) -> Result<(u64, u64)> {
+        let conn = self.connect()?;
         let (count, bytes): (u64, i64) = conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM global_feed WHERE actor_id=?1 AND created_at_ms>=?2",
             params![actor_id, since_ms],
@@ -840,8 +918,12 @@ impl SocialDb {
         Ok((count, bytes.max(0) as u64))
     }
 
-    pub fn list_global_feed(&self, limit: u32, cursor_ms: Option<i64>) -> Result<CollectionPage<GlobalFeedItem>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_global_feed(
+        &self,
+        limit: u32,
+        cursor_ms: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = self.connect()?;
         let total: u64 = conn.query_row("SELECT COUNT(*) FROM global_feed", [], |r| r.get(0))?;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
@@ -891,8 +973,12 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn list_federated_feed(&self, limit: u32, cursor_ms: Option<i64>) -> Result<CollectionPage<GlobalFeedItem>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_federated_feed(
+        &self,
+        limit: u32,
+        cursor_ms: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = self.connect()?;
         let total: u64 = conn.query_row("SELECT COUNT(*) FROM federated_feed", [], |r| r.get(0))?;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
@@ -942,8 +1028,12 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn list_home_feed(&self, limit: u32, cursor_ms: Option<i64>) -> Result<CollectionPage<GlobalFeedItem>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_home_feed(
+        &self,
+        limit: u32,
+        cursor_ms: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = self.connect()?;
         let accepted = FollowingStatus::Accepted as u32;
         let limit = limit.min(200).max(1) as i64;
 
@@ -1025,8 +1115,12 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn list_unified_feed(&self, limit: u32, cursor_ms: Option<i64>) -> Result<CollectionPage<GlobalFeedItem>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_unified_feed(
+        &self,
+        limit: u32,
+        cursor_ms: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = self.connect()?;
         let accepted = FollowingStatus::Accepted as u32;
         let limit = limit.min(200).max(1) as i64;
 
@@ -1123,7 +1217,7 @@ impl SocialDb {
     /// Best-effort backfill so the local DHT/global timeline can show our own previously
     /// published public activities (useful after upgrades).
     pub fn backfill_global_feed_from_outbox(&self, limit: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(2000).max(1) as i64;
         let mut stmt = conn.prepare(
             r#"
@@ -1138,7 +1232,9 @@ impl SocialDb {
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
             let bytes: Vec<u8> = row.get(1)?;
-            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                continue;
+            };
             if !is_public_activity_value(&v) {
                 continue;
             }
@@ -1150,7 +1246,7 @@ impl SocialDb {
     }
 
     pub fn prune_global_feed_before(&self, cutoff_ms: i64, limit: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         // SQLite compatibility: some builds don't support `DELETE ... LIMIT`.
         let deleted = conn.execute(
             r#"
@@ -1169,7 +1265,7 @@ impl SocialDb {
     }
 
     pub fn prune_global_feed_to_max(&self, max_items: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let max_items = max_items.max(1) as i64;
         let deleted = conn.execute(
             r#"
@@ -1186,7 +1282,7 @@ impl SocialDb {
     }
 
     pub fn prune_federated_feed_before(&self, cutoff_ms: i64, limit: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         // SQLite compatibility: some builds don't support `DELETE ... LIMIT`.
         let deleted = conn.execute(
             r#"
@@ -1205,7 +1301,7 @@ impl SocialDb {
     }
 
     pub fn prune_federated_feed_to_max(&self, max_items: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let max_items = max_items.max(1) as i64;
         let deleted = conn.execute(
             r#"
@@ -1232,7 +1328,7 @@ impl SocialDb {
         object_json: Vec<u8>,
     ) -> Result<()> {
         let now = now_ms();
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let size_bytes: i64 = object_json.len().try_into().unwrap_or(i64::MAX);
         conn.execute(
             r#"
@@ -1257,7 +1353,7 @@ impl SocialDb {
 
     pub fn mark_object_deleted(&self, object_id: &str) -> Result<()> {
         let now = now_ms();
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO objects(object_id, created_at_ms, updated_at_ms, deleted, object_json)
@@ -1269,7 +1365,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn upsert_reaction(&self, reaction_id: &str, ty: &str, actor_id: &str, object_id: &str) -> Result<()> {
+    pub fn upsert_reaction(
+        &self,
+        reaction_id: &str,
+        ty: &str,
+        actor_id: &str,
+        object_id: &str,
+    ) -> Result<()> {
         self.upsert_reaction_with_content(reaction_id, ty, actor_id, object_id, None)
     }
 
@@ -1281,7 +1383,7 @@ impl SocialDb {
         object_id: &str,
         content: Option<&str>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO reactions(reaction_id, created_at_ms, type, actor_id, object_id, content) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![reaction_id, now_ms(), ty, actor_id, object_id, content],
@@ -1289,12 +1391,16 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_reaction_counts(&self, object_id: &str, limit: u32) -> Result<Vec<(String, Option<String>, u64)>> {
+    pub fn list_reaction_counts(
+        &self,
+        object_id: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Option<String>, u64)>> {
         let object_id = object_id.trim();
         if object_id.is_empty() {
             return Ok(vec![]);
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT type, content, COUNT(*) AS c
@@ -1306,12 +1412,21 @@ impl SocialDb {
             "#,
         )?;
         let rows = stmt.query_map(params![object_id, limit.min(200)], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)? as u64))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, i64>(2)? as u64,
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn search_notes_by_text(&self, q: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ObjectRow>> {
+    pub fn search_notes_by_text(
+        &self,
+        q: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<ObjectRow>> {
         let q = q.trim().to_lowercase();
         if q.is_empty() {
             return Ok(CollectionPage {
@@ -1320,23 +1435,23 @@ impl SocialDb {
                 next: None,
             });
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let q_like = format!("%{}%", escape_like(&q));
         let total: u64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1",
+                "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\'",
                 params![q_like],
                 |r| r.get(0),
             )
             .unwrap_or(0);
         let mut stmt = if cursor.is_some() {
             conn.prepare(
-                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
+                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
             )?
         } else {
             conn.prepare(
-                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
             )?
         };
         let mut rows = if let Some(cur) = cursor {
@@ -1367,7 +1482,12 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn search_notes_by_tag(&self, tag: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ObjectRow>> {
+    pub fn search_notes_by_tag(
+        &self,
+        tag: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<ObjectRow>> {
         let tag = tag.trim().trim_start_matches('#').to_lowercase();
         if tag.is_empty() {
             return Ok(CollectionPage {
@@ -1376,7 +1496,7 @@ impl SocialDb {
                 next: None,
             });
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let tag_hash = format!("#{tag}");
         let total: u64 = conn
@@ -1449,7 +1569,12 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn search_actors_by_text(&self, q: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ObjectRow>> {
+    pub fn search_actors_by_text(
+        &self,
+        q: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<ObjectRow>> {
         let q = q.trim().to_lowercase();
         if q.is_empty() {
             return Ok(CollectionPage {
@@ -1458,23 +1583,23 @@ impl SocialDb {
                 next: None,
             });
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let q_like = format!("%{}%", escape_like(&q));
         let total: u64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1",
+                "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\'",
                 params![q_like],
                 |r| r.get(0),
             )
             .unwrap_or(0);
         let mut stmt = if cursor.is_some() {
             conn.prepare(
-                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
+                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
             )?
         } else {
             conn.prepare(
-                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ORDER BY created_at_ms DESC LIMIT ?2",
+                "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
             )?
         };
         let mut rows = if let Some(cur) = cursor {
@@ -1507,7 +1632,7 @@ impl SocialDb {
 
     pub fn search_hashtags(&self, q: &str, limit: u32) -> Result<Vec<(String, u64)>> {
         let q = q.trim().trim_start_matches('#').to_lowercase();
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let q_like = if q.is_empty() {
             "%".to_string()
@@ -1520,7 +1645,7 @@ impl SocialDb {
             FROM object_tags
             WHERE name != ''
               AND (tag_type='Hashtag' OR name LIKE '#%')
-              AND lower(name) LIKE ?1
+              AND lower(name) LIKE ?1 ESCAPE '\\'
             GROUP BY name
             ORDER BY COUNT(*) DESC
             LIMIT ?2
@@ -1547,7 +1672,7 @@ impl SocialDb {
         if actor_id.is_empty() || object_id.is_empty() {
             return Ok(vec![]);
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT reaction_id, type, content
@@ -1558,7 +1683,11 @@ impl SocialDb {
             "#,
         )?;
         let rows = stmt.query_map(params![actor_id, object_id, limit.min(200)], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -1579,7 +1708,7 @@ impl SocialDb {
         if object_id.is_empty() || ty.is_empty() {
             return Ok(vec![]);
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = if content.unwrap_or_default().trim().is_empty() {
             conn.prepare(
                 r#"
@@ -1605,7 +1734,10 @@ impl SocialDb {
         let rows = if content.unwrap_or_default().trim().is_empty() {
             stmt.query_map(params![object_id, ty, limit.min(200)], map_actor_row)?
         } else {
-            stmt.query_map(params![object_id, ty, content.unwrap(), limit.min(200)], map_actor_row)?
+            stmt.query_map(
+                params![object_id, ty, content.unwrap(), limit.min(200)],
+                map_actor_row,
+            )?
         };
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -1627,7 +1759,7 @@ impl SocialDb {
             return Ok(None);
         }
         let content = content.map(str::trim).filter(|s| !s.is_empty());
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let row: Option<String> = if let Some(c) = content {
             conn.query_row(
                 "SELECT reaction_id FROM reactions WHERE actor_id=?1 AND object_id=?2 AND type=?3 AND content=?4 ORDER BY created_at_ms DESC LIMIT 1",
@@ -1647,13 +1779,21 @@ impl SocialDb {
     }
 
     pub fn remove_reaction(&self, reaction_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
-        conn.execute("DELETE FROM reactions WHERE reaction_id=?1", params![reaction_id])?;
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM reactions WHERE reaction_id=?1",
+            params![reaction_id],
+        )?;
         Ok(())
     }
 
-    pub fn enqueue_object_fetch(&self, object_url: &str, next_attempt_at_ms: i64, err: Option<&str>) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn enqueue_object_fetch(
+        &self,
+        object_url: &str,
+        next_attempt_at_ms: i64,
+        err: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         // status: 0=pending, 1=done, 2=dead
         conn.execute(
             r#"
@@ -1669,8 +1809,14 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn try_mark_object_fetch_attempt(&self, object_url: &str, attempt: u32, next_attempt_at_ms: i64, err: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn try_mark_object_fetch_attempt(
+        &self,
+        object_url: &str,
+        attempt: u32,
+        next_attempt_at_ms: i64,
+        err: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE object_fetch_jobs SET attempt=?2, next_attempt_at_ms=?3, last_error=?4 WHERE object_url=?1",
             params![object_url, attempt, next_attempt_at_ms, err],
@@ -1679,7 +1825,7 @@ impl SocialDb {
     }
 
     pub fn mark_object_fetch_done(&self, object_url: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE object_fetch_jobs SET status=1, last_error=NULL WHERE object_url=?1",
             params![object_url],
@@ -1688,7 +1834,7 @@ impl SocialDb {
     }
 
     pub fn mark_object_fetch_dead(&self, object_url: &str, err: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE object_fetch_jobs SET status=2, last_error=?2 WHERE object_url=?1",
             params![object_url, err],
@@ -1697,7 +1843,7 @@ impl SocialDb {
     }
 
     pub fn fetch_due_object_jobs(&self, limit: u32) -> Result<Vec<ObjectFetchJob>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let now = now_ms();
         let mut stmt = conn.prepare(
             r#"
@@ -1720,7 +1866,7 @@ impl SocialDb {
     }
 
     pub fn remove_follower(&self, actor_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute("DELETE FROM followers WHERE actor_id=?1", params![actor_id])?;
         Ok(())
     }
@@ -1730,7 +1876,7 @@ impl SocialDb {
         if actor_id.is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT INTO following(actor_id, status, created_at_ms) VALUES (?1, ?2, ?3)\n             ON CONFLICT(actor_id) DO UPDATE SET status=excluded.status",
             params![actor_id, status as u32, now_ms()],
@@ -1743,7 +1889,7 @@ impl SocialDb {
         if actor_id.is_empty() {
             return Ok(None);
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let status_opt: Option<u32> = conn
             .query_row(
                 "SELECT status FROM following WHERE actor_id=?1",
@@ -1764,13 +1910,13 @@ impl SocialDb {
         if actor_id.is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute("DELETE FROM following WHERE actor_id=?1", params![actor_id])?;
         Ok(())
     }
 
     pub fn store_outbox(&self, id: &str, activity_json: Vec<u8>) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO outbox_items(id, created_at_ms, activity_json) VALUES (?1, ?2, ?3)",
             params![id, now_ms(), activity_json],
@@ -1778,8 +1924,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn store_outbox_at(&self, id: &str, created_at_ms: i64, activity_json: Vec<u8>) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn store_outbox_at(
+        &self,
+        id: &str,
+        created_at_ms: i64,
+        activity_json: Vec<u8>,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             "INSERT INTO outbox_items(id, created_at_ms, activity_json) VALUES (?1, ?2, ?3)\n             ON CONFLICT(id) DO UPDATE SET\n               activity_json=excluded.activity_json,\n               created_at_ms=(CASE WHEN excluded.created_at_ms < outbox_items.created_at_ms THEN excluded.created_at_ms ELSE outbox_items.created_at_ms END)",
             params![id, created_at_ms, activity_json],
@@ -1788,7 +1939,7 @@ impl SocialDb {
     }
 
     pub fn get_outbox(&self, id: &str) -> Result<Option<Vec<u8>>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT activity_json FROM outbox_items WHERE id=?1",
             params![id],
@@ -1799,7 +1950,7 @@ impl SocialDb {
     }
 
     pub fn get_inbox(&self, activity_id: &str) -> Result<Option<Vec<u8>>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT activity_json FROM inbox_items WHERE activity_id=?1",
             params![activity_id],
@@ -1809,13 +1960,18 @@ impl SocialDb {
         .map_err(Into::into)
     }
 
-    pub fn upsert_note_reply(&self, note_id: &str, activity_id: &str, created_at_ms: i64) -> Result<()> {
+    pub fn upsert_note_reply(
+        &self,
+        note_id: &str,
+        activity_id: &str,
+        created_at_ms: i64,
+    ) -> Result<()> {
         let note_id = note_id.trim();
         let activity_id = activity_id.trim();
         if note_id.is_empty() || activity_id.is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO note_replies(note_id, activity_id, created_at_ms) VALUES (?1, ?2, ?3)",
             params![note_id, activity_id, created_at_ms],
@@ -1823,13 +1979,22 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_note_replies(&self, note_id: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<GlobalFeedItem>> {
+    pub fn list_note_replies(
+        &self,
+        note_id: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
         let note_id = note_id.trim();
         if note_id.is_empty() {
-            return Ok(CollectionPage { total: 0, items: vec![], next: None });
+            return Ok(CollectionPage {
+                total: 0,
+                items: vec![],
+                next: None,
+            });
         }
         let limit = limit.min(200);
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let total: u64 = conn.query_row(
             "SELECT COUNT(*) FROM note_replies WHERE note_id=?1",
             params![note_id],
@@ -1869,7 +2034,7 @@ impl SocialDb {
     }
 
     pub fn get_local_meta(&self, key: &str) -> Result<Option<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT value FROM local_meta WHERE key=?1",
             params![key],
@@ -1880,7 +2045,7 @@ impl SocialDb {
     }
 
     pub fn set_local_meta(&self, key: &str, value: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO local_meta(key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -1888,12 +2053,16 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_followers(&self, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<String>> {
+    pub fn list_followers(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<CollectionPage<String>> {
         self.list_collection("followers", limit, cursor)
     }
 
     pub fn count_followers(&self) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let total: u64 = conn.query_row("SELECT COUNT(*) FROM followers", [], |r| r.get(0))?;
         Ok(total)
     }
@@ -1901,7 +2070,7 @@ impl SocialDb {
     /// Followers from legacy instances (best-effort).
     /// We treat unknown actors (missing `actor_meta`) as legacy for safety.
     pub fn count_legacy_followers(&self) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let total: u64 = conn.query_row(
             r#"
             SELECT COUNT(*)
@@ -1915,37 +2084,51 @@ impl SocialDb {
         Ok(total)
     }
 
-    pub fn list_following(&self, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<String>> {
+    pub fn list_following(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<CollectionPage<String>> {
         self.list_collection("following", limit, cursor)
     }
 
     pub fn list_following_accepted_ids(&self, limit: u32) -> Result<Vec<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.max(1).min(10_000) as i64;
         let mut stmt = conn.prepare(
             "SELECT actor_id FROM following WHERE status=?1 ORDER BY created_at_ms DESC LIMIT ?2",
         )?;
         let rows = stmt
-            .query_map(params![FollowingStatus::Accepted as u32, limit], |r| r.get::<_, String>(0))?
+            .query_map(params![FollowingStatus::Accepted as u32, limit], |r| {
+                r.get::<_, String>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
-    fn list_collection(&self, table: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<String>> {
-        let conn = Connection::open(&self.path)?;
-        let total: u64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+    fn list_collection(
+        &self,
+        table: &str,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<CollectionPage<String>> {
+        let conn = self.connect()?;
+        let total: u64 =
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
 
-        let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor {
+        let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) =
+            cursor.as_deref().and_then(parse_cursor)
+        {
             (
                 format!(
-                    "SELECT actor_id, created_at_ms FROM {table} WHERE created_at_ms < ?1 ORDER BY created_at_ms DESC LIMIT ?2"
+                    "SELECT actor_id, created_at_ms FROM {table} WHERE (created_at_ms < ?1 OR (created_at_ms = ?1 AND actor_id < ?2)) ORDER BY created_at_ms DESC, actor_id DESC LIMIT ?3"
                 ),
-                vec![c.into(), (limit as i64).into()],
+                vec![c.0.into(), c.1.into(), (limit as i64).into()],
             )
         } else {
             (
                 format!(
-                    "SELECT actor_id, created_at_ms FROM {table} ORDER BY created_at_ms DESC LIMIT ?1"
+                    "SELECT actor_id, created_at_ms FROM {table} ORDER BY created_at_ms DESC, actor_id DESC LIMIT ?1"
                 ),
                 vec![(limit as i64).into()],
             )
@@ -1954,16 +2137,16 @@ impl SocialDb {
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params_from_iter(params_vec))?;
         let mut items = Vec::new();
-        let mut last_created: Option<i64> = None;
+        let mut last: Option<(i64, String)> = None;
         while let Some(row) = rows.next()? {
             let actor_id: String = row.get(0)?;
             let created_at_ms: i64 = row.get(1)?;
-            last_created = Some(created_at_ms);
+            last = Some((created_at_ms, actor_id.clone()));
             items.push(actor_id);
         }
 
         let next = if items.len() as u32 == limit {
-            last_created.map(|v| v.to_string())
+            last.map(|(ms, id)| encode_cursor(ms, &id))
         } else {
             None
         };
@@ -1971,19 +2154,25 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn list_outbox(&self, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<Vec<u8>>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_outbox(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+    ) -> Result<CollectionPage<Vec<u8>>> {
+        let conn = self.connect()?;
         let total: u64 = conn.query_row("SELECT COUNT(*) FROM outbox_items", [], |r| r.get(0))?;
 
-        let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor {
+        let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) =
+            cursor.as_deref().and_then(parse_cursor)
+        {
             (
-                "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms < ?1 ORDER BY created_at_ms DESC LIMIT ?2"
+                "SELECT activity_json, created_at_ms, id FROM outbox_items WHERE (created_at_ms < ?1 OR (created_at_ms = ?1 AND id < ?2)) ORDER BY created_at_ms DESC, id DESC LIMIT ?3"
                     .to_string(),
-                vec![c.into(), (limit as i64).into()],
+                vec![c.0.into(), c.1.into(), (limit as i64).into()],
             )
         } else {
             (
-                "SELECT activity_json, created_at_ms FROM outbox_items ORDER BY created_at_ms DESC LIMIT ?1"
+                "SELECT activity_json, created_at_ms, id FROM outbox_items ORDER BY created_at_ms DESC, id DESC LIMIT ?1"
                     .to_string(),
                 vec![(limit as i64).into()],
             )
@@ -1992,16 +2181,17 @@ impl SocialDb {
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params_from_iter(params_vec))?;
         let mut items = Vec::new();
-        let mut last_created: Option<i64> = None;
+        let mut last: Option<(i64, String)> = None;
         while let Some(row) = rows.next()? {
             let json: Vec<u8> = row.get(0)?;
             let created_at_ms: i64 = row.get(1)?;
-            last_created = Some(created_at_ms);
+            let id: String = row.get(2)?;
+            last = Some((created_at_ms, id));
             items.push(json);
         }
 
         let next = if items.len() as u32 == limit {
-            last_created.map(|v| v.to_string())
+            last.map(|(ms, id)| encode_cursor(ms, &id))
         } else {
             None
         };
@@ -2009,7 +2199,7 @@ impl SocialDb {
     }
 
     pub fn list_outbox_since(&self, since_ms: i64, limit: u32) -> Result<(Vec<Vec<u8>>, i64)> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.max(1).min(500) as i64;
         let mut stmt = conn.prepare(
             "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 ORDER BY created_at_ms ASC LIMIT ?2",
@@ -2028,8 +2218,12 @@ impl SocialDb {
         Ok((items, latest))
     }
 
-    pub fn list_outbox_since_with_ts(&self, since_ms: i64, limit: u32) -> Result<(Vec<(Vec<u8>, i64)>, i64)> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_outbox_since_with_ts(
+        &self,
+        since_ms: i64,
+        limit: u32,
+    ) -> Result<(Vec<(Vec<u8>, i64)>, i64)> {
+        let conn = self.connect()?;
         let limit = limit.max(1).min(500) as i64;
         let mut stmt = conn.prepare(
             "SELECT activity_json, created_at_ms FROM outbox_items WHERE created_at_ms > ?1 ORDER BY created_at_ms ASC LIMIT ?2",
@@ -2049,7 +2243,7 @@ impl SocialDb {
     }
 
     pub fn get_p2p_sync_since(&self, actor_id: &str) -> Result<i64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let v: Option<i64> = conn
             .query_row(
                 "SELECT since_ms FROM p2p_sync_state WHERE actor_id=?1",
@@ -2061,14 +2255,13 @@ impl SocialDb {
     }
 
     pub fn set_p2p_sync_since(&self, actor_id: &str, since_ms: i64) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT INTO p2p_sync_state(actor_id, since_ms) VALUES (?1, ?2)\n             ON CONFLICT(actor_id) DO UPDATE SET since_ms=excluded.since_ms",
             params![actor_id, since_ms],
         )?;
         Ok(())
     }
-
 
     pub fn new_activity_id(&self, base_actor: &str) -> String {
         let mut b = [0u8; 16];
@@ -2090,7 +2283,9 @@ impl SocialDb {
         };
 
         let attachments = v.get("attachment").or_else(|| v.get("attachments"));
-        let Some(attachments) = attachments else { return Ok(()) };
+        let Some(attachments) = attachments else {
+            return Ok(());
+        };
 
         let mut list = Vec::<AttachmentRow>::new();
         match attachments {
@@ -2143,7 +2338,10 @@ impl SocialDb {
             .get("sensitive")
             .and_then(|s| s.as_bool())
             .map(|b| if b { 1 } else { 0 });
-        let summary = v.get("summary").and_then(|s| s.as_str()).map(|s| s.to_string());
+        let summary = v
+            .get("summary")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string());
         if sensitive.is_none() && summary.is_none() {
             return Ok(());
         }
@@ -2173,13 +2371,21 @@ impl SocialDb {
             serde_json::Value::Array(arr) => {
                 for item in arr {
                     if let Some(entry) = parse_tag(item) {
-                        list.push((entry.0, entry.1.unwrap_or_default(), entry.2.unwrap_or_default()));
+                        list.push((
+                            entry.0,
+                            entry.1.unwrap_or_default(),
+                            entry.2.unwrap_or_default(),
+                        ));
                     }
                 }
             }
             _ => {
                 if let Some(entry) = parse_tag(tags) {
-                    list.push((entry.0, entry.1.unwrap_or_default(), entry.2.unwrap_or_default()));
+                    list.push((
+                        entry.0,
+                        entry.1.unwrap_or_default(),
+                        entry.2.unwrap_or_default(),
+                    ));
                 }
             }
         }
@@ -2211,7 +2417,7 @@ impl SocialDb {
         height: Option<i64>,
         blurhash: Option<&str>,
     ) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT OR REPLACE INTO media_items(id, url, media_type, size, created_at_ms, local_name, actor_id, last_access_ms, width, height, blurhash)
@@ -2235,7 +2441,7 @@ impl SocialDb {
     }
 
     pub fn get_media(&self, id: &str) -> Result<Option<MediaItem>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let item = conn
             .query_row(
                 "SELECT id, url, media_type, size, created_at_ms, local_name, actor_id, last_access_ms, width, height, blurhash FROM media_items WHERE id=?1",
@@ -2267,7 +2473,7 @@ impl SocialDb {
     }
 
     pub fn touch_object(&self, object_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let _ = conn.execute(
             "UPDATE objects SET last_access_ms=?2 WHERE object_id=?1",
             params![object_id, now_ms()],
@@ -2275,8 +2481,21 @@ impl SocialDb {
         Ok(())
     }
 
+    /// Actor stored as the owner of an object (used to authorize Delete activities).
+    pub fn get_object_actor(&self, object_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        let actor: Option<String> = conn
+            .query_row(
+                "SELECT actor_id FROM objects WHERE object_id=?1",
+                params![object_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(actor.filter(|s| !s.trim().is_empty()))
+    }
+
     pub fn get_object_json(&self, object_id: &str) -> Result<Option<Vec<u8>>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let json: Option<Vec<u8>> = conn
             .query_row(
                 "SELECT object_json FROM objects WHERE object_id=?1",
@@ -2294,14 +2513,18 @@ impl SocialDb {
     }
 
     pub fn delete_media(&self, id: &str) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         Ok(conn.execute("DELETE FROM media_items WHERE id=?1", params![id])? as u64)
     }
 
-    pub fn prune_media_per_actor_other(&self, max_per_actor: u32, limit: u32) -> Result<Vec<String>> {
+    pub fn prune_media_per_actor_other(
+        &self,
+        max_per_actor: u32,
+        limit: u32,
+    ) -> Result<Vec<String>> {
         let max_per_actor = max_per_actor.max(1) as i64;
         let limit = limit.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         let ids = {
             let mut stmt = conn.prepare(
@@ -2329,7 +2552,11 @@ impl SocialDb {
         let mut local_names: Vec<String> = Vec::new();
         for id in &ids {
             if let Ok(Some(l)) = conn
-                .query_row("SELECT local_name FROM media_items WHERE id=?1", params![id], |r| r.get::<_, Option<String>>(0))
+                .query_row(
+                    "SELECT local_name FROM media_items WHERE id=?1",
+                    params![id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
                 .optional()
             {
                 if let Some(n) = l {
@@ -2346,10 +2573,14 @@ impl SocialDb {
         Ok(local_names)
     }
 
-    pub fn prune_media_per_actor_followed_fedi3(&self, max_per_actor: u32, limit: u32) -> Result<Vec<String>> {
+    pub fn prune_media_per_actor_followed_fedi3(
+        &self,
+        max_per_actor: u32,
+        limit: u32,
+    ) -> Result<Vec<String>> {
         let max_per_actor = max_per_actor.max(1) as i64;
         let limit = limit.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         let ids = {
             let mut stmt = conn.prepare(
@@ -2378,7 +2609,11 @@ impl SocialDb {
         let mut local_names: Vec<String> = Vec::new();
         for id in &ids {
             if let Ok(Some(l)) = conn
-                .query_row("SELECT local_name FROM media_items WHERE id=?1", params![id], |r| r.get::<_, Option<String>>(0))
+                .query_row(
+                    "SELECT local_name FROM media_items WHERE id=?1",
+                    params![id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
                 .optional()
             {
                 if let Some(n) = l {
@@ -2396,7 +2631,7 @@ impl SocialDb {
     }
 
     pub fn prune_inbox_items(&self, max_items: u32) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let max_items = max_items.max(1) as i64;
         let deleted = conn.execute(
             r#"
@@ -2413,12 +2648,15 @@ impl SocialDb {
     }
 
     pub fn prune_inbox_seen_before(&self, cutoff_ms: i64) -> Result<u64> {
-        let conn = Connection::open(&self.path)?;
-        Ok(conn.execute("DELETE FROM inbox_seen WHERE seen_at_ms < ?1", params![cutoff_ms])? as u64)
+        let conn = self.connect()?;
+        Ok(conn.execute(
+            "DELETE FROM inbox_seen WHERE seen_at_ms < ?1",
+            params![cutoff_ms],
+        )? as u64)
     }
 
     pub fn prune_objects_before(&self, cutoff_ms: i64, limit: u32) -> Result<u64> {
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let ids = {
             let mut stmt = tx.prepare(
@@ -2436,7 +2674,10 @@ impl SocialDb {
             return Ok(0);
         }
         for id in &ids {
-            let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![id])?;
+            let _ = tx.execute(
+                "DELETE FROM object_attachments WHERE object_id=?1",
+                params![id],
+            )?;
             let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![id])?;
@@ -2446,7 +2687,7 @@ impl SocialDb {
     }
 
     pub fn prune_objects_other_before(&self, cutoff_ms: i64, limit: u32) -> Result<u64> {
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let ids = {
             let mut stmt = tx.prepare(
@@ -2468,7 +2709,10 @@ impl SocialDb {
             return Ok(0);
         }
         for id in &ids {
-            let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![id])?;
+            let _ = tx.execute(
+                "DELETE FROM object_attachments WHERE object_id=?1",
+                params![id],
+            )?;
             let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![id])?;
@@ -2478,7 +2722,7 @@ impl SocialDb {
     }
 
     pub fn prune_objects_followed_fedi3_before(&self, cutoff_ms: i64, limit: u32) -> Result<u64> {
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let ids = {
             let mut stmt = tx.prepare(
@@ -2501,7 +2745,10 @@ impl SocialDb {
             return Ok(0);
         }
         for id in &ids {
-            let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![id])?;
+            let _ = tx.execute(
+                "DELETE FROM object_attachments WHERE object_id=?1",
+                params![id],
+            )?;
             let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![id])?;
@@ -2513,7 +2760,7 @@ impl SocialDb {
     pub fn prune_objects_per_actor_other(&self, max_per_actor: u32, limit: u32) -> Result<u64> {
         let max_per_actor = max_per_actor.max(1) as i64;
         let limit = limit.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let ids = {
             let mut stmt = tx.prepare(
@@ -2539,7 +2786,10 @@ impl SocialDb {
             return Ok(0);
         }
         for id in &ids {
-            let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![id])?;
+            let _ = tx.execute(
+                "DELETE FROM object_attachments WHERE object_id=?1",
+                params![id],
+            )?;
             let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![id])?;
@@ -2548,10 +2798,14 @@ impl SocialDb {
         Ok(ids.len() as u64)
     }
 
-    pub fn prune_objects_per_actor_followed_fedi3(&self, max_per_actor: u32, limit: u32) -> Result<u64> {
+    pub fn prune_objects_per_actor_followed_fedi3(
+        &self,
+        max_per_actor: u32,
+        limit: u32,
+    ) -> Result<u64> {
         let max_per_actor = max_per_actor.max(1) as i64;
         let limit = limit.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let ids = {
             let mut stmt = tx.prepare(
@@ -2578,7 +2832,10 @@ impl SocialDb {
             return Ok(0);
         }
         for id in &ids {
-            let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![id])?;
+            let _ = tx.execute(
+                "DELETE FROM object_attachments WHERE object_id=?1",
+                params![id],
+            )?;
             let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![id])?;
             let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![id])?;
@@ -2587,10 +2844,15 @@ impl SocialDb {
         Ok(ids.len() as u64)
     }
 
-    pub fn prune_object_bytes_per_actor_other(&self, max_bytes: u64, max_actors: u32, max_deletes: u32) -> Result<u64> {
+    pub fn prune_object_bytes_per_actor_other(
+        &self,
+        max_bytes: u64,
+        max_actors: u32,
+        max_deletes: u32,
+    ) -> Result<u64> {
         let max_actors = max_actors.max(1) as i64;
         let max_deletes = max_deletes.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         // Pick actors that exceed the budget (best-effort).
         let actor_ids: Vec<String> = {
@@ -2607,7 +2869,9 @@ impl SocialDb {
                 LIMIT ?2
                 "#,
             )?;
-            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| r.get::<_, String>(0))?;
+            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| {
+                r.get::<_, String>(0)
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
@@ -2639,16 +2903,27 @@ impl SocialDb {
                 "#,
             )?;
             let rows = stmt
-                .query_map(params![actor_id, max_deletes], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .query_map(params![actor_id, max_deletes], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             for (obj_id, sz) in rows {
                 if total as u64 <= max_bytes {
                     break;
                 }
-                let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![obj_id])?;
-                let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![obj_id])?;
-                let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![obj_id])?;
+                let _ = tx.execute(
+                    "DELETE FROM object_attachments WHERE object_id=?1",
+                    params![obj_id],
+                )?;
+                let _ = tx.execute(
+                    "DELETE FROM object_meta WHERE object_id=?1",
+                    params![obj_id],
+                )?;
+                let _ = tx.execute(
+                    "DELETE FROM object_tags WHERE object_id=?1",
+                    params![obj_id],
+                )?;
                 let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![obj_id])?;
                 deleted += 1;
                 total = total.saturating_sub(sz.max(0));
@@ -2658,10 +2933,15 @@ impl SocialDb {
         Ok(deleted)
     }
 
-    pub fn prune_object_bytes_per_actor_followed_fedi3(&self, max_bytes: u64, max_actors: u32, max_deletes: u32) -> Result<u64> {
+    pub fn prune_object_bytes_per_actor_followed_fedi3(
+        &self,
+        max_bytes: u64,
+        max_actors: u32,
+        max_deletes: u32,
+    ) -> Result<u64> {
         let max_actors = max_actors.max(1) as i64;
         let max_deletes = max_deletes.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         let actor_ids: Vec<String> = {
             let mut stmt = conn.prepare(
@@ -2677,7 +2957,9 @@ impl SocialDb {
                 LIMIT ?2
                 "#,
             )?;
-            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| r.get::<_, String>(0))?;
+            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| {
+                r.get::<_, String>(0)
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
@@ -2709,16 +2991,27 @@ impl SocialDb {
                 "#,
             )?;
             let rows = stmt
-                .query_map(params![actor_id, max_deletes], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .query_map(params![actor_id, max_deletes], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             for (obj_id, sz) in rows {
                 if total as u64 <= max_bytes {
                     break;
                 }
-                let _ = tx.execute("DELETE FROM object_attachments WHERE object_id=?1", params![obj_id])?;
-                let _ = tx.execute("DELETE FROM object_meta WHERE object_id=?1", params![obj_id])?;
-                let _ = tx.execute("DELETE FROM object_tags WHERE object_id=?1", params![obj_id])?;
+                let _ = tx.execute(
+                    "DELETE FROM object_attachments WHERE object_id=?1",
+                    params![obj_id],
+                )?;
+                let _ = tx.execute(
+                    "DELETE FROM object_meta WHERE object_id=?1",
+                    params![obj_id],
+                )?;
+                let _ = tx.execute(
+                    "DELETE FROM object_tags WHERE object_id=?1",
+                    params![obj_id],
+                )?;
                 let _ = tx.execute("DELETE FROM objects WHERE object_id=?1", params![obj_id])?;
                 deleted += 1;
                 total = total.saturating_sub(sz.max(0));
@@ -2728,10 +3021,15 @@ impl SocialDb {
         Ok(deleted)
     }
 
-    pub fn prune_media_bytes_per_actor_other(&self, max_bytes: u64, max_actors: u32, max_deletes: u32) -> Result<Vec<String>> {
+    pub fn prune_media_bytes_per_actor_other(
+        &self,
+        max_bytes: u64,
+        max_actors: u32,
+        max_deletes: u32,
+    ) -> Result<Vec<String>> {
         let max_actors = max_actors.max(1) as i64;
         let max_deletes = max_deletes.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         let actor_ids: Vec<String> = {
             let mut stmt = conn.prepare(
@@ -2747,7 +3045,9 @@ impl SocialDb {
                 LIMIT ?2
                 "#,
             )?;
-            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| r.get::<_, String>(0))?;
+            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| {
+                r.get::<_, String>(0)
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         if actor_ids.is_empty() {
@@ -2800,10 +3100,15 @@ impl SocialDb {
         Ok(local_names)
     }
 
-    pub fn prune_media_bytes_per_actor_followed_fedi3(&self, max_bytes: u64, max_actors: u32, max_deletes: u32) -> Result<Vec<String>> {
+    pub fn prune_media_bytes_per_actor_followed_fedi3(
+        &self,
+        max_bytes: u64,
+        max_actors: u32,
+        max_deletes: u32,
+    ) -> Result<Vec<String>> {
         let max_actors = max_actors.max(1) as i64;
         let max_deletes = max_deletes.max(1) as i64;
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
 
         let actor_ids: Vec<String> = {
             let mut stmt = conn.prepare(
@@ -2819,7 +3124,9 @@ impl SocialDb {
                 LIMIT ?2
                 "#,
             )?;
-            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| r.get::<_, String>(0))?;
+            let rows = stmt.query_map(params![max_bytes as i64, max_actors], |r| {
+                r.get::<_, String>(0)
+            })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         if actor_ids.is_empty() {
@@ -2873,7 +3180,7 @@ impl SocialDb {
     }
 
     pub fn get_chat_identity_key(&self) -> Result<Option<(String, String)>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT public_b64, secret_b64 FROM chat_identity_keys ORDER BY created_at_ms DESC LIMIT 1",
             [],
@@ -2884,7 +3191,7 @@ impl SocialDb {
     }
 
     pub fn set_chat_identity_key(&self, public_b64: &str, secret_b64: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO chat_identity_keys (key_id, public_b64, secret_b64, created_at_ms) VALUES (?1, ?2, ?3, ?4)",
             params!["identity", public_b64, secret_b64, now_ms()],
@@ -2892,8 +3199,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn insert_chat_prekey(&self, key_id: &str, public_b64: &str, secret_b64: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn insert_chat_prekey(
+        &self,
+        key_id: &str,
+        public_b64: &str,
+        secret_b64: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO chat_prekeys (key_id, public_b64, secret_b64, created_at_ms, used_at_ms) VALUES (?1, ?2, ?3, ?4, NULL)",
             params![key_id, public_b64, secret_b64, now_ms()],
@@ -2902,25 +3214,34 @@ impl SocialDb {
     }
 
     pub fn count_unused_chat_prekeys(&self) -> Result<u32> {
-        let conn = Connection::open(&self.path)?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM chat_prekeys WHERE used_at_ms IS NULL", [], |r| r.get(0))?;
+        let conn = self.connect()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chat_prekeys WHERE used_at_ms IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(count.max(0) as u32)
     }
 
     pub fn list_chat_prekeys(&self, limit: u32) -> Result<Vec<(String, String, String)>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let mut stmt = conn.prepare(
             "SELECT key_id, public_b64, secret_b64 FROM chat_prekeys WHERE used_at_ms IS NULL ORDER BY created_at_ms ASC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_chat_prekey_secret(&self, key_id: &str) -> Result<Option<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT secret_b64 FROM chat_prekeys WHERE key_id=?1",
             params![key_id],
@@ -2931,7 +3252,7 @@ impl SocialDb {
     }
 
     pub fn mark_chat_prekey_used(&self, key_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_prekeys SET used_at_ms=?2 WHERE key_id=?1 AND used_at_ms IS NULL",
             params![key_id, now_ms()],
@@ -2939,8 +3260,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn create_chat_thread(&self, thread_id: &str, kind: &str, title: Option<&str>) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn create_chat_thread(
+        &self,
+        thread_id: &str,
+        kind: &str,
+        title: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         let now = now_ms();
         conn.execute(
             "INSERT OR IGNORE INTO chat_threads (thread_id, kind, title, created_at_ms, updated_at_ms) VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -2961,7 +3287,7 @@ impl SocialDb {
     }
 
     pub fn touch_chat_thread(&self, thread_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_threads SET updated_at_ms=?2 WHERE thread_id=?1",
             params![thread_id, now_ms()],
@@ -2970,7 +3296,7 @@ impl SocialDb {
     }
 
     pub fn upsert_chat_member(&self, thread_id: &str, actor_id: &str, role: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let now = now_ms();
         conn.execute(
             r#"
@@ -2985,7 +3311,7 @@ impl SocialDb {
     }
 
     pub fn remove_chat_member(&self, thread_id: &str, actor_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "DELETE FROM chat_members WHERE thread_id=?1 AND actor_id=?2",
             params![thread_id, actor_id],
@@ -2994,9 +3320,12 @@ impl SocialDb {
     }
 
     pub fn set_chat_members(&self, thread_id: &str, members: &[String]) -> Result<()> {
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM chat_members WHERE thread_id=?1", params![thread_id])?;
+        tx.execute(
+            "DELETE FROM chat_members WHERE thread_id=?1",
+            params![thread_id],
+        )?;
         let now = now_ms();
         for actor in members {
             if actor.trim().is_empty() {
@@ -3012,16 +3341,19 @@ impl SocialDb {
     }
 
     pub fn list_chat_members(&self, thread_id: &str) -> Result<Vec<(String, String)>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT actor_id, role FROM chat_members WHERE thread_id=?1 ORDER BY added_at_ms ASC",
         )?;
-        let rows = stmt.query_map(params![thread_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        let rows = stmt.query_map(params![thread_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn update_chat_thread_title(&self, thread_id: &str, title: Option<&str>) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_threads SET title=?2, updated_at_ms=?3 WHERE thread_id=?1",
             params![thread_id, title, now_ms()],
@@ -3029,8 +3361,12 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_chat_threads(&self, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ChatThread>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_chat_threads(
+        &self,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<ChatThread>> {
+        let conn = self.connect()?;
         let total: u64 = conn.query_row("SELECT COUNT(*) FROM chat_threads", [], |r| r.get(0))?;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor {
@@ -3080,7 +3416,11 @@ impl SocialDb {
             last_updated = Some(updated_at_ms);
             let preview = last_body
                 .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-                .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()));
+                .and_then(|v| {
+                    v.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string())
+                });
             items.push(ChatThread {
                 thread_id,
                 kind,
@@ -3099,7 +3439,7 @@ impl SocialDb {
     }
 
     pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT OR IGNORE INTO chat_messages
@@ -3120,8 +3460,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_chat_messages(&self, thread_id: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ChatMessage>> {
-        let conn = Connection::open(&self.path)?;
+    pub fn list_chat_messages(
+        &self,
+        thread_id: &str,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> Result<CollectionPage<ChatMessage>> {
+        let conn = self.connect()?;
         let total: u64 = conn.query_row(
             "SELECT COUNT(*) FROM chat_messages WHERE thread_id=?1",
             params![thread_id],
@@ -3172,7 +3517,7 @@ impl SocialDb {
     }
 
     pub fn update_chat_message_edit(&self, message_id: &str, body_json: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_messages SET body_json=?2, edited_at_ms=?3 WHERE message_id=?1",
             params![message_id, body_json, now_ms()],
@@ -3181,7 +3526,7 @@ impl SocialDb {
     }
 
     pub fn mark_chat_message_deleted(&self, message_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_messages SET deleted=1, edited_at_ms=?2 WHERE message_id=?1",
             params![message_id, now_ms()],
@@ -3189,8 +3534,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn upsert_chat_message_status(&self, message_id: &str, actor_id: &str, status: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn upsert_chat_message_status(
+        &self,
+        message_id: &str,
+        actor_id: &str,
+        status: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO chat_message_status (message_id, actor_id, status, updated_at_ms)
@@ -3203,12 +3553,19 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_chat_message_statuses(&self, message_ids: &[String]) -> Result<Vec<(String, String, String, i64)>> {
+    pub fn list_chat_message_statuses(
+        &self,
+        message_ids: &[String],
+    ) -> Result<Vec<(String, String, String, i64)>> {
         if message_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = Connection::open(&self.path)?;
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let conn = self.connect()?;
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             "SELECT message_id, actor_id, status, updated_at_ms FROM chat_message_status WHERE message_id IN ({})",
             placeholders
@@ -3227,17 +3584,23 @@ impl SocialDb {
                 r.get::<_, i64>(3)?,
             ))
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
-    pub fn upsert_relay_entry(&self, base_url: &str, ws_url: Option<&str>, source: &str) -> Result<()> {
+    pub fn upsert_relay_entry(
+        &self,
+        base_url: &str,
+        ws_url: Option<&str>,
+        source: &str,
+    ) -> Result<()> {
         let base = base_url.trim().trim_end_matches('/').to_string();
         if base.is_empty() {
             return Ok(());
         }
         let ws = ws_url.map(|s| s.trim().trim_end_matches('/').to_string());
         let src = source.trim();
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO relay_registry (relay_base_url, relay_ws_url, last_seen_ms, source)
@@ -3253,7 +3616,7 @@ impl SocialDb {
     }
 
     pub fn list_relay_entries(&self, limit: u32) -> Result<Vec<RelayEntry>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.max(1).min(1000) as i64;
         let mut stmt = conn.prepare(
             "SELECT relay_base_url, relay_ws_url, last_seen_ms, source FROM relay_registry ORDER BY last_seen_ms DESC LIMIT ?1",
@@ -3266,7 +3629,8 @@ impl SocialDb {
                 source: r.get::<_, String>(3)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn remove_relay_entry(&self, base_url: &str) -> Result<()> {
@@ -3274,13 +3638,16 @@ impl SocialDb {
         if base.is_empty() {
             return Ok(());
         }
-        let conn = Connection::open(&self.path)?;
-        conn.execute("DELETE FROM relay_registry WHERE relay_base_url=?1", params![base])?;
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM relay_registry WHERE relay_base_url=?1",
+            params![base],
+        )?;
         Ok(())
     }
 
     pub fn list_actor_meta_fedi3(&self, limit: u32) -> Result<Vec<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let limit = limit.max(1).min(1000) as i64;
         let mut stmt = conn.prepare(
             "SELECT actor_id FROM actor_meta WHERE is_fedi3=1 ORDER BY last_seen_ms DESC LIMIT ?1",
@@ -3292,7 +3659,7 @@ impl SocialDb {
     }
 
     pub fn get_chat_message_thread_id(&self, message_id: &str) -> Result<Option<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare("SELECT thread_id FROM chat_messages WHERE message_id=?1")?;
         let mut rows = stmt.query(params![message_id])?;
         if let Some(row) = rows.next()? {
@@ -3304,8 +3671,9 @@ impl SocialDb {
     }
 
     pub fn get_chat_message_meta(&self, message_id: &str) -> Result<Option<(String, bool)>> {
-        let conn = Connection::open(&self.path)?;
-        let mut stmt = conn.prepare("SELECT sender_actor, deleted FROM chat_messages WHERE message_id=?1")?;
+        let conn = self.connect()?;
+        let mut stmt =
+            conn.prepare("SELECT sender_actor, deleted FROM chat_messages WHERE message_id=?1")?;
         let mut rows = stmt.query(params![message_id])?;
         if let Some(row) = rows.next()? {
             let sender: String = row.get(0)?;
@@ -3317,7 +3685,7 @@ impl SocialDb {
     }
 
     pub fn chat_message_seen_by_others(&self, message_id: &str, self_actor: &str) -> Result<bool> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM chat_message_status WHERE message_id=?1 AND status='seen' AND actor_id != ?2",
             params![message_id, self_actor],
@@ -3327,7 +3695,7 @@ impl SocialDb {
     }
 
     pub fn get_chat_member_role(&self, thread_id: &str, actor_id: &str) -> Result<Option<String>> {
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         conn.query_row(
             "SELECT role FROM chat_members WHERE thread_id=?1 AND actor_id=?2",
             params![thread_id, actor_id],
@@ -3338,7 +3706,7 @@ impl SocialDb {
     }
 
     pub fn delete_chat_thread(&self, thread_id: &str) -> Result<()> {
-        let mut conn = Connection::open(&self.path)?;
+        let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM chat_message_status WHERE message_id IN (SELECT message_id FROM chat_messages WHERE thread_id=?1)",
@@ -3348,15 +3716,29 @@ impl SocialDb {
             "DELETE FROM chat_message_reactions WHERE message_id IN (SELECT message_id FROM chat_messages WHERE thread_id=?1)",
             params![thread_id],
         )?;
-        tx.execute("DELETE FROM chat_messages WHERE thread_id=?1", params![thread_id])?;
-        tx.execute("DELETE FROM chat_members WHERE thread_id=?1", params![thread_id])?;
-        tx.execute("DELETE FROM chat_threads WHERE thread_id=?1", params![thread_id])?;
+        tx.execute(
+            "DELETE FROM chat_messages WHERE thread_id=?1",
+            params![thread_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_members WHERE thread_id=?1",
+            params![thread_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_threads WHERE thread_id=?1",
+            params![thread_id],
+        )?;
         tx.commit()?;
         Ok(())
     }
 
-    pub fn add_chat_reaction(&self, message_id: &str, actor_id: &str, reaction: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn add_chat_reaction(
+        &self,
+        message_id: &str,
+        actor_id: &str,
+        reaction: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO chat_message_reactions (message_id, actor_id, reaction, created_at_ms) VALUES (?1, ?2, ?3, ?4)",
             params![message_id, actor_id, reaction, now_ms()],
@@ -3364,8 +3746,13 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn remove_chat_reaction(&self, message_id: &str, actor_id: &str, reaction: &str) -> Result<()> {
-        let conn = Connection::open(&self.path)?;
+    pub fn remove_chat_reaction(
+        &self,
+        message_id: &str,
+        actor_id: &str,
+        reaction: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
         conn.execute(
             "DELETE FROM chat_message_reactions WHERE message_id=?1 AND actor_id=?2 AND reaction=?3",
             params![message_id, actor_id, reaction],
@@ -3373,11 +3760,15 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn list_chat_reactions(&self, message_ids: &[String], self_actor: &str) -> Result<Vec<(String, String, i64, bool)>> {
+    pub fn list_chat_reactions(
+        &self,
+        message_ids: &[String],
+        self_actor: &str,
+    ) -> Result<Vec<(String, String, i64, bool)>> {
         if message_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = Connection::open(&self.path)?;
+        let conn = self.connect()?;
         let placeholders = (0..message_ids.len())
             .map(|idx| format!("?{}", idx + 1))
             .collect::<Vec<_>>()
@@ -3405,7 +3796,8 @@ impl SocialDb {
                 me_count > 0,
             ))
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 }
 
@@ -3447,7 +3839,10 @@ fn parse_attachment(v: &serde_json::Value) -> Vec<AttachmentRow> {
                 .get("mediaType")
                 .and_then(|m| m.as_str())
                 .map(|s| s.to_string());
-            let name = map.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+            let name = map
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string());
             let blurhash = map
                 .get("blurhash")
                 .and_then(|b| b.as_str())
@@ -3455,8 +3850,17 @@ fn parse_attachment(v: &serde_json::Value) -> Vec<AttachmentRow> {
             let width = map.get("width").and_then(|w| w.as_i64());
             let height = map.get("height").and_then(|h| h.as_i64());
 
-            let Some(url_val) = map.get("url").or_else(|| map.get("href")) else { return vec![] };
-            parse_url_field(url_val, &attachment_media_type, &name, &blurhash, width, height)
+            let Some(url_val) = map.get("url").or_else(|| map.get("href")) else {
+                return vec![];
+            };
+            parse_url_field(
+                url_val,
+                &attachment_media_type,
+                &name,
+                &blurhash,
+                width,
+                height,
+            )
         }
         _ => vec![],
     }
@@ -3470,7 +3874,8 @@ fn is_public_activity_value(activity: &serde_json::Value) -> bool {
             _ => false,
         }
     }
-    activity.get("to").map(has_public).unwrap_or(false) || activity.get("cc").map(has_public).unwrap_or(false)
+    activity.get("to").map(has_public).unwrap_or(false)
+        || activity.get("cc").map(has_public).unwrap_or(false)
 }
 
 fn parse_url_field(
@@ -3531,6 +3936,44 @@ fn parse_url_field(
     }
 }
 
+/// Current schema version. Bump when adding a numbered migration below.
+pub const SCHEMA_VERSION: u32 = 2;
+
+fn open_with_pragmas(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path).with_context(|| format!("open db: {}", path.display()))?;
+    // SQLITE_BUSY is expected under concurrent writers; wait instead of failing immediately.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+    Ok(conn)
+}
+
+fn migrate(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
+    let current: Option<u32> = conn
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    // A pre-existing DB without a version row is treated as version 1 (the original schema).
+    let mut version = current.unwrap_or(1);
+    if version > SCHEMA_VERSION {
+        anyhow::bail!(
+            "database schema version {version} is newer than this binary ({SCHEMA_VERSION}); upgrade the app"
+        );
+    }
+    if version == 0 {
+        version = 1;
+    }
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM schema_version", [])?;
+    tx.execute(
+        "INSERT INTO schema_version(version) VALUES (?1)",
+        params![version],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn ensure_columns(conn: &Connection, table: &str, cols: &[(&str, &str)]) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -3555,8 +3998,14 @@ fn parse_tag(v: &serde_json::Value) -> Option<(String, Option<String>, Option<St
                 .and_then(|t| t.as_str())
                 .unwrap_or("Tag")
                 .to_string();
-            let name = map.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
-            let href = map.get("href").and_then(|h| h.as_str()).map(|s| s.to_string());
+            let name = map
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string());
+            let href = map
+                .get("href")
+                .and_then(|h| h.as_str())
+                .map(|s| s.to_string());
             if name.is_none() && href.is_none() {
                 return None;
             }
@@ -3566,8 +4015,31 @@ fn parse_tag(v: &serde_json::Value) -> Option<(String, Option<String>, Option<St
     }
 }
 
+/// Composite pagination cursor: `(created_at_ms, id)`. Plain numeric cursors are accepted for
+/// backwards compatibility and mean "everything at or below that timestamp".
+pub fn parse_cursor(cursor: &str) -> Option<(i64, String)> {
+    let cursor = cursor.trim();
+    if cursor.is_empty() {
+        return None;
+    }
+    match cursor.split_once('|') {
+        Some((ms, id)) => ms.parse::<i64>().ok().map(|v| (v, id.to_string())),
+        None => cursor
+            .parse::<i64>()
+            .ok()
+            .map(|v| (v, "\u{10FFFF}".to_string())),
+    }
+}
+
+pub fn encode_cursor(ms: i64, id: &str) -> String {
+    format!("{ms}|{id}")
+}
+
 fn escape_like(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn now_ms() -> i64 {

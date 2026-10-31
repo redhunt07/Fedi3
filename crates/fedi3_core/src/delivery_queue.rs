@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use crate::delivery::Delivery;
-use crate::delivery::build_signed_post_relay_http_request;
 use crate::crypto_envelope::encrypt_relay_http_request_body;
+use crate::delivery::build_signed_post_relay_http_request;
+use crate::delivery::Delivery;
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, Connection};
@@ -57,7 +57,9 @@ impl PostDeliveryMode {
     pub fn from_str(input: &str) -> Option<Self> {
         match input.trim().to_ascii_lowercase().as_str() {
             "p2p_only" | "p2ponly" | "p2p-only" => Some(Self::P2pOnly),
-            "p2p_relay" | "p2prelay" | "p2p-relay" | "p2p_first" | "p2p-first" => Some(Self::P2pRelay),
+            "p2p_relay" | "p2prelay" | "p2p-relay" | "p2p_first" | "p2p-first" => {
+                Some(Self::P2pRelay)
+            }
             _ => None,
         }
     }
@@ -82,7 +84,8 @@ impl DeliveryQueue {
         activity_json: Vec<u8>,
         targets: Vec<String>,
     ) -> Result<u64> {
-        self.enqueue_activity_with_key_id(activity_json, targets, None).await
+        self.enqueue_activity_with_key_id(activity_json, targets, None)
+            .await
     }
 
     pub async fn enqueue_activity_with_key_id(
@@ -98,7 +101,7 @@ impl DeliveryQueue {
             let activity_json = activity_json.clone();
             let activity_id = activity_id.clone();
             move || -> Result<u64> {
-                let mut conn = Connection::open(db_path)?;
+                let mut conn = open_conn(&db_path)?;
                 let tx = conn.transaction()?;
                 for t in targets {
                     let job_id = new_job_id();
@@ -136,11 +139,27 @@ impl DeliveryQueue {
     ) {
         let queue = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = queue
-                .run_loop(shutdown, delivery, private_key_pem, key_id, settings)
-                .await
-            {
-                warn!("delivery worker stopped: {e:#}");
+            // Supervisor: a transient DB error must never stop federation for the whole session.
+            loop {
+                if *shutdown.borrow() {
+                    break;
+                }
+                let res = queue
+                    .run_loop(
+                        shutdown.clone(),
+                        delivery.clone(),
+                        private_key_pem.clone(),
+                        key_id.clone(),
+                        settings,
+                    )
+                    .await;
+                match res {
+                    Ok(()) => break,
+                    Err(e) => {
+                        warn!("delivery worker stopped unexpectedly: {e:#}; restarting");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
             }
         });
     }
@@ -161,7 +180,29 @@ impl DeliveryQueue {
                 break;
             }
 
-            let jobs = self.fetch_due_jobs(40).await?;
+            let mut jobs = match self.fetch_due_jobs(40).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("delivery queue fetch failed: {e:#}; retrying after backoff");
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = shutdown.changed() => {}
+                    }
+                    continue;
+                }
+            };
+            // Jobs waiting for a receipt must also reach max_attempts instead of being retried forever.
+            let mut live = Vec::with_capacity(jobs.len());
+            for job in jobs.drain(..) {
+                if job.status == 3 && job.attempt >= settings.max_attempts {
+                    let _ = self
+                        .mark_dead(&job.id, "receipt never received (max attempts)")
+                        .await;
+                    continue;
+                }
+                live.push(job);
+            }
+            let jobs = live;
             if jobs.is_empty() {
                 tokio::select! {
                     _ = self.notify.notified() => {}
@@ -183,12 +224,58 @@ impl DeliveryQueue {
 
                 // Keep P2P-capable jobs as-is: no sharedInbox concern and may use mailbox fallback.
                 if !job.target.contains("/inbox") {
-                    match resolve_actor_cached(&delivery, &private_key_pem, job.key_id.as_deref().unwrap_or(&key_id), &job.target, &mut actor_cache).await {
+                    match resolve_actor_cached(
+                        &delivery,
+                        &private_key_pem,
+                        job.key_id.as_deref().unwrap_or(&key_id),
+                        &job.target,
+                        &mut actor_cache,
+                    )
+                    .await
+                    {
                         Ok(info) if info.p2p_peer_id.is_some() => {
                             passthrough.push(job);
                             continue;
                         }
-                        _ => {}
+                        Ok(_) => {
+                            // Actor resolved but no P2P peer, fall through to HTTP delivery
+                        }
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            if err_str.contains("404")
+                                || err_str.contains("410")
+                                || err_str.contains("429")
+                                || err_str.contains("peer deleted")
+                            {
+                                let _ =
+                                    self.mark_dead(&job.id, "peer deleted or unreachable").await;
+                                continue;
+                            } else {
+                                // Transient resolution failure: reschedule with backoff instead of
+                                // hammering the remote every 2s tick (and eventually dead-letter).
+                                let attempt_no = job.attempt.saturating_add(1);
+                                if attempt_no >= settings.max_attempts {
+                                    let _ = self
+                                        .mark_dead(&job.id, &format!("actor resolve failed: {e:#}"))
+                                        .await;
+                                } else {
+                                    let delay = next_backoff(
+                                        attempt_no,
+                                        settings.base_backoff_secs,
+                                        settings.max_backoff_secs,
+                                    );
+                                    let _ = self
+                                        .reschedule(
+                                            &job.id,
+                                            attempt_no,
+                                            delay,
+                                            &format!("resolve: {e:#}"),
+                                        )
+                                        .await;
+                                }
+                                continue;
+                            }
+                        }
                     }
                 }
 
@@ -196,11 +283,50 @@ impl DeliveryQueue {
                 let inbox_url = if job.target.contains("/inbox") {
                     job.target.clone()
                 } else {
-                    match resolve_actor_cached(&delivery, &private_key_pem, &effective_key_id, &job.target, &mut actor_cache).await {
+                    match resolve_actor_cached(
+                        &delivery,
+                        &private_key_pem,
+                        &effective_key_id,
+                        &job.target,
+                        &mut actor_cache,
+                    )
+                    .await
+                    {
                         Ok(info) => info.inbox,
                         Err(e) => {
-                            warn!("delivery resolve error: {e:#}");
-                            continue;
+                            let err_str = e.to_string();
+                            if err_str.contains("404")
+                                || err_str.contains("410")
+                                || err_str.contains("429")
+                                || err_str.contains("peer deleted")
+                            {
+                                let _ =
+                                    self.mark_dead(&job.id, "peer deleted or unreachable").await;
+                                continue;
+                            } else {
+                                warn!("delivery resolve error: {e:#}");
+                                let attempt_no = job.attempt.saturating_add(1);
+                                if attempt_no >= settings.max_attempts {
+                                    let _ = self
+                                        .mark_dead(&job.id, &format!("actor resolve failed: {e:#}"))
+                                        .await;
+                                } else {
+                                    let delay = next_backoff(
+                                        attempt_no,
+                                        settings.base_backoff_secs,
+                                        settings.max_backoff_secs,
+                                    );
+                                    let _ = self
+                                        .reschedule(
+                                            &job.id,
+                                            attempt_no,
+                                            delay,
+                                            &format!("resolve: {e:#}"),
+                                        )
+                                        .await;
+                                }
+                                continue;
+                            }
                         }
                     }
                 };
@@ -218,7 +344,14 @@ impl DeliveryQueue {
                     break;
                 }
                 if let Err(e) = self
-                    .process_group_http(&delivery, &private_key_pem, &effective_key_id, &settings, &inbox_url, jobs)
+                    .process_group_http(
+                        &delivery,
+                        &private_key_pem,
+                        &effective_key_id,
+                        &settings,
+                        &inbox_url,
+                        jobs,
+                    )
                     .await
                 {
                     warn!("delivery group error: {e:#}");
@@ -230,7 +363,9 @@ impl DeliveryQueue {
                 if *shutdown.borrow() {
                     break;
                 }
-                let res = self.process_one(&delivery, &private_key_pem, &key_id, &settings, job).await;
+                let res = self
+                    .process_one(&delivery, &private_key_pem, &key_id, &settings, job)
+                    .await;
                 if let Err(e) = res {
                     warn!("delivery job error: {e:#}");
                 }
@@ -243,11 +378,11 @@ impl DeliveryQueue {
         tokio::task::spawn_blocking({
             let db_path = self.db_path.clone();
             move || -> Result<Vec<Job>> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 let now = now_ms();
                 let mut stmt = conn.prepare(
                     r#"
-                    SELECT id, attempt, target, activity_json, key_id, activity_id
+                    SELECT id, attempt, target, activity_json, key_id, activity_id, status
                     FROM delivery_jobs
                     WHERE status IN (0, 3) AND next_attempt_at_ms <= ?1
                     ORDER BY next_attempt_at_ms ASC
@@ -264,6 +399,7 @@ impl DeliveryQueue {
                         activity_json: row.get(3)?,
                         key_id: row.get(4)?,
                         activity_id: row.get(5)?,
+                        status: row.get(6)?,
                     });
                 }
                 Ok(out)
@@ -282,24 +418,44 @@ impl DeliveryQueue {
     ) -> Result<()> {
         let effective_key_id = job.key_id.as_deref().unwrap_or(key_id);
 
-        let (inbox_url, p2p_peer_id, p2p_peer_addrs, public_key_pem) = if job.target.contains("/inbox") {
-            (job.target.clone(), None, Vec::new(), None)
-        } else {
-            let info = match delivery
-                .resolve_actor_info_signed(private_key_pem, effective_key_id, &job.target)
-                .await
-            {
-                Ok(v) => v,
-                Err(_) => delivery.resolve_actor_info(&job.target).await?,
+        let (inbox_url, p2p_peer_id, p2p_peer_addrs, public_key_pem) =
+            if job.target.contains("/inbox") {
+                (job.target.clone(), None, Vec::new(), None)
+            } else {
+                let info = delivery
+                    .resolve_actor_info_signed(private_key_pem, effective_key_id, &job.target)
+                    .await;
+                let info = if info.is_ok() {
+                    info
+                } else {
+                    delivery.resolve_actor_info(&job.target).await
+                };
+                match info {
+                    Ok(v) => (v.inbox, v.p2p_peer_id, v.p2p_peer_addrs, v.public_key_pem),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404")
+                            || err_str.contains("410")
+                            || err_str.contains("429")
+                            || err_str.contains("peer deleted")
+                        {
+                            self.mark_dead(&job.id, "peer deleted or unreachable")
+                                .await?;
+                            return Ok(());
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
             };
-            (info.inbox, info.p2p_peer_id, info.p2p_peer_addrs, info.public_key_pem)
-        };
 
         let attempt_no: u32 = job.attempt.saturating_add(1);
 
         if let Some(peer_id) = p2p_peer_id.as_deref() {
             if !p2p_peer_addrs.is_empty() {
-                let _ = delivery.p2p_add_peer_addrs(peer_id, p2p_peer_addrs.clone()).await;
+                let _ = delivery
+                    .p2p_add_peer_addrs(peer_id, p2p_peer_addrs.clone())
+                    .await;
             }
             if delivery
                 .deliver_json_p2p(
@@ -313,17 +469,36 @@ impl DeliveryQueue {
                 .await
                 .is_ok()
             {
-                self.mark_awaiting_receipt(&job.id, attempt_no, next_receipt_backoff(attempt_no), "p2p sent").await?;
+                self.mark_awaiting_receipt(
+                    &job.id,
+                    attempt_no,
+                    next_receipt_backoff(attempt_no),
+                    "p2p sent",
+                )
+                .await?;
                 return Ok(());
             }
 
             // libp2p direct failed: try WebRTC ICE/TURN (zero-setup NAT traversal) if enabled.
             if delivery
-                .deliver_json_webrtc(&job.target, peer_id, private_key_pem, effective_key_id, &inbox_url, &job.activity_json)
+                .deliver_json_webrtc(
+                    &job.target,
+                    peer_id,
+                    private_key_pem,
+                    effective_key_id,
+                    &inbox_url,
+                    &job.activity_json,
+                )
                 .await
                 .is_ok()
             {
-                self.mark_awaiting_receipt(&job.id, attempt_no, next_receipt_backoff(attempt_no), "webrtc sent").await?;
+                self.mark_awaiting_receipt(
+                    &job.id,
+                    attempt_no,
+                    next_receipt_backoff(attempt_no),
+                    "webrtc sent",
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -346,20 +521,32 @@ impl DeliveryQueue {
                     .is_ok()
                 {
                     let delay = next_receipt_backoff(attempt_no).max(Duration::from_secs(60));
-                    self.mark_awaiting_receipt(&job.id, attempt_no, delay, "mailboxed").await?;
+                    self.mark_awaiting_receipt(&job.id, attempt_no, delay, "mailboxed")
+                        .await?;
                     return Ok(());
                 }
             }
 
             if settings.post_delivery_mode == PostDeliveryMode::P2pOnly {
-                let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                self.reschedule(&job.id, attempt_no, delay, "p2p-only: no relay fallback").await?;
+                let delay = next_backoff(
+                    attempt_no,
+                    settings.base_backoff_secs,
+                    settings.max_backoff_secs,
+                );
+                self.reschedule(&job.id, attempt_no, delay, "p2p-only: no relay fallback")
+                    .await?;
                 return Ok(());
             }
 
             if attempt_no == 1 && settings.p2p_relay_fallback_secs > 0 {
                 let delay = Duration::from_secs(settings.p2p_relay_fallback_secs);
-                self.reschedule(&job.id, attempt_no, delay, "p2p-first: relay fallback delayed").await?;
+                self.reschedule(
+                    &job.id,
+                    attempt_no,
+                    delay,
+                    "p2p-first: relay fallback delayed",
+                )
+                .await?;
                 return Ok(());
             }
         }
@@ -370,7 +557,12 @@ impl DeliveryQueue {
         }
 
         match delivery
-            .deliver_json(private_key_pem, effective_key_id, &inbox_url, &job.activity_json)
+            .deliver_json(
+                private_key_pem,
+                effective_key_id,
+                &inbox_url,
+                &job.activity_json,
+            )
             .await
         {
             Ok(()) => {
@@ -382,8 +574,13 @@ impl DeliveryQueue {
                     self.mark_dead(&job.id, &format!("{e:#}")).await?;
                     return Ok(());
                 }
-                let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                self.reschedule(&job.id, attempt_no, delay, &format!("{e:#}")).await?;
+                let delay = next_backoff(
+                    attempt_no,
+                    settings.base_backoff_secs,
+                    settings.max_backoff_secs,
+                );
+                self.reschedule(&job.id, attempt_no, delay, &format!("{e:#}"))
+                    .await?;
                 Ok(())
             }
         }
@@ -394,7 +591,7 @@ impl DeliveryQueue {
             let db_path = self.db_path.clone();
             let id = id.to_string();
             move || -> Result<()> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 conn.execute(
                     "UPDATE delivery_jobs SET status = 1, last_error = NULL WHERE id = ?1",
                     params![id],
@@ -406,14 +603,20 @@ impl DeliveryQueue {
         Ok(())
     }
 
-    async fn mark_awaiting_receipt(&self, id: &str, attempt: u32, delay: Duration, note: &str) -> Result<()> {
+    async fn mark_awaiting_receipt(
+        &self,
+        id: &str,
+        attempt: u32,
+        delay: Duration,
+        note: &str,
+    ) -> Result<()> {
         let next = now_ms().saturating_add(delay.as_millis() as i64);
         tokio::task::spawn_blocking({
             let db_path = self.db_path.clone();
             let id = id.to_string();
             let note = note.to_string();
             move || -> Result<()> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 conn.execute(
                     "UPDATE delivery_jobs SET status = 3, attempt = ?2, next_attempt_at_ms = ?3, last_error = ?4 WHERE id = ?1",
                     params![id, attempt, next, note],
@@ -431,7 +634,7 @@ impl DeliveryQueue {
             let id = id.to_string();
             let err = err.to_string();
             move || -> Result<()> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 conn.execute(
                     "UPDATE delivery_jobs SET status = 2, last_error = ?2 WHERE id = ?1",
                     params![id, err],
@@ -450,7 +653,7 @@ impl DeliveryQueue {
             let id = id.to_string();
             let err = err.to_string();
             move || -> Result<()> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 conn.execute(
                     "UPDATE delivery_jobs SET attempt = ?2, next_attempt_at_ms = ?3, last_error = ?4 WHERE id = ?1",
                     params![id, attempt, next, err],
@@ -462,7 +665,11 @@ impl DeliveryQueue {
         Ok(())
     }
 
-    pub async fn mark_delivered_by_receipt(&self, activity_id: &str, from_actor: &str) -> Result<u64> {
+    pub async fn mark_delivered_by_receipt(
+        &self,
+        activity_id: &str,
+        from_actor: &str,
+    ) -> Result<u64> {
         let activity_id = activity_id.trim().to_string();
         let from_actor = from_actor.trim().to_string();
         if activity_id.is_empty() || from_actor.is_empty() {
@@ -473,7 +680,7 @@ impl DeliveryQueue {
         let updated = tokio::task::spawn_blocking({
             let db_path = self.db_path.clone();
             move || -> Result<u64> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 let changed = conn.execute(
                     "UPDATE delivery_jobs SET status = 1, last_error = NULL WHERE status = 3 AND activity_id = ?1 AND (target = ?2 OR target = ?3)",
                     params![activity_id, from_actor, from_inbox],
@@ -485,11 +692,39 @@ impl DeliveryQueue {
         Ok(updated)
     }
 
+    /// Remove old delivered/dead jobs so the DB does not grow forever.
+    pub async fn prune_delivery_jobs(
+        &self,
+        delivered_older_than_ms: i64,
+        dead_older_than_ms: i64,
+    ) -> Result<u64> {
+        let now = now_ms();
+        let delivered_cutoff = now.saturating_sub(delivered_older_than_ms);
+        let dead_cutoff = now.saturating_sub(dead_older_than_ms);
+        let deleted = tokio::task::spawn_blocking({
+            let db_path = self.db_path.clone();
+            move || -> Result<u64> {
+                let conn = open_conn(&db_path)?;
+                let a = conn.execute(
+                    "DELETE FROM delivery_jobs WHERE status = 1 AND created_at_ms < ?1",
+                    params![delivered_cutoff],
+                )?;
+                let b = conn.execute(
+                    "DELETE FROM delivery_jobs WHERE status = 2 AND created_at_ms < ?1",
+                    params![dead_cutoff],
+                )?;
+                Ok((a + b) as u64)
+            }
+        })
+        .await??;
+        Ok(deleted)
+    }
+
     pub async fn stats(&self) -> Result<QueueStats> {
         tokio::task::spawn_blocking({
             let db_path = self.db_path.clone();
             move || -> Result<QueueStats> {
-                let conn = Connection::open(db_path)?;
+                let conn = open_conn(&db_path)?;
                 let pending: u64 = conn.query_row(
                     "SELECT COUNT(*) FROM delivery_jobs WHERE status = 0",
                     [],
@@ -545,8 +780,14 @@ impl DeliveryQueue {
                         let _ = self.mark_dead(&j.id, &format!("{e:#}")).await;
                         continue;
                     }
-                    let delay = next_backoff(attempt_no, settings.base_backoff_secs, settings.max_backoff_secs);
-                    let _ = self.reschedule(&j.id, attempt_no, delay, &format!("{e:#}")).await;
+                    let delay = next_backoff(
+                        attempt_no,
+                        settings.base_backoff_secs,
+                        settings.max_backoff_secs,
+                    );
+                    let _ = self
+                        .reschedule(&j.id, attempt_no, delay, &format!("{e:#}"))
+                        .await;
                 }
                 Ok(())
             }
@@ -569,7 +810,18 @@ async fn resolve_actor_cached(
         .await
     {
         Ok(v) => v,
-        Err(_) => delivery.resolve_actor_info(actor_url).await?,
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("404")
+                || err_str.contains("410")
+                || err_str.contains("429")
+                || err_str.contains("peer deleted")
+            {
+                return Err(e);
+            } else {
+                delivery.resolve_actor_info(actor_url).await?
+            }
+        }
     };
     cache.insert(actor_url.to_string(), info.clone());
     Ok(info)
@@ -591,6 +843,7 @@ struct Job {
     key_id: Option<String>,
     #[allow(dead_code)]
     activity_id: Option<String>,
+    status: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -600,8 +853,15 @@ pub struct QueueStats {
     pub dead: u64,
 }
 
-fn init_db(path: &Path) -> Result<()> {
+fn open_conn(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).with_context(|| format!("open db: {}", path.display()))?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+    Ok(conn)
+}
+
+fn init_db(path: &Path) -> Result<()> {
+    let mut conn = open_conn(path)?;
     conn.execute_batch(
         r#"
         PRAGMA journal_mode=WAL;
@@ -620,11 +880,36 @@ fn init_db(path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_delivery_due ON delivery_jobs(status, next_attempt_at_ms);
         "#,
     )?;
-    // Migrate existing dbs.
-    let _ = conn.execute("ALTER TABLE delivery_jobs ADD COLUMN key_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE delivery_jobs ADD COLUMN activity_id TEXT NULL", []);
+    // Migrate existing dbs (numbered migrations, recorded in schema_version).
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
+    let current: Option<u32> = conn
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .ok();
+    let version = current.unwrap_or(1);
+    if version > DELIVERY_SCHEMA_VERSION {
+        anyhow::bail!(
+            "delivery schema version {version} is newer than this binary ({DELIVERY_SCHEMA_VERSION})"
+        );
+    }
+    let tx = conn.transaction()?;
+    // Idempotent: an error here means the column already exists.
+    let _ = tx.execute("ALTER TABLE delivery_jobs ADD COLUMN key_id TEXT NULL", []);
+    let _ = tx.execute(
+        "ALTER TABLE delivery_jobs ADD COLUMN activity_id TEXT NULL",
+        [],
+    );
+    tx.execute("DELETE FROM schema_version", [])?;
+    tx.execute(
+        "INSERT INTO schema_version(version) VALUES (?1)",
+        params![DELIVERY_SCHEMA_VERSION],
+    )?;
+    tx.commit()?;
     Ok(())
 }
+
+pub const DELIVERY_SCHEMA_VERSION: u32 = 2;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -640,7 +925,7 @@ fn new_job_id() -> String {
     b.iter().map(|v| format!("{v:02x}")).collect()
 }
 
-fn next_backoff(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
+pub fn next_backoff(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
     let pow = attempt.saturating_sub(1).min(20);
     let mut secs = base_secs.saturating_mul(1u64 << pow);
     if secs > max_secs {
@@ -673,5 +958,8 @@ pub(crate) fn activity_id_from_bytes(bytes: &[u8]) -> Option<String> {
     use sha2::Digest as _;
     let mut h = sha2::Sha256::new();
     h.update(bytes);
-    Some(format!("urn:fedi3:activity:sha256:{}", hex::encode(h.finalize())))
+    Some(format!(
+        "urn:fedi3:activity:sha256:{}",
+        hex::encode(h.finalize())
+    ))
 }

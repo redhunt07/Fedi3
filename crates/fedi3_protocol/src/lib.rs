@@ -22,4 +22,3 @@ pub struct RelayHttpResponse {
     pub headers: Vec<(String, String)>,
     pub body_b64: String,
 }
-

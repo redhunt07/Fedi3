@@ -11,8 +11,8 @@ use fedi3_core::http_sig::KeyResolver;
 use fedi3_core::keys::{default_data_dir, load_or_generate_identity};
 use fedi3_core::media_backend::{build_media_backend, MediaConfig};
 use fedi3_core::net_metrics::NetMetrics;
-use fedi3_core::social_db::SocialDb;
 use fedi3_core::object_fetch::ObjectFetchWorker;
+use fedi3_core::social_db::SocialDb;
 use fedi3_core::ui_events::UiEvent;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,13 +22,18 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
         .init();
 
     let username = std::env::var("FEDI3_USER").unwrap_or_else(|_| "alice".to_string());
     let domain = std::env::var("FEDI3_DOMAIN").unwrap_or_else(|_| "example.invalid".to_string());
-    let base_url = std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
-    let relay_ws = std::env::var("FEDI3_RELAY_WS").unwrap_or_else(|_| "ws://127.0.0.1:8787".to_string());
+    let base_url =
+        std::env::var("FEDI3_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+    let relay_ws =
+        std::env::var("FEDI3_RELAY_WS").unwrap_or_else(|_| "ws://127.0.0.1:8787".to_string());
     let relay_token = std::env::var("FEDI3_RELAY_TOKEN").unwrap_or_else(|_| "devtoken".to_string());
     let bind = std::env::var("FEDI3_BIND").unwrap_or_else(|_| "127.0.0.1:8788".to_string());
 
@@ -67,7 +72,8 @@ async fn main() -> anyhow::Result<()> {
     let (ui_events, _) = tokio::sync::broadcast::channel::<UiEvent>(128);
 
     let http = reqwest::Client::new();
-    let (media_cfg, media_backend) = build_media_backend(MediaConfig::default(), data_dir.clone(), http.clone())?;
+    let (media_cfg, media_backend) =
+        build_media_backend(MediaConfig::default(), data_dir.clone(), http.clone())?;
 
     let state = ApState {
         cfg: cfg.clone(),
@@ -98,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
             max_bytes_per_day: 200 * 1024 * 1024,
         },
         inbox_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        max_body_bytes: 20 * 1024 * 1024,
     };
 
     // Start queue worker (dev). Shutdown isn't wired here; stop the process to stop.
@@ -114,28 +121,41 @@ async fn main() -> anyhow::Result<()> {
         key_id,
         QueueSettings::default(),
     );
-    state
-        .object_fetch
-        .start(shutdown_rx.clone(), state.social.clone(), state.http.clone());
+    state.object_fetch.start(
+        shutdown_rx.clone(),
+        state.social.clone(),
+        state.http.clone(),
+    );
 
     let state_for_router = state.clone();
-    let router = Router::new().fallback(any(move |req| async move { handle_request(&state_for_router, req).await }));
+    let router = Router::new().fallback(any(move |req| async move {
+        handle_request(&state_for_router, req).await
+    }));
 
     let addr: SocketAddr = bind.parse()?;
     info!("local AP server on http://{addr} (debug)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let server = tokio::spawn(async move { axum::serve(listener, router.into_make_service()).await });
+    let server =
+        tokio::spawn(async move { axum::serve(listener, router.into_make_service()).await });
 
     let state_for_tunnel = state.clone();
-    let router2 = Router::new().fallback(any(move |req| async move { handle_request(&state_for_tunnel, req).await }));
+    let router2 = Router::new().fallback(any(move |req| async move {
+        handle_request(&state_for_tunnel, req).await
+    }));
     let tunnel = tokio::spawn(async move {
         fedi3_core::tunnel::run_tunnel(&username, &relay_ws, &relay_token, router2).await
     });
 
-    let _ = tokio::try_join!(async { server.await??; Ok::<(), anyhow::Error>(()) }, async {
-        tunnel.await??;
-        Ok::<(), anyhow::Error>(())
-    })?;
+    let _ = tokio::try_join!(
+        async {
+            server.await??;
+            Ok::<(), anyhow::Error>(())
+        },
+        async {
+            tunnel.await??;
+            Ok::<(), anyhow::Error>(())
+        }
+    )?;
 
     Ok(())
 }

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use anyhow::{Context, Result};
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hkdf::Hkdf;
 use pqcrypto_kyber::kyber768;
@@ -17,7 +17,7 @@ use sha2::Sha256;
 use tracing::warn;
 
 use crate::ap::ApState;
-use crate::http_sig::{verify_bytes_rsa_sha256, sign_bytes_rsa_sha256};
+use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
 use crate::social_db::{ChatMessage, ChatThread, CollectionPage};
 use fedi3_protocol::RelayHttpRequest;
 
@@ -257,14 +257,20 @@ pub async fn decrypt_envelope(state: &ApState, env: &ChatEnvelope) -> Result<Cha
     Ok(payload)
 }
 
-pub async fn store_incoming_payload(state: &ApState, env: &ChatEnvelope, payload: &ChatPayload) -> Result<()> {
+pub async fn store_incoming_payload(
+    state: &ApState,
+    env: &ChatEnvelope,
+    payload: &ChatPayload,
+) -> Result<()> {
     let thread_id = env.thread_id.trim();
     if thread_id.is_empty() {
         return Err(anyhow::anyhow!("missing thread_id"));
     }
     if payload.op == "message" {
         state.social.create_chat_thread(thread_id, "dm", None)?;
-        state.social.upsert_chat_member(thread_id, &env.sender_actor, "member")?;
+        state
+            .social
+            .upsert_chat_member(thread_id, &env.sender_actor, "member")?;
         let msg = ChatMessage {
             message_id: env.message_id.clone(),
             thread_id: thread_id.to_string(),
@@ -279,7 +285,9 @@ pub async fn store_incoming_payload(state: &ApState, env: &ChatEnvelope, payload
         state.social.touch_chat_thread(thread_id)?;
     } else if payload.op == "edit" {
         if let Some(message_id) = payload.message_id.as_deref() {
-            state.social.update_chat_message_edit(message_id, &serde_json::to_string(payload)?)?;
+            state
+                .social
+                .update_chat_message_edit(message_id, &serde_json::to_string(payload)?)?;
         }
     } else if payload.op == "delete" {
         if let Some(message_id) = payload.message_id.as_deref() {
@@ -325,16 +333,26 @@ pub async fn store_incoming_payload(state: &ApState, env: &ChatEnvelope, payload
         state.social.insert_chat_message(&msg)?;
         state.social.touch_chat_thread(thread_id)?;
     } else if payload.op == "receipt" {
-        if let (Some(message_id), Some(status)) = (payload.message_id.as_deref(), payload.status.as_deref()) {
-            state.social.upsert_chat_message_status(message_id, &env.sender_actor, status)?;
+        if let (Some(message_id), Some(status)) =
+            (payload.message_id.as_deref(), payload.status.as_deref())
+        {
+            state
+                .social
+                .upsert_chat_message_status(message_id, &env.sender_actor, status)?;
         }
     } else if payload.op == "react" {
-        if let (Some(message_id), Some(reaction)) = (payload.message_id.as_deref(), payload.reaction.as_deref()) {
+        if let (Some(message_id), Some(reaction)) =
+            (payload.message_id.as_deref(), payload.reaction.as_deref())
+        {
             let action = payload.action.as_deref().unwrap_or("add");
             if action == "remove" {
-                let _ = state.social.remove_chat_reaction(message_id, &env.sender_actor, reaction);
+                let _ = state
+                    .social
+                    .remove_chat_reaction(message_id, &env.sender_actor, reaction);
             } else {
-                let _ = state.social.add_chat_reaction(message_id, &env.sender_actor, reaction);
+                let _ = state
+                    .social
+                    .add_chat_reaction(message_id, &env.sender_actor, reaction);
             }
             if let Ok(Some(thread_id)) = state.social.get_chat_message_thread_id(message_id) {
                 let _ = state.social.touch_chat_thread(&thread_id);
@@ -362,11 +380,7 @@ pub async fn send_envelope_to_peer(
         Ok(v) => v,
         Err(e) => {
             let ttl = state.cfg.p2p_cache_ttl_secs;
-            return match state
-                .delivery
-                .store_in_mailboxes(peer_id, req, ttl)
-                .await
-            {
+            return match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
                 Ok(()) => {
                     warn!(peer=%peer_id, msg_id=%env.message_id, "chat queued in mailbox after p2p failure: {e}");
                     Ok(ChatSendOutcome::Queued)
@@ -384,11 +398,7 @@ pub async fn send_envelope_to_peer(
         return Ok(ChatSendOutcome::Sent);
     }
     let ttl = state.cfg.p2p_cache_ttl_secs;
-    match state
-        .delivery
-        .store_in_mailboxes(peer_id, req, ttl)
-        .await
-    {
+    match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
         Ok(()) => {
             warn!(peer=%peer_id, msg_id=%env.message_id, status=resp.status, "chat queued in mailbox after non-2xx response");
             Ok(ChatSendOutcome::Queued)
@@ -403,11 +413,20 @@ pub async fn send_envelope_to_peer(
     }
 }
 
-pub fn list_threads(state: &ApState, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ChatThread>> {
+pub fn list_threads(
+    state: &ApState,
+    limit: u32,
+    cursor: Option<i64>,
+) -> Result<CollectionPage<ChatThread>> {
     state.social.list_chat_threads(limit, cursor)
 }
 
-pub fn list_messages(state: &ApState, thread_id: &str, limit: u32, cursor: Option<i64>) -> Result<CollectionPage<ChatMessage>> {
+pub fn list_messages(
+    state: &ApState,
+    thread_id: &str,
+    limit: u32,
+    cursor: Option<i64>,
+) -> Result<CollectionPage<ChatMessage>> {
     state.social.list_chat_messages(thread_id, limit, cursor)
 }
 
@@ -448,7 +467,11 @@ async fn verify_envelope(state: &ApState, env: &ChatEnvelope) -> Result<()> {
     Ok(())
 }
 
-fn derive_key(shared: &kyber768::SharedSecret, thread_id: &str, message_id: &str) -> Result<[u8; 32]> {
+fn derive_key(
+    shared: &kyber768::SharedSecret,
+    thread_id: &str,
+    message_id: &str,
+) -> Result<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(Some(thread_id.as_bytes()), shared.as_bytes());
     let mut out = [0u8; 32];
     hk.expand(message_id.as_bytes(), &mut out)
@@ -456,7 +479,9 @@ fn derive_key(shared: &kyber768::SharedSecret, thread_id: &str, message_id: &str
     Ok(out)
 }
 
-fn select_kem_target(bundle: &ChatBundle) -> Result<(String, kyber768::Ciphertext, kyber768::SharedSecret)> {
+fn select_kem_target(
+    bundle: &ChatBundle,
+) -> Result<(String, kyber768::Ciphertext, kyber768::SharedSecret)> {
     if let Some(pk) = bundle.prekeys.first() {
         let public = kyber768::PublicKey::from_bytes(&B64.decode(pk.public_b64.as_bytes())?)?;
         let (ss, ct) = kyber768::encapsulate(&public);

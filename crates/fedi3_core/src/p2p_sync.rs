@@ -105,8 +105,13 @@ pub fn start_p2p_sync_worker(state: ApState, cfg: P2pConfig, mut shutdown: watch
                         continue;
                     }
                     let bytes = canonical_json_bytes(&activity);
-                    let _ = state.social.store_inbox_activity(&activity_id, actor, ty, bytes.clone());
-                    let _ = state.social.insert_federated_feed_item(&activity_id, actor, bytes);
+                    let _ =
+                        state
+                            .social
+                            .store_inbox_activity(&activity_id, actor, ty, bytes.clone());
+                    let _ = state
+                        .social
+                        .insert_federated_feed_item(&activity_id, actor, bytes);
                     if let Some(a) = actor {
                         let _ = state.social.upsert_actor_meta(a, true);
                     }
@@ -146,7 +151,10 @@ fn activity_dedup_id(activity: &serde_json::Value) -> String {
         }
     }
     let bytes = canonical_json_bytes(activity);
-    format!("urn:fedi3:sync:{}", short_hash(&String::from_utf8_lossy(&bytes)))
+    format!(
+        "urn:fedi3:sync:{}",
+        short_hash(&String::from_utf8_lossy(&bytes))
+    )
 }
 
 fn canonical_json_bytes(v: &serde_json::Value) -> Vec<u8> {
@@ -166,7 +174,9 @@ fn canonicalize_json(v: &serde_json::Value) -> serde_json::Value {
             }
             serde_json::Value::Object(out)
         }
-        serde_json::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(canonicalize_json).collect()),
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(canonicalize_json).collect())
+        }
         _ => v.clone(),
     }
 }

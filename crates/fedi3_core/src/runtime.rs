@@ -7,26 +7,26 @@ use crate::ap::{handle_request, ApConfig, ApState, GlobalIngestPolicy, InboxRate
 use crate::delivery::Delivery;
 use crate::delivery_queue::{DeliveryQueue, PostDeliveryMode, QueueSettings};
 use crate::http_retry::send_with_retry;
-use crate::http_sig::{KeyResolver, sign_request_rsa_sha256};
-use crate::keys::{default_data_dir, did_from_public_key_pem, load_or_generate_identity};
+use crate::http_sig::{sign_request_rsa_sha256, KeyResolver};
+use crate::keys::{default_data_dir, did_from_public_key_pem};
 use crate::net_metrics::NetMetrics;
-use crate::social_db::SocialDb;
 use crate::object_fetch::ObjectFetchWorker;
+use crate::social_db::SocialDb;
 use anyhow::{Context, Result};
 use axum::{routing::any, Router};
-use tower_http::trace::TraceLayer;
 use http::{HeaderMap, HeaderValue, Method as HttpMethod, Uri};
 use std::{
-    net::SocketAddr,
+    net::{SocketAddr, TcpListener as StdTcpListener},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::Duration,
 };
 use tokio::sync::watch;
-use tracing::{error, info};
+use tower_http::trace::TraceLayer;
+use tracing::{error, info, warn};
 
 static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -44,7 +44,7 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct CoreStartConfig {
     pub username: String,
     pub domain: String,
@@ -98,10 +98,10 @@ pub struct CoreStartConfig {
     /// When true, inbound Follow requests require manual approval (a.k.a. "locked account").
     #[serde(default)]
     pub manually_approves_followers: Option<bool>,
-            /// Optional list of ActivityPub relay actor URLs to follow (Misskey/Mastodon-style relay),
-            /// to populate the federated timeline without manually following every remote account.
-            #[serde(default)]
-            pub ap_relays: Option<Vec<String>>,
+    /// Optional list of ActivityPub relay actor URLs to follow (Misskey/Mastodon-style relay),
+    /// to populate the federated timeline without manually following every remote account.
+    #[serde(default)]
+    pub ap_relays: Option<Vec<String>>,
     /// HTTP client timeout for outbound requests (seconds).
     #[serde(default)]
     pub http_timeout_secs: Option<u64>,
@@ -160,6 +160,43 @@ impl Default for CoreStartConfig {
     }
 }
 
+fn validate_username(username: &str) -> bool {
+    !username.is_empty()
+        && username.len() <= 64
+        && username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn validate_domain(domain: &str) -> bool {
+    let domain = domain.trim();
+    if domain.is_empty() || domain.len() > 253 {
+        return false;
+    }
+    if domain.contains("://") || domain.contains('/') || domain.contains(' ') {
+        return false;
+    }
+    domain.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    })
+}
+
+fn data_dir_for(cfg: &CoreStartConfig) -> Result<std::path::PathBuf> {
+    if let Some(dir) = &cfg.data_dir {
+        Ok(std::path::PathBuf::from(dir))
+    } else {
+        Ok(default_data_dir()?.join("app").join(&cfg.username))
+    }
+}
+
+/// Start the core. This function returns `Ok(handle)` only after the local server is
+/// actually bound to `cfg.bind` and the database has been opened successfully.
 pub fn start(cfg: CoreStartConfig) -> Result<u64> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -169,16 +206,49 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
         .try_init()
         .ok();
 
+    // Fail-fast config validation (H-43/M-33).
+    if !validate_username(&cfg.username) {
+        anyhow::bail!(
+            "invalid username {:?}: must match ^[A-Za-z0-9_]{{1,64}}$",
+            cfg.username
+        );
+    }
+    if !validate_domain(&cfg.domain) {
+        anyhow::bail!("invalid domain {:?}: expected a hostname", cfg.domain);
+    }
+    let addr: SocketAddr = cfg.bind.parse().context("parse bind address")?;
+
+    // Synchronous bind on the calling thread: a busy port must be an Err, never a live handle.
+    let std_listener = StdTcpListener::bind(addr).with_context(|| format!("bind {addr}"))?;
+    std_listener
+        .set_nonblocking(true)
+        .context("set listener nonblocking")?;
+
+    // Open the DB before spawning so a corrupt/locked DB fails the start.
+    let data_dir = data_dir_for(&cfg)?;
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("create data dir {}", data_dir.display()))?;
+    crate::keys::secure_dir(&data_dir)?;
+    let db_path = data_dir.join("fedi3.db");
+    crate::social_db::SocialDb::open(&db_path).context("open social db")?;
+    crate::delivery_queue::DeliveryQueue::open(&db_path).context("open delivery queue db")?;
+
+    // Load (or generate) the identity on the caller thread too: a corrupted key file must not
+    // silently produce a new DID after start returned success.
+    let identity = crate::keys::load_or_generate_identity(&data_dir)?;
+
     let handle = HANDLE_SEQ.fetch_add(1, Ordering::Relaxed);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let join = thread::spawn(move || {
-        if let Err(e) = run_core(cfg, shutdown_rx) {
+        if let Err(e) = run_core(cfg, shutdown_rx, std_listener, data_dir, identity) {
             error!("core runtime failed: {e:#}");
         }
     });
 
-    let mut reg = REGISTRY.lock().unwrap();
+    let mut reg = REGISTRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     reg.push((
         handle,
         RunningCore {
@@ -192,45 +262,73 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
 
 pub fn stop(handle: u64) -> Result<()> {
     let running = {
-        let mut reg = REGISTRY.lock().unwrap();
-        let idx = reg.iter().position(|(h, _)| *h == handle).context("invalid handle")?;
+        let mut reg = REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let idx = reg
+            .iter()
+            .position(|(h, _)| *h == handle)
+            .context("invalid handle")?;
         let (_, mut running) = reg.swap_remove(idx);
         let _ = running.shutdown_tx.send(true);
-        // Join in background to avoid blocking the UI thread.
         running.join.take()
     };
 
     if let Some(j) = running {
+        // Wait for a clean shutdown (DB checkpoint, workers stopped), but never hang forever.
+        let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let _ = j.join();
+            let _ = tx.send(());
         });
+        let _ = rx.recv_timeout(Duration::from_secs(15));
     }
     Ok(())
 }
 
-fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
+fn run_core(
+    cfg: CoreStartConfig,
+    mut shutdown_rx: watch::Receiver<bool>,
+    std_listener: StdTcpListener,
+    data_dir: std::path::PathBuf,
+    identity: crate::keys::Identity,
+) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build tokio runtime")?;
 
     rt.block_on(async move {
+        let relay_ws_enabled = !cfg.relay_ws.trim().is_empty();
         let public_base_url = if cfg.public_base_url.trim().is_empty() {
-            infer_http_base_from_relay_ws(&cfg.relay_ws)?
+            if relay_ws_enabled {
+                infer_http_base_from_relay_ws(&cfg.relay_ws)?
+            } else {
+                format!("http://{}", cfg.bind)
+            }
         } else {
             cfg.public_base_url.trim_end_matches('/').to_string()
         };
 
-        let data_dir = if let Some(dir) = &cfg.data_dir {
-            std::path::PathBuf::from(dir)
-        } else {
-            default_data_dir()?.join("app").join(&cfg.username)
-        };
-
-        let identity = load_or_generate_identity(&data_dir)?;
         info!("identity dir: {}", data_dir.display());
         let did = did_from_public_key_pem(&identity.public_key_pem);
         let net = Arc::new(NetMetrics::new());
+
+        // H-48: prune the peer metric maps on a timer, not only when the UI polls.
+        {
+            let net = net.clone();
+            let mut prune_shutdown = shutdown_rx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => net.prune_seen(60_000),
+                        _ = prune_shutdown.changed() => {
+                            if *prune_shutdown.borrow() { break; }
+                        }
+                    }
+                }
+            });
+        }
 
         let db_path = data_dir.join("fedi3.db");
         let queue = Arc::new(DeliveryQueue::open(&db_path)?);
@@ -434,7 +532,12 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         }
         queue_settings.p2p_cache_ttl_secs = p2p_cache_ttl_secs;
 
+        let max_body_bytes = cfg
+            .max_body_bytes
+            .unwrap_or(20 * 1024 * 1024)
+            .clamp(1 * 1024 * 1024, 100 * 1024 * 1024);
         let state = ApState {
+            max_body_bytes,
             cfg: {
                 let mut c = ap_cfg;
                 if let Some(list) = cfg.legacy_aliases.as_ref() {
@@ -468,7 +571,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             social: social.clone(),
             http: http.clone(),
             object_fetch: ObjectFetchWorker::default(),
-            max_date_skew: Duration::from_secs(cfg.max_date_skew_secs.unwrap_or(3600)),
+            max_date_skew: Duration::from_secs(cfg.max_date_skew_secs.unwrap_or(300)),
             data_dir: data_dir.clone(),
             media_cfg,
             media_backend: Arc::from(media_backend),
@@ -562,6 +665,7 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         crate::storage_gc::start_storage_gc_worker(
             storage_cfg,
             state.social.clone(),
+            queue.clone(),
             data_dir.clone(),
             shutdown_rx.clone(),
         );
@@ -678,11 +782,6 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
             }),
         );
 
-        let max_body_bytes = cfg
-            .max_body_bytes
-            .unwrap_or(20 * 1024 * 1024)
-            .clamp(1 * 1024 * 1024, 100 * 1024 * 1024);
-
         let state_for_router = state.clone();
         let router = Router::new().fallback(any(move |req| {
             let st = state_for_router.clone();
@@ -692,7 +791,8 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         .layer(TraceLayer::new_for_http());
 
         let addr: SocketAddr = cfg.bind.parse().context("parse bind")?;
-        let listener = tokio::net::TcpListener::bind(addr).await.context("bind")?;
+        let listener = tokio::net::TcpListener::from_std(std_listener)
+            .context("adopt pre-bound listener")?;
         info!("core local server http://{addr}");
 
         let (server_shutdown_tx, mut server_shutdown_rx) = watch::channel(false);
@@ -705,15 +805,20 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
                 .await
         });
 
-        let relay_ws = cfg.relay_ws.clone();
+        let relay_ws = cfg.relay_ws.trim().to_string();
         let relay_token = cfg
             .relay_token
             .clone()
             .or_else(|| std::env::var("FEDI3_RELAY_TOKEN").ok())
             .unwrap_or_default();
         let relay_token = relay_token.trim().to_string();
-        if relay_token.len() < 16 {
-            anyhow::bail!("relay_token missing/too short (min 16 chars); set it in the app settings");
+        // H-09: the relay is optional. A missing/short token must not kill the local core:
+        // without a relay we still serve the UI and P2P.
+        let tunnel_enabled = !relay_ws.is_empty() && !relay_token.is_empty();
+        if !relay_ws.is_empty() && relay_token.len() < 16 {
+            warn!(
+                "relay token missing/too short (min 16 chars): tunnel disabled, local core keeps running"
+            );
         }
 
         // Best-effort: if the user previously had a different relay token (e.g. old devtoken),
@@ -747,9 +852,22 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
 
         let shutdown_for_tunnel = shutdown_rx.clone();
         let net_for_tunnel = net.clone();
-        let tunnel = tokio::spawn(async move {
-            crate::tunnel::run_tunnel_with_shutdown(&user, &relay_ws, &relay_token, router2, shutdown_for_tunnel, net_for_tunnel).await
-        });
+        let tunnel = if tunnel_enabled {
+            Some(tokio::spawn(async move {
+                crate::tunnel::run_tunnel_with_shutdown(
+                    &user,
+                    &relay_ws,
+                    &relay_token,
+                    router2,
+                    shutdown_for_tunnel,
+                    net_for_tunnel,
+                )
+                .await
+            }))
+        } else {
+            net.set_relay_connected(false);
+            None
+        };
 
         if let Some(kp) = p2p_keypair {
             let p2p_cfg_for_sync = p2p_cfg.clone();
@@ -817,13 +935,20 @@ fn run_core(cfg: CoreStartConfig, mut shutdown_rx: watch::Receiver<bool>) -> Res
         }
         let _ = server_shutdown_tx.send(true);
 
-        let _ = tunnel.await;
+        if let Some(tunnel) = tunnel {
+            let _ = tunnel.await;
+        }
         let _ = server.await;
         Ok::<(), anyhow::Error>(())
     })
 }
 
-async fn send_move_to_followers(state: &ApState, old_base: &str, old_actor: &str, new_actor: &str) -> Result<()> {
+async fn send_move_to_followers(
+    state: &ApState,
+    old_base: &str,
+    old_actor: &str,
+    new_actor: &str,
+) -> Result<()> {
     let move_id = state.social.new_activity_id(old_actor);
     let followers_collection = format!("{old_actor}/followers");
     let activity = serde_json::json!({
@@ -842,14 +967,18 @@ async fn send_move_to_followers(state: &ApState, old_base: &str, old_actor: &str
         let _ = state.social.store_outbox(id, bytes.clone());
     }
 
-    let old_key_id = format!("{}/users/{}#main-key", old_base.trim_end_matches('/'), state.cfg.username);
+    let old_key_id = format!(
+        "{}/users/{}#main-key",
+        old_base.trim_end_matches('/'),
+        state.cfg.username
+    );
 
-    let mut cursor: Option<i64> = None;
+    let mut cursor: Option<String> = None;
     let mut all: Vec<String> = Vec::new();
     loop {
         let page = state.social.list_followers(200, cursor)?;
         all.extend(page.items);
-        cursor = page.next.and_then(|v| v.parse::<i64>().ok());
+        cursor = page.next;
         if cursor.is_none() {
             break;
         }
@@ -896,7 +1025,10 @@ async fn ensure_follow_actor(state: &ApState, target_actor: &str) -> Result<()> 
     let _ = state
         .social
         .set_following(target_actor, crate::social_db::FollowingStatus::Pending);
-    let _pending = state.queue.enqueue_activity(bytes, vec![target_actor.to_string()]).await?;
+    let _pending = state
+        .queue
+        .enqueue_activity(bytes, vec![target_actor.to_string()])
+        .await?;
     Ok(())
 }
 
@@ -939,11 +1071,20 @@ async fn post_signed_move_notice(
     relay_base: &str,
     body: Vec<u8>,
 ) -> Result<()> {
-    let url = format!("{}/_fedi3/relay/move_notice", relay_base.trim_end_matches('/'));
+    let url = format!(
+        "{}/_fedi3/relay/move_notice",
+        relay_base.trim_end_matches('/')
+    );
     let uri: Uri = url.parse().context("parse move_notice uri")?;
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(http::header::ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        http::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
 
     sign_request_rsa_sha256(
         private_key_pem,

@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StorageConfig {
     pub gc_interval_secs: Option<u64>,
 
@@ -48,6 +48,10 @@ pub struct StorageConfig {
     pub other_max_media_bytes_per_actor: Option<u64>,
     pub max_media_bytes_actors_per_run: Option<u32>,
     pub max_media_bytes_deletes_per_actor: Option<u32>,
+
+    /// Retention for delivered/dead delivery jobs (days), pruned by the GC.
+    pub delivered_jobs_retention_days: Option<u32>,
+    pub dead_jobs_retention_days: Option<u32>,
 }
 
 impl Default for StorageConfig {
@@ -81,6 +85,8 @@ impl Default for StorageConfig {
             other_max_media_bytes_per_actor: Some(200 * 1024 * 1024),
             max_media_bytes_actors_per_run: Some(25),
             max_media_bytes_deletes_per_actor: Some(200),
+            delivered_jobs_retention_days: Some(7),
+            dead_jobs_retention_days: Some(30),
         }
     }
 }
@@ -88,6 +94,7 @@ impl Default for StorageConfig {
 pub fn start_storage_gc_worker(
     cfg: StorageConfig,
     social: std::sync::Arc<SocialDb>,
+    queue: std::sync::Arc<crate::delivery_queue::DeliveryQueue>,
     data_dir: PathBuf,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -108,15 +115,31 @@ pub fn start_storage_gc_worker(
                 break;
             }
 
-            if let Err(e) = run_once(&cfg, &social, &data_dir).await {
+            if let Err(e) = run_once(&cfg, &social, &queue, &data_dir).await {
                 warn!("storage gc error: {e:#}");
             }
         }
     });
 }
 
-async fn run_once(cfg: &StorageConfig, social: &SocialDb, data_dir: &Path) -> Result<()> {
+async fn run_once(
+    cfg: &StorageConfig,
+    social: &SocialDb,
+    queue: &crate::delivery_queue::DeliveryQueue,
+    data_dir: &Path,
+) -> Result<()> {
     let now = now_ms();
+
+    // H-40: delivery jobs are otherwise never deleted.
+    let delivered_cutoff =
+        cfg.delivered_jobs_retention_days.unwrap_or(7).max(1) as i64 * 24 * 3600 * 1000;
+    let dead_cutoff = cfg.dead_jobs_retention_days.unwrap_or(30).max(1) as i64 * 24 * 3600 * 1000;
+    let pruned = queue
+        .prune_delivery_jobs(delivered_cutoff, dead_cutoff)
+        .await?;
+    if pruned > 0 {
+        info!(pruned, "gc pruned delivery_jobs");
+    }
 
     if let Some(max) = cfg.inbox_max_items {
         let deleted = tokio::task::spawn_blocking({
@@ -228,12 +251,21 @@ async fn run_once(cfg: &StorageConfig, social: &SocialDb, data_dir: &Path) -> Re
         // Per-actor quotas first (to cap growth deterministically).
         let obj_batch = cfg.max_objects_per_actor_batch.unwrap_or(2000).max(100);
         let obj_bytes_actors = cfg.max_object_bytes_actors_per_run.unwrap_or(25).max(1);
-        let obj_bytes_deletes = cfg.max_object_bytes_deletes_per_actor.unwrap_or(500).max(10);
+        let obj_bytes_deletes = cfg
+            .max_object_bytes_deletes_per_actor
+            .unwrap_or(500)
+            .max(10);
 
         if let Some(max_bytes) = cfg.other_max_object_bytes_per_actor {
             let deleted = tokio::task::spawn_blocking({
                 let s = social.clone();
-                move || s.prune_object_bytes_per_actor_other(max_bytes, obj_bytes_actors, obj_bytes_deletes)
+                move || {
+                    s.prune_object_bytes_per_actor_other(
+                        max_bytes,
+                        obj_bytes_actors,
+                        obj_bytes_deletes,
+                    )
+                }
             })
             .await??;
             if deleted > 0 {
@@ -243,11 +275,20 @@ async fn run_once(cfg: &StorageConfig, social: &SocialDb, data_dir: &Path) -> Re
         if let Some(max_bytes) = cfg.followed_fedi3_max_object_bytes_per_actor {
             let deleted = tokio::task::spawn_blocking({
                 let s = social.clone();
-                move || s.prune_object_bytes_per_actor_followed_fedi3(max_bytes, obj_bytes_actors, obj_bytes_deletes)
+                move || {
+                    s.prune_object_bytes_per_actor_followed_fedi3(
+                        max_bytes,
+                        obj_bytes_actors,
+                        obj_bytes_deletes,
+                    )
+                }
             })
             .await??;
             if deleted > 0 {
-                info!(deleted, "gc pruned objects per-actor bytes (followed fedi3)");
+                info!(
+                    deleted,
+                    "gc pruned objects per-actor bytes (followed fedi3)"
+                );
             }
         }
 
@@ -336,67 +377,91 @@ async fn run_once(cfg: &StorageConfig, social: &SocialDb, data_dir: &Path) -> Re
         }
     }
 
-        // Per-actor media quotas (DB + files).
-        let media_batch = cfg.max_media_items_per_actor_batch.unwrap_or(500).max(50);
-        let media_bytes_actors = cfg.max_media_bytes_actors_per_run.unwrap_or(25).max(1);
-        let media_bytes_deletes = cfg.max_media_bytes_deletes_per_actor.unwrap_or(200).max(10);
+    // Per-actor media quotas (DB + files).
+    let media_batch = cfg.max_media_items_per_actor_batch.unwrap_or(500).max(50);
+    let media_bytes_actors = cfg.max_media_bytes_actors_per_run.unwrap_or(25).max(1);
+    let media_bytes_deletes = cfg.max_media_bytes_deletes_per_actor.unwrap_or(200).max(10);
 
-        if let Some(max_bytes) = cfg.other_max_media_bytes_per_actor {
-            let names = tokio::task::spawn_blocking({
+    if let Some(max_bytes) = cfg.other_max_media_bytes_per_actor {
+        let names = tokio::task::spawn_blocking({
+            let s = social.clone();
+            move || {
+                s.prune_media_bytes_per_actor_other(
+                    max_bytes,
+                    media_bytes_actors,
+                    media_bytes_deletes,
+                )
+            }
+        })
+        .await??;
+        if !names.is_empty() {
+            delete_local_media_files(&data_dir.join("media"), &names)?;
+            info!(
+                deleted = names.len(),
+                "gc pruned media per-actor bytes (other)"
+            );
+        }
+    }
+    if let Some(max_bytes) = cfg.followed_fedi3_max_media_bytes_per_actor {
+        let names = tokio::task::spawn_blocking({
+            let s = social.clone();
+            move || {
+                s.prune_media_bytes_per_actor_followed_fedi3(
+                    max_bytes,
+                    media_bytes_actors,
+                    media_bytes_deletes,
+                )
+            }
+        })
+        .await??;
+        if !names.is_empty() {
+            delete_local_media_files(&data_dir.join("media"), &names)?;
+            info!(
+                deleted = names.len(),
+                "gc pruned media per-actor bytes (followed fedi3)"
+            );
+        }
+    }
+
+    // M-19: per-actor media quotas for non-followed actors must stay active regardless of
+    // `cache_only_followed_fedi3`.
+    if let Some(max) = cfg.other_max_media_items_per_actor {
+        loop {
+            let local_names = tokio::task::spawn_blocking({
                 let s = social.clone();
-                move || s.prune_media_bytes_per_actor_other(max_bytes, media_bytes_actors, media_bytes_deletes)
+                move || s.prune_media_per_actor_other(max, media_batch)
             })
             .await??;
-            if !names.is_empty() {
-                delete_local_media_files(&data_dir.join("media"), &names)?;
-                info!(deleted=names.len(), "gc pruned media per-actor bytes (other)");
+            if local_names.is_empty() {
+                break;
+            }
+            delete_local_media_files(&data_dir.join("media"), &local_names)?;
+            info!(
+                deleted = local_names.len(),
+                "gc pruned media per-actor (other)"
+            );
+            if local_names.len() < media_batch as usize {
+                break;
             }
         }
-        if let Some(max_bytes) = cfg.followed_fedi3_max_media_bytes_per_actor {
-            let names = tokio::task::spawn_blocking({
+    }
+    if let Some(max) = cfg.followed_fedi3_max_media_items_per_actor {
+        loop {
+            let local_names = tokio::task::spawn_blocking({
                 let s = social.clone();
-                move || s.prune_media_bytes_per_actor_followed_fedi3(max_bytes, media_bytes_actors, media_bytes_deletes)
+                move || s.prune_media_per_actor_followed_fedi3(max, media_batch)
             })
             .await??;
-            if !names.is_empty() {
-                delete_local_media_files(&data_dir.join("media"), &names)?;
-                info!(deleted=names.len(), "gc pruned media per-actor bytes (followed fedi3)");
+            if local_names.is_empty() {
+                break;
             }
-        }
-
-        if cfg.cache_only_followed_fedi3.unwrap_or(false) {
-            if let Some(max) = cfg.other_max_media_items_per_actor {
-                loop {
-                    let local_names = tokio::task::spawn_blocking({
-                    let s = social.clone();
-                    move || s.prune_media_per_actor_other(max, media_batch)
-                })
-                .await??;
-                if local_names.is_empty() {
-                    break;
-                }
-                delete_local_media_files(&data_dir.join("media"), &local_names)?;
-                info!(deleted=local_names.len(), "gc pruned media per-actor (other)");
-                if local_names.len() < media_batch as usize {
-                    break;
-                }
-            }
-        }
-        if let Some(max) = cfg.followed_fedi3_max_media_items_per_actor {
-            loop {
-                let local_names = tokio::task::spawn_blocking({
-                    let s = social.clone();
-                    move || s.prune_media_per_actor_followed_fedi3(max, media_batch)
-                })
-                .await??;
-                if local_names.is_empty() {
-                    break;
-                }
-                delete_local_media_files(&data_dir.join("media"), &local_names)?;
-                info!(deleted=local_names.len(), "gc pruned media per-actor (followed fedi3)");
-                if local_names.len() < media_batch as usize {
-                    break;
-                }
+            delete_local_media_files(&data_dir.join("media"), &local_names)?;
+            info!(
+                deleted = local_names.len(),
+                "gc pruned media per-actor (followed fedi3)"
+            );
+            if local_names.len() < media_batch as usize {
+                break;
             }
         }
     }
@@ -455,7 +520,11 @@ async fn prune_media_dir(dir: &Path, max_bytes: u64, social: &SocialDb) -> Resul
             if total <= max_bytes {
                 break;
             }
-            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             let _ = std::fs::remove_file(&path);
             total = total.saturating_sub(len);
             if !name.is_empty() {
