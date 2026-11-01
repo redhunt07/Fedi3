@@ -55,6 +55,7 @@ Nessun test richiede Docker o servizi esterni: il relay viene testato su SQLite 
 - [`docs/interop.md`](docs/interop.md) — interoperabilità verificata con Mastodon e Misskey reali
 - [`docs/build_linux.md`](docs/build_linux.md) — compilare app e AppImage su Linux
 - [`docs/app_guide.md`](docs/app_guide.md) — guida utente dell'app
+- [`docs/client_ux_plan.md`](docs/client_ux_plan.md) — piano di rilancio del client (IA, auth, step)
 - [`docs/ops_backup_restore.md`](docs/ops_backup_restore.md) — backup e ripristino
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — diagnosi dei problemi
 - [`docs/faq.md`](docs/faq.md) — domande frequenti
