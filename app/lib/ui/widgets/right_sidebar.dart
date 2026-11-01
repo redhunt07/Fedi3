@@ -16,6 +16,7 @@ import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/relays_screen.dart';
+import '../screens/search_screen.dart';
 import '../theme/ui_tokens.dart';
 import 'fedi3_ui.dart';
 import '../utils/time_ago.dart';
@@ -31,6 +32,7 @@ class RightSidebar extends StatefulWidget {
 
 class _RightSidebarState extends State<RightSidebar> {
   Timer? _poll;
+  Timer? _trendingTimer;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -42,12 +44,18 @@ class _RightSidebarState extends State<RightSidebar> {
   List<Map<String, dynamic>> _items = const [];
   String _draftKey = '';
   ComposeDraft? _draft;
+  List<Map<String, dynamic>> _trending = const [];
 
   @override
   void initState() {
     super.initState();
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+    _trendingTimer = Timer.periodic(
+        const Duration(minutes: 5), (_) => _loadTrending());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refresh();
+      _loadTrending();
+    });
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
@@ -70,6 +78,7 @@ class _RightSidebarState extends State<RightSidebar> {
   @override
   void dispose() {
     _poll?.cancel();
+    _trendingTimer?.cancel();
     _streamDebounce?.cancel();
     _streamRetry?.cancel();
     _streamSub?.cancel();
@@ -110,6 +119,27 @@ class _RightSidebarState extends State<RightSidebar> {
       if (!mounted) return;
       _startStream();
     });
+  }
+
+  Future<void> _loadTrending() async {
+    final cfg = widget.appState.config;
+    if (cfg == null || !widget.appState.isRunning) return;
+    try {
+      final api = CoreApi(config: cfg);
+      final resp = await api.fetchTrendingHashtags(limit: 8);
+      final raw = resp['items'];
+      final items = <Map<String, dynamic>>[];
+      if (raw is List) {
+        for (final it in raw) {
+          if (it is! Map) continue;
+          items.add(it.cast<String, dynamic>());
+        }
+      }
+      if (!mounted) return;
+      setState(() => _trending = items);
+    } catch (_) {
+      // Best-effort: keep the previous trending list.
+    }
   }
 
   Future<void> _refresh() async {
@@ -295,6 +325,63 @@ class _RightSidebarState extends State<RightSidebar> {
                 ),
               ),
             ),
+            if (_trending.isNotEmpty) ...[
+              const SizedBox(height: UiTokens.gapMd),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(UiTokens.padCard),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(context.l10n.trendingTitle,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w800)),
+                          const Spacer(),
+                          Icon(Icons.trending_up_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        context.l10n.trendingHint,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final tag in _trending.take(8))
+                            ActionChip(
+                              label: Text(
+                                tag['name']?.toString() ?? '',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => SearchScreen(
+                                    appState: widget.appState,
+                                    initialQuery:
+                                        tag['name']?.toString() ?? '',
+                                    initialTab: SearchTab.hashtags,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: UiTokens.gapMd),
             Card(
               child: ListTile(

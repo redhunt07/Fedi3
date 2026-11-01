@@ -371,6 +371,29 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Search'
+  /_fedi3/trending/hashtags:
+    get:
+      tags: [core]
+      summary: Hashtag in tendenza
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Hashtag più usati
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: {type: string}
+                        count: {type: integer}
   /_fedi3/notifications:
     get:
       tags: [core]

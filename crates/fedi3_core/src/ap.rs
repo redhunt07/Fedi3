@@ -298,6 +298,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/search/notes") => search_notes(state, req).await,
         ("GET", "/_fedi3/search/users") => search_users(state, req).await,
         ("GET", "/_fedi3/search/hashtags") => search_hashtags(state, req).await,
+        ("GET", "/_fedi3/trending/hashtags") => trending_hashtags(state, req).await,
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
         // H-44: locked-account Follow requests (internal UI endpoints).
@@ -2991,6 +2992,33 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
       "next": next,
     }))
     .into_response()
+}
+
+async fn trending_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find(|p| p.starts_with("limit="))
+        .and_then(|p| p.split_once('='))
+        .and_then(|(_, v)| v.parse::<u32>().ok())
+        .unwrap_or(10)
+        .min(50);
+    match state.social.list_trending_hashtags(limit) {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(name, count)| {
+                    serde_json::json!({"name": name, "count": count})
+                })
+                .collect();
+            axum::Json(serde_json::json!({"items": items})).into_response()
+        }
+        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
 }
 
 async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> {

@@ -1738,6 +1738,30 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
+    pub fn list_trending_hashtags(&self, limit: u32) -> Result<Vec<(String, u64)>> {
+        let conn = self.connect()?;
+        let limit = limit.min(50).max(1) as i64;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT name, COUNT(*)
+            FROM object_tags
+            WHERE name != ''
+              AND (tag_type='Hashtag' OR name LIKE '#%')
+            GROUP BY name
+            ORDER BY COUNT(*) DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let mut rows = stmt.query(params![limit])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(0)?;
+            let count: u64 = row.get(1)?;
+            out.push((name, count));
+        }
+        Ok(out)
+    }
+
     pub fn search_hashtags(&self, q: &str, limit: u32) -> Result<Vec<(String, u64)>> {
         let q = q.trim().trim_start_matches('#').to_lowercase();
         let conn = self.connect()?;
@@ -1753,7 +1777,7 @@ impl SocialDb {
             FROM object_tags
             WHERE name != ''
               AND (tag_type='Hashtag' OR name LIKE '#%')
-              AND lower(name) LIKE ?1 ESCAPE '\\'
+              AND lower(name) LIKE ?1 ESCAPE '\'
             GROUP BY name
             ORDER BY COUNT(*) DESC
             LIMIT ?2
@@ -4368,4 +4392,43 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod hashtag_tests {
+    use super::*;
+
+    #[test]
+    fn search_and_trending_hashtags_read_object_tags() {
+        let path = std::env::temp_dir().join(format!(
+            "fedi3_hashtag_test_{}_{}.db",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = SocialDb::open(&path).expect("open db");
+        {
+            let conn = db.connect().expect("connect");
+            conn.execute(
+                "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
+                params!["obj-1", "fedi3", "https://fedi3.test/tags/fedi3"],
+            )
+            .expect("insert tag 1");
+            conn.execute(
+                "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
+                params!["obj-2", "fedi3", "https://fedi3.test/tags/fedi3"],
+            )
+            .expect("insert tag 2");
+            conn.execute(
+                "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
+                params!["obj-1", "activitypub", "https://fedi3.test/tags/activitypub"],
+            )
+            .expect("insert tag 3");
+        }
+        let search = db.search_hashtags("fedi3", 10).expect("search");
+        assert_eq!(search, vec![("fedi3".to_string(), 2)]);
+        let trending = db.list_trending_hashtags(10).expect("trending");
+        assert_eq!(trending.first(), Some(&("fedi3".to_string(), 2)));
+        let _ = std::fs::remove_file(&path);
+    }
 }

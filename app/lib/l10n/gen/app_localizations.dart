@@ -2474,6 +2474,18 @@ abstract class AppLocalizations {
   /// **'Change status'**
   String get presenceChangeTooltip;
 
+  /// No description provided for @trendingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Discover'**
+  String get trendingTitle;
+
+  /// No description provided for @trendingHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Trending hashtags across the Fediverse'**
+  String get trendingHint;
+
   /// No description provided for @presenceTitle.
   ///
   /// In en, this message translates to:

@@ -590,6 +590,15 @@ class CoreApi {
     return _decodeMap(resp, 'search users');
   }
 
+  Future<Map<String, dynamic>> fetchTrendingHashtags({int limit = 10}) async {
+    final uri = _internal('/_fedi3/trending/hashtags', {
+      'limit': limit.toString(),
+    });
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'trending hashtags');
+  }
+
   Future<Map<String, dynamic>> searchHashtags({
     required String query,
     String? source,

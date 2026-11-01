@@ -3,6 +3,12 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-01 — Scopri gli hashtag in tendenza
+
+Il rail destro mostra ora gli hashtag più usati nel Fediverso e li apre
+direttamente nella ricerca. Corretta anche la ricerca hashtag, che prima
+restituiva sempre zero risultati.
+
 ## 2026-11-01 — Notifiche e composer più usabili
 
 Le notifiche ora sono righe compatte con avatar, stato di presenza e azioni

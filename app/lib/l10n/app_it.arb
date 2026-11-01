@@ -626,6 +626,8 @@
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
   "presenceChangeTooltip": "Cambia stato",
+  "trendingTitle": "Scopri",
+  "trendingHint": "Hashtag in tendenza nel Fediverso",
   "presenceTitle": "Stato",
   "presenceHint": "Scegli come gli altri utenti Fedi3 ti vedono.",
   "presenceOnline": "Online",

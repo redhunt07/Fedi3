@@ -1328,6 +1328,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get presenceChangeTooltip => 'Change status';
 
   @override
+  String get trendingTitle => 'Discover';
+
+  @override
+  String get trendingHint => 'Trending hashtags across the Fediverse';
+
+  @override
   String get presenceTitle => 'Status';
 
   @override

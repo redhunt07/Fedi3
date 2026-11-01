@@ -1334,6 +1334,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get presenceChangeTooltip => 'Cambia stato';
 
   @override
+  String get trendingTitle => 'Scopri';
+
+  @override
+  String get trendingHint => 'Hashtag in tendenza nel Fediverso';
+
+  @override
   String get presenceTitle => 'Stato';
 
   @override
