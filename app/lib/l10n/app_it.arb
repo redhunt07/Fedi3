@@ -70,6 +70,7 @@
   "chatSend": "Invia",
   "chatRefresh": "Aggiorna",
   "chatThreadsEmpty": "Nessuna chat",
+  "chatE2eBadge": "Cifrata end-to-end",
   "chatEmptyHint": "Le conversazioni cifrate end-to-end appariranno qui.",
   "chatEmpty": "Nessun messaggio",
   "chatNoMessages": "Nessun messaggio",
@@ -742,6 +743,55 @@
   "composeSensitiveMediaHint": "Segna i media come sensibili",
   "composeEmojiButton": "Emoji",
   "composeMfmCheatsheet": "MFM cheatsheet",
+  "composerBlockStyle": "Stile blocco",
+  "composerParagraph": "Paragrafo",
+  "composerH1": "Titolo 1",
+  "composerH2": "Titolo 2",
+  "composerH3": "Titolo 3",
+  "composerQuote": "Citazione",
+  "composerFont": "Carattere",
+  "composerSans": "Sans serif",
+  "composerSerif": "Serif",
+  "composerMono": "Monospazio",
+  "composerSize": "Dimensione",
+  "composerSizeS": "Piccolo",
+  "composerSizeL": "Grande",
+  "composerSizeXL": "Molto grande",
+  "composerAlignLeft": "Allinea a sinistra",
+  "composerAlignCenter": "Centra",
+  "composerAlignRight": "Allinea a destra",
+  "composerUndo": "Annulla",
+  "composerRedo": "Ripeti",
+  "composerEdit": "Modifica",
+  "composerPreview": "Anteprima",
+  "composerBold": "Grassetto",
+  "composerItalic": "Corsivo",
+  "composerStrike": "Barrato",
+  "composerCode": "Codice",
+  "composerLink": "Link",
+  "composerBulletList": "Elenco puntato",
+  "composerNumberedList": "Elenco numerato",
+  "composerDivider": "Separatore",
+  "composerEmoji": "Emoji",
+  "composerStats": "{words} parole · {chars} caratteri · {minutes} min di lettura",
+  "@composerStats": {
+    "placeholders": {
+      "words": {
+        "type": "int"
+      },
+      "chars": {
+        "type": "int"
+      },
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "composerPreviewMode": "Anteprima live",
+  "composerPreviewEmpty": "Scrivi qualcosa per vedere l’anteprima.",
+  "composerInsertLink": "Inserisci link",
+  "composerLinkUrl": "URL",
+  "composerInsert": "Inserisci",
   "composeMfmCheatsheetTitle": "MFM cheatsheet",
   "composeMfmCheatsheetBody": "**grassetto** -> grassetto\n*corsivo* -> corsivo\n~~barrato~~ -> barrato\n`codice` -> codice in linea\n#tag -> hashtag\n:emoji: -> emoji personalizzata\nA capo: nuova linea",
   "close": "Chiudi",

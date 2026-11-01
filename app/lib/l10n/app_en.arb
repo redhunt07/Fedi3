@@ -70,6 +70,7 @@
   "chatSend": "Send",
   "chatRefresh": "Refresh",
   "chatThreadsEmpty": "No chats yet",
+  "chatE2eBadge": "End-to-end encrypted",
   "chatEmptyHint": "End-to-end encrypted conversations will appear here.",
   "chatEmpty": "No messages yet",
   "chatNoMessages": "No messages",
@@ -742,6 +743,55 @@
   "composeSensitiveMediaHint": "Mark media as sensitive",
   "composeEmojiButton": "Emoji",
   "composeMfmCheatsheet": "MFM cheatsheet",
+  "composerBlockStyle": "Block style",
+  "composerParagraph": "Paragraph",
+  "composerH1": "Heading 1",
+  "composerH2": "Heading 2",
+  "composerH3": "Heading 3",
+  "composerQuote": "Quote",
+  "composerFont": "Font",
+  "composerSans": "Sans serif",
+  "composerSerif": "Serif",
+  "composerMono": "Monospace",
+  "composerSize": "Size",
+  "composerSizeS": "Small",
+  "composerSizeL": "Large",
+  "composerSizeXL": "Extra large",
+  "composerAlignLeft": "Align left",
+  "composerAlignCenter": "Center",
+  "composerAlignRight": "Align right",
+  "composerUndo": "Undo",
+  "composerRedo": "Redo",
+  "composerEdit": "Edit",
+  "composerPreview": "Preview",
+  "composerBold": "Bold",
+  "composerItalic": "Italic",
+  "composerStrike": "Strikethrough",
+  "composerCode": "Code",
+  "composerLink": "Link",
+  "composerBulletList": "Bullet list",
+  "composerNumberedList": "Numbered list",
+  "composerDivider": "Divider",
+  "composerEmoji": "Emoji",
+  "composerStats": "{words} words · {chars} characters · {minutes} min read",
+  "@composerStats": {
+    "placeholders": {
+      "words": {
+        "type": "int"
+      },
+      "chars": {
+        "type": "int"
+      },
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "composerPreviewMode": "Live preview",
+  "composerPreviewEmpty": "Type something to see the preview.",
+  "composerInsertLink": "Insert link",
+  "composerLinkUrl": "URL",
+  "composerInsert": "Insert",
   "composeMfmCheatsheetTitle": "MFM cheatsheet",
   "composeMfmCheatsheetBody": "**bold** -> bold\n*italic* -> italic\n~~strike~~ -> strike\n`code` -> inline code\n#tag -> hashtag\n:emoji: -> custom emoji\nLine breaks: new line",
   "close": "Close",

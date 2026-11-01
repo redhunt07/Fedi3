@@ -13,6 +13,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../widgets/emoji_picker.dart';
+import '../widgets/rich_composer.dart';
 import '../../state/emoji_recent_store.dart';
 import '../../state/direct_recipient_store.dart';
 import '../widgets/mfm_cheatsheet.dart';
@@ -117,12 +118,13 @@ class _ComposeScreenState extends State<ComposeScreen> {
                     ),
                   ),
                 ),
-              TextField(
+              RichComposer(
                 controller: _text,
-                minLines: 5,
-                maxLines: 12,
-                decoration: InputDecoration(
-                    labelText: context.l10n.composeWhatsHappening),
+                hintText: context.l10n.composeWhatsHappening,
+                enabled: widget.appState.isRunning,
+                onEmoji: () => EmojiPicker.show(context,
+                    prefs: widget.appState.prefs),
+                onMedia: widget.appState.isRunning ? _addMediaFromPath : null,
               ),
               if (_draftStatus != null) ...[
                 const SizedBox(height: 8),

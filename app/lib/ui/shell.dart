@@ -5,14 +5,18 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
 import '../services/core_event_stream.dart';
 import '../services/notification_service.dart';
+import 'screens/compose_screen.dart';
 import 'screens/notifications_screen.dart';
+import 'screens/profile_screen.dart';
 import 'screens/relays_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
@@ -33,6 +37,7 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _index = 0;
+  final GlobalKey _searchScreenKey = GlobalKey();
   late final List<Widget> _pages;
   StreamSubscription<CoreEvent>? _chatStream;
   Timer? _chatDebounce;
@@ -46,11 +51,16 @@ class _ShellState extends State<Shell> {
     super.initState();
     _pages = <Widget>[
       TimelinesScreen(appState: widget.appState),
-      SearchScreen(appState: widget.appState),
+      SearchScreen(key: _searchScreenKey, appState: widget.appState),
       ChatScreen(appState: widget.appState),
       NotificationsScreen(appState: widget.appState),
       RelaysScreen(appState: widget.appState),
       SettingsScreen(appState: widget.appState),
+      if (widget.appState.config != null)
+        ProfileScreen(
+          appState: widget.appState,
+          actorUrl: _selfActorUrl(widget.appState.config!),
+        ),
     ];
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -125,6 +135,103 @@ class _ShellState extends State<Shell> {
     });
   }
 
+  bool get _isDesktopPlatform =>
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
+
+  String _selfActorUrl(CoreConfig config) {
+    final base = config.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final user = config.username.trim();
+    return '$base/users/$user';
+  }
+
+  void _selectSection(int index) {
+    if (!mounted || index < 0 || index >= _pages.length) return;
+    if (_index == index) return;
+    setState(() => _index = index);
+  }
+
+  void _openComposer() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComposeScreen(appState: widget.appState),
+      ),
+    );
+  }
+
+  void _focusSearch() {
+    _selectSection(1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final editable = _findEditableText(_searchScreenKey.currentContext);
+      editable?.focusNode.requestFocus();
+    });
+  }
+
+  EditableText? _findEditableText(BuildContext? root) {
+    if (root == null) return null;
+    EditableText? found;
+    void visit(Element element) {
+      if (found != null) return;
+      final widget = element.widget;
+      if (widget is EditableText) {
+        found = widget;
+        return;
+      }
+      element.visitChildren(visit);
+    }
+
+    root.visitChildElements(visit);
+    return found;
+  }
+
+  void _closeTopRoute() {
+    final navigator = Navigator.maybeOf(context);
+    if (navigator != null && navigator.canPop()) {
+      navigator.maybePop();
+    }
+  }
+
+  Map<ShortcutActivator, VoidCallback> _shortcutBindings() {
+    return {
+      const SingleActivator(LogicalKeyboardKey.digit1, control: true):
+          () => _selectSection(0),
+      const SingleActivator(LogicalKeyboardKey.digit2, control: true):
+          () => _selectSection(1),
+      const SingleActivator(LogicalKeyboardKey.digit3, control: true):
+          () => _selectSection(2),
+      const SingleActivator(LogicalKeyboardKey.digit4, control: true):
+          () => _selectSection(3),
+      const SingleActivator(LogicalKeyboardKey.digit5, control: true):
+          () => _selectSection(4),
+      const SingleActivator(LogicalKeyboardKey.digit6, control: true):
+          () => _selectSection(5),
+      const SingleActivator(LogicalKeyboardKey.digit7, control: true):
+          () => _selectSection(6),
+      const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+          _openComposer,
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+          _focusSearch,
+      const SingleActivator(LogicalKeyboardKey.escape): _closeTopRoute,
+    };
+  }
+
+  Widget _wrapWithShortcuts(Widget child) {
+    if (!_isDesktopPlatform) return child;
+    return CallbackShortcuts(
+      bindings: _shortcutBindings(),
+      // The focus node exists only so keyboard events inside the shell have a
+      // descendant to start from; it is skipped by Tab traversal.
+      child: Focus(
+        autofocus: true,
+        skipTraversal: true,
+        child: child,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isWide =
@@ -134,72 +241,104 @@ class _ShellState extends State<Shell> {
     final items = _navItems(context, unread, unreadChats);
 
     if (!isWide) {
-      return Scaffold(
-        body: IndexedStack(index: _index, children: _pages),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
-          destinations: [
-            for (final it in items)
-              NavigationDestination(
-                icon: it.badge > 0
-                    ? Badge(
-                        label: Text('${it.badge}'),
-                        child: Icon(it.icon),
-                      )
-                    : Icon(it.icon),
-                label: it.label,
-              ),
-          ],
+      return _wrapWithShortcuts(
+        Scaffold(
+          body: IndexedStack(
+            key: const ValueKey('shell-pages'),
+            index: _index,
+            children: _pages,
+          ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: _selectSection,
+            destinations: [
+              for (final it in items)
+                NavigationDestination(
+                  tooltip: '${it.label} (${it.shortcut})',
+                  icon: it.badge > 0
+                      ? Badge(
+                          label: Text('${it.badge}'),
+                          child: Icon(it.icon),
+                        )
+                      : Icon(it.icon),
+                  label: it.label,
+                ),
+            ],
+          ),
         ),
       );
     }
 
-    return Scaffold(
-      body: Row(
-        children: [
-          _FediRail(
-            appState: widget.appState,
-            items: items,
-            index: _index,
-            onSelect: (i) => setState(() => _index = i),
-          ),
-          Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: IndexedStack(index: _index, children: _pages),
-                ),
-                SizedBox(
-                  width: UiTokens.rightSidebarWidth,
-                  child: RightSidebar(appState: widget.appState),
-                ),
-              ],
+    return _wrapWithShortcuts(
+      Scaffold(
+        body: Row(
+          children: [
+            _FediRail(
+              appState: widget.appState,
+              items: items,
+              index: _index,
+              onSelect: _selectSection,
             ),
-          ),
-        ],
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: IndexedStack(
+                      key: const ValueKey('shell-pages'),
+                      index: _index,
+                      children: _pages,
+                    ),
+                  ),
+                  SizedBox(
+                    width: UiTokens.rightSidebarWidth,
+                    child: RightSidebar(appState: widget.appState),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   List<_RailItem> _navItems(
       BuildContext context, int unread, int unreadChats) {
-    return [
+    final items = <_RailItem>[
       _RailItem(
           icon: Icons.dynamic_feed_rounded,
-          label: context.l10n.navTimeline),
-      _RailItem(icon: Icons.search_rounded, label: context.l10n.navSearch),
+          label: context.l10n.navTimeline,
+          shortcut: 'Ctrl+1'),
+      _RailItem(
+          icon: Icons.search_rounded,
+          label: context.l10n.navSearch,
+          shortcut: 'Ctrl+2'),
       _RailItem(
           icon: Icons.forum_rounded,
           label: context.l10n.navChat,
+          shortcut: 'Ctrl+3',
           badge: unreadChats),
       _RailItem(
           icon: Icons.notifications_rounded,
           label: context.l10n.navNotifications,
+          shortcut: 'Ctrl+4',
           badge: unread),
-      _RailItem(icon: Icons.hub_rounded, label: context.l10n.navRelays),
-      _RailItem(icon: Icons.tune_rounded, label: context.l10n.navSettings),
+      _RailItem(
+          icon: Icons.hub_rounded,
+          label: context.l10n.navRelays,
+          shortcut: 'Ctrl+5'),
+      _RailItem(
+          icon: Icons.tune_rounded,
+          label: context.l10n.navSettings,
+          shortcut: 'Ctrl+6'),
     ];
+    if (_pages.length > items.length) {
+      items.add(_RailItem(
+          icon: Icons.person_rounded,
+          label: context.l10n.settingsAccount,
+          shortcut: 'Ctrl+7'));
+    }
+    return items;
   }
 
   void _showChatSnack() {
@@ -222,11 +361,13 @@ class _RailItem {
   const _RailItem({
     required this.icon,
     required this.label,
+    required this.shortcut,
     this.badge = 0,
   });
 
   final IconData icon;
   final String label;
+  final String shortcut;
   final int badge;
 }
 
@@ -269,20 +410,26 @@ class _FediRail extends StatelessWidget {
           ),
           const SizedBox(height: UiTokens.gapLg),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              children: [
-                for (var i = 0; i < items.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 3),
-                    child: _RailButton(
-                      item: items[i],
-                      active: i == index,
-                      onTap: () => onSelect(i),
+            child: FocusTraversalGroup(
+              policy: OrderedTraversalPolicy(),
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                children: [
+                  for (var i = 0; i < items.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 3),
+                      child: FocusTraversalOrder(
+                        order: NumericFocusOrder(i.toDouble()),
+                        child: _RailButton(
+                          item: items[i],
+                          active: i == index,
+                          onTap: () => onSelect(i),
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
           Padding(
@@ -329,6 +476,7 @@ class _RailButton extends StatefulWidget {
 
 class _RailButtonState extends State<_RailButton> {
   bool _hover = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
@@ -344,28 +492,45 @@ class _RailButtonState extends State<_RailButton> {
         : _hover
             ? scheme.onSurface
             : scheme.onSurfaceVariant;
-    return Tooltip(
-      message: widget.item.label,
-      waitDuration: const Duration(milliseconds: 450),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: UiTokens.motionFast,
-            curve: Curves.easeOutCubic,
-            height: 62,
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: active
-                    ? scheme.primary.withAlpha(70)
-                    : Colors.transparent,
-              ),
-            ),
+    return AccessibleTooltip(
+      message: '${widget.item.label} (${widget.item.shortcut})',
+      button: true,
+      selected: active,
+      child: Focus(
+        onFocusChange: (hasFocus) => setState(() => _focused = hasFocus),
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent &&
+              (event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.space)) {
+            widget.onTap();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: ConstrainedBox(
+              constraints:
+                  const BoxConstraints(minWidth: 48, minHeight: 48),
+              child: AnimatedContainer(
+                duration: UiTokens.motionFast,
+                curve: Curves.easeOutCubic,
+                height: 62,
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: active
+                        ? scheme.primary.withAlpha(70)
+                        : _focused
+                            ? scheme.primary.withAlpha(140)
+                            : Colors.transparent,
+                  ),
+                ),
             child: Stack(
               alignment: Alignment.center,
               children: [
@@ -439,6 +604,8 @@ class _RailButtonState extends State<_RailButton> {
             ),
           ),
         ),
+      ),
+      ),
       ),
     );
   }

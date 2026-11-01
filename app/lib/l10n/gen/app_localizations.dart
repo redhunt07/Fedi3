@@ -434,6 +434,12 @@ abstract class AppLocalizations {
   /// **'No chats yet'**
   String get chatThreadsEmpty;
 
+  /// No description provided for @chatE2eBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'End-to-end encrypted'**
+  String get chatE2eBadge;
+
   /// No description provided for @chatEmptyHint.
   ///
   /// In en, this message translates to:
@@ -2899,6 +2905,222 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'MFM cheatsheet'**
   String get composeMfmCheatsheet;
+
+  /// No description provided for @composerBlockStyle.
+  ///
+  /// In en, this message translates to:
+  /// **'Block style'**
+  String get composerBlockStyle;
+
+  /// No description provided for @composerParagraph.
+  ///
+  /// In en, this message translates to:
+  /// **'Paragraph'**
+  String get composerParagraph;
+
+  /// No description provided for @composerH1.
+  ///
+  /// In en, this message translates to:
+  /// **'Heading 1'**
+  String get composerH1;
+
+  /// No description provided for @composerH2.
+  ///
+  /// In en, this message translates to:
+  /// **'Heading 2'**
+  String get composerH2;
+
+  /// No description provided for @composerH3.
+  ///
+  /// In en, this message translates to:
+  /// **'Heading 3'**
+  String get composerH3;
+
+  /// No description provided for @composerQuote.
+  ///
+  /// In en, this message translates to:
+  /// **'Quote'**
+  String get composerQuote;
+
+  /// No description provided for @composerFont.
+  ///
+  /// In en, this message translates to:
+  /// **'Font'**
+  String get composerFont;
+
+  /// No description provided for @composerSans.
+  ///
+  /// In en, this message translates to:
+  /// **'Sans serif'**
+  String get composerSans;
+
+  /// No description provided for @composerSerif.
+  ///
+  /// In en, this message translates to:
+  /// **'Serif'**
+  String get composerSerif;
+
+  /// No description provided for @composerMono.
+  ///
+  /// In en, this message translates to:
+  /// **'Monospace'**
+  String get composerMono;
+
+  /// No description provided for @composerSize.
+  ///
+  /// In en, this message translates to:
+  /// **'Size'**
+  String get composerSize;
+
+  /// No description provided for @composerSizeS.
+  ///
+  /// In en, this message translates to:
+  /// **'Small'**
+  String get composerSizeS;
+
+  /// No description provided for @composerSizeL.
+  ///
+  /// In en, this message translates to:
+  /// **'Large'**
+  String get composerSizeL;
+
+  /// No description provided for @composerSizeXL.
+  ///
+  /// In en, this message translates to:
+  /// **'Extra large'**
+  String get composerSizeXL;
+
+  /// No description provided for @composerAlignLeft.
+  ///
+  /// In en, this message translates to:
+  /// **'Align left'**
+  String get composerAlignLeft;
+
+  /// No description provided for @composerAlignCenter.
+  ///
+  /// In en, this message translates to:
+  /// **'Center'**
+  String get composerAlignCenter;
+
+  /// No description provided for @composerAlignRight.
+  ///
+  /// In en, this message translates to:
+  /// **'Align right'**
+  String get composerAlignRight;
+
+  /// No description provided for @composerUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get composerUndo;
+
+  /// No description provided for @composerRedo.
+  ///
+  /// In en, this message translates to:
+  /// **'Redo'**
+  String get composerRedo;
+
+  /// No description provided for @composerEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get composerEdit;
+
+  /// No description provided for @composerPreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get composerPreview;
+
+  /// No description provided for @composerBold.
+  ///
+  /// In en, this message translates to:
+  /// **'Bold'**
+  String get composerBold;
+
+  /// No description provided for @composerItalic.
+  ///
+  /// In en, this message translates to:
+  /// **'Italic'**
+  String get composerItalic;
+
+  /// No description provided for @composerStrike.
+  ///
+  /// In en, this message translates to:
+  /// **'Strikethrough'**
+  String get composerStrike;
+
+  /// No description provided for @composerCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Code'**
+  String get composerCode;
+
+  /// No description provided for @composerLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Link'**
+  String get composerLink;
+
+  /// No description provided for @composerBulletList.
+  ///
+  /// In en, this message translates to:
+  /// **'Bullet list'**
+  String get composerBulletList;
+
+  /// No description provided for @composerNumberedList.
+  ///
+  /// In en, this message translates to:
+  /// **'Numbered list'**
+  String get composerNumberedList;
+
+  /// No description provided for @composerDivider.
+  ///
+  /// In en, this message translates to:
+  /// **'Divider'**
+  String get composerDivider;
+
+  /// No description provided for @composerEmoji.
+  ///
+  /// In en, this message translates to:
+  /// **'Emoji'**
+  String get composerEmoji;
+
+  /// No description provided for @composerStats.
+  ///
+  /// In en, this message translates to:
+  /// **'{words} words · {chars} characters · {minutes} min read'**
+  String composerStats(int words, int chars, int minutes);
+
+  /// No description provided for @composerPreviewMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Live preview'**
+  String get composerPreviewMode;
+
+  /// No description provided for @composerPreviewEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Type something to see the preview.'**
+  String get composerPreviewEmpty;
+
+  /// No description provided for @composerInsertLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Insert link'**
+  String get composerInsertLink;
+
+  /// No description provided for @composerLinkUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'URL'**
+  String get composerLinkUrl;
+
+  /// No description provided for @composerInsert.
+  ///
+  /// In en, this message translates to:
+  /// **'Insert'**
+  String get composerInsert;
 
   /// No description provided for @composeMfmCheatsheetTitle.
   ///

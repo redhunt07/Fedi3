@@ -182,6 +182,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatThreadsEmpty => 'No chats yet';
 
   @override
+  String get chatE2eBadge => 'End-to-end encrypted';
+
+  @override
   String get chatEmptyHint =>
       'End-to-end encrypted conversations will appear here.';
 
@@ -1554,6 +1557,116 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get composeMfmCheatsheet => 'MFM cheatsheet';
+
+  @override
+  String get composerBlockStyle => 'Block style';
+
+  @override
+  String get composerParagraph => 'Paragraph';
+
+  @override
+  String get composerH1 => 'Heading 1';
+
+  @override
+  String get composerH2 => 'Heading 2';
+
+  @override
+  String get composerH3 => 'Heading 3';
+
+  @override
+  String get composerQuote => 'Quote';
+
+  @override
+  String get composerFont => 'Font';
+
+  @override
+  String get composerSans => 'Sans serif';
+
+  @override
+  String get composerSerif => 'Serif';
+
+  @override
+  String get composerMono => 'Monospace';
+
+  @override
+  String get composerSize => 'Size';
+
+  @override
+  String get composerSizeS => 'Small';
+
+  @override
+  String get composerSizeL => 'Large';
+
+  @override
+  String get composerSizeXL => 'Extra large';
+
+  @override
+  String get composerAlignLeft => 'Align left';
+
+  @override
+  String get composerAlignCenter => 'Center';
+
+  @override
+  String get composerAlignRight => 'Align right';
+
+  @override
+  String get composerUndo => 'Undo';
+
+  @override
+  String get composerRedo => 'Redo';
+
+  @override
+  String get composerEdit => 'Edit';
+
+  @override
+  String get composerPreview => 'Preview';
+
+  @override
+  String get composerBold => 'Bold';
+
+  @override
+  String get composerItalic => 'Italic';
+
+  @override
+  String get composerStrike => 'Strikethrough';
+
+  @override
+  String get composerCode => 'Code';
+
+  @override
+  String get composerLink => 'Link';
+
+  @override
+  String get composerBulletList => 'Bullet list';
+
+  @override
+  String get composerNumberedList => 'Numbered list';
+
+  @override
+  String get composerDivider => 'Divider';
+
+  @override
+  String get composerEmoji => 'Emoji';
+
+  @override
+  String composerStats(int words, int chars, int minutes) {
+    return '$words words · $chars characters · $minutes min read';
+  }
+
+  @override
+  String get composerPreviewMode => 'Live preview';
+
+  @override
+  String get composerPreviewEmpty => 'Type something to see the preview.';
+
+  @override
+  String get composerInsertLink => 'Insert link';
+
+  @override
+  String get composerLinkUrl => 'URL';
+
+  @override
+  String get composerInsert => 'Insert';
 
   @override
   String get composeMfmCheatsheetTitle => 'MFM cheatsheet';

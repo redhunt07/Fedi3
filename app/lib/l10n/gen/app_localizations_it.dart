@@ -182,6 +182,9 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatThreadsEmpty => 'Nessuna chat';
 
   @override
+  String get chatE2eBadge => 'Cifrata end-to-end';
+
+  @override
   String get chatEmptyHint =>
       'Le conversazioni cifrate end-to-end appariranno qui.';
 
@@ -1563,6 +1566,116 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get composeMfmCheatsheet => 'MFM cheatsheet';
+
+  @override
+  String get composerBlockStyle => 'Stile blocco';
+
+  @override
+  String get composerParagraph => 'Paragrafo';
+
+  @override
+  String get composerH1 => 'Titolo 1';
+
+  @override
+  String get composerH2 => 'Titolo 2';
+
+  @override
+  String get composerH3 => 'Titolo 3';
+
+  @override
+  String get composerQuote => 'Citazione';
+
+  @override
+  String get composerFont => 'Carattere';
+
+  @override
+  String get composerSans => 'Sans serif';
+
+  @override
+  String get composerSerif => 'Serif';
+
+  @override
+  String get composerMono => 'Monospazio';
+
+  @override
+  String get composerSize => 'Dimensione';
+
+  @override
+  String get composerSizeS => 'Piccolo';
+
+  @override
+  String get composerSizeL => 'Grande';
+
+  @override
+  String get composerSizeXL => 'Molto grande';
+
+  @override
+  String get composerAlignLeft => 'Allinea a sinistra';
+
+  @override
+  String get composerAlignCenter => 'Centra';
+
+  @override
+  String get composerAlignRight => 'Allinea a destra';
+
+  @override
+  String get composerUndo => 'Annulla';
+
+  @override
+  String get composerRedo => 'Ripeti';
+
+  @override
+  String get composerEdit => 'Modifica';
+
+  @override
+  String get composerPreview => 'Anteprima';
+
+  @override
+  String get composerBold => 'Grassetto';
+
+  @override
+  String get composerItalic => 'Corsivo';
+
+  @override
+  String get composerStrike => 'Barrato';
+
+  @override
+  String get composerCode => 'Codice';
+
+  @override
+  String get composerLink => 'Link';
+
+  @override
+  String get composerBulletList => 'Elenco puntato';
+
+  @override
+  String get composerNumberedList => 'Elenco numerato';
+
+  @override
+  String get composerDivider => 'Separatore';
+
+  @override
+  String get composerEmoji => 'Emoji';
+
+  @override
+  String composerStats(int words, int chars, int minutes) {
+    return '$words parole · $chars caratteri · $minutes min di lettura';
+  }
+
+  @override
+  String get composerPreviewMode => 'Anteprima live';
+
+  @override
+  String get composerPreviewEmpty => 'Scrivi qualcosa per vedere l’anteprima.';
+
+  @override
+  String get composerInsertLink => 'Inserisci link';
+
+  @override
+  String get composerLinkUrl => 'URL';
+
+  @override
+  String get composerInsert => 'Inserisci';
 
   @override
   String get composeMfmCheatsheetTitle => 'MFM cheatsheet';

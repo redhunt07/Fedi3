@@ -296,6 +296,48 @@ class _StatusDotState extends State<StatusDot>
   }
 }
 
+/// Tooltip wrapper that also exposes a matching semantics label.
+///
+/// Icon-only controls often communicate their purpose only through a glyph;
+/// this widget makes the tooltip text the accessible name as well, and lets
+/// callers expose a keyboard shortcut hint (for example "Search (Ctrl+2)").
+class AccessibleTooltip extends StatelessWidget {
+  const AccessibleTooltip({
+    super.key,
+    required this.message,
+    required this.child,
+    this.button = false,
+    this.selected,
+    this.excludeFromSemantics = true,
+  });
+
+  final String message;
+  final Widget child;
+  final bool button;
+  final bool? selected;
+
+  /// When true the child's own semantics are replaced by [message]. This keeps
+  /// the accessible name identical to the visible tooltip and avoids duplicate
+  /// announcements for buttons that also render a text label.
+  final bool excludeFromSemantics;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: message,
+      button: button,
+      selected: selected,
+      excludeSemantics: excludeFromSemantics,
+      child: Tooltip(
+        message: message,
+        waitDuration: const Duration(milliseconds: 450),
+        excludeFromSemantics: true,
+        child: child,
+      ),
+    );
+  }
+}
+
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,

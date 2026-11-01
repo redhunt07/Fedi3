@@ -832,7 +832,28 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_title),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_title),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_outline_rounded,
+                    size: 11,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 3),
+                Text(
+                  context.l10n.chatE2eBadge,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: context.l10n.chatRefresh,
@@ -1162,6 +1183,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 children: [
                   for (var i = 0; i < _media.length; i++)
                     InputChip(
+                      avatar: _media[i].bytes.isNotEmpty &&
+                              _looksLikeImage(_media[i].name)
+                          ? CircleAvatar(
+                              backgroundImage:
+                                  MemoryImage(_media[i].bytes),
+                            )
+                          : const Icon(Icons.insert_drive_file, size: 18),
                       label: Text(_media[i].name,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       onDeleted: _sending
@@ -1292,6 +1320,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ],
       ],
     );
+  }
+
+
+  bool _looksLikeImage(String name) {
+    final n = name.toLowerCase();
+    return n.endsWith('.png') ||
+        n.endsWith('.jpg') ||
+        n.endsWith('.jpeg') ||
+        n.endsWith('.gif') ||
+        n.endsWith('.webp');
   }
 
   bool _isMedia(String mediaType, String url) {
