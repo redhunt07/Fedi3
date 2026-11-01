@@ -24,6 +24,7 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
   List<AnnouncementEntry> _entries = const [];
   bool _loading = true;
   String? _error;
+  String? _errorDetail;
   DateTime? _lastSync;
 
   @override
@@ -36,6 +37,7 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _errorDetail = null;
     });
     try {
       final entries =
@@ -55,6 +57,8 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
       setState(() {
         _entries = entries;
         _error = context.l10n.announcementsOffline;
+        _errorDetail = e.toString();
+        debugPrint('announcements error: $e');
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -141,7 +145,19 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Text(_error!),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_error!),
+                      if (_errorDetail != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _errorDetail!,
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ],

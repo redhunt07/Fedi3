@@ -17,11 +17,11 @@ class AnnouncementsStore {
   static Future<Map<String, dynamic>> _read() async {
     try {
       final f = await _file();
-      if (!await f.exists()) return const {};
+      if (!await f.exists()) return <String, dynamic>{};
       final json = jsonDecode(await f.readAsString());
-      return json is Map ? json.cast<String, dynamic>() : const {};
+      return json is Map ? json.cast<String, dynamic>() : <String, dynamic>{};
     } catch (_) {
-      return const {};
+      return <String, dynamic>{};
     }
   }
 
