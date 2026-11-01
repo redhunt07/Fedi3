@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Flutter client: WordPress-style composer with block styles (paragraph, headings, quote), font and size controls, alignment, undo/redo, inline formatting, lists, links, emoji/media insertion, live Markdown/MFM preview and document statistics. Keyboard shortcuts Ctrl+1..7 (sections), Ctrl+N (composer), Ctrl+F (search) and Esc; accessible rail labels with shortcut hints. Chat shows an E2E badge and image thumbnails for pending attachments.
 - API: nuova specifica OpenAPI 3.1 (`docs/openapi.yaml`) con 66 path e 16 schemi per core, relay e admin, collegata nel README.
 - Flutter client: cronologia delle ricerche persistente (max 10, dedupe) con chip richiamabili e cancellazione, più stati vuoti brandizzati nella ricerca.
 - Flutter client: quick-connect login from instance URL and recovery code, profile pagination with a "load more" action, a media grid tab, and date-grouped notifications with branded empty states.

@@ -186,7 +186,7 @@ stabile.
 | 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
 | 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |
 | 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
-| 7 — Chat | parziale | lista e thread presenti; allegati e read state da verificare |
-| 8 — Finitura | da fare | accessibilità, temi completi, i18n, scorciatoie |
+| 7 — Chat | completato (base) | thread, allegati con anteprima, reazioni, read state, badge E2E; mancano chiamate e ricerca interna |
+| 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato; restano audit contrasto e navigazione da tastiera completa |
 
-Prossimo passo consigliato: client web sulla specifica OpenAPI, poi Step 7 (chat con allegati e read state) e Step 8 (accessibilità, temi completi, scorciatoie).
+Prossimo passo consigliato: client web sulla specifica OpenAPI, poi audit di contrasto/accessibilità completo e test end-to-end della chat con due identità reali.
