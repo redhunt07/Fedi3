@@ -1,5 +1,8 @@
 # Annunci Fedi3
 
+Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
+dal repository Git e il client la controlla periodicamente.
+
 ## 2026-11-01 — Restyling del client
 
 Nuova passata grafica: logo Fedi3 fisso con particelle luminose, bagliore aurora
@@ -7,8 +10,6 @@ nel rail, banner profilo con mesh e avatar sovrapposto, lista chat a schede,
 composer in evidenza nella sidebar e azioni dei post più compatte. La ricerca
 è raggiungibile dalla barra della timeline e gli stati vuoti sono brandizzati.
 
-Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
-dal repository Git e il client la controlla periodicamente.
 
 ## 2026-11-01 — Composer avanzato e nuovo client
 
@@ -17,7 +18,7 @@ titoli, caratteri, dimensioni, allineamento, liste, citazioni, link e media,
 anteprima live e statistiche del documento. La pubblicazione resta compatibile
 con il Fediverso.
 
-- Nuovo rail animato con effetti particellari.
+- Nuovo rail con effetti particellari e logo fisso.
 - Scorciatoie Ctrl+1..7, Ctrl+N, Ctrl+F ed Esc.
 - Rimozione del composer rapido: la sidebar apre direttamente l'editor.
 
