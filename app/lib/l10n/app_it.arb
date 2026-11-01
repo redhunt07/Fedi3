@@ -71,6 +71,23 @@
   "chatRefresh": "Aggiorna",
   "chatThreadsEmpty": "Nessuna chat",
   "chatE2eBadge": "Cifrata end-to-end",
+  "announcementsTitle": "Annunci",
+  "announcementsSubtitle": "Aggiornamenti ufficiali dai maintainer",
+  "announcementsEmpty": "Nessun annuncio disponibile.",
+  "announcementsRefresh": "Aggiorna",
+  "announcementsNewAlert": "Nuovi annunci dai maintainer",
+  "announcementsOpen": "Apri",
+  "announcementsOffline": "Impossibile raggiungere il repository: mostro l’ultima copia salvata.",
+  "announcementsSource": "Sorgente Git",
+  "announcementsLastSync": "Ultimo controllo: {when}",
+  "@announcementsLastSync": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "announcementsMarkRead": "Segna come letti",
   "chatEmptyHint": "Le conversazioni cifrate end-to-end appariranno qui.",
   "chatEmpty": "Nessun messaggio",
   "chatNoMessages": "Nessun messaggio",

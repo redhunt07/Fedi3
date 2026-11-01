@@ -440,6 +440,66 @@ abstract class AppLocalizations {
   /// **'End-to-end encrypted'**
   String get chatE2eBadge;
 
+  /// No description provided for @announcementsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Announcements'**
+  String get announcementsTitle;
+
+  /// No description provided for @announcementsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Official updates from the maintainers'**
+  String get announcementsSubtitle;
+
+  /// No description provided for @announcementsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No announcements available.'**
+  String get announcementsEmpty;
+
+  /// No description provided for @announcementsRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get announcementsRefresh;
+
+  /// No description provided for @announcementsNewAlert.
+  ///
+  /// In en, this message translates to:
+  /// **'New announcements from the maintainers'**
+  String get announcementsNewAlert;
+
+  /// No description provided for @announcementsOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get announcementsOpen;
+
+  /// No description provided for @announcementsOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot reach the repository: showing the last cached copy.'**
+  String get announcementsOffline;
+
+  /// No description provided for @announcementsSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Git source'**
+  String get announcementsSource;
+
+  /// No description provided for @announcementsLastSync.
+  ///
+  /// In en, this message translates to:
+  /// **'Last check: {when}'**
+  String announcementsLastSync(String when);
+
+  /// No description provided for @announcementsMarkRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark as read'**
+  String get announcementsMarkRead;
+
   /// No description provided for @chatEmptyHint.
   ///
   /// In en, this message translates to:

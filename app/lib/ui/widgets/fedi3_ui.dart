@@ -3,48 +3,109 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../theme/ui_tokens.dart';
 
 /// Brand mark for the app shell: an aurora gradient tile with the Fedi3 glyph.
-class BrandMark extends StatelessWidget {
-  const BrandMark({super.key, this.size = 44, this.showGlow = true});
+class BrandMark extends StatefulWidget {
+  const BrandMark({
+    super.key,
+    this.size = 44,
+    this.showGlow = true,
+    this.animated = false,
+  });
 
   final double size;
   final bool showGlow;
+  final bool animated;
+
+  @override
+  State<BrandMark> createState() => _BrandMarkState();
+}
+
+class _BrandMarkState extends State<BrandMark>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 6),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animated) _c.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduce = MediaQuery.of(context).disableAnimations;
+    if (!widget.animated || reduce) {
+      if (_c.isAnimating) _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(size * 0.32),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(UiTokens.brandViolet),
-            Color(UiTokens.brandCyan),
-          ],
-        ),
-        boxShadow: showGlow
-            ? [
-                BoxShadow(
-                  color: scheme.primary.withAlpha(90),
-                  blurRadius: size * 0.6,
-                  offset: const Offset(0, 6),
-                ),
-              ]
-            : null,
-      ),
-      child: Icon(
-        Icons.hub_rounded,
-        color: Colors.white,
-        size: size * 0.52,
-      ),
+    final size = widget.size;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, _) {
+        final t = _c.value * 2 * math.pi;
+        final pulse = 1 + 0.025 * math.sin(t * 2);
+        final glowAlpha =
+            (70 + 35 * (0.5 + 0.5 * math.sin(t * 2))).round();
+        return Transform.scale(
+          scale: pulse,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(size * 0.32),
+              gradient: LinearGradient(
+                begin: Alignment(
+                    math.cos(t) * 0.8, math.sin(t) * 0.8),
+                end: Alignment(
+                    -math.cos(t) * 0.8, -math.sin(t) * 0.8),
+                colors: const [
+                  Color(UiTokens.brandViolet),
+                  Color(UiTokens.brandCyan),
+                  Color(UiTokens.brandViolet),
+                ],
+              ),
+              boxShadow: widget.showGlow
+                  ? [
+                      BoxShadow(
+                        color: scheme.primary.withAlpha(glowAlpha),
+                        blurRadius: size * 0.7,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Transform.rotate(
+              angle: 0.04 * math.sin(t),
+              child: Icon(
+                Icons.hub_rounded,
+                color: Colors.white,
+                size: size * 0.52,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

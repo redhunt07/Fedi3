@@ -14,7 +14,9 @@ import '../state/app_state.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
 import '../services/core_event_stream.dart';
+import '../services/announcements_service.dart';
 import '../services/notification_service.dart';
+import 'screens/announcements_screen.dart';
 import 'screens/compose_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/profile_screen.dart';
@@ -46,6 +48,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   CoreConfig? _chatStreamConfig;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
+  Timer? _announcementsTimer;
+  Timer? _announcementsInitialCheck;
+  bool _announcementsUnread = false;
+  bool _announcementsChecking = false;
   late final AnimationController _sectionFade = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 220),
@@ -84,6 +90,42 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (widget.appState.isRunning) {
       _startChatStream();
     }
+    _announcementsTimer =
+        Timer.periodic(const Duration(hours: 6), (_) => _checkAnnouncements());
+    _announcementsInitialCheck =
+        Timer(const Duration(seconds: 4), _checkAnnouncements);
+  }
+
+  Future<void> _checkAnnouncements() async {
+    if (_announcementsChecking) return;
+    _announcementsChecking = true;
+    try {
+      final update = await AnnouncementsService.checkForUpdates();
+      if (!mounted) return;
+      if (update.hasNew) {
+        setState(() => _announcementsUnread = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.l10n.announcementsNewAlert),
+            action: SnackBarAction(
+              label: context.l10n.announcementsOpen,
+              onPressed: _openAnnouncements,
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      // Offline is fine: the cached copy stays available in the screen.
+    } finally {
+      _announcementsChecking = false;
+    }
+  }
+
+  Future<void> _openAnnouncements() async {
+    setState(() => _announcementsUnread = false);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const AnnouncementsScreen()),
+    );
   }
 
   @override
@@ -91,6 +133,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _chatStream?.cancel();
     _chatDebounce?.cancel();
     _chatRetry?.cancel();
+    _announcementsTimer?.cancel();
+    _announcementsInitialCheck?.cancel();
     widget.appState.removeListener(_appStateListener);
     _sectionFade.dispose();
     super.dispose();
@@ -295,6 +339,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
               items: items,
               index: _index,
               onSelect: _selectSection,
+              onBrandTap: _openAnnouncements,
+              hasBrandNews: _announcementsUnread,
             ),
             Expanded(
               child: Row(
@@ -404,12 +450,16 @@ class _FediRail extends StatelessWidget {
     required this.items,
     required this.index,
     required this.onSelect,
+    required this.onBrandTap,
+    required this.hasBrandNews,
   });
 
   final AppState appState;
   final List<_RailItem> items;
   final int index;
   final ValueChanged<int> onSelect;
+  final VoidCallback onBrandTap;
+  final bool hasBrandNews;
 
   @override
   Widget build(BuildContext context) {
@@ -428,9 +478,40 @@ class _FediRail extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: UiTokens.gapLg),
-          const Tooltip(
+          Tooltip(
             message: 'Fedi3',
-            child: BrandMark(size: 46),
+            child: GestureDetector(
+              onTap: onBrandTap,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const BrandMark(size: 46, animated: true),
+                  if (hasBrandNews)
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF22D3EE),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.surface,
+                            width: 2,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x8822D3EE),
+                              blurRadius: 8,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: UiTokens.gapLg),
           Expanded(

@@ -71,6 +71,23 @@
   "chatRefresh": "Refresh",
   "chatThreadsEmpty": "No chats yet",
   "chatE2eBadge": "End-to-end encrypted",
+  "announcementsTitle": "Announcements",
+  "announcementsSubtitle": "Official updates from the maintainers",
+  "announcementsEmpty": "No announcements available.",
+  "announcementsRefresh": "Refresh",
+  "announcementsNewAlert": "New announcements from the maintainers",
+  "announcementsOpen": "Open",
+  "announcementsOffline": "Cannot reach the repository: showing the last cached copy.",
+  "announcementsSource": "Git source",
+  "announcementsLastSync": "Last check: {when}",
+  "@announcementsLastSync": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "announcementsMarkRead": "Mark as read",
   "chatEmptyHint": "End-to-end encrypted conversations will appear here.",
   "chatEmpty": "No messages yet",
   "chatNoMessages": "No messages",

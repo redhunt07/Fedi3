@@ -185,6 +185,39 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatE2eBadge => 'Cifrata end-to-end';
 
   @override
+  String get announcementsTitle => 'Annunci';
+
+  @override
+  String get announcementsSubtitle => 'Aggiornamenti ufficiali dai maintainer';
+
+  @override
+  String get announcementsEmpty => 'Nessun annuncio disponibile.';
+
+  @override
+  String get announcementsRefresh => 'Aggiorna';
+
+  @override
+  String get announcementsNewAlert => 'Nuovi annunci dai maintainer';
+
+  @override
+  String get announcementsOpen => 'Apri';
+
+  @override
+  String get announcementsOffline =>
+      'Impossibile raggiungere il repository: mostro l’ultima copia salvata.';
+
+  @override
+  String get announcementsSource => 'Sorgente Git';
+
+  @override
+  String announcementsLastSync(String when) {
+    return 'Ultimo controllo: $when';
+  }
+
+  @override
+  String get announcementsMarkRead => 'Segna come letti';
+
+  @override
   String get chatEmptyHint =>
       'Le conversazioni cifrate end-to-end appariranno qui.';
 
