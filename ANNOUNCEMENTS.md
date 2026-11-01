@@ -1,5 +1,12 @@
 # Annunci Fedi3
 
+## 2026-11-01 — Restyling del client
+
+Nuova passata grafica: logo Fedi3 fisso con particelle luminose, bagliore aurora
+nel rail, banner profilo con mesh e avatar sovrapposto, lista chat a schede,
+composer in evidenza nella sidebar e azioni dei post più compatte. La ricerca
+è raggiungibile dalla barra della timeline e gli stati vuoti sono brandizzati.
+
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 

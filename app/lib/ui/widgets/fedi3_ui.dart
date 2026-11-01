@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 
 import '../theme/ui_tokens.dart';
 
-/// Brand mark for the app shell: an aurora gradient tile with the Fedi3 glyph.
+/// Brand mark for the app shell: a fixed aurora gradient tile with the Fedi3
+/// glyph and a slow, subtle particle field. The tile itself never moves; only
+/// the particles drift, which keeps the mark calm and recognizable.
 class BrandMark extends StatefulWidget {
   const BrandMark({
     super.key,
@@ -30,7 +32,7 @@ class _BrandMarkState extends State<BrandMark>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 6),
+    duration: const Duration(seconds: 14),
   );
 
   @override
@@ -58,56 +60,116 @@ class _BrandMarkState extends State<BrandMark>
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final size = widget.size;
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (context, _) {
-        final t = _c.value * 2 * math.pi;
-        final pulse = 1 + 0.025 * math.sin(t * 2);
-        final glowAlpha =
-            (70 + 35 * (0.5 + 0.5 * math.sin(t * 2))).round();
-        return Transform.scale(
-          scale: pulse,
-          child: Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(size * 0.32),
-              gradient: LinearGradient(
-                begin: Alignment(
-                    math.cos(t) * 0.8, math.sin(t) * 0.8),
-                end: Alignment(
-                    -math.cos(t) * 0.8, -math.sin(t) * 0.8),
-                colors: const [
-                  Color(UiTokens.brandViolet),
-                  Color(UiTokens.brandCyan),
-                  Color(UiTokens.brandViolet),
-                ],
-              ),
-              boxShadow: widget.showGlow
-                  ? [
-                      BoxShadow(
-                        color: scheme.primary.withAlpha(glowAlpha),
-                        blurRadius: size * 0.7,
-                        offset: const Offset(0, 4),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Transform.rotate(
-              angle: 0.04 * math.sin(t),
-              child: Icon(
-                Icons.hub_rounded,
-                color: Colors.white,
-                size: size * 0.52,
-              ),
-            ),
+    final radius = BorderRadius.circular(size * 0.32);
+    return Semantics(
+      label: 'Fedi3',
+      button: true,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(UiTokens.brandViolet),
+              Color(0xFF5B8DF6),
+              Color(UiTokens.brandCyan),
+            ],
+            stops: [0, 0.55, 1],
           ),
-        );
-      },
+          border: Border.all(color: Colors.white.withAlpha(36)),
+          boxShadow: widget.showGlow
+              ? [
+                  BoxShadow(
+                    color: const Color(UiTokens.brandViolet).withAlpha(90),
+                    blurRadius: size * 0.75,
+                    offset: const Offset(0, 6),
+                  ),
+                  BoxShadow(
+                    color: const Color(UiTokens.brandCyan).withAlpha(45),
+                    blurRadius: size * 0.45,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: const Alignment(-0.35, -0.45),
+                      radius: 0.9,
+                      colors: [
+                        Colors.white.withAlpha(46),
+                        Colors.white.withAlpha(0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (widget.animated)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: AnimatedBuilder(
+                      animation: _c,
+                      builder: (context, _) => CustomPaint(
+                        painter: _BrandParticlesPainter(progress: _c.value),
+                      ),
+                    ),
+                  ),
+                ),
+              Center(
+                child: Icon(
+                  Icons.hub_rounded,
+                  color: Colors.white,
+                  size: size * 0.52,
+                  shadows: [
+                    Shadow(
+                      color: Colors.black.withAlpha(70),
+                      blurRadius: size * 0.08,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
+}
+
+/// Small drifting sparks inside the brand tile. Deterministic per index so the
+/// mark stays cheap to repaint and does not flicker.
+class _BrandParticlesPainter extends CustomPainter {
+  const _BrandParticlesPainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    for (var i = 0; i < 11; i++) {
+      final phase = (i * 0.173 + progress) % 1.0;
+      final x = size.width * (0.08 + 0.84 * ((i * 0.37) % 1.0));
+      final drift = math.sin((phase + i) * 2 * math.pi) * size.width * 0.06;
+      final y = size.height * (0.12 + 0.76 * phase);
+      final twinkle = 0.5 + 0.5 * math.sin((progress + i * 0.31) * 2 * math.pi);
+      paint.color = Colors.white.withAlpha((28 + 52 * twinkle).round());
+      canvas.drawCircle(Offset(x + drift, y), size.width * (0.008 + 0.006 * twinkle), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BrandParticlesPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 /// Primary call to action with the aurora gradient and a subtle hover lift.

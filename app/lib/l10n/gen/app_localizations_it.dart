@@ -379,6 +379,10 @@ class AppLocalizationsIt extends AppLocalizations {
   String get coreStop => 'Ferma core';
 
   @override
+  String get timelineEmptyHint =>
+      'Segui persone o esplora il Fediverso per riempire questa timeline.';
+
+  @override
   String get listNoItems => 'Nessun elemento';
 
   @override
@@ -733,7 +737,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get composeDraftDeleteTooltip => 'Elimina bozza';
 
   @override
-  String get composeQuickHint => 'Apri il compositore rapido';
+  String get composeQuickHint => 'Cosa succede nel Fediverso?';
 
   @override
   String get translationTitle => 'Traduzione';
@@ -1748,7 +1752,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get composeVisibilityDirectMissing => 'Serve un destinatario diretto';
 
   @override
-  String get composeExpand => 'Espandi';
+  String get composeExpand => 'Scrivi un post';
 
   @override
   String get composeExpandTitle => 'Editor';

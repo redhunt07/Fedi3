@@ -475,10 +475,53 @@ class _FediRail extends StatelessWidget {
           right: BorderSide(color: scheme.outlineVariant, width: 1),
         ),
       ),
-      child: Column(
+      child: Stack(
         children: [
-          const SizedBox(height: UiTokens.gapLg),
-          Tooltip(
+          Positioned(
+            top: -70,
+            left: -40,
+            right: -40,
+            height: 220,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.topCenter,
+                    radius: 0.9,
+                    colors: [
+                      const Color(UiTokens.brandViolet).withAlpha(46),
+                      const Color(UiTokens.brandViolet).withAlpha(0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -60,
+            left: -30,
+            right: -30,
+            height: 180,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.bottomCenter,
+                    radius: 0.9,
+                    colors: [
+                      const Color(UiTokens.brandCyan).withAlpha(24),
+                      const Color(UiTokens.brandCyan).withAlpha(0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Column(
+              children: [
+                const SizedBox(height: UiTokens.gapLg),
+                Tooltip(
             message: 'Fedi3',
             child: GestureDetector(
               onTap: onBrandTap,
@@ -555,6 +598,9 @@ class _FediRail extends StatelessWidget {
                         fontSize: 9,
                       ),
                 ),
+              ],
+            ),
+          ),
               ],
             ),
           ),

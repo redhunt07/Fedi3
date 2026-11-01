@@ -62,6 +62,7 @@ class _NoteCardState extends State<NoteCard> {
   ActorProfile? _noteActor;
   ActorProfile? _boostActor;
   bool _showRaw = false;
+  bool _hovered = false;
   bool _replying = false;
   final TextEditingController _replyCtrl = TextEditingController();
   bool _showThread = false;
@@ -238,8 +239,17 @@ class _NoteCardState extends State<NoteCard> {
         ? note.summary
         : context.l10n.noteContentWarning;
 
-    return Card(
-      elevation: widget.elevated ? 2 : 0,
+    return MouseRegion(
+      cursor: widget.rawActivity == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Card(
+        color: _hovered
+            ? Theme.of(context).colorScheme.surfaceContainerHigh
+            : null,
+        elevation: widget.elevated ? 2 : 0,
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: widget.rawActivity == null
@@ -632,7 +642,17 @@ class _NoteCardState extends State<NoteCard> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
+                  IconButtonTheme(
+                    data: const IconButtonThemeData(
+                      style: ButtonStyle(
+                        minimumSize: WidgetStatePropertyAll(Size(34, 34)),
+                        padding: WidgetStatePropertyAll(
+                            EdgeInsets.symmetric(horizontal: 4)),
+                        iconSize: WidgetStatePropertyAll(20),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: Wrap(
                     spacing: 4,
                     runSpacing: 4,
                     children: [
@@ -770,6 +790,7 @@ class _NoteCardState extends State<NoteCard> {
                       ),
                     ],
                   ),
+                  ),
                   if (widget.showRawFallback && widget.rawActivity != null)
                     Align(
                       alignment: Alignment.centerRight,
@@ -853,6 +874,7 @@ class _NoteCardState extends State<NoteCard> {
           ),
         ),
       ),
+    ),
     );
   }
 

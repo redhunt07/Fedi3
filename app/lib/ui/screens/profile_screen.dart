@@ -518,23 +518,62 @@ class _ProfileHeader extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
-              child: Container(
-                height: 72,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(UiTokens.brandViolet),
-                      Color(UiTokens.brandCyan),
-                    ],
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
+                  child: SizedBox(
+                    height: 118,
+                    width: double.infinity,
+                    child: CustomPaint(
+                      painter: _ProfileBannerPainter(
+                        primary: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                Positioned(
+                  left: 16,
+                  bottom: -32,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(UiTokens.brandViolet),
+                          Color(UiTokens.brandCyan),
+                        ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x667C6CF6),
+                          blurRadius: 22,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Theme.of(context).colorScheme.surface,
+                      ),
+                      child: _Avatar(
+                        url: profile.iconUrl,
+                        size: 78,
+                        showStatus: profile.isFedi3,
+                        statusKey: profile.statusKey,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 40),
             if (profile.imageUrl.trim().isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
@@ -551,13 +590,6 @@ class _ProfileHeader extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _Avatar(
-                  url: profile.iconUrl,
-                  size: 64,
-                  showStatus: profile.isFedi3,
-                  statusKey: profile.statusKey,
-                ),
-                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -661,6 +693,54 @@ class _ProfileHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProfileBannerPainter extends CustomPainter {
+  const _ProfileBannerPainter({required this.primary});
+
+  final Color primary;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final base = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color(UiTokens.brandViolet),
+          Color(0xFF5B8DF6),
+          Color(UiTokens.brandCyan),
+        ],
+        stops: [0, 0.5, 1],
+      ).createShader(rect);
+    canvas.drawRect(rect, base);
+
+    final glow = Paint()
+      ..color = Colors.white.withAlpha(38)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 34);
+    canvas.drawCircle(Offset(size.width * 0.22, size.height * 0.25),
+        size.height * 0.55, glow);
+    canvas.drawCircle(Offset(size.width * 0.82, size.height * 0.78),
+        size.height * 0.62, glow);
+
+    final accent = Paint()
+      ..color = primary.withAlpha(80)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24);
+    canvas.drawCircle(Offset(size.width * 0.62, size.height * 0.18),
+        size.height * 0.4, accent);
+
+    final dot = Paint()..color = Colors.white.withAlpha(90);
+    for (var i = 0; i < 18; i++) {
+      final x = size.width * (0.05 + 0.9 * ((i * 0.37) % 1.0));
+      final y = size.height * (0.12 + 0.76 * ((i * 0.61) % 1.0));
+      canvas.drawCircle(Offset(x, y), 1.2, dot);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProfileBannerPainter oldDelegate) =>
+      oldDelegate.primary != primary;
 }
 
 class _StatChip extends StatelessWidget {

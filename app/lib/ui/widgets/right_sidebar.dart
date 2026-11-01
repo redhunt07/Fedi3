@@ -15,7 +15,9 @@ import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/relays_screen.dart';
 import '../theme/ui_tokens.dart';
+import 'fedi3_ui.dart';
 import '../utils/time_ago.dart';
 
 class RightSidebar extends StatefulWidget {
@@ -155,59 +157,83 @@ class _RightSidebarState extends State<RightSidebar> {
                     children: [
                       Row(
                         children: [
-                          Text(context.l10n.composeTitle,
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w800)),
-                          const Spacer(),
-                          FilledButton.icon(
-                            onPressed: api == null
-                                ? null
-                                : () => _openComposer(context),
-                            icon: const Icon(Icons.edit_note),
-                            label: Text(context.l10n.composeExpand),
+                          _ComposeAvatar(iconUrl: cfg.iconUrl, size: 40),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              context.l10n.composeQuickHint,
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(190),
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: UiTokens.gapSm),
-                      Text(
-                        context.l10n.composeQuickHint,
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withAlpha(179),
-                            fontSize: 12),
+                      const SizedBox(height: UiTokens.gapMd),
+                      AuroraButton(
+                        label: context.l10n.composeExpand,
+                        icon: Icons.edit_rounded,
+                        expand: true,
+                        onPressed:
+                            api == null ? null : () => _openComposer(context),
                       ),
                       if (_draft != null) ...[
-                        const SizedBox(height: UiTokens.gapSm),
-                        Row(
-                          children: [
-                            Icon(Icons.description_outlined,
-                                size: 16,
-                                color: Theme.of(context).colorScheme.primary),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                context.l10n.composeDraftSaved,
-                                style: const TextStyle(
-                                    fontSize: 12, fontWeight: FontWeight.w700),
-                              ),
+                        const SizedBox(height: UiTokens.gapMd),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withAlpha(14),
+                            borderRadius: BorderRadius.circular(
+                                UiTokens.radiusCardSm),
+                            border: Border.all(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withAlpha(46),
                             ),
-                            Tooltip(
-                              message: context.l10n.composeDraftResumeTooltip,
-                              child: IconButton(
-                                onPressed: () => _resumeDraft(context),
-                                icon: const Icon(Icons.history_edu),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.description_outlined,
+                                  size: 16,
+                                  color: Theme.of(context).colorScheme.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  context.l10n.composeDraftSaved,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700),
+                                ),
                               ),
-                            ),
-                            Tooltip(
-                              message: context.l10n.composeDraftDeleteTooltip,
-                              child: IconButton(
-                                onPressed: _clearDraft,
-                                icon: const Icon(Icons.delete_outline),
+                              Tooltip(
+                                message: context.l10n.composeDraftResumeTooltip,
+                                child: IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () => _resumeDraft(context),
+                                  icon: const Icon(Icons.history_edu, size: 18),
+                                ),
                               ),
-                            ),
-                          ],
+                              Tooltip(
+                                message: context.l10n.composeDraftDeleteTooltip,
+                                child: IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: _clearDraft,
+                                  icon:
+                                      const Icon(Icons.delete_outline, size: 18),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ],
@@ -272,11 +298,14 @@ class _RightSidebarState extends State<RightSidebar> {
             const SizedBox(height: UiTokens.gapMd),
             Card(
               child: ListTile(
+                leading: cfg == null
+                    ? const Icon(Icons.person_outline)
+                    : _ComposeAvatar(iconUrl: cfg.iconUrl, size: 34),
                 title: Text(context.l10n.settingsAccount),
                 subtitle: Text(cfg == null
                     ? context.l10n.statusUnknownShort
                     : '${cfg.username}@${cfg.domain}'),
-                trailing: const Icon(Icons.person_outline),
+                trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: cfg == null
                     ? null
                     : () => Navigator.of(context).push(
@@ -293,8 +322,15 @@ class _RightSidebarState extends State<RightSidebar> {
             const SizedBox(height: UiTokens.gapMd),
             Card(
               child: ListTile(
+                leading: const Icon(Icons.dns_outlined),
                 title: Text(context.l10n.relaysTitle),
                 subtitle: Text(cfg?.publicBaseUrl ?? ''),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => RelaysScreen(appState: widget.appState),
+                  ),
+                ),
               ),
             ),
           ],
@@ -468,5 +504,41 @@ class _SidebarNotificationRow extends StatelessWidget {
       }
     }
     return type;
+  }
+}
+
+class _ComposeAvatar extends StatelessWidget {
+  const _ComposeAvatar({required this.iconUrl, required this.size});
+
+  final String iconUrl;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          colors: [
+            Color(UiTokens.brandViolet),
+            Color(UiTokens.brandCyan),
+          ],
+        ),
+      ),
+      child: Icon(Icons.person_rounded,
+          size: size * 0.55, color: Colors.white),
+    );
+    if (iconUrl.trim().isEmpty) return fallback;
+    return ClipOval(
+      child: Image.network(
+        iconUrl,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      ),
+    );
   }
 }

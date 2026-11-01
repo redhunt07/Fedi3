@@ -16,6 +16,7 @@ import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
+import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
 import 'chat_thread_screen.dart';
 
@@ -275,13 +276,13 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     final all = [...pinned, ...rest];
-    return ListView.separated(
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       itemCount: all.length + (_next != null ? 1 : 0),
-      separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
         if (index >= all.length) {
           return Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.only(top: 12),
             child: Center(
               child: OutlinedButton(
                 onPressed: _loading ? null : () => _loadThreads(reset: false),
@@ -306,45 +307,145 @@ class _ChatScreenState extends State<ChatScreen> {
             widget.appState.prefs.chatThreadSeenMs[thread.threadId] ?? 0;
         final isUnread = ts > seenMs;
         final isPinned = pinnedIds.contains(thread.threadId);
-        return ListTile(
-          title: Row(
-            children: [
-              if (isPinned) ...[
-                const Icon(Icons.push_pin, size: 16),
-                const SizedBox(width: 6),
-              ],
-              Expanded(
-                  child:
-                      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
-              if (isUnread)
-                Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.only(left: 6),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary,
-                    shape: BoxShape.circle,
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Card(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(UiTokens.radiusCard),
+              onLongPress: () => _showThreadMenu(thread, isPinned),
+              onTap: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatThreadScreen(
+                      appState: widget.appState,
+                      threadId: thread.threadId,
+                      title: name,
+                    ),
                   ),
-                ),
-            ],
-          ),
-          subtitle: Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis),
-          trailing: Text(formatTimeAgo(context, when)),
-          onLongPress: () => _showThreadMenu(thread, isPinned),
-          onTap: () async {
-            await Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ChatThreadScreen(
-                  appState: widget.appState,
-                  threadId: thread.threadId,
-                  title: name,
+                );
+                if (mounted) {
+                  await _loadThreads(reset: true);
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color(UiTokens.brandViolet),
+                            Color(UiTokens.brandCyan),
+                          ],
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        name.characters.first.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              if (isPinned) ...[
+                                const Icon(Icons.push_pin_rounded, size: 14),
+                                const SizedBox(width: 5),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                formatTimeAgo(context, when),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  preview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    height: 1.35,
+                                    color: isUnread
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .onSurface
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                    fontWeight: isUnread
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                              if (isUnread)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8, top: 4),
+                                  child: Container(
+                                    width: 9,
+                                    height: 9,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          Color(UiTokens.brandViolet),
+                                          Color(UiTokens.brandCyan),
+                                        ],
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Color(0x667C6CF6),
+                                          blurRadius: 8,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            );
-            if (mounted) {
-              await _loadThreads(reset: true);
-            }
-          },
+            ),
+          ),
         );
       },
     );

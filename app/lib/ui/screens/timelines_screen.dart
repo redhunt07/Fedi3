@@ -14,6 +14,8 @@ import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import 'compose_screen.dart';
+import 'search_screen.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
@@ -141,6 +143,16 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                     preferredSize: const Size.fromHeight(58),
                     child: _timelineTabs(context)),
             actions: [
+              IconButton(
+                tooltip: context.l10n.searchTitle,
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        SearchScreen(appState: widget.appState),
+                  ),
+                ),
+                icon: const Icon(Icons.search_rounded),
+              ),
               IconButton(
                 tooltip: widget.appState.isRunning
                     ? context.l10n.coreStop
@@ -767,7 +779,11 @@ class _TimelineListState extends State<_TimelineList>
             if (filtered.isEmpty && !_loading) {
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: Text(context.l10n.listNoItems)),
+                child: EmptyState(
+                  icon: Icons.dynamic_feed_rounded,
+                  title: context.l10n.listNoItems,
+                  message: context.l10n.timelineEmptyHint,
+                ),
               );
             }
             if (filtered.isEmpty && _loading) {

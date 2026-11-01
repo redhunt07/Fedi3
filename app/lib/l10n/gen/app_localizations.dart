@@ -800,6 +800,12 @@ abstract class AppLocalizations {
   /// **'Stop core'**
   String get coreStop;
 
+  /// No description provided for @timelineEmptyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow people or explore the Fediverse to fill this timeline.'**
+  String get timelineEmptyHint;
+
   /// No description provided for @listNoItems.
   ///
   /// In en, this message translates to:
@@ -1397,7 +1403,7 @@ abstract class AppLocalizations {
   /// No description provided for @composeQuickHint.
   ///
   /// In en, this message translates to:
-  /// **'Open the quick composer'**
+  /// **'What\'s happening in the Fediverse?'**
   String get composeQuickHint;
 
   /// No description provided for @translationTitle.
@@ -3257,7 +3263,7 @@ abstract class AppLocalizations {
   /// No description provided for @composeExpand.
   ///
   /// In en, this message translates to:
-  /// **'Expand'**
+  /// **'Write a post'**
   String get composeExpand;
 
   /// No description provided for @composeExpandTitle.

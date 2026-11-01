@@ -379,6 +379,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get coreStop => 'Stop core';
 
   @override
+  String get timelineEmptyHint =>
+      'Follow people or explore the Fediverse to fill this timeline.';
+
+  @override
   String get listNoItems => 'No items';
 
   @override
@@ -732,7 +736,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get composeDraftDeleteTooltip => 'Delete draft';
 
   @override
-  String get composeQuickHint => 'Open the quick composer';
+  String get composeQuickHint => 'What\'s happening in the Fediverse?';
 
   @override
   String get translationTitle => 'Translation';
@@ -1739,7 +1743,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get composeVisibilityDirectMissing => 'Direct recipient is required';
 
   @override
-  String get composeExpand => 'Expand';
+  String get composeExpand => 'Write a post';
 
   @override
   String get composeExpandTitle => 'Composer';
