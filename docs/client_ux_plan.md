@@ -184,9 +184,9 @@ stabile.
 | 2 — Home unica con tab | parziale | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer persistente solo su mobile e nella sidebar |
 | 3 — Profilo proprio/altrui | completato (base) | banner, contatori cliccabili, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati |
 | 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
-| 5 — Ricerca | parziale | ricerca post/utenti funzionante con fallback locale; filtri e cronologia da fare |
+| 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |
 | 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
 | 7 — Chat | parziale | lista e thread presenti; allegati e read state da verificare |
 | 8 — Finitura | da fare | accessibilità, temi completi, i18n, scorciatoie |
 
-Prossimo passo consigliato: specifica OpenAPI per il client web, poi Step 5 (ricerca con filtri e cronologia) e Step 7 (chat con allegati e read state).
+Prossimo passo consigliato: client web sulla specifica OpenAPI, poi Step 7 (chat con allegati e read state) e Step 8 (accessibilità, temi completi, scorciatoie).
