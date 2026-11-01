@@ -616,6 +616,16 @@ class AppLocalizationsIt extends AppLocalizations {
   String get onboardingAdvanced => 'Impostazioni avanzate';
 
   @override
+  String get onboardingRecoveryTitle => 'Codice di recupero';
+
+  @override
+  String get onboardingRecoveryHint =>
+      'Conserva questi codici: ti servono per accedere alla tua identità su un altro dispositivo o dopo un ripristino.';
+
+  @override
+  String get onboardingCopy => 'Copia';
+
+  @override
   String get composeTitle => 'Componi';
 
   @override
@@ -829,6 +839,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get profileEditTitle => 'Profilo';
+
+  @override
+  String get profileEditAction => 'Modifica profilo';
 
   @override
   String get profileEditHint => 'Profilo pubblico, avatar, banner, campi';

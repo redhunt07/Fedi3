@@ -5,6 +5,7 @@
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
@@ -574,7 +575,75 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();
     if (!mounted) return;
+    await _showRecoveryCode(cfg);
+    if (!mounted) return;
     Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
+
+  Future<void> _showRecoveryCode(CoreConfig cfg) async {
+    Widget codeRow(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    )),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: SelectableText(
+                    value,
+                    style: const TextStyle(
+                        fontFamily: 'monospace', fontSize: 12),
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.l10n.onboardingCopy,
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: value));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(context.l10n.onboardingCopy)),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(context.l10n.onboardingRecoveryTitle),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(context.l10n.onboardingRecoveryHint),
+              const SizedBox(height: 14),
+              codeRow(context.l10n.onboardingRelayToken, cfg.relayToken),
+              codeRow(context.l10n.onboardingInternalToken, cfg.internalToken),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(context.l10n.settingsOk),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _importBackupFile() async {

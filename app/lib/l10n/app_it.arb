@@ -257,6 +257,9 @@
   "onboardingRelayPick": "Seleziona un relay",
   "onboardingRelayCustom": "Usa impostazioni relay personalizzate",
   "onboardingAdvanced": "Impostazioni avanzate",
+  "onboardingRecoveryTitle": "Codice di recupero",
+  "onboardingRecoveryHint": "Conserva questi codici: ti servono per accedere alla tua identità su un altro dispositivo o dopo un ripristino.",
+  "onboardingCopy": "Copia",
   "composeTitle": "Componi",
   "composeCharCount": "{used}/{max}",
   "@composeCharCount": {
@@ -408,6 +411,7 @@
   "settingsAdvancedDevHint": "Start/Stop + status migrazione",
   "settingsResetApp": "Reset app (cancella config)",
   "profileEditTitle": "Profilo",
+  "profileEditAction": "Modifica profilo",
   "profileEditHint": "Profilo pubblico, avatar, banner, campi",
   "profileDisplayName": "Nome visualizzato",
   "profileBio": "Bio",

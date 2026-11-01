@@ -257,6 +257,9 @@
   "onboardingRelayPick": "Select a relay",
   "onboardingRelayCustom": "Use custom relay settings",
   "onboardingAdvanced": "Advanced settings",
+  "onboardingRecoveryTitle": "Recovery code",
+  "onboardingRecoveryHint": "Keep these codes: you need them to access your identity on another device or after a restore.",
+  "onboardingCopy": "Copy",
   "composeTitle": "Compose",
   "composeCharCount": "{used}/{max}",
   "@composeCharCount": {
@@ -408,6 +411,7 @@
   "settingsAdvancedDevHint": "Start/Stop + migration status",
   "settingsResetApp": "Reset app (clear config)",
   "profileEditTitle": "Profile",
+  "profileEditAction": "Edit profile",
   "profileEditHint": "Public profile, avatar, banner, fields",
   "profileDisplayName": "Display name",
   "profileBio": "Bio",

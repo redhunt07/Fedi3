@@ -16,6 +16,7 @@ import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
+import 'profile_edit_screen.dart';
 import 'relations_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -38,6 +39,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _followBusy = false;
   int? _followersCount;
   int? _followingCount;
+  int _profileTab = 0;
   Timer? _followPoll;
 
   @override
@@ -155,7 +157,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ? null
                   : () => _openRelations(
                       _profile!.following, context.l10n.profileFollowing),
+              onEdit: _isSelf(_profile!) ? _openEditProfile : null,
             ),
+          if (_profile != null) ...[
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<int>(
+                showSelectedIcon: false,
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withAlpha(70);
+                    }
+                    return Colors.transparent;
+                  }),
+                  foregroundColor: WidgetStatePropertyAll(
+                      Theme.of(context).colorScheme.onSurface),
+                  side: WidgetStatePropertyAll(BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant)),
+                ),
+                segments: [
+                  ButtonSegment(
+                      value: 0, label: Text(context.l10n.searchTabPosts)),
+                  ButtonSegment(
+                      value: 1, label: Text(context.l10n.timelineFilterReply)),
+                  ButtonSegment(
+                      value: 2, label: Text(context.l10n.timelineFilterMedia)),
+                ],
+                selected: {_profileTab},
+                onSelectionChanged: (s) =>
+                    setState(() => _profileTab = s.first),
+              ),
+            ),
+          ],
           if (_profile == null && !_loading)
             Center(child: Text(context.l10n.listNoItems)),
           if (_loading)
@@ -163,19 +202,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: Padding(
                     padding: EdgeInsets.all(16),
                     child: CircularProgressIndicator())),
-          if (_outbox.isNotEmpty) ...[
+          if (_profile != null) ...[
             const SizedBox(height: 12),
-            Text(context.l10n.timelineTabHome,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            for (final a in _outbox.where(_isNoteActivity))
-              TimelineActivityCard(appState: widget.appState, activity: a),
+            if (_filteredOutbox().isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 28),
+                child: Center(child: Text(context.l10n.listNoItems)),
+              )
+            else
+              for (final a in _filteredOutbox())
+                TimelineActivityCard(appState: widget.appState, activity: a),
           ],
         ],
       ),
     );
   }
 
+
+
+  Map<String, dynamic>? _noteMap(Map<String, dynamic> activity) {
+    final obj = activity['object'];
+    if (obj is String) return null;
+    if (obj is! Map) return null;
+    final m = obj.cast<String, dynamic>();
+    final inner = m['object'];
+    if (inner is Map) return inner.cast<String, dynamic>();
+    return m;
+  }
+
+  List<Map<String, dynamic>> _filteredOutbox() {
+    final notes = _outbox.where(_isNoteActivity).toList(growable: false);
+    return notes.where((a) {
+      final note = _noteMap(a);
+      if (note == null) return false;
+      final irt = (note['inReplyTo'] as String?)?.trim() ?? '';
+      final attachment = note['attachment'];
+      final hasMedia = attachment is List && attachment.isNotEmpty;
+      return switch (_profileTab) {
+        0 => irt.isEmpty,
+        1 => irt.isNotEmpty,
+        _ => hasMedia,
+      };
+    }).toList(growable: false);
+  }
+
+  void _openEditProfile() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ProfileEditScreen(appState: widget.appState),
+      ),
+    );
+  }
 
   bool _isNoteActivity(Map<String, dynamic> activity) {
     final type = (activity['type'] as String?)?.trim() ?? '';
@@ -272,6 +349,7 @@ class _ProfileHeader extends StatelessWidget {
     required this.isSelf,
     required this.onOpenFollowers,
     required this.onOpenFollowing,
+    required this.onEdit,
   });
 
   final ActorProfile profile;
@@ -283,6 +361,7 @@ class _ProfileHeader extends StatelessWidget {
   final bool isSelf;
   final VoidCallback? onOpenFollowers;
   final VoidCallback? onOpenFollowing;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -300,7 +379,7 @@ class _ProfileHeader extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
               child: Container(
-                height: 88,
+                height: 72,
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
@@ -373,7 +452,12 @@ class _ProfileHeader extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    if (!isSelf)
+                    if (isSelf)
+                      OutlinedButton(
+                        onPressed: onEdit,
+                        child: Text(context.l10n.profileEditAction),
+                      )
+                    else
                       FilledButton(
                         onPressed: followBusy ? null : onToggleFollow,
                         child: followBusy
@@ -384,7 +468,7 @@ class _ProfileHeader extends StatelessWidget {
                                     CircularProgressIndicator(strokeWidth: 2))
                             : Text(label),
                       ),
-                    if (!isSelf) const SizedBox(height: 6),
+                    const SizedBox(height: 6),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

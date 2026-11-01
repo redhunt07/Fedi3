@@ -1178,6 +1178,24 @@ abstract class AppLocalizations {
   /// **'Advanced settings'**
   String get onboardingAdvanced;
 
+  /// No description provided for @onboardingRecoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery code'**
+  String get onboardingRecoveryTitle;
+
+  /// No description provided for @onboardingRecoveryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep these codes: you need them to access your identity on another device or after a restore.'**
+  String get onboardingRecoveryHint;
+
+  /// No description provided for @onboardingCopy.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy'**
+  String get onboardingCopy;
+
   /// No description provided for @composeTitle.
   ///
   /// In en, this message translates to:
@@ -1543,6 +1561,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Profile'**
   String get profileEditTitle;
+
+  /// No description provided for @profileEditAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit profile'**
+  String get profileEditAction;
 
   /// No description provided for @profileEditHint.
   ///
