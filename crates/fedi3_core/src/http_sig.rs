@@ -93,6 +93,10 @@ impl KeyResolver {
             .error_for_status()
             .with_context(|| format!("actor not ok: {actor_url}"))?;
 
+        // Canonical URL after redirects: the relay may redirect its own actor URL to the
+        // identity anchor, so the identity check must use where the document actually came from.
+        let final_url = resp.url().to_string();
+
         // Streamed, capped read: a hostile server cannot make us buffer gigabytes.
         let body = crate::net_policy::read_capped(resp, MAX_ACTOR_DOC_BYTES).await?;
         let text = String::from_utf8_lossy(&body).into_owned();
@@ -105,15 +109,15 @@ impl KeyResolver {
         // The actor document must identify itself with the URL we fetched (or at least the same
         // origin): otherwise a server could serve a valid key belonging to someone else.
         if let Some(id) = actor.id.as_deref() {
-            let same_origin = match (Uri::try_from(id), Uri::try_from(actor_url.as_str())) {
+            let same_origin = match (Uri::try_from(id), Uri::try_from(final_url.as_str())) {
                 (Ok(a), Ok(b)) => {
                     a.scheme_str() == b.scheme_str() && a.host() == b.host() && a.port() == b.port()
                 }
                 _ => false,
             };
-            if !same_origin && id.trim_end_matches('/') != actor_url.trim_end_matches('/') {
+            if !same_origin && id.trim_end_matches('/') != final_url.trim_end_matches('/') {
                 return Err(anyhow!(
-                    "actor id mismatch: document id={id} fetched={actor_url}"
+                    "actor id mismatch: document id={id} fetched={final_url}"
                 ));
             }
         }

@@ -45,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
         username: username.clone(),
         domain,
         public_base_url: base_url.clone(),
+        anchor_actor_url: std::env::var("FEDI3_ANCHOR_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
         relay_base_url: Some(base_url.clone()),
         relay_token: Some(relay_token.clone()),
         public_key_pem: identity.public_key_pem.clone(),

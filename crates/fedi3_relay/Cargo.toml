@@ -25,6 +25,7 @@ anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 httpdate = "1"
 rsa = "0.9"
+aes-gcm = "0.10"
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
 subtle = "2"
 async-trait = "0.1"

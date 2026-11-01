@@ -1472,6 +1472,7 @@ dependencies = [
 name = "fedi3_relay"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "aws-sdk-s3",

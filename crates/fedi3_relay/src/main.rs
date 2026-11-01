@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use anyhow::Result;
 use axum::{
     extract::{
@@ -11,7 +12,7 @@ use axum::{
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{from_fn, from_fn_with_state, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{any, get, post},
     Router,
 };
@@ -25,6 +26,7 @@ use http::header;
 use httpdate::parse_http_date;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use rsa::pkcs8::DecodePublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::future::Future;
@@ -186,6 +188,7 @@ struct SpoolItem {
     query: String,
     headers_json: String,
     body_b64: String,
+    created_at_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -2228,7 +2231,15 @@ async fn webfinger(
     }
 
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
-    let actor_url = format!("{scheme}://{host}/users/{user}");
+    let mut actor_url = format!("{scheme}://{host}/users/{user}");
+    {
+        let db = state.db.lock().await;
+        let cached = db.get_actor_cache(&user).ok().flatten();
+        drop(db);
+        if let Some(anchor) = anchor_actor_id(&state, &user, cached.as_deref()) {
+            actor_url = anchor;
+        }
+    }
     let body = serde_json::json!({
       "subject": format!("acct:{user}@{host}"),
       "links": [{
@@ -2910,6 +2921,17 @@ async fn forward_user_root(
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
+    if method == Method::GET {
+        let cached = {
+            let db = state.db.lock().await;
+            db.get_actor_cache(&user).ok().flatten()
+        };
+        if let Some(actor_id) = anchor_actor_id(&state, &user, cached.as_deref()) {
+            // Identity lives on a static anchor: send remote servers to the canonical URL.
+            return Redirect::temporary(&actor_id).into_response();
+        }
+    }
+
     let path = format!("/users/{user}");
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
     forward_to_user(state, user, method, &path, query, headers, body).await
@@ -3235,6 +3257,47 @@ async fn forward_to_user(
     build_response(resp)
 }
 
+/// Pseudo-headers that mark a spooled row as end-to-end encrypted. The relay stores only
+/// ciphertext and forwards it as an envelope; the private key never leaves the user's core.
+const SPOOL_ENC_HEADER: &str = "x-fedi3-spool-enc";
+const SPOOL_ENC_ALG: &str = "aes256gcm+rsa-oaep-sha256";
+const SPOOL_ENC_KEY: &str = "x-fedi3-spool-key";
+const SPOOL_ENC_NONCE: &str = "x-fedi3-spool-nonce";
+const SPOOL_ENC_LEN: &str = "x-fedi3-spool-len";
+
+fn user_public_key_pem(actor_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(actor_json).ok()?;
+    let pem = v
+        .get("publicKey")
+        .and_then(|k| k.get("publicKeyPem"))
+        .and_then(|p| p.as_str())?;
+    let pem = pem.trim();
+    if pem.is_empty() {
+        None
+    } else {
+        Some(pem.to_string())
+    }
+}
+
+/// Hybrid encryption: AES-256-GCM for the body, RSA-OAEP-SHA256 to wrap the one-time key.
+/// Returns `(ciphertext, wrapped_key_b64, nonce_b64)`.
+fn encrypt_spool_body(pub_pem: &str, plaintext: &[u8]) -> Option<(Vec<u8>, String, String)> {
+    use aes_gcm::aead::Aead;
+    use rand::RngCore;
+    let pub_key = rsa::RsaPublicKey::from_public_key_pem(pub_pem).ok()?;
+    let mut key = [0u8; 32];
+    let mut nonce = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+    let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+    let ciphertext = cipher.encrypt(Nonce::from_slice(&nonce), plaintext).ok()?;
+    let mut rng = rand::rngs::OsRng;
+    let wrapped = pub_key
+        .encrypt(&mut rng, rsa::Oaep::new::<Sha256>(), &key)
+        .ok()?;
+    Some((ciphertext, B64.encode(wrapped), B64.encode(nonce)))
+}
+
 /// Queue a request for delivery on the next tunnel reconnect (spool) and
 /// answer 503. Returns false when spooling itself failed.
 async fn spool_request(
@@ -3246,6 +3309,25 @@ async fn spool_request(
     headers: &HeaderMap,
     body: &Bytes,
 ) -> bool {
+    let actor_json = {
+        let db = state.db.lock().await;
+        db.get_actor_cache(user).ok().flatten()
+    };
+    let mut stored_headers = headers_to_vec(headers);
+    let stored_body = match actor_json
+        .as_deref()
+        .and_then(user_public_key_pem)
+        .and_then(|pem| encrypt_spool_body(&pem, body))
+    {
+        Some((ciphertext, key_b64, nonce_b64)) => {
+            stored_headers.push((SPOOL_ENC_HEADER.to_string(), SPOOL_ENC_ALG.to_string()));
+            stored_headers.push((SPOOL_ENC_KEY.to_string(), key_b64));
+            stored_headers.push((SPOOL_ENC_NONCE.to_string(), nonce_b64));
+            stored_headers.push((SPOOL_ENC_LEN.to_string(), body.len().to_string()));
+            B64.encode(ciphertext)
+        }
+        None => B64.encode(body),
+    };
     let db = state.db.lock().await;
     db.enqueue_spool(
         &state.cfg,
@@ -3253,8 +3335,8 @@ async fn spool_request(
         method.as_str(),
         path,
         query,
-        &headers_to_vec(headers),
-        &B64.encode(body),
+        &stored_headers,
+        &stored_body,
         body.len() as i64,
     )
     .is_ok()
@@ -3646,6 +3728,31 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
 }
 
 async fn ensure_user_cached(state: &AppState, user: &str) -> Result<()> {
+    // Prefer the tunnel: the canonical actor may live on a static anchor that is unreachable
+    // from the relay, and the tunnel is also the only source of the freshest key material.
+    if state.tunnels.read().await.contains_key(user) {
+        let resp = forward_to_user(
+            state.clone(),
+            user.to_string(),
+            Method::GET,
+            &format!("/users/{user}"),
+            String::new(),
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await;
+        if resp.status().is_success() {
+            if let Ok(bytes) = axum::body::to_bytes(resp.into_body(), MAX_PEER_PAGE_BYTES).await {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    if let Ok(json) = serde_json::to_string(&value) {
+                        let db = state.db.lock().await;
+                        let _ = db.upsert_actor_cache(user, &json);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
     let url = format!("{}/users/{user}", user_base_url(&state.cfg, user));
     let _ = fetch_json_url(state, &url).await;
     Ok(())
@@ -3712,6 +3819,31 @@ fn relay_self_base(cfg: &RelayConfig) -> String {
     format!("http://{}:{}", host, cfg.bind.port())
 }
 
+fn origin_of(url: &str) -> Option<String> {
+    let u = url.parse::<http::Uri>().ok()?;
+    let scheme = u.scheme_str()?;
+    let host = u.host()?;
+    Some(match u.port_u16() {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+/// Canonical actor id of a local user when it lives on a different origin (identity anchor).
+fn anchor_actor_id(state: &AppState, user: &str, cached_json: Option<&str>) -> Option<String> {
+    let json = cached_json?;
+    let (actor_id, _) = extract_actor_ids_from_json(json);
+    let actor_id = actor_id?;
+    let relay_origin = origin_of(&user_base_url(&state.cfg, user));
+    let self_origin = origin_of(&relay_self_base(&state.cfg));
+    let actor_origin = origin_of(&actor_id);
+    if actor_origin != relay_origin && actor_origin != self_origin {
+        Some(actor_id)
+    } else {
+        None
+    }
+}
+
 fn user_base_url(cfg: &RelayConfig, user: &str) -> String {
     if let Some(base_domain) = cfg.base_domain.as_ref() {
         let scheme = cfg
@@ -3767,20 +3899,63 @@ async fn flush_spool_for_user(state: AppState, user: String) {
         for item in &items {
             let headers_vec: Vec<(String, String)> =
                 serde_json::from_str(&item.headers_json).unwrap_or_default();
-            let headers = vec_to_headers(&headers_vec);
-            let body_bytes = B64.decode(item.body_b64.as_bytes()).unwrap_or_default();
-            let method = item.method.parse::<Method>().unwrap_or(Method::POST);
+            let encrypted = headers_vec
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case(SPOOL_ENC_HEADER) && v == SPOOL_ENC_ALG);
 
-            let resp = forward_to_user(
-                state.clone(),
-                user.clone(),
-                method,
-                &item.path,
-                item.query.clone(),
-                headers,
-                Bytes::from(body_bytes),
-            )
-            .await;
+            let resp = if encrypted {
+                let value_of = |name: &str| -> String {
+                    headers_vec
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default()
+                };
+                let original_headers: Vec<(String, String)> = headers_vec
+                    .iter()
+                    .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-fedi3-spool-"))
+                    .cloned()
+                    .collect();
+                let envelope = serde_json::json!({
+                    "method": item.method,
+                    "path": item.path,
+                    "query": item.query,
+                    "headers": original_headers,
+                    "body_b64": item.body_b64,
+                    "key_b64": value_of(SPOOL_ENC_KEY),
+                    "nonce_b64": value_of(SPOOL_ENC_NONCE),
+                    "spooled_at_ms": item.created_at_ms,
+                });
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                forward_to_user(
+                    state.clone(),
+                    user.clone(),
+                    Method::POST,
+                    "/_fedi3/spool/envelope",
+                    String::new(),
+                    headers,
+                    Bytes::from(envelope.to_string()),
+                )
+                .await
+            } else {
+                let headers = vec_to_headers(&headers_vec);
+                let body_bytes = B64.decode(item.body_b64.as_bytes()).unwrap_or_default();
+                let method = item.method.parse::<Method>().unwrap_or(Method::POST);
+                forward_to_user(
+                    state.clone(),
+                    user.clone(),
+                    method,
+                    &item.path,
+                    item.query.clone(),
+                    headers,
+                    Bytes::from(body_bytes),
+                )
+                .await
+            };
 
             if resp.status().is_success() || resp.status().as_u16() == 202 {
                 delivered_ids.push(item.id);
@@ -5699,7 +5874,7 @@ impl Db {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT id, method, path, query, headers_json, body_b64 FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
+                    "SELECT id, method, path, query, headers_json, body_b64, created_at_ms FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
                 )?;
                 let mut rows = stmt.query(params![username, limit])?;
                 let mut out = Vec::new();
@@ -5711,6 +5886,7 @@ impl Db {
                         query: r.get(3)?,
                         headers_json: r.get(4)?,
                         body_b64: r.get(5)?,
+                        created_at_ms: r.get(6)?,
                     });
                 }
                 Ok(out)
@@ -5718,7 +5894,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let rows = conn.query(
-                    "SELECT id, method, path, query, headers_json, body_b64 FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
+                    "SELECT id, method, path, query, headers_json, body_b64, created_at_ms FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
                     &[&username, &limit],
                 )?;
                 let mut out = Vec::new();
@@ -5730,6 +5906,7 @@ impl Db {
                         query: r.get(3),
                         headers_json: r.get(4),
                         body_b64: r.get(5),
+                        created_at_ms: r.get(6),
                     });
                 }
                 Ok(out)

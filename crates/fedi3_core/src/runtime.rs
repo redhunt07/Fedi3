@@ -50,6 +50,10 @@ pub struct CoreStartConfig {
     pub domain: String,
     #[serde(default, alias = "base_url")]
     pub public_base_url: String,
+    /// Optional canonical identity anchor (e.g. `https://alice.example`). When set, the actor
+    /// id/key live there while inbox/outbox stay on the relay transport.
+    #[serde(default)]
+    pub anchor_actor_url: Option<String>,
     pub previous_public_base_url: Option<String>,
     /// Relay token for the previous relay when performing a migration (used to register a moved-to mapping).
     #[serde(default)]
@@ -125,6 +129,7 @@ impl Default for CoreStartConfig {
             username: "alice".to_string(),
             domain: "example.invalid".to_string(),
             public_base_url: "http://127.0.0.1:8787".to_string(),
+            anchor_actor_url: None,
             previous_public_base_url: None,
             previous_relay_token: None,
             allow_relay_switch_without_migration: None,
@@ -464,6 +469,11 @@ fn run_core(
             username: cfg.username.clone(),
             domain: cfg.domain.clone(),
             public_base_url: public_base_url.clone(),
+            anchor_actor_url: cfg
+                .anchor_actor_url
+                .clone()
+                .map(|s| s.trim().trim_end_matches('/').to_string())
+                .filter(|s| !s.is_empty()),
             relay_base_url: infer_http_base_from_relay_ws(&cfg.relay_ws).ok(),
             relay_token: cfg.relay_token.clone(),
             public_key_pem: identity.public_key_pem.clone(),
@@ -509,11 +519,9 @@ fn run_core(
             .map(|b| format!("{b}/users/{}", cfg.username));
         let new_actor = format!("{}/users/{}", public_base_url.trim_end_matches('/'), cfg.username);
 
-        let key_id = format!(
-            "{}/users/{}#main-key",
-            public_base_url.trim_end_matches('/'),
-            cfg.username
-        );
+        // The signing key id must be the canonical actor (the anchor when configured), or
+        // remote servers reject the signature because the advertised publicKey id differs.
+        let key_id = format!("{}#main-key", crate::ap::canonical_actor_url(&ap_cfg));
         let key_id_for_fetch = key_id.clone();
 
         let internal_token = cfg.internal_token.clone().unwrap_or_else(random_token);
@@ -594,6 +602,29 @@ fn run_core(
             },
             inbox_limiter: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         };
+
+        // Publish the static anchor documents (actor + WebFinger) so the user can host them on a
+        // cheap static domain. This is what makes the identity independent from the relay.
+        {
+            let (actor_doc, webfinger_doc) = crate::ap::anchor_documents(&state.cfg);
+            let anchor_dir = data_dir.join("anchor");
+            if let Err(e) = std::fs::create_dir_all(&anchor_dir) {
+                warn!("anchor dir creation failed: {e}");
+            } else {
+                if let Err(e) = std::fs::write(
+                    anchor_dir.join("actor.json"),
+                    serde_json::to_vec_pretty(&actor_doc).unwrap_or_default(),
+                ) {
+                    warn!("anchor actor write failed: {e}");
+                }
+                if let Err(e) = std::fs::write(
+                    anchor_dir.join("webfinger"),
+                    serde_json::to_vec_pretty(&webfinger_doc).unwrap_or_default(),
+                ) {
+                    warn!("anchor webfinger write failed: {e}");
+                }
+            }
+        }
 
         net.set_p2p_enabled(p2p_cfg.enable);
         // H-42: every background worker is registered here so shutdown can join it.

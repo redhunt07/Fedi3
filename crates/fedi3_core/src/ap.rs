@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use anyhow::Context;
 use axum::{
     body::Body,
@@ -12,6 +13,7 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
 use http::{HeaderMap, Method, Uri};
+use rsa::pkcs8::DecodePrivateKey;
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -44,6 +46,10 @@ pub struct ApConfig {
     pub username: String,
     pub domain: String,
     pub public_base_url: String,
+    /// Canonical identity anchor (e.g. `https://alice.example`) when it differs from the relay
+    /// transport base. The actor `id`/`url`/key id live on the anchor; inbox/outbox/collections
+    /// stay on the relay so every dynamic resource remains dereferenceable.
+    pub anchor_actor_url: Option<String>,
     pub relay_base_url: Option<String>,
     pub relay_token: Option<String>,
     pub public_key_pem: String,
@@ -264,6 +270,10 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         // Endpoint interno per la UI: fetch di un oggetto già in cache/DB.
         // Esempio: `GET /_fedi3/object?url=<urlencoded>`
         ("GET", "/_fedi3/object") => object_get(state, req).await,
+        // Anchor documents (static identity decoupled from the relay transport).
+        ("GET", "/_fedi3/anchor") => anchor_get(state),
+        // Ciphertext envelope flushed from the relay spool: decrypted here, never by the relay.
+        ("POST", "/_fedi3/spool/envelope") => spool_envelope_post(state, req).await,
         ("GET", "/_fedi3/blocks") => blocks_list(state, req).await,
         ("POST", "/_fedi3/blocks") => blocks_update(state, req).await,
         ("GET", "/_fedi3/audit/recent") => audit_recent(state, req).await,
@@ -439,6 +449,22 @@ async fn object_deref_get(state: &ApState, req: Request<Body>) -> Response<Body>
     }
 }
 
+/// Header added by the core when rebuilding a spooled request: it extends the accepted
+/// Date skew by the time the request spent in the relay spool. It is not part of the
+/// signature, so a sender may also use it deliberately (capped at seven days).
+const SPOOL_SKEW_HEADER: &str = "x-fedi3-spooled-skew-secs";
+const MAX_SPOOL_SKEW_SECS: u64 = 7 * 24 * 3600;
+
+fn effective_max_date_skew(state: &ApState, headers: &HeaderMap) -> Duration {
+    let extra = headers
+        .get(SPOOL_SKEW_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0)
+        .min(MAX_SPOOL_SKEW_SECS);
+    state.max_date_skew + Duration::from_secs(extra)
+}
+
 async fn verify_signature_if_present(
     state: &ApState,
     parts: &http::request::Parts,
@@ -453,7 +479,10 @@ async fn verify_signature_if_present(
         return Ok(());
     };
 
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
+    if let Err(e) = verify_date(
+        &parts.headers,
+        effective_max_date_skew(state, &parts.headers),
+    ) {
         return Err(simple(
             StatusCode::UNAUTHORIZED,
             &format!("date invalid: {e}"),
@@ -781,8 +810,7 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let _ = state.social.upsert_media(
         &response.id,
         &response.url,
@@ -1015,8 +1043,7 @@ async fn fetch_and_cache_media(
     }
     let path = dir.join(&stored_name);
     if std::fs::write(&path, &bytes).is_ok() {
-        let base = state.cfg.public_base_url.trim_end_matches('/');
-        let me = format!("{base}/users/{}", state.cfg.username);
+        let me = canonical_actor_url(&state.cfg);
         let _ = state.social.upsert_media(
             &item.id,
             &item.url,
@@ -1974,8 +2001,7 @@ async fn p2p_follow(state: &ApState, req: Request<Body>) -> Response<Body> {
     };
     let target_actor = target_actor.trim_end_matches('/').to_string();
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let id = state.social.new_activity_id(&me);
     let activity = serde_json::json!({
       "@context": "https://www.w3.org/ns/activitystreams",
@@ -2104,16 +2130,14 @@ pub(crate) async fn approve_follow_request(
         .as_deref()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
         .unwrap_or_else(|| {
-            let base = state.cfg.public_base_url.trim_end_matches('/');
-            let me = format!("{base}/users/{}", state.cfg.username);
+            let me = canonical_actor_url(&state.cfg);
             serde_json::json!({"type": "Follow", "actor": actor, "object": me})
         });
 
     state.social.add_follower(actor)?;
     state.social.remove_follow_request(actor)?;
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let accept_id = state.social.new_activity_id(&me);
     let accept = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -2160,15 +2184,13 @@ pub(crate) async fn reject_follow_request(
         .as_deref()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
         .unwrap_or_else(|| {
-            let base = state.cfg.public_base_url.trim_end_matches('/');
-            let me = format!("{base}/users/{}", state.cfg.username);
+            let me = canonical_actor_url(&state.cfg);
             serde_json::json!({"type": "Follow", "actor": actor, "object": me})
         });
 
     state.social.remove_follow_request(actor)?;
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let reject_id = state.social.new_activity_id(&me);
     let reject = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -4333,7 +4355,7 @@ async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> 
     let target_actor = target_actor.trim_end_matches('/').to_string();
 
     let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let undo_id = state.social.new_activity_id(&me);
     let activity = serde_json::json!({
       "@context": "https://www.w3.org/ns/activitystreams",
@@ -4403,6 +4425,22 @@ async fn social_follow_status_get(state: &ApState, req: Request<Body>) -> Respon
         .into_response()
 }
 
+pub(crate) fn canonical_actor_url(cfg: &ApConfig) -> String {
+    match cfg
+        .anchor_actor_url
+        .as_deref()
+        .map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+    {
+        Some(anchor) => format!("{anchor}/users/{}", cfg.username),
+        None => format!(
+            "{}/users/{}",
+            cfg.public_base_url.trim_end_matches('/'),
+            cfg.username
+        ),
+    }
+}
+
 fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
     let resource = req
         .uri()
@@ -4412,12 +4450,15 @@ fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
         .map(|(_, v)| url_decode(v))
         .unwrap_or_default();
 
-    let actor_url = format!(
-        "{}/users/{}",
-        cfg.public_base_url.trim_end_matches('/'),
-        cfg.username
-    );
-    let expected_acct = format!("acct:{}@{}", cfg.username, cfg.domain);
+    let actor_url = canonical_actor_url(cfg);
+    let canonical_domain = cfg
+        .anchor_actor_url
+        .as_deref()
+        .and_then(|u| u.parse::<http::Uri>().ok())
+        .and_then(|u| u.host().map(|h| h.to_string()))
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| cfg.domain.clone());
+    let expected_acct = format!("acct:{}@{}", cfg.username, canonical_domain);
 
     if resource.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing resource");
@@ -4462,18 +4503,161 @@ fn webfinger(cfg: &ApConfig, req: Request<Body>) -> Response<Body> {
     jrd(StatusCode::OK, &body)
 }
 
+/// Public anchor documents: the static actor + WebFinger pair a user can host on a cheap
+/// static domain so that the identity does not belong to the relay operator.
+pub fn anchor_documents(cfg: &ApConfig) -> (Value, Value) {
+    let actor = serde_json::to_value(build_local_actor(cfg)).unwrap_or(Value::Null);
+    let actor_url = canonical_actor_url(cfg);
+    let domain = actor_url
+        .parse::<http::Uri>()
+        .ok()
+        .and_then(|u| u.host().map(|h| h.to_string()))
+        .unwrap_or_else(|| cfg.domain.clone());
+    let webfinger = serde_json::json!({
+        "subject": format!("acct:{}@{}", cfg.username, domain),
+        "links": [{
+            "rel": "self",
+            "type": "application/activity+json",
+            "href": actor_url
+        }]
+    });
+    (actor, webfinger)
+}
+
+fn anchor_get(state: &ApState) -> Response<Body> {
+    let (actor, webfinger) = anchor_documents(&state.cfg);
+    let body = serde_json::json!({"actor": actor, "webfinger": webfinger});
+    (
+        StatusCode::OK,
+        [("Content-Type", "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct SpoolEnvelope {
+    method: String,
+    path: String,
+    #[serde(default)]
+    query: String,
+    headers: Vec<(String, String)>,
+    body_b64: String,
+    key_b64: String,
+    nonce_b64: String,
+    #[serde(default)]
+    spooled_at_ms: Option<i64>,
+}
+
+async fn spool_envelope_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (_parts, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return simple(StatusCode::PAYLOAD_TOO_LARGE, "envelope too large"),
+    };
+    let env: SpoolEnvelope = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_REQUEST, &format!("bad envelope: {e}")),
+    };
+    let key = B64.decode(env.key_b64.as_bytes()).unwrap_or_default();
+    let nonce = B64.decode(env.nonce_b64.as_bytes()).unwrap_or_default();
+    let ciphertext = B64.decode(env.body_b64.as_bytes()).unwrap_or_default();
+    let private_key = match rsa::RsaPrivateKey::from_pkcs8_pem(&state.private_key_pem) {
+        Ok(k) => k,
+        Err(e) => {
+            return simple(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("private key: {e}"),
+            )
+        }
+    };
+    let aes_key = match private_key.decrypt(rsa::Oaep::new::<sha2::Sha256>(), &key) {
+        Ok(k) => k,
+        Err(e) => {
+            // The identity key changed (or the item predates encryption): accept it so the
+            // relay drops the item instead of retrying forever.
+            warn!("spool envelope key decrypt failed: {e}");
+            return simple(StatusCode::OK, "undecryptable");
+        }
+    };
+    let cipher = match Aes256Gcm::new_from_slice(&aes_key) {
+        Ok(c) => c,
+        Err(_) => return simple(StatusCode::INTERNAL_SERVER_ERROR, "bad AES key length"),
+    };
+    if nonce.len() != 12 {
+        return simple(StatusCode::BAD_REQUEST, "bad nonce length");
+    }
+    let plaintext =
+        match aes_gcm::aead::Aead::decrypt(&cipher, Nonce::from_slice(&nonce), ciphertext.as_ref())
+        {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("spool envelope AES decrypt failed: {e}");
+                return simple(StatusCode::OK, "undecryptable");
+            }
+        };
+
+    let method = env.method.parse::<Method>().unwrap_or(Method::POST);
+    let uri = if env.query.is_empty() {
+        env.path.clone()
+    } else {
+        format!("{}?{}", env.path, env.query)
+    };
+    let mut builder = Request::builder().method(method).uri(uri);
+    for (k, v) in &env.headers {
+        if k.eq_ignore_ascii_case(SPOOL_SKEW_HEADER) {
+            continue;
+        }
+        if let (Ok(name), Ok(value)) = (
+            http::header::HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(v),
+        ) {
+            builder = builder.header(name, value);
+        }
+    }
+    let age_secs = env
+        .spooled_at_ms
+        .map(|ts| (now_ms() - ts).max(0) as u64 / 1000)
+        .unwrap_or(0)
+        .min(MAX_SPOOL_SKEW_SECS);
+    builder = builder.header(SPOOL_SKEW_HEADER, age_secs.to_string());
+    let request = match builder.body(Body::from(plaintext)) {
+        Ok(r) => r,
+        Err(e) => {
+            return simple(
+                StatusCode::BAD_REQUEST,
+                &format!("bad envelope request: {e}"),
+            )
+        }
+    };
+    inbox(state, request).await
+}
+
 fn build_local_actor(cfg: &ApConfig) -> Actor {
     let base = cfg.public_base_url.trim_end_matches('/');
-    let id = format!("{base}/users/{}", cfg.username);
-    let inbox = format!("{id}/inbox");
-    let outbox = format!("{id}/outbox");
-    let followers = format!("{id}/followers");
-    let following = format!("{id}/following");
+    // Transport resources (inbox/outbox/collections) must be dereferenceable by remote
+    // servers, so they always live on the relay base. Only the canonical actor identity can
+    // be moved to a separate anchor (a cheap static host), which decouples the identity from
+    // the relay operator.
+    let transport = format!("{base}/users/{}", cfg.username);
+    let anchor_base = cfg
+        .anchor_actor_url
+        .as_deref()
+        .map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty());
+    let id = match anchor_base {
+        Some(anchor) => format!("{anchor}/users/{}", cfg.username),
+        None => transport.clone(),
+    };
+    let inbox = format!("{transport}/inbox");
+    let outbox = format!("{transport}/outbox");
+    let followers = format!("{transport}/followers");
+    let following = format!("{transport}/following");
     // A shared inbox is only useful when the receiving instance can expand collection
     // recipients (e.g. `.../followers`). The relay has no follow graph, so its shared inbox
     // rejects followers-only deliveries with "no local recipients". Advertising the user's own
     // inbox keeps every delivery correct: the relay routes by path to the right tunnel.
-    let shared_inbox = format!("{id}/inbox");
+    let shared_inbox = format!("{transport}/inbox");
     let key_id = format!("{id}#main-key");
 
     let icon = cfg
@@ -4529,7 +4713,13 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
             })
             .filter(|f| !f.name.is_empty() && !f.value.is_empty())
             .collect(),
-        also_known_as: cfg.also_known_as.clone(),
+        also_known_as: {
+            let mut aliases = cfg.also_known_as.clone();
+            if id != transport {
+                aliases.push(transport.clone());
+            }
+            aliases
+        },
         followers,
         following,
         inbox,
@@ -4548,8 +4738,8 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
         image,
         discoverable: Some(true),
         indexable: Some(true),
-        featured: Some(format!("{id}/collections/featured")),
-        featured_tags: Some(format!("{id}/collections/featuredTags")),
+        featured: Some(format!("{transport}/collections/featured")),
+        featured_tags: Some(format!("{transport}/collections/featuredTags")),
     }
 }
 
@@ -4879,8 +5069,11 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
 
-    // Basic guard: l'actor deve essere il nostro (se presente).
-    let expected_actor = format!(
+    // Basic guard: the actor must be us. With an identity anchor the canonical actor is the
+    // anchor URL, while the relay URL is still accepted as an alias and normalized below so
+    // that the stored/delivered activity always matches the signing key.
+    let expected_actor = canonical_actor_url(&state.cfg);
+    let relay_actor = format!(
         "{}/users/{}",
         state.cfg.public_base_url.trim_end_matches('/'),
         state.cfg.username
@@ -4891,8 +5084,16 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         state.cfg.username
     );
     if let Some(actor) = activity.get("actor").and_then(|v| v.as_str()) {
-        if actor != expected_actor {
+        if actor != expected_actor && actor != relay_actor {
             return simple(StatusCode::FORBIDDEN, "actor mismatch");
+        }
+        if actor != expected_actor {
+            if let serde_json::Value::Object(map) = &mut activity {
+                map.insert(
+                    "actor".to_string(),
+                    serde_json::Value::String(expected_actor.clone()),
+                );
+            }
         }
     } else {
         if let serde_json::Value::Object(map) = &mut activity {
@@ -4944,9 +5145,21 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     "id".to_string(),
                     serde_json::Value::String(object_id.clone()),
                 );
-                obj_map
-                    .entry("attributedTo".to_string())
-                    .or_insert_with(|| serde_json::Value::String(expected_actor.clone()));
+                match obj_map.get("attributedTo").and_then(|v| v.as_str()) {
+                    Some(v) if v == relay_actor => {
+                        obj_map.insert(
+                            "attributedTo".to_string(),
+                            serde_json::Value::String(expected_actor.clone()),
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        obj_map.insert(
+                            "attributedTo".to_string(),
+                            serde_json::Value::String(expected_actor.clone()),
+                        );
+                    }
+                }
 
                 // Legacy servers frequently dereference the object id later; propagate audience to the object
                 // so visibility remains correct even out-of-context of the Create activity.
@@ -5675,7 +5888,10 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
+    if let Err(e) = verify_date(
+        &parts.headers,
+        effective_max_date_skew(state, &parts.headers),
+    ) {
         let _ = state.social.insert_audit_event(
             "inbox",
             None,
@@ -6045,7 +6261,10 @@ async fn receipt_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         );
         return simple(StatusCode::UNAUTHORIZED, &format!("digest invalid: {e}"));
     }
-    if let Err(e) = verify_date(&parts.headers, state.max_date_skew) {
+    if let Err(e) = verify_date(
+        &parts.headers,
+        effective_max_date_skew(state, &parts.headers),
+    ) {
         let _ = state.social.insert_audit_event(
             "receipt",
             None,
@@ -6263,8 +6482,7 @@ async fn send_delivery_receipt_best_effort(
     let sender_base = format!("{scheme}://{auth}");
     let receipt_url = format!("{sender_base}/.fedi3/receipt");
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
     let my_key_id = format!("{me}#main-key");
 
     let body = serde_json::json!({
@@ -6570,8 +6788,7 @@ pub(crate) async fn process_inbox_activity(
     activity: &serde_json::Value,
 ) -> anyhow::Result<()> {
     let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
 
     match ty {
         "Create" | "Update" | "Delete" | "Announce" | "Like" | "EmojiReact" => {
@@ -7027,8 +7244,7 @@ async fn reactions_me_get(state: &ApState, req: Request<Body>) -> Response<Body>
         return simple(StatusCode::BAD_REQUEST, "missing object");
     }
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me = format!("{base}/users/{}", state.cfg.username);
+    let me = canonical_actor_url(&state.cfg);
 
     let rows = match state
         .social
