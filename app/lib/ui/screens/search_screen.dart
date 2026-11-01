@@ -13,6 +13,8 @@ import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
+import '../../state/search_history_store.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/note_card.dart';
 import '../widgets/status_avatar.dart';
@@ -55,6 +57,7 @@ class _SearchScreenState extends State<SearchScreen>
   String? _usersNext;
   bool _notesLoadingMore = false;
   bool _usersLoadingMore = false;
+  List<String> _history = const [];
 
   @override
   void initState() {
@@ -71,6 +74,7 @@ class _SearchScreenState extends State<SearchScreen>
         _runSearch();
       }
     });
+    _loadHistory();
     WidgetsBinding.instance.addPostFrameCallback((_) => _runSearch());
   }
 
@@ -113,6 +117,20 @@ class _SearchScreenState extends State<SearchScreen>
       _query = next;
       _runSearch();
     });
+  }
+
+
+  Future<void> _loadHistory() async {
+    final items = await SearchHistoryStore.read();
+    if (!mounted) return;
+    setState(() => _history = items);
+  }
+
+  Future<void> _rememberQuery() async {
+    final q = _searchCtrl.text.trim();
+    if (q.isEmpty) return;
+    await SearchHistoryStore.add(q);
+    await _loadHistory();
   }
 
   Future<void> _runSearch({bool reset = true}) async {
@@ -391,9 +409,50 @@ class _SearchScreenState extends State<SearchScreen>
                 filled: true,
               ),
               textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _runSearch(),
+              onSubmitted: (_) {
+                _rememberQuery();
+                _runSearch();
+              },
             ),
           ),
+          if (_query.isEmpty && _history.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(context.l10n.searchRecent,
+                          style: Theme.of(context).textTheme.labelSmall),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          await SearchHistoryStore.clear();
+                          await _loadHistory();
+                        },
+                        child: Text(context.l10n.searchClearHistory),
+                      ),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      for (final q in _history)
+                        ActionChip(
+                          label: Text(q),
+                          onPressed: () {
+                            _searchCtrl.text = q;
+                            _query = q;
+                            _runSearch();
+                          },
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
@@ -456,10 +515,16 @@ class _SearchScreenState extends State<SearchScreen>
 
   Widget _buildNotes(BuildContext context) {
     if (_query.isEmpty) {
-      return Center(child: Text(context.l10n.searchEmpty));
+      return EmptyState(
+        icon: Icons.search_rounded,
+        title: context.l10n.searchEmpty,
+      );
     }
     if (_noteItems.isEmpty) {
-      return Center(child: Text(context.l10n.searchNoResults));
+      return EmptyState(
+        icon: Icons.search_off_rounded,
+        title: context.l10n.searchNoResults,
+      );
     }
     return ListView.builder(
       padding: const EdgeInsets.all(12),
@@ -509,10 +574,16 @@ class _SearchScreenState extends State<SearchScreen>
 
   Widget _buildUsers(BuildContext context) {
     if (_query.isEmpty) {
-      return Center(child: Text(context.l10n.searchEmpty));
+      return EmptyState(
+        icon: Icons.search_rounded,
+        title: context.l10n.searchEmpty,
+      );
     }
     if (_userItems.isEmpty) {
-      return Center(child: Text(context.l10n.searchNoResults));
+      return EmptyState(
+        icon: Icons.search_off_rounded,
+        title: context.l10n.searchNoResults,
+      );
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
@@ -576,7 +647,10 @@ class _SearchScreenState extends State<SearchScreen>
 
   Widget _buildHashtags(BuildContext context) {
     if (_tagItems.isEmpty) {
-      return Center(child: Text(context.l10n.searchNoResults));
+      return EmptyState(
+        icon: Icons.search_off_rounded,
+        title: context.l10n.searchNoResults,
+      );
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),

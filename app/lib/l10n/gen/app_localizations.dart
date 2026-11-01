@@ -302,6 +302,18 @@ abstract class AppLocalizations {
   /// **'Type to search'**
   String get searchEmpty;
 
+  /// No description provided for @searchRecent.
+  ///
+  /// In en, this message translates to:
+  /// **'Recent searches'**
+  String get searchRecent;
+
+  /// No description provided for @searchClearHistory.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear history'**
+  String get searchClearHistory;
+
   /// No description provided for @searchNoResults.
   ///
   /// In en, this message translates to:

@@ -113,6 +113,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchEmpty => 'Type to search';
 
   @override
+  String get searchRecent => 'Recent searches';
+
+  @override
+  String get searchClearHistory => 'Clear history';
+
+  @override
   String get searchNoResults => 'No results';
 
   @override

@@ -113,6 +113,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get searchEmpty => 'Scrivi per cercare';
 
   @override
+  String get searchRecent => 'Ricerche recenti';
+
+  @override
+  String get searchClearHistory => 'Cancella cronologia';
+
+  @override
   String get searchNoResults => 'Nessun risultato';
 
   @override

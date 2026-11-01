@@ -41,6 +41,8 @@
   "searchTabUsers": "Utenti",
   "searchTabHashtags": "Hashtag",
   "searchEmpty": "Scrivi per cercare",
+  "searchRecent": "Ricerche recenti",
+  "searchClearHistory": "Cancella cronologia",
   "searchNoResults": "Nessun risultato",
   "searchShowingFor": "Risultati per",
   "searchSourceAll": "Tutti",
