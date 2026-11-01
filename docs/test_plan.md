@@ -670,3 +670,27 @@ Gate eseguiti con output reale sullo stato finale:
 - Il Dockerfile del relay non è stato costruito (Docker non disponibile nell'ambiente): il tag `rust:1.99-bookworm` è stato verificato esistente sul registry e allineato al toolchain usato per i test.
 - La migrazione PostgreSQL è coperta da asserzioni sul testo SQL, non da un database live.
 - Alcuni lint clippy preesistenti di tipo stilistico sono stati silenziati a livello di crate (`manual_clamp`, `result_large_err`, `too_many_arguments`, …). I lint di correttezza restano attivi e bloccanti.
+
+## 12. Interoperabilità reale (manuale)
+
+I test automatici usano server ActivityPub simulati. Per verificare il comportamento contro
+implementazioni indipendenti esiste un test manuale documentato in `docs/interop.md`, eseguito
+contro **Mastodon 4.7.4** e **Misskey 2026.10.1** reali (PostgreSQL + Redis, build da sorgente,
+reverse proxy TLS con CA locale).
+
+Copertura verificata:
+
+| Scenario | Mastodon | Misskey | Esito |
+|----------|----------|---------|-------|
+| Risoluzione attore Fedi3 ancorato via WebFinger/HTTPS | sì | sì | pass |
+| Follow dell'identità Fedi3 | sì | sì | pass |
+| `Accept` firmato consegnato e verificato | sì | sì | pass |
+| Nota Fedi3 → istanza terza (firma verificata) | sì | sì | pass |
+| Nota istanza terza → Fedi3 (verifica firma e storage) | sì | sì | pass |
+| Follow Fedi3 → istanza terza | sì (manuale) | sì | pass |
+
+Il test ha trovato un bug reale nella firma HTTP in uscita (header `Content-Type` duplicato),
+corretto in `Delivery::deliver_json`; dopo il fix tutti gli scenari passano.
+
+Limiti del test: non è in CI (richiede due servizi esterni e un trust store locale); va rieseguito
+manualmente prima di una release che tocchi firma HTTP, delivery o `net_policy`.

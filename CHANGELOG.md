@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Relay moderation: admin blocklists (`/admin/blocks`, actor/domain with optional expiry) and per-user blocklists pushed by the core (`PUT /_fedi3/relay/user_blocks/<user>`), enforced on the inbox path with `202` for blocked senders.
 - Core syncs its blocklist to the relay at startup and after every change.
 - End-to-end tests for anchor identity, blind spool, relay mesh and moderation.
+- Real interoperability verified against Mastodon 4.7.4 and Misskey 2026.10.1 (procedure and evidence in `docs/interop.md`).
 - End-to-end federation test: a real relay binary plus two real core runtimes (Follow, Accept, public note delivery, outbox).
 - Outbound fetch policy with SSRF protection, bounded redirects and streamed body caps (`net_policy`).
 - Pending follow requests for locked accounts, with internal endpoints and a Flutter screen to approve or reject them.
@@ -31,6 +32,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - The tunnel reconnects with exponential backoff instead of dying on the first network error.
 - `fedi3_core_start` returns success only after the local server is listening.
 - The relay token is optional: local-only and P2P-only instances start without a relay.
+- Outbound HTTP clients use `rustls-tls-native-roots`, so the system CA store is honoured (needed for enterprise/private CAs; public CAs keep working).
 - Health and readiness endpoints are unauthenticated and side-effect free.
 - Client IP is derived from the proxy-appended `X-Forwarded-For` entry; rate limits are per route.
 - SQLite uses `busy_timeout`; delivery workers survive transient database errors.
@@ -38,6 +40,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Post text is always converted to escaped HTML before publishing.
 
 ### Fixed
+- A duplicated `Content-Type` header in `Delivery::deliver_json` made the signed value differ from the value received by Mastodon, which rejected the HTTP signature (401). The header is now sent once, from the signed header set.
 - Two real bugs found by the end-to-end test: the tunnel deadlocked on nested federation fetches (now dispatched concurrently), and the actor document advertised the relay shared inbox, which cannot expand `followers` collections, silently losing followers-only deliveries.
 - The core now joins every background worker on shutdown and checkpoints the SQLite WAL.
 - The key resolver cache evicts least-recently-used entries instead of arbitrary ones.

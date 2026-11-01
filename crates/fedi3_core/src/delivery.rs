@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use http::{HeaderMap, Method, Uri};
-use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use reqwest::header::ACCEPT;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -226,7 +226,6 @@ impl Delivery {
         for (k, v) in headers.iter() {
             req = req.header(k.as_str(), v.to_str().unwrap_or_default());
         }
-        req = req.header(CONTENT_TYPE, "application/activity+json");
 
         let resp = send_with_retry(|| req.try_clone().unwrap().body(body.to_vec()), 3).await?;
         let status = resp.status();
