@@ -359,22 +359,27 @@ class _RightSidebarState extends State<RightSidebar> {
                         runSpacing: 6,
                         children: [
                           for (final tag in _trending.take(8))
-                            ActionChip(
-                              label: Text(
-                                tag['name']?.toString() ?? '',
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              onPressed: () => Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => SearchScreen(
-                                    appState: widget.appState,
-                                    initialQuery:
-                                        tag['name']?.toString() ?? '',
-                                    initialTab: SearchTab.hashtags,
+                            Builder(builder: (context) {
+                              final name = (tag['name']?.toString() ?? '')
+                                  .trim()
+                                  .replaceFirst(RegExp(r'^#+'), '');
+                              if (name.isEmpty) return const SizedBox.shrink();
+                              return ActionChip(
+                                label: Text(
+                                  '#$name',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => SearchScreen(
+                                      appState: widget.appState,
+                                      initialQuery: '#$name',
+                                      initialTab: SearchTab.hashtags,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
+                              );
+                            }),
                         ],
                       ),
                     ],

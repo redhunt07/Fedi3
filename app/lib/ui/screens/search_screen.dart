@@ -325,7 +325,7 @@ class _SearchScreenState extends State<SearchScreen>
   }
 
   void _openHashtag(String tag) {
-    final next = tag.trim();
+    final next = tag.trim().replaceFirst(RegExp(r'^#+'), '');
     if (next.isEmpty) return;
     _tabs.animateTo(_tabIndex(SearchTab.posts));
     _searchCtrl.text = '#$next';
@@ -664,7 +664,10 @@ class _SearchScreenState extends State<SearchScreen>
         return ListTile(
           onTap: () => _openHashtag(tag.name),
           title: RichText(
-            text: _highlightQuery(context, '#${tag.name}'),
+            text: _highlightQuery(
+              context,
+              '#${tag.name.trim().replaceFirst(RegExp(r'^#+'), '')}',
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

@@ -3012,7 +3012,8 @@ async fn trending_hashtags(state: &ApState, req: Request<Body>) -> Response<Body
             let items: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|(name, count)| {
-                    serde_json::json!({"name": name, "count": count})
+                    let clean = name.trim().trim_start_matches('#').to_string();
+                    serde_json::json!({"name": clean, "count": count})
                 })
                 .collect();
             axum::Json(serde_json::json!({"items": items})).into_response()

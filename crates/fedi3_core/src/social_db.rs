@@ -1743,11 +1743,13 @@ impl SocialDb {
         let limit = limit.min(50).max(1) as i64;
         let mut stmt = conn.prepare(
             r#"
-            SELECT name, COUNT(*)
-            FROM object_tags
-            WHERE name != ''
-              AND (tag_type='Hashtag' OR name LIKE '#%')
-            GROUP BY name
+            SELECT t.name, COUNT(*)
+            FROM object_tags t
+            JOIN objects o ON o.object_id = t.object_id
+            WHERE o.deleted=0
+              AND t.name != ''
+              AND (t.tag_type='Hashtag' OR t.name LIKE '#%')
+            GROUP BY t.name
             ORDER BY COUNT(*) DESC
             LIMIT ?1
             "#,
@@ -1773,12 +1775,14 @@ impl SocialDb {
         };
         let mut stmt = conn.prepare(
             r#"
-            SELECT name, COUNT(*)
-            FROM object_tags
-            WHERE name != ''
-              AND (tag_type='Hashtag' OR name LIKE '#%')
-              AND lower(name) LIKE ?1 ESCAPE '\'
-            GROUP BY name
+            SELECT t.name, COUNT(*)
+            FROM object_tags t
+            JOIN objects o ON o.object_id = t.object_id
+            WHERE o.deleted=0
+              AND t.name != ''
+              AND (t.tag_type='Hashtag' OR t.name LIKE '#%')
+              AND lower(t.name) LIKE ?1 ESCAPE '\'
+            GROUP BY t.name
             ORDER BY COUNT(*) DESC
             LIMIT ?2
             "#,
@@ -4409,6 +4413,17 @@ mod hashtag_tests {
         let db = SocialDb::open(&path).expect("open db");
         {
             let conn = db.connect().expect("connect");
+            let note_json: Vec<u8> =
+                r##"{"type":"Note","id":"https://fedi3.test/notes/1","content":"#fedi3"}"##
+                    .as_bytes()
+                    .to_vec();
+            for id in ["obj-1", "obj-2"] {
+                conn.execute(
+                    "INSERT INTO objects(object_id,created_at_ms,updated_at_ms,deleted,object_json) VALUES (?1,?2,?2,0,?3)",
+                    params![id, 1i64, note_json.clone()],
+                )
+                .expect("insert object");
+            }
             conn.execute(
                 "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
                 params!["obj-1", "fedi3", "https://fedi3.test/tags/fedi3"],
@@ -4424,11 +4439,20 @@ mod hashtag_tests {
                 params!["obj-1", "activitypub", "https://fedi3.test/tags/activitypub"],
             )
             .expect("insert tag 3");
+            conn.execute(
+                "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
+                params!["missing-object", "orphan", "https://fedi3.test/tags/orphan"],
+            )
+            .expect("insert orphan tag");
         }
         let search = db.search_hashtags("fedi3", 10).expect("search");
         assert_eq!(search, vec![("fedi3".to_string(), 2)]);
         let trending = db.list_trending_hashtags(10).expect("trending");
         assert_eq!(trending.first(), Some(&("fedi3".to_string(), 2)));
+        assert!(!trending.iter().any(|(name, _)| name == "orphan"));
+        let notes = db.search_notes_by_tag("fedi3", 10, None).expect("notes");
+        assert_eq!(notes.total, 2);
+        assert_eq!(notes.items.len(), 2);
         let _ = std::fs::remove_file(&path);
     }
 }

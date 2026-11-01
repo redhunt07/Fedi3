@@ -3,6 +3,12 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-02 — I tag aprono davvero i post
+
+Corretto il percorso dei tag: i conteggi considerano solo tag con post
+esistenti, i nomi sono normalizzati e cliccando un hashtag si apre la ricerca
+con i post corrispondenti, senza risultati vuoti.
+
 ## 2026-11-01 — Scopri gli hashtag in tendenza
 
 Il rail destro mostra ora gli hashtag più usati nel Fediverso e li apre

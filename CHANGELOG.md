@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Fixed hashtag cards/tags opening empty searches: tag counts now join stored objects (orphan tags excluded) and trending names are normalized, so clicking a tag always lists its posts.
 - Right sidebar: live "Scopri" card with trending hashtags (new `/_fedi3/trending/hashtags` core endpoint), opening hashtag search on tap.
 - Fixed hashtag search returning no results: the raw SQL `ESCAPE` literal used two backslashes, so SQLite rejected it and the handler silently returned an empty list.
 - Notifications redesigned as compact actor rows with presence dots, type icons, excerpts and inline actions instead of full post cards.
