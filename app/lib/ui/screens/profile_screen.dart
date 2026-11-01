@@ -14,6 +14,7 @@ import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
 import 'profile_edit_screen.dart';
@@ -206,8 +207,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 12),
             if (_filteredOutbox().isEmpty)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 28),
-                child: Center(child: Text(context.l10n.listNoItems)),
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: EmptyState(
+                  icon: Icons.article_outlined,
+                  title: context.l10n.listNoItems,
+                ),
               )
             else
               for (final a in _filteredOutbox())

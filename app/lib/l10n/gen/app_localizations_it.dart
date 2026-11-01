@@ -176,6 +176,10 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatThreadsEmpty => 'Nessuna chat';
 
   @override
+  String get chatEmptyHint =>
+      'Le conversazioni cifrate end-to-end appariranno qui.';
+
+  @override
   String get chatEmpty => 'Nessun messaggio';
 
   @override

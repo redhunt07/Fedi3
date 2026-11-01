@@ -422,6 +422,12 @@ abstract class AppLocalizations {
   /// **'No chats yet'**
   String get chatThreadsEmpty;
 
+  /// No description provided for @chatEmptyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'End-to-end encrypted conversations will appear here.'**
+  String get chatEmptyHint;
+
   /// No description provided for @chatEmpty.
   ///
   /// In en, this message translates to:

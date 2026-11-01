@@ -14,6 +14,7 @@ import '../../model/core_config.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../utils/time_ago.dart';
 import 'chat_thread_screen.dart';
@@ -256,7 +257,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_threads.isEmpty) {
       return ListView(children: [
         const SizedBox(height: 120),
-        Center(child: Text(context.l10n.chatThreadsEmpty))
+        EmptyState(
+          icon: Icons.forum_outlined,
+          title: context.l10n.chatThreadsEmpty,
+          message: context.l10n.chatEmptyHint,
+        )
       ]);
     }
     final pinnedIds = widget.appState.prefs.pinnedChatThreads.toSet();

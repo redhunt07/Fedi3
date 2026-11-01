@@ -68,6 +68,7 @@
   "chatSend": "Invia",
   "chatRefresh": "Aggiorna",
   "chatThreadsEmpty": "Nessuna chat",
+  "chatEmptyHint": "Le conversazioni cifrate end-to-end appariranno qui.",
   "chatEmpty": "Nessun messaggio",
   "chatNoMessages": "Nessun messaggio",
   "chatDirectMessage": "Messaggio diretto",

@@ -68,6 +68,7 @@
   "chatSend": "Send",
   "chatRefresh": "Refresh",
   "chatThreadsEmpty": "No chats yet",
+  "chatEmptyHint": "End-to-end encrypted conversations will appear here.",
   "chatEmpty": "No messages yet",
   "chatNoMessages": "No messages",
   "chatDirectMessage": "Direct message",
