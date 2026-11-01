@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Flutter client: new "Aurora" visual language (design tokens, dark/light palette, typography scale, animated brand mark, gradient CTAs, hover states), a custom navigation rail with selection indicator and live core status, pill timeline tabs, a restyled profile header with banner, a note-only profile feed, a grouped settings hub with icon tiles, and a guided onboarding surface with advanced options collapsed. The desktop default layout is now the tabbed single feed; the deck/columns mode remains available.
 - Flutter client: followers/following list screens with per-actor follow/unfollow, tappable profile counters, a clickable Account card that opens the local profile, and a user-search fallback over actors already seen by the client and the local follow graph (the core index only stores activity objects).
 
 ### Changed

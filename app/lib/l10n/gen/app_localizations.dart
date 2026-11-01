@@ -230,6 +230,30 @@ abstract class AppLocalizations {
   /// **'Local'**
   String get timelineTabLocal;
 
+  /// No description provided for @timelineTabFollowing.
+  ///
+  /// In en, this message translates to:
+  /// **'Following'**
+  String get timelineTabFollowing;
+
+  /// No description provided for @timelineTabDiscover.
+  ///
+  /// In en, this message translates to:
+  /// **'Discover'**
+  String get timelineTabDiscover;
+
+  /// No description provided for @coreOnline.
+  ///
+  /// In en, this message translates to:
+  /// **'Core online'**
+  String get coreOnline;
+
+  /// No description provided for @coreOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Core offline'**
+  String get coreOffline;
+
   /// No description provided for @timelineTabSocial.
   ///
   /// In en, this message translates to:
@@ -1147,6 +1171,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Use custom relay settings'**
   String get onboardingRelayCustom;
+
+  /// No description provided for @onboardingAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced settings'**
+  String get onboardingAdvanced;
 
   /// No description provided for @composeTitle.
   ///

@@ -29,6 +29,10 @@
   "timelineTitle": "Timeline",
   "timelineTabHome": "Home",
   "timelineTabLocal": "Local",
+  "timelineTabFollowing": "Following",
+  "timelineTabDiscover": "Discover",
+  "coreOnline": "Core online",
+  "coreOffline": "Core offline",
   "timelineTabSocial": "Social",
   "timelineTabFederated": "Federated",
   "searchTitle": "Search",
@@ -252,6 +256,7 @@
   "onboardingRelayListHint": "Pick a relay from the shared list or enter one manually.",
   "onboardingRelayPick": "Select a relay",
   "onboardingRelayCustom": "Use custom relay settings",
+  "onboardingAdvanced": "Advanced settings",
   "composeTitle": "Compose",
   "composeCharCount": "{used}/{max}",
   "@composeCharCount": {

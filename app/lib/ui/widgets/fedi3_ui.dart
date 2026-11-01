@@ -1,0 +1,297 @@
+/*
+ * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+import 'package:flutter/material.dart';
+
+import '../theme/ui_tokens.dart';
+
+/// Brand mark for the app shell: an aurora gradient tile with the Fedi3 glyph.
+class BrandMark extends StatelessWidget {
+  const BrandMark({super.key, this.size = 44, this.showGlow = true});
+
+  final double size;
+  final bool showGlow;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(size * 0.32),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(UiTokens.brandViolet),
+            Color(UiTokens.brandCyan),
+          ],
+        ),
+        boxShadow: showGlow
+            ? [
+                BoxShadow(
+                  color: scheme.primary.withAlpha(90),
+                  blurRadius: size * 0.6,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : null,
+      ),
+      child: Icon(
+        Icons.hub_rounded,
+        color: Colors.white,
+        size: size * 0.52,
+      ),
+    );
+  }
+}
+
+/// Primary call to action with the aurora gradient and a subtle hover lift.
+class AuroraButton extends StatefulWidget {
+  const AuroraButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.expand = false,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final IconData? icon;
+  final bool expand;
+
+  @override
+  State<AuroraButton> createState() => _AuroraButtonState();
+}
+
+class _AuroraButtonState extends State<AuroraButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+    final child = Row(
+      mainAxisSize: widget.expand ? MainAxisSize.max : MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (widget.icon != null) ...[
+          Icon(widget.icon, size: 18, color: Colors.white),
+          const SizedBox(width: 8),
+        ],
+        Text(
+          widget.label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+        ),
+      ],
+    );
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AnimatedScale(
+        scale: _hover && enabled ? 1.02 : 1,
+        duration: UiTokens.motionFast,
+        child: AnimatedOpacity(
+          opacity: enabled ? 1 : 0.5,
+          duration: UiTokens.motionFast,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(UiTokens.radiusPill),
+              gradient: const LinearGradient(
+                colors: [
+                  Color(UiTokens.brandViolet),
+                  Color(UiTokens.brandCyan),
+                ],
+              ),
+              boxShadow: _hover && enabled
+                  ? [
+                      BoxShadow(
+                        color: const Color(UiTokens.brandViolet).withAlpha(120),
+                        blurRadius: 22,
+                        offset: const Offset(0, 8),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(UiTokens.radiusPill),
+                onTap: widget.onPressed,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: UiTokens.gapLg, vertical: 13),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A soft, bordered surface used for panels and cards in the new visual language.
+class GlassPanel extends StatelessWidget {
+  const GlassPanel({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(UiTokens.padCard),
+    this.onTap,
+    this.highlight = false,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final VoidCallback? onTap;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = isDark
+        ? const Color(UiTokens.darkSurface)
+        : const Color(UiTokens.lightSurface);
+    final border = isDark
+        ? const Color(UiTokens.darkBorder)
+        : const Color(UiTokens.lightBorder);
+    final content = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(UiTokens.radiusCard),
+        color: highlight ? scheme.primary.withAlpha(isDark ? 18 : 12) : base,
+        border: Border.all(
+          color: highlight ? scheme.primary.withAlpha(90) : border,
+        ),
+        boxShadow: isDark
+            ? [
+                BoxShadow(
+                  color: Colors.black.withAlpha(90),
+                  blurRadius: 26,
+                  offset: const Offset(0, 12),
+                ),
+              ]
+            : [
+                BoxShadow(
+                  color: scheme.shadow.withAlpha(10),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+      ),
+      child: child,
+    );
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(UiTokens.radiusCard),
+        onTap: onTap,
+        child: content,
+      ),
+    );
+  }
+}
+
+/// Small pill label used for tags, counters and status hints.
+class PillTag extends StatelessWidget {
+  const PillTag({
+    super.key,
+    required this.label,
+    this.icon,
+    this.color,
+  });
+
+  final String label;
+  final IconData? icon;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: tint.withAlpha(18),
+        borderRadius: BorderRadius.circular(UiTokens.radiusPill),
+        border: Border.all(color: tint.withAlpha(60)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 13, color: tint),
+            const SizedBox(width: 5),
+          ],
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: tint,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Live status dot with a soft pulse, used for core/relay connectivity.
+class StatusDot extends StatefulWidget {
+  const StatusDot({super.key, required this.color, this.size = 8});
+
+  final Color color;
+  final double size;
+
+  @override
+  State<StatusDot> createState() => _StatusDotState();
+}
+
+class _StatusDotState extends State<StatusDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (_, __) {
+        final t = _controller.value;
+        return Container(
+          width: widget.size,
+          height: widget.size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: widget.color,
+            boxShadow: [
+              BoxShadow(
+                color: widget.color.withAlpha((60 + 90 * t).round()),
+                blurRadius: widget.size * 2.2,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}

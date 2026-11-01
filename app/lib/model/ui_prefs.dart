@@ -80,7 +80,7 @@ class UiPrefs {
         lastChatSeenMs: 0,
         chatThreadSeenMs: {},
         pinnedChatThreads: [],
-        desktopUseColumns: true,
+        desktopUseColumns: false,
         mediaAutoplay: true,
         mediaMuted: false,
         emojiPickerScale: 1.0,

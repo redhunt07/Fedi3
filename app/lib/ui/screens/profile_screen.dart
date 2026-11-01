@@ -15,6 +15,7 @@ import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
+import '../theme/ui_tokens.dart';
 import 'relations_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -167,12 +168,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Text(context.l10n.timelineTabHome,
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
-            for (final a in _outbox)
+            for (final a in _outbox.where(_isNoteActivity))
               TimelineActivityCard(appState: widget.appState, activity: a),
           ],
         ],
       ),
     );
+  }
+
+
+  bool _isNoteActivity(Map<String, dynamic> activity) {
+    final type = (activity['type'] as String?)?.trim() ?? '';
+    if (type != 'Create' && type != 'Announce') return false;
+    final obj = activity['object'];
+    if (obj is! Map) return obj is String;
+    final m = obj.cast<String, dynamic>();
+    if (type == 'Create') {
+      final inner = m['object'];
+      if (inner is Map) {
+        return (inner['type'] as String?) == 'Note';
+      }
+      return (m['type'] as String?) == 'Note';
+    }
+    if ((m['type'] as String?) == 'Note') return true;
+    final inner = m['object'];
+    if (inner is Map) return (inner['type'] as String?) == 'Note';
+    return inner is String && inner.trim().isNotEmpty;
   }
 
   bool _isSelf(ActorProfile profile) {
@@ -272,10 +293,27 @@ class _ProfileHeader extends StatelessWidget {
     final fields = profile.fields;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(UiTokens.padCard),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
+              child: Container(
+                height: 88,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(UiTokens.brandViolet),
+                      Color(UiTokens.brandCyan),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             if (profile.imageUrl.trim().isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
@@ -294,7 +332,7 @@ class _ProfileHeader extends StatelessWidget {
               children: [
                 _Avatar(
                   url: profile.iconUrl,
-                  size: 52,
+                  size: 64,
                   showStatus: profile.isFedi3,
                   statusKey: profile.statusKey,
                 ),
@@ -304,8 +342,10 @@ class _ProfileHeader extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(profile.displayName,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 16)),
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 2),
                       Text(
                         profile.preferredUsername.isNotEmpty

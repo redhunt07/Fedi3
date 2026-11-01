@@ -174,3 +174,19 @@ lo Step 2 rischia di consolidare endpoint interni.
 Se il vincolo è "copiare Misskey", la sequenza resta valida: si copia la
 tassonomia e i flussi, non la densità, e si tiene Flutter finché l'IA non è
 stabile.
+
+## 10. Stato di avanzamento (2026-11-01)
+
+| Step | Stato | Note |
+|---|---|---|
+| 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route esistenti, empty state; manca un vero router dichiarativo |
+| 1 — Registrazione/login guidati, recovery | parziale | onboarding ridisegnato con identità/relay in primo piano e avanzate collassate; recovery code ancora da mostrare come step dedicato |
+| 2 — Home unica con tab | parziale | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer persistente solo su mobile e nella sidebar |
+| 3 — Profilo proprio/altrui | parziale | banner, contatori cliccabili, feed solo Note; mancano tab Post/Risposte/Media e paginazione |
+| 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
+| 5 — Ricerca | parziale | ricerca post/utenti funzionante con fallback locale; filtri e cronologia da fare |
+| 6 — Notifiche | parziale | schermata e filtri presenti; raggruppamento/mark-read da rifinire |
+| 7 — Chat | parziale | lista e thread presenti; allegati e read state da verificare |
+| 8 — Finitura | da fare | accessibilità, temi completi, i18n, scorciatoie |
+
+Prossimo passo consigliato: completare lo Step 1 (recovery code e login da URL+token) e lo Step 3 (tab del profilo con paginazione), poi aprire la specifica OpenAPI.

@@ -12,6 +12,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/backup_codec.dart';
 import '../../state/app_state.dart';
+import '../widgets/fedi3_ui.dart';
 
 enum OnboardingMode { loginExisting, createNew }
 
@@ -105,102 +106,142 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          const Center(child: BrandMark(size: 64)),
+          const SizedBox(height: 18),
+          Text(
+            widget.mode == OnboardingMode.createNew
+                ? context.l10n.onboardingCreateTitle
+                : context.l10n.onboardingLoginTitle,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 8),
           Text(
             widget.mode == OnboardingMode.createNew
                 ? context.l10n.onboardingCreateIntro
                 : context.l10n.onboardingLoginIntro,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
           ),
+          const SizedBox(height: 20),
           if (widget.mode == OnboardingMode.loginExisting) ...[
-            const SizedBox(height: 12),
-            FilledButton.icon(
+            FilledButton.tonalIcon(
               onPressed: _importing ? null : _importBackupFile,
               icon: const Icon(Icons.upload_file),
               label: Text(context.l10n.onboardingImportBackup),
             ),
+            const SizedBox(height: 16),
           ],
-          const SizedBox(height: 16),
-          _field(context.l10n.onboardingUsername, _username),
-          _relayPicker(context),
-          if (_relayOptions.isEmpty || _customRelay) ...[
-            _field(context.l10n.onboardingDomain, _domain),
-            _field(context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
-            _field(context.l10n.onboardingRelayWs, _relayWs),
-          ] else
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: () => setState(() => _customRelay = true),
-                child: Text(context.l10n.onboardingRelayCustom),
-              ),
-            ),
-          _field(context.l10n.onboardingRelayToken, _relayToken),
-          _field(context.l10n.onboardingBind, _bind),
-          _field(context.l10n.onboardingInternalToken, _internalToken),
-          _field(context.l10n.p2pRelayReserveLabel, _p2pRelayReserve,
-              maxLines: 3),
-          SwitchListTile(
-            title: Text(context.l10n.onboardingEnableP2p),
-            value: _p2pEnable,
-            onChanged: (v) => setState(() {
-              _p2pEnable = v;
-              if (v) {
-                _webrtcEnable = true;
-                _autofillNetworkingDefaults(force: false);
-              }
-            }),
-          ),
-          DropdownButtonFormField<String>(
-            initialValue: _postDeliveryMode,
-            key: ValueKey(_postDeliveryMode),
-            decoration: InputDecoration(
-              labelText: context.l10n.postDeliveryModeLabel,
-            ),
-            items: [
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pRelay,
-                child: Text(context.l10n.postDeliveryP2pRelay),
-              ),
-              DropdownMenuItem(
-                value: CoreConfig.postDeliveryP2pOnly,
-                child: Text(context.l10n.postDeliveryP2pOnly),
-              ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _postDeliveryMode = value);
-            },
-          ),
-          const SizedBox(height: 6),
-          SwitchListTile(
-            title: Text(context.l10n.webrtcSectionTitle),
-            subtitle: Text(context.l10n.webrtcSectionHint),
-            value: _webrtcEnable,
-            onChanged: (v) => setState(() => _webrtcEnable = v),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () =>
-                  setState(() => _autofillNetworkingDefaults(force: true)),
-              icon: const Icon(Icons.bolt),
-              label: Text(context.l10n.webrtcAutofill),
+          GlassPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _field(context.l10n.onboardingUsername, _username),
+                _relayPicker(context),
+                if (_relayOptions.isNotEmpty && !_customRelay)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: () => setState(() => _customRelay = true),
+                      child: Text(context.l10n.onboardingRelayCustom),
+                    ),
+                  ),
+                if (_customRelay || _relayOptions.isEmpty) ...[
+                  _field(context.l10n.onboardingDomain, _domain),
+                  _field(context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
+                  _field(context.l10n.onboardingRelayWs, _relayWs),
+                ],
+              ],
             ),
           ),
-          _field(context.l10n.webrtcIceUrlsLabel, _webrtcIceUrls, maxLines: 3),
-          _field(context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
-          _field(context.l10n.webrtcIceCredentialLabel, _webrtcIceCredential),
           const SizedBox(height: 12),
+          Card(
+            child: ExpansionTile(
+              shape: const Border(),
+              collapsedShape: const Border(),
+              leading: const Icon(Icons.tune_rounded),
+              title: Text(context.l10n.onboardingAdvanced),
+              childrenPadding:
+                  const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              children: [
+                _field(context.l10n.onboardingRelayToken, _relayToken),
+                _field(context.l10n.onboardingBind, _bind),
+                _field(context.l10n.onboardingInternalToken, _internalToken),
+                _field(context.l10n.p2pRelayReserveLabel, _p2pRelayReserve,
+                    maxLines: 3),
+                SwitchListTile(
+                  title: Text(context.l10n.onboardingEnableP2p),
+                  value: _p2pEnable,
+                  onChanged: (v) => setState(() {
+                    _p2pEnable = v;
+                    if (v) {
+                      _webrtcEnable = true;
+                      _autofillNetworkingDefaults(force: false);
+                    }
+                  }),
+                ),
+                DropdownButtonFormField<String>(
+                  initialValue: _postDeliveryMode,
+                  key: ValueKey(_postDeliveryMode),
+                  decoration: InputDecoration(
+                    labelText: context.l10n.postDeliveryModeLabel,
+                  ),
+                  items: [
+                    DropdownMenuItem(
+                      value: CoreConfig.postDeliveryP2pRelay,
+                      child: Text(context.l10n.postDeliveryP2pRelay),
+                    ),
+                    DropdownMenuItem(
+                      value: CoreConfig.postDeliveryP2pOnly,
+                      child: Text(context.l10n.postDeliveryP2pOnly),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _postDeliveryMode = value);
+                  },
+                ),
+                const SizedBox(height: 6),
+                SwitchListTile(
+                  title: Text(context.l10n.webrtcSectionTitle),
+                  subtitle: Text(context.l10n.webrtcSectionHint),
+                  value: _webrtcEnable,
+                  onChanged: (v) => setState(() => _webrtcEnable = v),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () =>
+                        setState(() => _autofillNetworkingDefaults(force: true)),
+                    icon: const Icon(Icons.bolt),
+                    label: Text(context.l10n.webrtcAutofill),
+                  ),
+                ),
+                _field(context.l10n.webrtcIceUrlsLabel, _webrtcIceUrls,
+                    maxLines: 3),
+                _field(
+                    context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
+                _field(context.l10n.webrtcIceCredentialLabel,
+                    _webrtcIceCredential),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
           if (_formError != null)
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: 10),
               child: Text(
                 _formError!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ),
-          FilledButton(
+          AuroraButton(
+            label: context.l10n.onboardingSave,
             onPressed: _save,
-            child: Text(context.l10n.onboardingSave),
+            icon: Icons.rocket_launch_rounded,
+            expand: true,
           ),
         ],
       ),

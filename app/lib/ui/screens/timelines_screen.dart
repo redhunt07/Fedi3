@@ -48,6 +48,48 @@ class _TimelinesScreenState extends State<TimelinesScreen>
     super.dispose();
   }
 
+  Widget _timelineTabs(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final labelStyle = Theme.of(context).textTheme.labelLarge;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: TabBar(
+        controller: _tabs,
+        dividerColor: Colors.transparent,
+        indicatorSize: TabBarIndicatorSize.tab,
+        indicatorPadding:
+            const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+        indicator: BoxDecoration(
+          borderRadius: BorderRadius.circular(UiTokens.radiusPill),
+          color: scheme.primary.withAlpha(24),
+          border: Border.all(color: scheme.primary.withAlpha(90)),
+        ),
+        labelColor: scheme.onSurface,
+        unselectedLabelColor: scheme.onSurfaceVariant,
+        labelStyle: labelStyle?.copyWith(fontWeight: FontWeight.w800),
+        unselectedLabelStyle: Theme.of(context).textTheme.labelMedium,
+        tabs: [
+          Tooltip(
+            message: context.l10n.timelineHomeTooltip,
+            child: Tab(text: context.l10n.timelineTabHome),
+          ),
+          Tooltip(
+            message: context.l10n.timelineLocalTooltip,
+            child: Tab(text: context.l10n.timelineTabFollowing),
+          ),
+          Tooltip(
+            message: context.l10n.timelineSocialTooltip,
+            child: Tab(text: context.l10n.timelineTabDiscover),
+          ),
+          Tooltip(
+            message: context.l10n.timelineFederatedTooltip,
+            child: Tab(text: context.l10n.timelineTabFederated),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -79,48 +121,12 @@ class _TimelinesScreenState extends State<TimelinesScreen>
             bottom: isWide
                 ? (useColumns
                     ? null
-                    : TabBar(
-                        controller: _tabs,
-                        tabs: [
-                          Tooltip(
-                            message: context.l10n.timelineHomeTooltip,
-                            child: Tab(text: context.l10n.timelineTabHome),
-                          ),
-                          Tooltip(
-                            message: context.l10n.timelineLocalTooltip,
-                            child: Tab(text: context.l10n.timelineTabLocal),
-                          ),
-                          Tooltip(
-                            message: context.l10n.timelineSocialTooltip,
-                            child: Tab(text: context.l10n.timelineTabSocial),
-                          ),
-                          Tooltip(
-                            message: context.l10n.timelineFederatedTooltip,
-                            child: Tab(text: context.l10n.timelineTabFederated),
-                          ),
-                        ],
-                      ))
-                : TabBar(
-                    controller: _tabs,
-                    tabs: [
-                      Tooltip(
-                        message: context.l10n.timelineHomeTooltip,
-                        child: Tab(text: context.l10n.timelineTabHome),
-                      ),
-                      Tooltip(
-                        message: context.l10n.timelineLocalTooltip,
-                        child: Tab(text: context.l10n.timelineTabLocal),
-                      ),
-                      Tooltip(
-                        message: context.l10n.timelineSocialTooltip,
-                        child: Tab(text: context.l10n.timelineTabSocial),
-                      ),
-                      Tooltip(
-                        message: context.l10n.timelineFederatedTooltip,
-                        child: Tab(text: context.l10n.timelineTabFederated),
-                      ),
-                    ],
-                  ),
+                    : PreferredSize(
+                        preferredSize: const Size.fromHeight(58),
+                        child: _timelineTabs(context)))
+                : PreferredSize(
+                    preferredSize: const Size.fromHeight(58),
+                    child: _timelineTabs(context)),
             actions: [
               IconButton(
                 tooltip: widget.appState.isRunning
@@ -164,7 +170,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                         controller: _columnsScroll,
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                            horizontal: 20, vertical: 16),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -178,29 +184,29 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               constrainWidth: false,
                               showComposer: showInlineComposer,
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 16),
                             _TimelineList(
                               key: _listKeys[1],
                               appState: widget.appState,
                               api: api,
                               kind: 'home',
-                              headerTitle: context.l10n.timelineTabLocal,
+                              headerTitle: context.l10n.timelineTabFollowing,
                               headerTooltip: context.l10n.timelineLocalTooltip,
                               constrainWidth: false,
                               showComposer: showInlineComposer,
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 16),
                             _TimelineList(
                               key: _listKeys[2],
                               appState: widget.appState,
                               api: api,
                               kind: 'dht',
-                              headerTitle: context.l10n.timelineTabSocial,
+                              headerTitle: context.l10n.timelineTabDiscover,
                               headerTooltip: context.l10n.timelineSocialTooltip,
                               constrainWidth: false,
                               showComposer: showInlineComposer,
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 16),
                             _TimelineList(
                               key: _listKeys[3],
                               appState: widget.appState,
@@ -234,7 +240,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           appState: widget.appState,
                           api: api,
                           kind: 'home',
-                          headerTitle: context.l10n.timelineTabLocal,
+                          headerTitle: context.l10n.timelineTabFollowing,
                           headerTooltip: context.l10n.timelineLocalTooltip,
                           constrainWidth: true,
                           showComposer: showInlineComposer,
@@ -244,7 +250,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           appState: widget.appState,
                           api: api,
                           kind: 'dht',
-                          headerTitle: context.l10n.timelineTabSocial,
+                          headerTitle: context.l10n.timelineTabDiscover,
                           headerTooltip: context.l10n.timelineSocialTooltip,
                           constrainWidth: true,
                           showComposer: showInlineComposer,
@@ -279,7 +285,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       appState: widget.appState,
                       api: api,
                       kind: 'home',
-                      headerTitle: context.l10n.timelineTabLocal,
+                      headerTitle: context.l10n.timelineTabFollowing,
                       headerTooltip: context.l10n.timelineLocalTooltip,
                       constrainWidth: true,
                       showComposer: showInlineComposer,
@@ -289,7 +295,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       appState: widget.appState,
                       api: api,
                       kind: 'dht',
-                      headerTitle: context.l10n.timelineTabSocial,
+                      headerTitle: context.l10n.timelineTabDiscover,
                       headerTooltip: context.l10n.timelineSocialTooltip,
                       constrainWidth: true,
                       showComposer: showInlineComposer,
@@ -663,7 +669,7 @@ class _TimelineListState extends State<_TimelineList>
       child: ListView.builder(
         key: PageStorageKey('timeline-${widget.kind}'),
         controller: _scroll,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
         scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
         addAutomaticKeepAlives: false,
         itemCount: filtered.length + 3,
@@ -672,35 +678,66 @@ class _TimelineListState extends State<_TimelineList>
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Tooltip(
-                      message: widget.headerTooltip,
-                      child: Text(
-                        widget.headerTitle,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
+                Container(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  margin: const EdgeInsets.only(bottom: 10),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant,
                       ),
                     ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: context.l10n.timelineFiltersTooltip,
-                      onPressed: () => _showFilters(context),
-                      icon: const Icon(Icons.filter_alt_outlined),
-                    ),
-                    IconButton(
-                      tooltip: context.l10n.timelineRefreshHint,
-                      onPressed: widget.appState.isRunning && !_syncing
-                          ? _forceSyncAndRefresh
-                          : null,
-                      icon: _syncing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh),
-                    ),
-                  ],
+                  ),
+                  child: Row(
+                    children: [
+                      if (!widget.constrainWidth) ...[
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [
+                                Color(UiTokens.brandViolet),
+                                Color(UiTokens.brandCyan),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: widget.headerTooltip,
+                          child: Text(
+                            widget.headerTitle,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
+                      const Spacer(),
+                      IconButton(
+                        tooltip: context.l10n.timelineFiltersTooltip,
+                        onPressed: () => _showFilters(context),
+                        icon: const Icon(Icons.filter_alt_outlined),
+                      ),
+                      IconButton(
+                        tooltip: context.l10n.timelineRefreshHint,
+                        onPressed: widget.appState.isRunning && !_syncing
+                            ? _forceSyncAndRefresh
+                            : null,
+                        icon: _syncing
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                      ),
+                    ],
+                  ),
                 ),
                 if (widget.showComposer) ...[
                   InlineComposer(
@@ -968,7 +1005,7 @@ class _TimelineSkeletonCard extends StatelessWidget {
                     height: 42,
                     decoration:
                         BoxDecoration(color: base, shape: BoxShape.circle)),
-                const SizedBox(width: 10),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

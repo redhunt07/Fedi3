@@ -77,6 +77,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get timelineTabLocal => 'Local';
 
   @override
+  String get timelineTabFollowing => 'Following';
+
+  @override
+  String get timelineTabDiscover => 'Discover';
+
+  @override
+  String get coreOnline => 'Core online';
+
+  @override
+  String get coreOffline => 'Core offline';
+
+  @override
   String get timelineTabSocial => 'Social';
 
   @override
@@ -598,6 +610,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get onboardingRelayCustom => 'Use custom relay settings';
+
+  @override
+  String get onboardingAdvanced => 'Advanced settings';
 
   @override
   String get composeTitle => 'Compose';
