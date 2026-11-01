@@ -623,6 +623,18 @@ class AppLocalizationsIt extends AppLocalizations {
   String get onboardingRecoveryTitle => 'Codice di recupero';
 
   @override
+  String get onboardingInstanceUrl => 'URL istanza (https://...)';
+
+  @override
+  String get onboardingRecoveryCode => 'Codice di recupero (relay token)';
+
+  @override
+  String get onboardingConnect => 'Connetti';
+
+  @override
+  String get onboardingManualConfig => 'Configura manualmente';
+
+  @override
   String get onboardingRecoveryHint =>
       'Conserva questi codici: ti servono per accedere alla tua identità su un altro dispositivo o dopo un ripristino.';
 
@@ -846,6 +858,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get profileEditAction => 'Modifica profilo';
+
+  @override
+  String get profileLoadMore => 'Carica altri';
 
   @override
   String get profileEditHint => 'Profilo pubblico, avatar, banner, campi';
@@ -1410,6 +1425,15 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get notificationsEmpty => 'Nessuna notifica';
+
+  @override
+  String get notificationsToday => 'Oggi';
+
+  @override
+  String get notificationsYesterday => 'Ieri';
+
+  @override
+  String get notificationsEarlier => 'Precedenti';
 
   @override
   String get notificationsCoreNotRunning => 'Core non avviato.';

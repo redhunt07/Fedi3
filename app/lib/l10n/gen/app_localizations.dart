@@ -1190,6 +1190,30 @@ abstract class AppLocalizations {
   /// **'Recovery code'**
   String get onboardingRecoveryTitle;
 
+  /// No description provided for @onboardingInstanceUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Instance URL (https://...)'**
+  String get onboardingInstanceUrl;
+
+  /// No description provided for @onboardingRecoveryCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery code (relay token)'**
+  String get onboardingRecoveryCode;
+
+  /// No description provided for @onboardingConnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect'**
+  String get onboardingConnect;
+
+  /// No description provided for @onboardingManualConfig.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure manually'**
+  String get onboardingManualConfig;
+
   /// No description provided for @onboardingRecoveryHint.
   ///
   /// In en, this message translates to:
@@ -1573,6 +1597,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Edit profile'**
   String get profileEditAction;
+
+  /// No description provided for @profileLoadMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Load more'**
+  String get profileLoadMore;
 
   /// No description provided for @profileEditHint.
   ///
@@ -2599,6 +2629,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No notifications'**
   String get notificationsEmpty;
+
+  /// No description provided for @notificationsToday.
+  ///
+  /// In en, this message translates to:
+  /// **'Today'**
+  String get notificationsToday;
+
+  /// No description provided for @notificationsYesterday.
+  ///
+  /// In en, this message translates to:
+  /// **'Yesterday'**
+  String get notificationsYesterday;
+
+  /// No description provided for @notificationsEarlier.
+  ///
+  /// In en, this message translates to:
+  /// **'Earlier'**
+  String get notificationsEarlier;
 
   /// No description provided for @notificationsCoreNotRunning.
   ///

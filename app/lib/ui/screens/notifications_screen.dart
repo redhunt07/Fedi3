@@ -13,6 +13,7 @@ import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/timeline_activity_card.dart';
 
@@ -246,6 +247,48 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
+
+  List<Widget> _groupedNotifications(
+      BuildContext context, List<Map<String, dynamic>> items) {
+    final out = <Widget>[];
+    String? last;
+    for (final item in items) {
+      final ts = (item['ts'] is num)
+          ? (item['ts'] as num).toInt()
+          : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+      final bucket = _bucket(ts);
+      if (bucket != last) {
+        out.add(Padding(
+          padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
+          child: Text(
+            bucket,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.w800,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ));
+        last = bucket;
+      }
+      out.add(_NotificationItem(appState: widget.appState, item: item));
+    }
+    return out;
+  }
+
+  String _bucket(int ts) {
+    if (ts <= 0) return context.l10n.notificationsEarlier;
+    final when = DateTime.fromMillisecondsSinceEpoch(ts).toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(when.year, when.month, when.day);
+    if (day == today) return context.l10n.notificationsToday;
+    if (day == today.subtract(const Duration(days: 1))) {
+      return context.l10n.notificationsYesterday;
+    }
+    return context.l10n.notificationsEarlier;
+  }
+
   bool _matchesFilter(Map<String, dynamic> item) {
     if (_filter == 'all') return true;
     final activity = (item['activity'] is Map)
@@ -382,12 +425,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   ),
                 if (filtered.isEmpty && !_loading && _error == null)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Center(child: Text(context.l10n.notificationsEmpty)),
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: EmptyState(
+                      icon: Icons.notifications_none_rounded,
+                      title: context.l10n.notificationsEmpty,
+                    ),
                   ),
-                for (final it in filtered) ...[
-                  _NotificationItem(appState: widget.appState, item: it),
-                ],
+                ..._groupedNotifications(context, filtered),
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Center(

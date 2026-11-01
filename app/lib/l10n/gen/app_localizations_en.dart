@@ -622,6 +622,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get onboardingRecoveryTitle => 'Recovery code';
 
   @override
+  String get onboardingInstanceUrl => 'Instance URL (https://...)';
+
+  @override
+  String get onboardingRecoveryCode => 'Recovery code (relay token)';
+
+  @override
+  String get onboardingConnect => 'Connect';
+
+  @override
+  String get onboardingManualConfig => 'Configure manually';
+
+  @override
   String get onboardingRecoveryHint =>
       'Keep these codes: you need them to access your identity on another device or after a restore.';
 
@@ -845,6 +857,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get profileEditAction => 'Edit profile';
+
+  @override
+  String get profileLoadMore => 'Load more';
 
   @override
   String get profileEditHint => 'Public profile, avatar, banner, fields';
@@ -1403,6 +1418,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get notificationsEmpty => 'No notifications';
+
+  @override
+  String get notificationsToday => 'Today';
+
+  @override
+  String get notificationsYesterday => 'Yesterday';
+
+  @override
+  String get notificationsEarlier => 'Earlier';
 
   @override
   String get notificationsCoreNotRunning => 'Core not running.';

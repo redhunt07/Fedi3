@@ -42,6 +42,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   late final TextEditingController _webrtcIceUrls;
   late final TextEditingController _webrtcIceUsername;
   late final TextEditingController _webrtcIceCredential;
+  late final TextEditingController _quickUrl;
+  late final TextEditingController _quickToken;
+  bool _manualLogin = false;
   bool _p2pEnable = false;
   bool _webrtcEnable = false;
   String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
@@ -74,6 +77,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _webrtcIceUrls = TextEditingController();
     _webrtcIceUsername = TextEditingController();
     _webrtcIceCredential = TextEditingController();
+    _quickUrl = TextEditingController(text: isCreate ? '' : '');
+    _quickToken = TextEditingController(text: isCreate ? '' : '');
     _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
     _seedRelayOptions();
   }
@@ -91,6 +96,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _webrtcIceUrls.dispose();
     _webrtcIceUsername.dispose();
     _webrtcIceCredential.dispose();
+    _quickUrl.dispose();
+    _quickToken.dispose();
     super.dispose();
   }
 
@@ -140,19 +147,40 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _field(context.l10n.onboardingUsername, _username),
-                _relayPicker(context),
-                if (_relayOptions.isNotEmpty && !_customRelay)
+                if (widget.mode == OnboardingMode.loginExisting &&
+                    !_manualLogin) ...[
+                  _field(context.l10n.onboardingInstanceUrl, _quickUrl),
+                  _field(context.l10n.onboardingRecoveryCode, _quickToken),
+                  const SizedBox(height: 6),
+                  AuroraButton(
+                    label: context.l10n.onboardingConnect,
+                    onPressed: _quickConnect,
+                    icon: Icons.link_rounded,
+                    expand: true,
+                  ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: TextButton(
-                      onPressed: () => setState(() => _customRelay = true),
-                      child: Text(context.l10n.onboardingRelayCustom),
+                      onPressed: () => setState(() => _manualLogin = true),
+                      child: Text(context.l10n.onboardingManualConfig),
                     ),
                   ),
-                if (_customRelay || _relayOptions.isEmpty) ...[
-                  _field(context.l10n.onboardingDomain, _domain),
-                  _field(context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
-                  _field(context.l10n.onboardingRelayWs, _relayWs),
+                ] else ...[
+                  _relayPicker(context),
+                  if (_relayOptions.isNotEmpty && !_customRelay)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () => setState(() => _customRelay = true),
+                        child: Text(context.l10n.onboardingRelayCustom),
+                      ),
+                    ),
+                  if (_customRelay || _relayOptions.isEmpty) ...[
+                    _field(context.l10n.onboardingDomain, _domain),
+                    _field(
+                        context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
+                    _field(context.l10n.onboardingRelayWs, _relayWs),
+                  ],
                 ],
               ],
             ),
@@ -575,11 +603,40 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();
     if (!mounted) return;
-    await _showRecoveryCode(cfg);
-    if (!mounted) return;
+    if (widget.mode == OnboardingMode.createNew) {
+      await _showRecoveryCode(cfg);
+      if (!mounted) return;
+    }
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
+
+
+  Future<void> _quickConnect() async {
+    final raw = _quickUrl.text.trim();
+    final uri = Uri.tryParse(raw);
+    if (uri == null ||
+        uri.host.isEmpty ||
+        (uri.scheme != 'http' && uri.scheme != 'https')) {
+      setState(() => _formError = context.l10n.onboardingErrPublicUrl);
+      return;
+    }
+    final token = _quickToken.text.trim();
+    if (token.length < 16) {
+      setState(() => _formError = context.l10n.onboardingRelayTokenTooShort);
+      return;
+    }
+    final base = raw.replaceAll(RegExp(r'/+$'), '');
+    final wsScheme = uri.scheme == 'https' ? 'wss' : 'ws';
+    final path = uri.path.replaceAll(RegExp(r'/+$'), '');
+    _publicBaseUrl.text = base;
+    _domain.text = uri.host;
+    _relayWs.text = '$wsScheme://${uri.host}$path';
+    _relayToken.text = token;
+    _customRelay = true;
+    setState(() => _formError = null);
+    await _save();
+  }
 
   Future<void> _showRecoveryCode(CoreConfig cfg) async {
     Widget codeRow(String label, String value) {

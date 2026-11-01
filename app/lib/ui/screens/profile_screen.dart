@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
 import '../../core/core_api.dart';
@@ -36,6 +37,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _error;
   bool _loading = false;
   List<Map<String, dynamic>> _outbox = const [];
+  String? _outboxNext;
+  bool _loadingMore = false;
   String _followingStatus = 'none';
   bool _followBusy = false;
   int? _followersCount;
@@ -80,10 +83,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final items =
-            await ActorRepository.instance.fetchOutbox(p!.outbox, limit: 20);
+        final page =
+            await ActorRepository.instance.fetchOutboxPage(p!.outbox, limit: 20);
         if (!mounted) return;
-        setState(() => _outbox = items);
+        setState(() {
+          _outbox = page.items;
+          _outboxNext = page.next;
+        });
       }
     } catch (e) {
       if (!mounted) return;
@@ -213,9 +219,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   title: context.l10n.listNoItems,
                 ),
               )
-            else
+            else if (_profileTab == 2)
+              _mediaGrid(context)
+            else ...[
               for (final a in _filteredOutbox())
                 TimelineActivityCard(appState: widget.appState, activity: a),
+              if (_outboxNext != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: OutlinedButton.icon(
+                      onPressed: _loadingMore ? null : _loadMore,
+                      icon: _loadingMore
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.expand_more_rounded),
+                      label: Text(context.l10n.profileLoadMore),
+                    ),
+                  ),
+                ),
+            ],
           ],
         ],
       ),
@@ -248,6 +273,119 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _ => hasMedia,
       };
     }).toList(growable: false);
+  }
+
+
+  Future<void> _loadMore() async {
+    final p = _profile;
+    final next = _outboxNext;
+    if (p == null || next == null) return;
+    setState(() => _loadingMore = true);
+    try {
+      final page = await ActorRepository.instance
+          .fetchOutboxPage(p.outbox, limit: 20, pageUrl: next);
+      if (!mounted) return;
+      final seen = _outbox.map((a) => a['id']?.toString()).toSet();
+      setState(() {
+        _outbox = [
+          ..._outbox,
+          ...page.items.where((a) => seen.add(a['id']?.toString())),
+        ];
+        _outboxNext = page.next;
+      });
+    } catch (_) {
+      // keep current page on failure
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _mediaItems() {
+    final out = <Map<String, dynamic>>[];
+    for (final a in _filteredOutbox()) {
+      final note = _noteMap(a);
+      final att = note?['attachment'];
+      if (att is! List) continue;
+      for (final item in att) {
+        if (item is Map) out.add(item.cast<String, dynamic>());
+      }
+    }
+    return out;
+  }
+
+  Widget _mediaGrid(BuildContext context) {
+    final items = _mediaItems();
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: EmptyState(
+          icon: Icons.photo_library_outlined,
+          title: context.l10n.listNoItems,
+        ),
+      );
+    }
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+        childAspectRatio: 1,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final item = items[index];
+        final url = (item['url'] as String?)?.trim() ?? '';
+        final type = (item['mediaType'] as String?)?.trim() ?? '';
+        final isVideo = type.startsWith('video/');
+        final isAudio = type.startsWith('audio/');
+        final placeholder = Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+          child: Icon(
+            isVideo
+                ? Icons.play_circle_outline_rounded
+                : isAudio
+                    ? Icons.graphic_eq_rounded
+                    : Icons.image_outlined,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        );
+        return InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: url.isEmpty
+              ? null
+              : () => launchUrl(Uri.parse(url),
+                  mode: LaunchMode.externalApplication),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (url.isNotEmpty && !isVideo && !isAudio)
+                  Image.network(
+                    url,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => placeholder,
+                    loadingBuilder: (context, child, progress) =>
+                        progress == null ? child : placeholder,
+                  )
+                else
+                  placeholder,
+                if (isVideo)
+                  const Align(
+                    alignment: Alignment.center,
+                    child: Icon(Icons.play_arrow_rounded,
+                        size: 36, color: Colors.white),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _openEditProfile() {

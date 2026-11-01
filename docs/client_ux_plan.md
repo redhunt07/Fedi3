@@ -180,13 +180,13 @@ stabile.
 | Step | Stato | Note |
 |---|---|---|
 | 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route esistenti, empty state; manca un vero router dichiarativo |
-| 1 — Registrazione/login guidati, recovery | parziale | onboarding ridisegnato con identità/relay in primo piano, avanzate collassate e dialog di recovery con copia dei codici; manca il login rapido da URL+token |
+| 1 — Registrazione/login guidati, recovery | completato | onboarding con identità/relay in primo piano, login rapido da URL+token, avanzate collassate e dialog di recovery con copia dei codici |
 | 2 — Home unica con tab | parziale | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer persistente solo su mobile e nella sidebar |
-| 3 — Profilo proprio/altrui | parziale | banner, contatori cliccabili, tab Post/Risposte/Media e feed solo Note; mancano paginazione e griglia media |
+| 3 — Profilo proprio/altrui | completato (base) | banner, contatori cliccabili, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati |
 | 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
 | 5 — Ricerca | parziale | ricerca post/utenti funzionante con fallback locale; filtri e cronologia da fare |
-| 6 — Notifiche | parziale | schermata e filtri presenti; raggruppamento/mark-read da rifinire |
+| 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
 | 7 — Chat | parziale | lista e thread presenti; allegati e read state da verificare |
 | 8 — Finitura | da fare | accessibilità, temi completi, i18n, scorciatoie |
 
-Prossimo passo consigliato: completare lo Step 1 (recovery code e login da URL+token) e lo Step 3 (tab del profilo con paginazione), poi aprire la specifica OpenAPI.
+Prossimo passo consigliato: specifica OpenAPI per il client web, poi Step 5 (ricerca con filtri e cronologia) e Step 7 (chat con allegati e read state).

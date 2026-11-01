@@ -170,6 +170,13 @@ class ActorProfile {
   }
 }
 
+class OutboxPage {
+  const OutboxPage({required this.items, required this.next});
+
+  final List<Map<String, dynamic>> items;
+  final String? next;
+}
+
 class ActorRepository {
   ActorRepository._();
 
@@ -237,18 +244,30 @@ class ActorRepository {
 
   Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
       {int limit = 20}) async {
-    final first = await _fetchJson(outboxUrl);
-    if (first == null) return const [];
+    final page = await fetchOutboxPage(outboxUrl, limit: limit);
+    return page.items;
+  }
 
-    Map<String, dynamic>? page = first;
-    final firstLink = first['first'];
-    if (firstLink is String && firstLink.trim().isNotEmpty) {
-      page = await _fetchJson(firstLink.trim());
-    } else if (firstLink is Map) {
-      final href = (firstLink['id'] as String?)?.trim() ??
-          (firstLink['href'] as String?)?.trim() ??
-          '';
-      if (href.isNotEmpty) page = await _fetchJson(href);
+  /// Fetches one outbox page and returns the next page URL when present.
+  /// Pass [pageUrl] to fetch a subsequent page.
+  Future<OutboxPage> fetchOutboxPage(String outboxUrl,
+      {int limit = 20, String? pageUrl}) async {
+    Map<String, dynamic>? page;
+    if (pageUrl != null && pageUrl.trim().isNotEmpty) {
+      page = await _fetchJson(pageUrl.trim());
+    } else {
+      final first = await _fetchJson(outboxUrl);
+      if (first == null) return const OutboxPage(items: [], next: null);
+      page = first;
+      final firstLink = first['first'];
+      if (firstLink is String && firstLink.trim().isNotEmpty) {
+        page = await _fetchJson(firstLink.trim());
+      } else if (firstLink is Map) {
+        final href = (firstLink['id'] as String?)?.trim() ??
+            (firstLink['href'] as String?)?.trim() ??
+            '';
+        if (href.isNotEmpty) page = await _fetchJson(href);
+      }
     }
 
     final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
@@ -257,7 +276,17 @@ class ActorRepository {
       if (it is Map) out.add(it.cast<String, dynamic>());
       if (out.length >= limit) break;
     }
-    return out;
+
+    String? next;
+    final nextRaw = page?['next'];
+    if (nextRaw is String && nextRaw.trim().isNotEmpty) {
+      next = nextRaw.trim();
+    } else if (nextRaw is Map) {
+      final href = (nextRaw['id'] as String?)?.trim() ??
+          (nextRaw['href'] as String?)?.trim();
+      if (href != null && href.isNotEmpty) next = href;
+    }
+    return OutboxPage(items: out, next: next);
   }
 
   /// Best-effort local user search over the in-memory actor cache. The core

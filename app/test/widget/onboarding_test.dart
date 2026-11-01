@@ -99,4 +99,39 @@ void main() {
     expect(app.config!.domain, 'relay.fedi3.com');
     expect(core.startCalls, 1);
   });
+
+  testWidgets('AW-02d login rapido deriva la config da URL e token',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final core = FakeCoreRuntime();
+    CoreHttp.useTestClient(
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}')));
+    addTearDown(CoreHttp.reset);
+    final app = buildTestAppState(config: null, core: core);
+    await pumpScreen(tester,
+        OnboardingScreen(appState: app, mode: OnboardingMode.loginExisting));
+    await tester.pumpAndSettle();
+
+    final username = find.widgetWithText(TextField, 'Username');
+    await tester.enterText(username, 'bob');
+    final url = find.widgetWithText(TextField, 'Instance URL (https://...)');
+    await tester.enterText(url, 'https://fedi3.test');
+    final token =
+        find.widgetWithText(TextField, 'Recovery code (relay token)');
+    await tester.enterText(token, 'abcdefghijklmnop1234');
+    await tester.pump();
+
+    await tester.scrollUntilVisible(find.text('Connect'), 200,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
+
+    expect(app.config, isNotNull);
+    expect(app.config!.username, 'bob');
+    expect(app.config!.domain, 'fedi3.test');
+    expect(app.config!.publicBaseUrl, 'https://fedi3.test');
+    expect(app.config!.relayWs, 'wss://fedi3.test');
+    expect(app.config!.relayToken, 'abcdefghijklmnop1234');
+    expect(core.startCalls, 1);
+  });
 }
