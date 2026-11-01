@@ -64,7 +64,7 @@ void main() {
     await pumpScreen(tester, NotificationsScreen(appState: app));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('users/one'), findsOneWidget);
+    expect(find.text('one'), findsOneWidget);
     // The SSE refresh is debounced (350 ms) and timers alone do not schedule
     // frames, so advance the clock until the stream frame arrives and the
     // debounce fires.
@@ -73,7 +73,7 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(notificationCalls, greaterThanOrEqualTo(2));
-    expect(find.textContaining('users/two'), findsOneWidget);
+    expect(find.text('two'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });
@@ -99,7 +99,7 @@ void main() {
     await pumpScreen(tester, NotificationsScreen(appState: app));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('users/one'), findsOneWidget);
+    expect(find.text('one'), findsOneWidget);
     // Cursor is preserved: the load-more button remains available.
     expect(find.text('Load more'), findsOneWidget);
 

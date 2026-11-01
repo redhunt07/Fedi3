@@ -712,6 +712,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get composePublicHint => 'If off: followers-only';
 
   @override
+  String get composeDropMediaTitle => 'Drop your media here';
+
+  @override
+  String get composeDropMediaHint =>
+      'Images, videos or audio — or choose files';
+
+  @override
+  String get composeChooseFiles => 'Choose files';
+
+  @override
   String get composeAddMediaPath => 'Add media (path)';
 
   @override

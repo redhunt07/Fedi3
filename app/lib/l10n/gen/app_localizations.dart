@@ -1352,6 +1352,24 @@ abstract class AppLocalizations {
   /// **'If off: followers-only'**
   String get composePublicHint;
 
+  /// No description provided for @composeDropMediaTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Drop your media here'**
+  String get composeDropMediaTitle;
+
+  /// No description provided for @composeDropMediaHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Images, videos or audio — or choose files'**
+  String get composeDropMediaHint;
+
+  /// No description provided for @composeChooseFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose files'**
+  String get composeChooseFiles;
+
   /// No description provided for @composeAddMediaPath.
   ///
   /// In en, this message translates to:

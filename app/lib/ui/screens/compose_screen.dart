@@ -4,9 +4,10 @@
  */
 
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_selector/file_selector.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -31,13 +32,13 @@ class ComposeScreen extends StatefulWidget {
 class _ComposeScreenState extends State<ComposeScreen> {
   final _text = TextEditingController();
   final _cw = TextEditingController();
-  final _filePath = TextEditingController();
   String _visibility = 'public';
   final _directTo = TextEditingController();
   List<String> _directRecent = const [];
   bool _cwEnabled = false;
   bool _sensitive = false;
   bool _posting = false;
+  bool _dragging = false;
   String? _status;
   String? _draftStatus;
   final _media = <_PickedMedia>[];
@@ -62,7 +63,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
     _text.dispose();
     _cw.dispose();
     _directTo.dispose();
-    _filePath.dispose();
     super.dispose();
   }
 
@@ -103,7 +103,16 @@ class _ComposeScreenState extends State<ComposeScreen> {
         },
         child: Scaffold(
           appBar: AppBar(title: Text(context.l10n.composeTitle)),
-          body: ListView(
+          body: DropTarget(
+            onDragEntered: (_) => setState(() => _dragging = true),
+            onDragExited: (_) => setState(() => _dragging = false),
+            onDragDone: (detail) async {
+              setState(() => _dragging = false);
+              await _addFiles(detail.files);
+            },
+            child: Stack(
+              children: [
+                ListView(
             padding: const EdgeInsets.all(16),
             children: [
               if (!widget.appState.isRunning)
@@ -124,7 +133,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 enabled: widget.appState.isRunning,
                 onEmoji: () => EmojiPicker.show(context,
                     prefs: widget.appState.prefs),
-                onMedia: widget.appState.isRunning ? _addMediaFromPath : null,
+                onMedia: widget.appState.isRunning ? _pickFiles : null,
               ),
               if (_draftStatus != null) ...[
                 const SizedBox(height: 8),
@@ -145,9 +154,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 children: [
                   OutlinedButton.icon(
                     onPressed:
-                        widget.appState.isRunning ? _addMediaFromPath : null,
+                        widget.appState.isRunning ? _pickFiles : null,
                     icon: const Icon(Icons.attach_file),
-                    label: Text(context.l10n.composeAddMediaPath),
+                    label: Text(context.l10n.composeChooseFiles),
                   ),
                   OutlinedButton.icon(
                     onPressed: () async {
@@ -247,11 +256,70 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 ),
               ],
               const SizedBox(height: 10),
-              TextField(
-                controller: _filePath,
-                decoration: InputDecoration(
-                  labelText: context.l10n.composeMediaFilePathLabel,
-                  hintText: context.l10n.composeMediaFilePathHint,
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withAlpha(120),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _dragging
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outlineVariant,
+                    width: _dragging ? 1.6 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withAlpha(22),
+                      ),
+                      child: Icon(
+                        _dragging
+                            ? Icons.file_download_rounded
+                            : Icons.cloud_upload_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            context.l10n.composeDropMediaTitle,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 13),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            context.l10n.composeDropMediaHint,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _posting ? null : _pickFiles,
+                      icon: const Icon(Icons.attach_file_rounded, size: 16),
+                      label: Text(context.l10n.composeChooseFiles),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
@@ -307,6 +375,42 @@ class _ComposeScreenState extends State<ComposeScreen> {
                   ),
               ],
             ],
+                ),
+                if (_dragging)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        margin: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withAlpha(18),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 2,
+                          ),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.file_download_rounded,
+                                  size: 40,
+                                  color: Theme.of(context).colorScheme.primary),
+                              const SizedBox(height: 8),
+                              Text(context.l10n.composeDropMediaTitle,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -392,22 +496,37 @@ class _ComposeScreenState extends State<ComposeScreen> {
     });
   }
 
-  Future<void> _addMediaFromPath() async {
-    final path = _filePath.text.trim();
-    if (path.isEmpty) return;
+  Future<void> _pickFiles() async {
+    if (_posting) return;
     try {
-      final file = File(path);
-      final bytes = await file.readAsBytes();
-      final name = path.split(RegExp(r'[\\/]+')).last;
-      setState(() {
-        _media.add(_PickedMedia(
-            name: name.isEmpty ? context.l10n.composeFileFallback : name,
-            bytes: bytes));
-        _filePath.clear();
-      });
+      final files = await openFiles();
+      await _addFiles(files);
     } catch (e) {
       setState(
           () => _status = context.l10n.composeErrUnableReadFile(e.toString()));
+    }
+  }
+
+  Future<void> _addFiles(List<XFile> files) async {
+    if (files.isEmpty) return;
+    final room = 8 - _media.length;
+    if (room <= 0) return;
+    for (final file in files.take(room)) {
+      try {
+        final bytes = await file.readAsBytes();
+        if (!mounted) return;
+        setState(() {
+          _media.add(_PickedMedia(
+              name: file.name.isEmpty
+                  ? context.l10n.composeFileFallback
+                  : file.name,
+              bytes: bytes));
+        });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _status =
+            context.l10n.composeErrUnableReadFile(e.toString()));
+      }
     }
   }
 

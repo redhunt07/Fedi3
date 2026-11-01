@@ -52,7 +52,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField).last, 'hello from the test');
     await tester.pump();
-    await tester.tap(find.byIcon(Icons.send));
+    await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
 
     final sends = client.requestsFor('POST', '/_fedi3/chat/send');

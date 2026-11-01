@@ -20,6 +20,7 @@ import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../services/gif_service.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
 import '../utils/open_url.dart';
 import '../utils/media_url.dart';
@@ -1425,48 +1426,62 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 ],
               ),
             ),
-          Row(
-            children: [
-              IconButton(
-                tooltip: context.l10n.composeAttachments,
-                onPressed: _sending ? null : _pickFiles,
-                icon: const Icon(Icons.attach_file),
+          Container(
+            padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
               ),
-              IconButton(
-                tooltip: context.l10n.composeEmojiButton,
-                onPressed: _sending ? null : _insertEmoji,
-                icon: const Icon(Icons.emoji_emotions_outlined),
-              ),
-              IconButton(
-                tooltip: context.l10n.chatGif,
-                onPressed: _sending ? null : _openGifPicker,
-                icon: const Icon(Icons.gif_box),
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _composerCtrl,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: InputDecoration(
-                    hintText: context.l10n.chatMessageHint,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                  ),
-                  onSubmitted: (_) => _sendMessage(),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  tooltip: context.l10n.composeAttachments,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _sending ? null : _pickFiles,
+                  icon: const Icon(Icons.attach_file_rounded, size: 20),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: context.l10n.chatSend,
-                onPressed: _sending ? null : _sendMessage,
-                icon: _sending
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.send),
-              ),
-            ],
+                Expanded(
+                  child: TextField(
+                    controller: _composerCtrl,
+                    minLines: 1,
+                    maxLines: 5,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      hintText: context.l10n.chatMessageHint,
+                      filled: false,
+                      isDense: true,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding:
+                          const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.l10n.composeEmojiButton,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _sending ? null : _insertEmoji,
+                  icon: const Icon(Icons.emoji_emotions_outlined, size: 20),
+                ),
+                IconButton(
+                  tooltip: context.l10n.chatGif,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _sending ? null : _openGifPicker,
+                  icon: const Icon(Icons.gif_box_outlined, size: 20),
+                ),
+                const SizedBox(width: 4),
+                _ChatSendButton(
+                  sending: _sending,
+                  onPressed: _sending ? null : _sendMessage,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1596,6 +1611,63 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           url: focus.url,
           mediaType: focus.mediaType,
           attachments: items,
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatSendButton extends StatelessWidget {
+  const _ChatSendButton({required this.sending, required this.onPressed});
+
+  final bool sending;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Opacity(
+        opacity: enabled ? 1 : 0.5,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: onPressed,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(UiTokens.brandViolet),
+                    Color(UiTokens.brandCyan),
+                  ],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x667C6CF6),
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: sending
+                  ? const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.send_rounded,
+                      color: Colors.white, size: 20),
+            ),
+          ),
         ),
       ),
     );

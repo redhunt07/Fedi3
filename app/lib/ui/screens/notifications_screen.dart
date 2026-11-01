@@ -13,9 +13,12 @@ import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
+import '../screens/profile_screen.dart';
+import '../../services/actor_repository.dart';
+import '../widgets/status_avatar.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
-import '../widgets/timeline_activity_card.dart';
+import '../theme/ui_tokens.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key, required this.appState});
@@ -454,112 +457,245 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
-class _NotificationItem extends StatelessWidget {
+class _NotificationItem extends StatefulWidget {
   const _NotificationItem({required this.appState, required this.item});
 
   final AppState appState;
   final Map<String, dynamic> item;
 
   @override
-  Widget build(BuildContext context) {
-    final ts = (item['ts'] is num)
-        ? (item['ts'] as num).toInt()
-        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
-    final activity = (item['activity'] is Map)
-        ? (item['activity'] as Map).cast<String, dynamic>()
-        : const <String, dynamic>{};
-    final type = _normalizeNotificationType(activity);
+  State<_NotificationItem> createState() => _NotificationItemState();
+}
+
+class _NotificationItemState extends State<_NotificationItem> {
+  ActorProfile? _actorProfile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadActor();
+  }
+
+  Future<void> _loadActor() async {
+    final activity = _activity;
     final actor = (activity['actor'] as String?)?.trim() ?? '';
+    if (actor.isEmpty) return;
+    final profile = await ActorRepository.instance.getActor(actor);
+    if (!mounted) return;
+    setState(() => _actorProfile = profile);
+  }
+
+  Map<String, dynamic> get _activity => (widget.item['activity'] is Map)
+      ? (widget.item['activity'] as Map).cast<String, dynamic>()
+      : const <String, dynamic>{};
+
+  String get _actorUrl => (_activity['actor'] as String?)?.trim() ?? '';
+
+  String _actorName() {
+    final profile = _actorProfile;
+    if (profile != null && profile.displayName.trim().isNotEmpty) {
+      return profile.displayName.trim();
+    }
+    return _usernameFromActor(_actorUrl);
+  }
+
+  String _usernameFromActor(String actorUrl) {
+    final uri = Uri.tryParse(actorUrl.trim());
+    if (uri == null) return actorUrl;
+    for (final seg in uri.pathSegments.reversed) {
+      final value = seg.trim();
+      if (value.isEmpty) continue;
+      return value.startsWith('@') ? value.substring(1) : value;
+    }
+    return actorUrl;
+  }
+
+  String _plainExcerpt(Map<String, dynamic> activity) {
+    final obj = activity['object'];
+    dynamic content;
+    if (obj is Map) {
+      final m = obj.cast<String, dynamic>();
+      content = m['content'] ?? m['summary'] ?? m['name'] ?? m['id'];
+    } else {
+      content = obj;
+    }
+    if (content is! String) return '';
+    var text = content
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<[^>]+>'), ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.length > 180) {
+      text = '${text.substring(0, 180)}…';
+    }
+    return text;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ts = (widget.item['ts'] is num)
+        ? (widget.item['ts'] as num).toInt()
+        : int.tryParse(widget.item['ts']?.toString() ?? '') ?? 0;
+    final activity = _activity;
+    final type = _normalizeNotificationType(activity);
     final label = _labelFor(context, type);
     final when =
         ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
+    final excerpt = _plainExcerpt(activity);
+    final profile = _actorProfile;
+    final username = profile?.preferredUsername.isNotEmpty == true
+        ? profile!.preferredUsername
+        : _usernameFromActor(_actorUrl);
 
-    return Column(
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(UiTokens.radiusCard),
+        onTap: () {
+          if (type == 'Create') {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => NoteDetailScreen(
+                    appState: widget.appState, activity: activity),
+              ),
+            );
+          } else if (_actorUrl.isNotEmpty) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ProfileScreen(
+                    appState: widget.appState, actorUrl: _actorUrl),
+              ),
+            );
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              StatusAvatar(
+                imageUrl: profile?.iconUrl ?? '',
+                size: 40,
+                showStatus: true,
+                statusKey: username,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _iconFor(type),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: Text(label,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w800))),
-                    if (when != null)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _actorName(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 13.5),
+                          ),
+                        ),
+                        if (when != null)
+                          Text(
+                            '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}',
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 11),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        _iconFor(type),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (excerpt.isNotEmpty) ...[
+                      const SizedBox(height: 6),
                       Text(
-                        '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withAlpha(128),
-                            fontSize: 12),
+                        excerpt,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5, height: 1.35),
                       ),
+                    ],
+                    if (type == 'Follow' || type == 'Create') ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          if (type == 'Follow' && _actorUrl.isNotEmpty)
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8),
+                              ),
+                              onPressed: () async {
+                                final api = CoreApi(
+                                    config: widget.appState.config!);
+                                try {
+                                  await api.follow(_actorUrl);
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text(context.l10n
+                                              .notificationsFollowedBack)));
+                                } catch (e) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text(context.l10n
+                                              .notificationsFollowBackFailed(
+                                                  e.toString()))));
+                                }
+                              },
+                              child:
+                                  Text(context.l10n.notificationsFollowBack),
+                            ),
+                          if (type == 'Create')
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8),
+                              ),
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                      builder: (_) => NoteDetailScreen(
+                                          appState: widget.appState,
+                                          activity: activity)),
+                                );
+                              },
+                              child: Text(context.l10n.notificationsReply),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 10),
-                if (type == 'Create')
-                  TimelineActivityCard(
-                      appState: appState, activity: activity, elevated: true)
-                else
-                  Text(
-                    _shortText(activity),
-                    style: TextStyle(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withAlpha(179)),
-                  ),
-                if (type == 'Follow' || type == 'Create') ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (type == 'Follow' && actor.isNotEmpty)
-                        TextButton(
-                          onPressed: () async {
-                            final api = CoreApi(config: appState.config!);
-                            try {
-                              await api.follow(actor);
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text(context
-                                          .l10n.notificationsFollowedBack)));
-                            } catch (e) {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text(context.l10n
-                                          .notificationsFollowBackFailed(
-                                              e.toString()))));
-                            }
-                          },
-                          child: Text(context.l10n.notificationsFollowBack),
-                        ),
-                      if (type == 'Create')
-                        TextButton(
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                  builder: (_) => NoteDetailScreen(
-                                      appState: appState, activity: activity)),
-                            );
-                          },
-                          child: Text(context.l10n.notificationsReply),
-                        ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -574,7 +710,7 @@ class _NotificationItem extends StatelessWidget {
       'Create' => Icons.alternate_email,
       _ => Icons.notifications,
     };
-    return Icon(icon, size: 18);
+    return Icon(icon, size: 15, color: Theme.of(context).colorScheme.primary);
   }
 
   String _labelFor(BuildContext context, String type) {
@@ -588,17 +724,6 @@ class _NotificationItem extends StatelessWidget {
       'Create' => context.l10n.notificationsMentionOrReply,
       _ => context.l10n.notificationsGeneric,
     };
-  }
-
-  String _shortText(Map<String, dynamic> activity) {
-    final actor = (activity['actor'] as String?)?.trim() ?? '';
-    final obj = activity['object'];
-    if (obj is String) return '$actor → $obj';
-    if (obj is Map) {
-      final m = obj.cast<String, dynamic>();
-      return '$actor → ${(m['id'] as String?)?.trim() ?? ''}';
-    }
-    return actor;
   }
 }
 

@@ -3,6 +3,13 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-01 — Notifiche e composer più usabili
+
+Le notifiche ora sono righe compatte con avatar, stato di presenza e azioni
+rapide. Il composer accetta il trascinamento dei file e la selezione nativa,
+con anteprima degli allegati; la chat ha un campo di scrittura arrotondato in
+stile Telegram con pulsante di invio a gradiente.
+
 ## 2026-11-01 — Chat in stile Telegram e presenza
 
 Le chat hanno bolle con coda, avatar e spunte di consegna: singola, doppia e

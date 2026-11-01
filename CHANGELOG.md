@@ -25,6 +25,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Notifications redesigned as compact actor rows with presence dots, type icons, excerpts and inline actions instead of full post cards.
+- Composer media: real drag-and-drop upload zone, native file picker, multi-file selection and a Telegram-style rounded chat composer with gradient send button.
 - Chat Telegram-style: gradient outgoing bubbles with tails, incoming avatars, member-aware delivery checks (sent, delivered, seen by all) and peer presence in the thread header.
 - Presence network: Fedi3 peers exchange online/busy/afk/offline status through encrypted chat envelopes, with TTL expiry, relay online fallback and a status selector in Settings; avatars across the app show the matching coloured dot.
 - Flutter client restyling: fixed aurora brand tile with drifting particles and rail ambient glow, mesh profile banner with overlapping avatar ring, card-based chat list, composer prompt card in the sidebar, search action in the timeline bar, compact post actions, branded empty states and actionable account/relay cards.
