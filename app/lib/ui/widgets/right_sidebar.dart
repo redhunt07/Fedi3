@@ -16,6 +16,7 @@ import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/relays_screen.dart';
+import '../screens/saved_screen.dart';
 import '../screens/search_screen.dart';
 import '../theme/ui_tokens.dart';
 import 'fedi3_ui.dart';
@@ -409,6 +410,20 @@ class _RightSidebarState extends State<RightSidebar> {
                             ),
                           ),
                         ),
+              ),
+            ),
+            const SizedBox(height: UiTokens.gapMd),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.bookmark_border_rounded),
+                title: Text(context.l10n.savedTitle),
+                subtitle: Text(context.l10n.savedHint),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => SavedScreen(appState: widget.appState),
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: UiTokens.gapMd),

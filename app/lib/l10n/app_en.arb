@@ -432,6 +432,11 @@
     }
   },
   "settingsCoreStopped": "Stopped",
+  "savedTitle": "Saved",
+  "savedHint": "Posts saved on this device, available offline too",
+  "savedEmptyTitle": "No saved posts",
+  "savedEmptyHint": "Tap the bookmark on a post to find it here.",
+  "savedRefresh": "Refresh saved",
   "settingsAccount": "Account",
   "settingsFollowSection": "Follow / Unfollow",
   "settingsActorUrlLabel": "Actor URL (https://...)",

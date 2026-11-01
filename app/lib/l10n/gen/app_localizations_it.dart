@@ -889,6 +889,23 @@ class AppLocalizationsIt extends AppLocalizations {
   String get settingsCoreStopped => 'Fermo';
 
   @override
+  String get savedTitle => 'Salvati';
+
+  @override
+  String get savedHint =>
+      'Post salvati sul dispositivo, disponibili anche offline';
+
+  @override
+  String get savedEmptyTitle => 'Nessun post salvato';
+
+  @override
+  String get savedEmptyHint =>
+      'Tocca il segnalibro su un post per ritrovarlo qui.';
+
+  @override
+  String get savedRefresh => 'Aggiorna salvati';
+
+  @override
   String get settingsAccount => 'Account';
 
   @override

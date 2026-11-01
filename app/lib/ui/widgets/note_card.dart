@@ -33,6 +33,7 @@ import 'status_avatar.dart';
 import '../../state/reaction_store.dart';
 import '../../state/emoji_store.dart';
 import '../../state/note_flags_store.dart';
+import '../../state/saved_notes_store.dart';
 
 class NoteCard extends StatefulWidget {
   const NoteCard({
@@ -1282,11 +1283,50 @@ class _NoteCardState extends State<NoteCard> {
     });
   }
 
+  Map<String, dynamic> _savedActivity() {
+    final raw = widget.rawActivity;
+    if (raw != null) return raw;
+    final note = widget.item.note;
+    return <String, dynamic>{
+      'type': 'Create',
+      'actor': widget.item.actor,
+      'object': <String, dynamic>{
+        'type': 'Note',
+        'id': note.id,
+        'attributedTo': note.attributedTo,
+        'content': note.contentHtml,
+        'summary': note.summary,
+        'sensitive': note.sensitive,
+        'published': note.published,
+        if (note.inReplyTo.isNotEmpty) 'inReplyTo': note.inReplyTo,
+        'attachment': [
+          for (final a in note.attachments)
+            {
+              'type': 'Document',
+              'url': a.url,
+              'mediaType': a.mediaType,
+            }
+        ],
+        'tag': [
+          for (final tag in note.hashtags)
+            {'type': 'Hashtag', 'name': '#$tag'}
+        ],
+      },
+    };
+  }
+
   Future<void> _toggleFlag(
       BuildContext context, String key, String noteId) async {
     final id = noteId.trim();
     if (id.isEmpty) return;
     final next = await NoteFlagsStore.toggle(key, id);
+    if (key == 'bookmark') {
+      if (next) {
+        await SavedNotesStore.add(_savedActivity());
+      } else {
+        await SavedNotesStore.remove(id);
+      }
+    }
     if (!mounted) return;
     setState(() {
       if (key == 'bookmark') _bookmarked = next;

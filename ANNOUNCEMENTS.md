@@ -3,6 +3,12 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-02 — Post salvati e disponibili offline
+
+I segnalibri ora conservano una copia locale del post: la nuova schermata
+«Salvati» (Configurazioni o rail destro) li mostra anche senza rete e permette
+di rimuoverli con uno swipe.
+
 ## 2026-11-02 — I tag aprono davvero i post
 
 Corretto il percorso dei tag: i conteggi considerano solo tag con post

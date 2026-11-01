@@ -19,6 +19,7 @@ import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'profile_edit_screen.dart';
+import 'saved_screen.dart';
 import 'security_settings_screen.dart';
 import 'translation_settings_screen.dart';
 import 'ui_settings_screen.dart';
@@ -147,6 +148,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: context.l10n.settingsFollowRequestsHint,
                 onTap: () => _push(context,
                     FollowRequestsScreen(appState: widget.appState)),
+              ),
+              _tile(
+                context,
+                icon: Icons.bookmark_border_rounded,
+                title: context.l10n.savedTitle,
+                subtitle: context.l10n.savedHint,
+                onTap: () =>
+                    _push(context, SavedScreen(appState: widget.appState)),
               ),
               _section(context, context.l10n.privacyTitle),
               _tile(

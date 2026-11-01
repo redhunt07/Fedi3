@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/state/config_store.dart';
 import 'package:fedi3/state/prefs_store.dart';
+import 'package:fedi3/state/saved_notes_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/test_config.dart';
@@ -19,10 +20,12 @@ void main() {
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('fedi3_store_test_');
     useTempStores(tempDir);
+    SavedNotesStore.useDirectoryForTesting(tempDir);
   });
 
   tearDown(() async {
     resetStoreOverrides();
+    SavedNotesStore.useDirectoryForTesting(null);
     if (await tempDir.exists()) {
       await tempDir.delete(recursive: true);
     }
@@ -98,6 +101,26 @@ void main() {
       final bak =
           File('${tempDir.path}${Platform.pathSeparator}ui_prefs.json.bak');
       expect(await bak.exists(), isTrue);
+    });
+  });
+
+  group('SavedNotesStore', () {
+    test('round-trips saved activities newest first and removes them', () async {
+      Map<String, dynamic> activity(String id) => {
+            'type': 'Create',
+            'actor': 'https://a.test/users/one',
+            'object': {'type': 'Note', 'id': id, 'content': '<p>hi</p>'},
+          };
+      await SavedNotesStore.add(activity('https://a.test/notes/1'));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await SavedNotesStore.add(activity('https://a.test/notes/2'));
+      expect(await SavedNotesStore.contains('https://a.test/notes/1'), isTrue);
+      final all = await SavedNotesStore.readAll();
+      expect(all, hasLength(2));
+      expect(all.first['id'], 'https://a.test/notes/2');
+      await SavedNotesStore.remove('https://a.test/notes/2');
+      expect(await SavedNotesStore.contains('https://a.test/notes/2'), isFalse);
+      expect(await SavedNotesStore.readAll(), hasLength(1));
     });
   });
 }

@@ -888,6 +888,21 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsCoreStopped => 'Stopped';
 
   @override
+  String get savedTitle => 'Saved';
+
+  @override
+  String get savedHint => 'Posts saved on this device, available offline too';
+
+  @override
+  String get savedEmptyTitle => 'No saved posts';
+
+  @override
+  String get savedEmptyHint => 'Tap the bookmark on a post to find it here.';
+
+  @override
+  String get savedRefresh => 'Refresh saved';
+
+  @override
   String get settingsAccount => 'Account';
 
   @override

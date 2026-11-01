@@ -1646,6 +1646,36 @@ abstract class AppLocalizations {
   /// **'Stopped'**
   String get settingsCoreStopped;
 
+  /// No description provided for @savedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved'**
+  String get savedTitle;
+
+  /// No description provided for @savedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Posts saved on this device, available offline too'**
+  String get savedHint;
+
+  /// No description provided for @savedEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No saved posts'**
+  String get savedEmptyTitle;
+
+  /// No description provided for @savedEmptyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap the bookmark on a post to find it here.'**
+  String get savedEmptyHint;
+
+  /// No description provided for @savedRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh saved'**
+  String get savedRefresh;
+
   /// No description provided for @settingsAccount.
   ///
   /// In en, this message translates to:

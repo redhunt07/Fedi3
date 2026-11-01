@@ -187,6 +187,6 @@ stabile.
 | 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |
 | 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
 | 7 — Chat | completato (base) | thread, allegati con anteprima, reazioni, read state, badge E2E; mancano chiamate e ricerca interna |
-| 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato, logo fisso con particelle, annunci dai maintainer con alert periodico, banner profilo mesh, chat a schede e bolle stile Telegram con spunte, notifiche compatte, composer con drag&drop, presenza online/occupato/AFK/offline; restano audit contrasto e navigazione da tastiera completa |
+| 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato, logo fisso con particelle, annunci dai maintainer con alert periodico, banner profilo mesh, chat a schede e bolle stile Telegram con spunte, notifiche compatte, post salvati offline, composer con drag&drop, presenza online/occupato/AFK/offline; restano audit contrasto e navigazione da tastiera completa |
 
 Prossimo passo consigliato: client web sulla specifica OpenAPI, poi audit di contrasto/accessibilità completo e test end-to-end della chat con due identità reali.

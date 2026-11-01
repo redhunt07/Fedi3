@@ -432,6 +432,11 @@
     }
   },
   "settingsCoreStopped": "Fermo",
+  "savedTitle": "Salvati",
+  "savedHint": "Post salvati sul dispositivo, disponibili anche offline",
+  "savedEmptyTitle": "Nessun post salvato",
+  "savedEmptyHint": "Tocca il segnalibro su un post per ritrovarlo qui.",
+  "savedRefresh": "Aggiorna salvati",
   "settingsAccount": "Account",
   "settingsFollowSection": "Follow / Unfollow",
   "settingsActorUrlLabel": "Actor URL (https://...)",
