@@ -52,3 +52,6 @@ backups/
 *.db-wal
 *.db-shm
 *.sqlite
+
+# Relay media store (default path when the relay runs from the repo root)
+fedi3_relay_media/

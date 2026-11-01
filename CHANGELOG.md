@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Core syncs its blocklist to the relay at startup and after every change.
 - End-to-end tests for anchor identity, blind spool, relay mesh and moderation.
 - Real interoperability verified against Mastodon 4.7.4 and Misskey 2026.10.1 (procedure and evidence in `docs/interop.md`).
+- AP endpoint proxy on the identity host keeps the anchor/relay split while satisfying classic instances; photo, video and audio federation and timeline/thread consistency verified in both directions.
 - End-to-end federation test: a real relay binary plus two real core runtimes (Follow, Accept, public note delivery, outbox).
 - Outbound fetch policy with SSRF protection, bounded redirects and streamed body caps (`net_policy`).
 - Pending follow requests for locked accounts, with internal endpoints and a Flutter screen to approve or reject them.

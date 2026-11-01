@@ -164,14 +164,107 @@ Il fix è coperto indirettamente dai test di consegna esistenti; non è stato ag
 automatico contro un server reale perché richiederebbe Mastodon/Misskey in CI. Il test manuale
 è documentato qui ed è riproducibile con i passi sopra.
 
+
+## Proxy degli endpoint AP: identità separata dal relay
+
+Il limite "Misskey rifiuta un attore con `inbox` su un host diverso dall'`id`" si risolve
+**senza cambiare il modello**: l'host di identità fa da reverse proxy per gli endpoint AP
+(`/users/<u>/inbox`, `/users/<u>/outbox`, `/users/<u>/media/...`, `/_fedi3/tunnel`) verso il
+relay, mentre il relay resta su un hostname separato. Le istanze classiche vedono un solo host
+(quello dell'identità) e accettano l'attore.
+
+Configurazione verificata nel test:
+
+- identità: `https://fedi3.test` (documento attore e WebFinger serviti dal core);
+- relay: `https://relay.fedi3.test` (trasporto, media, tunnel), raggiungibile pubblicamente;
+- nginx su `fedi3.test`: `/.well-known/webfinger` e `GET /users/alice` → core (8788); tutto il
+  resto → relay (8787);
+- il documento attore continua a pubblicare `id`, `inbox`, `outbox` e `media` sull'host di
+  identità, quindi la divisione identità/trasporto è mantenuta e l'host del relay non compare
+  nelle URL dell'attore.
+
+Con questa configurazione, dopo il riavvio del relay su `relay.fedi3.test`:
+
+- la risoluzione di `alice@fedi3.test` da Misskey e Mastodon continua a funzionare;
+- follow, `Accept`, note e media sono consegnati attraverso l'host di identità (proxy) e
+  verificati dalle due istanze;
+- la home timeline di Misskey e Mastodon mostra le note pubblicate da Fedi3.
+
+Nota: i media caricati dal core vengono specchiati sul relay e la URL restituita usa l'host del
+relay (`https://relay.fedi3.test/users/alice/media/...`). Le stesse URL sono raggiungibili anche
+tramite il proxy dell'host di identità (`https://fedi3.test/users/alice/media/...`), quindi un
+deployment può scegliere di riscrivere le URL sull'host di identità se vuole un solo host
+pubblico.
+
+## Media: foto, video e audio
+
+Sono stati testati tutti i tipi richiesti, in entrambe le direzioni.
+
+### Fedi3 → Misskey / Mastodon
+
+Caricamento su `POST /users/alice/media` (token interno), poi `Create` con `attachment`:
+
+| Tipo | MIME | Esito Misskey | Esito Mastodon |
+|------|------|---------------|----------------|
+| Foto | `image/png` | importata e visualizzata (`image/png`) | importata e visualizzata (`image`) |
+| Video | `video/mp4` | importato e visualizzato (`video/mp4`) | importato e visualizzato (`gifv`) |
+| Audio | `audio/mpeg` | importato e visualizzato (`audio/mpeg`) | importato e visualizzato (`audio`) |
+
+Le URL dei media restituite dal core sono servite con il content-type corretto e i byte
+corrispondono al file caricato (`200`, `image/png` / `video/mp4` / `audio/mpeg`), sia via
+`relay.fedi3.test` sia via il proxy `fedi3.test`.
+
+### Misskey / Mastodon → Fedi3
+
+Upload tramite le API delle istanze e pubblicazione con media:
+
+| Origine | Tipo | Esito Fedi3 |
+|---------|------|-------------|
+| Misskey | foto `image/png` | `objects` contiene `attachment` con `mediaType=image/png`, `width/height` |
+| Misskey | video `video/mp4` | `attachment` con `mediaType=video/mp4` |
+| Misskey | audio `audio/mpeg` | `attachment` con `mediaType=audio/mpeg` |
+| Mastodon | foto `image/png` | `attachment` con `mediaType=image/png`, `blurhash`, dimensioni |
+| Mastodon | video `video/mp4` | `attachment` con `mediaType=video/mp4`, `duration` |
+| Mastodon | audio `audio/mpeg` | `attachment` con `mediaType=audio/mpeg`, `duration` |
+
+Tutte le 9 URL di media presenti nella timeline Fedi3 (3 Fedi3, 3 Misskey, 3 Mastodon) sono
+state scaricate con successo (`200`) e con il content-type atteso.
+
+Nota di deployment: Mastodon serve i media da `/system/` con un alias statico nel reverse proxy
+(non da Rails). Nel test nginx è stato configurato con
+`location /system/ { alias .../public/system/; }` e con `include mime.types;`, altrimenti le URL
+dei media Mastodon rispondono `404` o con content-type errato. Questo non riguarda Fedi3 ma va
+previsto nel proxy che ospita Mastodon.
+
+## Coerenza delle federazioni
+
+Verifica di coerenza "vista da client" (timeline e thread delle tre implementazioni):
+
+- la timeline federata Fedi3 contiene le note pubbliche di Misskey e Mastodon (8 elementi
+  osservati), con autore e contenuto corretti;
+- la home timeline Fedi3 contiene tutte le 9 note con media (3 Fedi3, 3 Misskey, 3 Mastodon),
+  con `mediaType` corretti;
+- la timeline Misskey mostra le note di `alice@fedi3.test` con i media re-hostati da Misskey;
+- la home timeline Mastodon mostra le note di `alice@fedi3.test` con i media cachati da Mastodon;
+- thread: una risposta Misskey a una nota Fedi3 arriva a Fedi3 con `inReplyTo` corretto; una
+  risposta Fedi3 a una nota Mastodon compare nel thread Mastodon con `in_reply_to_id` corretto e
+  nel thread Fedi3 (`/_fedi3/note/replies`).
+
+Non sono state osservate duplicazioni, note mancanti o media non risolti nei tre client.
+
 ## Limiti noti emersi
 
 - **Host con porta**: Misskey usa `domainToASCII` sul dominio e ottiene stringa vuota se il
   dominio contiene una porta; per questo gli host federati devono essere raggiungibili sulla
   porta standard (443). In produzione è normale; nei test locali serve un reverse proxy TLS.
-- **Stesso host per id e inbox**: come detto, Misskey rifiuta attori con inbox su host diverso.
-  L'anchor deve quindi essere pubblicato sullo stesso hostname del relay (o proxato).
+- **Stesso host per id e inbox**: risolto con il proxy degli endpoint AP descritto sopra.
+  L'host di identità deve esporre e inoltrare al relay `inbox`, `outbox`, `media` e il tunnel.
 - **HTTPS obbligatorio**: Mastodon assume `https` per WebFinger; il supporto `http` esiste solo
   per `.onion`. Il test locale usa una CA dedicata.
+- **Media Mastodon**: il reverse proxy dell'istanza Mastodon deve servire `/system/` come alias
+  statico e includere i MIME type, altrimenti i media federati risultano non raggiungibili.
 - **Node 26**: Misskey è stato eseguito con Node 26.12 (oltre la versione consigliata); nessun
   problema osservato nel test, ma per produzione conviene la versione LTS supportata.
+- **URL media sul relay**: il core specchia i media sul relay e restituisce URL sull'host del
+  relay; se serve un solo host pubblico, riscrivere l'host delle URL o servire i media tramite
+  il proxy dell'identità (entrambe le strade sono state verificate).

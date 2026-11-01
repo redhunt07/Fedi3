@@ -688,9 +688,18 @@ Copertura verificata:
 | Nota Fedi3 → istanza terza (firma verificata) | sì | sì | pass |
 | Nota istanza terza → Fedi3 (verifica firma e storage) | sì | sì | pass |
 | Follow Fedi3 → istanza terza | sì (manuale) | sì | pass |
+| Proxy endpoint AP su host di identità, relay su host separato | sì | sì | pass |
+| Media foto `image/png` Fedi3 → istanza | sì | sì | pass |
+| Media video `video/mp4` Fedi3 → istanza | sì | sì | pass |
+| Media audio `audio/mpeg` Fedi3 → istanza | sì | sì | pass |
+| Media foto/video/audio istanza → Fedi3 | sì | sì | pass |
+| Coerenza timeline e thread tra i tre client | sì | sì | pass |
 
 Il test ha trovato un bug reale nella firma HTTP in uscita (header `Content-Type` duplicato),
-corretto in `Delivery::deliver_json`; dopo il fix tutti gli scenari passano.
+corretto in `Delivery::deliver_json`; dopo il fix tutti gli scenari passano. Il test ha inoltre
+verificato che il proxy degli endpoint AP sull'host di identità mantiene la divisione
+dal relay e funziona con le istanze classiche, e che foto, video e audio federano in entrambe
+le direzioni con timeline e thread coerenti.
 
 Limiti del test: non è in CI (richiede due servizi esterni e un trust store locale); va rieseguito
 manualmente prima di una release che tocchi firma HTTP, delivery o `net_policy`.
