@@ -1,0 +1,1442 @@
+openapi: 3.1.0
+info:
+  title: Fedi3 Core and Relay API
+  version: 1.0.0
+  description: |
+    API HTTP del core Fedi3 (identità e dati locali) e del relay pubblico.
+    Il core espone sia endpoint ActivityPub (webfinger, actor, outbox, inbox)
+    sia endpoint interni per il client (`/_fedi3/*`), protetti dal token interno.
+    Il relay espone registrazione, tunnel WebSocket, discovery, ricerca e admin.
+  license:
+    name: AGPL-3.0-only
+servers:
+  - url: http://127.0.0.1:8788
+    description: Core locale (identità)
+  - url: https://relay.example.org
+    description: Relay pubblico
+security:
+  - internalToken: []
+tags:
+  - name: core
+  - name: activitypub
+  - name: relay
+  - name: admin
+paths:
+  /healthz:
+    get:
+      tags: [core, relay]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Servizio attivo
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+  /readyz:
+    get:
+      tags: [core, relay]
+      summary: Readiness probe (DB raggiungibile)
+      security: []
+      responses:
+        '200':
+          description: Pronto
+        '503':
+          description: Database non pronto
+  /.well-known/webfinger:
+    get:
+      tags: [activitypub]
+      summary: WebFinger (acct:user@domain)
+      security: []
+      parameters:
+        - name: resource
+          in: query
+          required: true
+          schema:
+            type: string
+            example: acct:alice@fedi3.test
+      responses:
+        '200':
+          description: Documento WebFinger
+          content:
+            application/jrd+json:
+              schema:
+                $ref: '#/components/schemas/WebFinger'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /.well-known/nodeinfo:
+    get:
+      tags: [activitypub]
+      summary: Link NodeInfo
+      security: []
+      responses:
+        '200':
+          description: Link a NodeInfo 2.0
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /nodeinfo/2.0:
+    get:
+      tags: [activitypub]
+      summary: Documento NodeInfo 2.0
+      security: []
+      responses:
+        '200':
+          description: NodeInfo
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /.well-known/host-meta:
+    get:
+      tags: [activitypub]
+      summary: Host-meta XML
+      security: []
+      responses:
+        '200':
+          description: XML host-meta
+          content:
+            application/xrd+xml:
+              schema:
+                type: string
+  /.well-known/host-meta.json:
+    get:
+      tags: [activitypub]
+      summary: Host-meta JSON
+      security: []
+      responses:
+        '200':
+          description: JSON host-meta
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /users/{username}:
+    get:
+      tags: [activitypub]
+      summary: Documento actor ActivityPub
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      responses:
+        '200':
+          description: Actor
+          content:
+            application/activity+json:
+              schema:
+                $ref: '#/components/schemas/Actor'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /users/{username}/outbox:
+    get:
+      tags: [activitypub]
+      summary: Outbox ActivityPub paginata
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - name: page
+          in: query
+          schema:
+            type: boolean
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Collezione outbox
+          content:
+            application/activity+json:
+              schema:
+                $ref: '#/components/schemas/OutboxCollection'
+    post:
+      tags: [core]
+      summary: Pubblica una nota nell'outbox
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNoteRequest'
+      responses:
+        '201':
+          description: Nota creata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Note'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /users/{username}/followers:
+    get:
+      tags: [activitypub]
+      summary: Collezione follower
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      responses:
+        '200':
+          description: Collezione follower
+          content:
+            application/activity+json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+  /users/{username}/following:
+    get:
+      tags: [activitypub]
+      summary: Collezione following
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      responses:
+        '200':
+          description: Collezione following
+          content:
+            application/activity+json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+  /users/{username}/inbox:
+    post:
+      tags: [activitypub]
+      summary: Inbox personale (HTTP Signature richiesta)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          application/activity+json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Attività accettata
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /inbox:
+    post:
+      tags: [activitypub]
+      summary: Shared inbox (HTTP Signature richiesta)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/activity+json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Attività accettata
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /users/{username}/media:
+    post:
+      tags: [core]
+      summary: Carica un media
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Media caricato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Media'
+  /users/{username}/media/{mediaId}:
+    get:
+      tags: [core]
+      summary: Scarica un media
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contenuto binario
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /_fedi3/timeline/home:
+    get:
+      tags: [core]
+      summary: Timeline home locale
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+  /_fedi3/timeline/unified:
+    get:
+      tags: [core]
+      summary: Timeline unificata (locale + federata)
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+  /_fedi3/timeline/federated:
+    get:
+      tags: [core]
+      summary: Timeline federata
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+  /_fedi3/timeline/dht:
+    get:
+      tags: [core]
+      summary: Timeline globale P2P
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+  /_fedi3/note/replies:
+    get:
+      tags: [core]
+      summary: Risposte a una nota
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+  /_fedi3/search/notes:
+    get:
+      tags: [core]
+      summary: Ricerca note
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+  /_fedi3/search/users:
+    get:
+      tags: [core]
+      summary: Ricerca utenti
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+  /_fedi3/search/hashtags:
+    get:
+      tags: [core]
+      summary: Ricerca hashtag
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+  /_fedi3/notifications:
+    get:
+      tags: [core]
+      summary: Notifiche locali
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: filter
+          in: query
+          schema:
+            type: string
+            enum: [all, mentions, reactions, follows, boosts, likes]
+      responses:
+        '200':
+          description: Notifiche
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  next:
+                    type: string
+                    nullable: true
+  /_fedi3/chat/threads:
+    get:
+      tags: [core]
+      summary: Elenco thread di chat
+      responses:
+        '200':
+          description: Thread
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [threads]
+                properties:
+                  threads:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatThread'
+  /_fedi3/chat/threads/{threadId}:
+    get:
+      tags: [core]
+      summary: Messaggi di un thread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Messaggi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+  /_fedi3/chat/send:
+    post:
+      tags: [core]
+      summary: Invia un messaggio cifrato E2E
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatSendRequest'
+      responses:
+        '201':
+          description: Messaggio inviato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessage'
+  /_fedi3/chat/react:
+    post:
+      tags: [core]
+      summary: Reazione a un messaggio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id, message_id, reaction]
+              properties:
+                thread_id:
+                  type: string
+                message_id:
+                  type: string
+                reaction:
+                  type: string
+      responses:
+        '200':
+          description: Reazione registrata
+  /_fedi3/chat/seen:
+    post:
+      tags: [core]
+      summary: Segna un thread come letto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id]
+              properties:
+                thread_id:
+                  type: string
+      responses:
+        '200':
+          description: Stato aggiornato
+  /_fedi3/chat/thread/members:
+    get:
+      tags: [core]
+      summary: Membri di un thread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '200':
+          description: Membri
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [core]
+      summary: Aggiorna i membri di un thread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Membri aggiornati
+  /_fedi3/reactions:
+    get:
+      tags: [core]
+      summary: Reazioni a una nota
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        '200':
+          description: Reazioni
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/follow_requests:
+    get:
+      tags: [core]
+      summary: Richieste di follow in attesa
+      responses:
+        '200':
+          description: Richieste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+  /_fedi3/follow_requests/{actor}/approve:
+    post:
+      tags: [core]
+      summary: Approva una richiesta di follow
+      parameters:
+        - $ref: '#/components/parameters/Actor'
+      responses:
+        '200':
+          description: Approvata
+  /_fedi3/follow_requests/{actor}/reject:
+    post:
+      tags: [core]
+      summary: Rifiuta una richiesta di follow
+      parameters:
+        - $ref: '#/components/parameters/Actor'
+      responses:
+        '200':
+          description: Rifiutata
+  /_fedi3/blocks:
+    get:
+      tags: [core]
+      summary: Elenco domini/attori bloccati
+      responses:
+        '200':
+          description: Blocchi
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [core]
+      summary: Aggiorna blocchi
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Blocchi aggiornati
+  /_fedi3/social/follow:
+    post:
+      tags: [core]
+      summary: Segui un attore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor]
+              properties:
+                actor:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Follow inviato
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /_fedi3/social/unfollow:
+    post:
+      tags: [core]
+      summary: Smetti di seguire un attore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor]
+              properties:
+                actor:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Unfollow inviato
+  /_fedi3/social/status:
+    get:
+      tags: [core]
+      summary: Stato follow verso un attore
+      parameters:
+        - $ref: '#/components/parameters/Actor'
+      responses:
+        '200':
+          description: Stato
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/object:
+    get:
+      tags: [core]
+      summary: Recupera un oggetto ActivityPub in cache
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        '200':
+          description: Oggetto
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/anchor:
+    get:
+      tags: [core]
+      summary: Documento anchor dell'identità
+      security: []
+      responses:
+        '200':
+          description: Anchor
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/spool/envelope:
+    post:
+      tags: [core]
+      summary: Bustina cifrata dal relay (spool cieco)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Accettata
+  /_fedi3/health:
+    get:
+      tags: [core]
+      summary: Stato interno del core
+      responses:
+        '200':
+          description: Stato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /_fedi3/stream:
+    get:
+      tags: [core]
+      summary: Event stream per la UI (SSE)
+      responses:
+        '200':
+          description: Stream di eventi
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /_fedi3/net/metrics:
+    get:
+      tags: [core]
+      summary: Metriche di rete JSON
+      responses:
+        '200':
+          description: Metriche
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/audit/recent:
+    get:
+      tags: [core]
+      summary: Eventi di audit recenti
+      responses:
+        '200':
+          description: Audit
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relays:
+    get:
+      tags: [core]
+      summary: Relay configurati
+      responses:
+        '200':
+          description: Relay
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [core]
+      summary: Aggiorna i relay configurati
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Aggiornati
+  /register:
+    post:
+      tags: [relay]
+      summary: Registra un'identità sul relay
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, token]
+              properties:
+                username:
+                  type: string
+                token:
+                  type: string
+      responses:
+        '201':
+          description: Registrato
+        '409':
+          description: Utente già esistente
+  /tunnel/{user}:
+    get:
+      tags: [relay]
+      summary: Tunnel WebSocket per il core
+      security: []
+      parameters:
+        - name: user
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Upgrade WebSocket
+  /_fedi3/relay/users:
+    get:
+      tags: [relay]
+      summary: Directory utenti del relay
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Utenti
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RelayUser'
+  /_fedi3/relay/relays:
+    get:
+      tags: [relay]
+      summary: Relay conosciuti nella mesh
+      security: []
+      responses:
+        '200':
+          description: Relay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [relays]
+                properties:
+                  relays:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+  /_fedi3/relay/peers:
+    get:
+      tags: [relay]
+      summary: Peer della mesh
+      responses:
+        '200':
+          description: Peer
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relay/stats:
+    get:
+      tags: [relay]
+      summary: Statistiche del relay
+      responses:
+        '200':
+          description: Statistiche
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relay/search/notes:
+    get:
+      tags: [relay]
+      summary: Ricerca note sul relay
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+        '503':
+          description: Indice non pronto
+  /_fedi3/relay/search/users:
+    get:
+      tags: [relay]
+      summary: Ricerca utenti sul relay
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+  /_fedi3/relay/search/hashtags:
+    get:
+      tags: [relay]
+      summary: Ricerca hashtag sul relay
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          $ref: '#/components/responses/Search'
+  /_fedi3/relay/search/coverage:
+    get:
+      tags: [relay]
+      summary: Copertura dell'indice di ricerca
+      responses:
+        '200':
+          description: Copertura
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relay/sync/notes:
+    get:
+      tags: [relay]
+      summary: Sincronizzazione note per peer
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Note sincronizzate
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relay/p2p_infra:
+    get:
+      tags: [relay]
+      summary: Infrastruttura P2P annunciata
+      security: []
+      responses:
+        '200':
+          description: Multiaddr e peer id
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /_fedi3/relay/telemetry:
+    post:
+      tags: [relay]
+      summary: Telemetria dei peer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Accettata
+  /_fedi3/relay/metrics:
+    get:
+      tags: [relay]
+      summary: Metriche relay JSON (admin)
+      responses:
+        '200':
+          description: Metriche
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /_fedi3/webrtc/send:
+    post:
+      tags: [relay]
+      summary: Invia un segnale WebRTC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Accettato
+  /_fedi3/webrtc/poll:
+    get:
+      tags: [relay]
+      summary: Ricevi segnali WebRTC
+      parameters:
+        - name: peer
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Segnali
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: Elenco utenti (admin)
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: Utenti
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RelayUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/users/{user}/disable:
+    post:
+      tags: [admin]
+      summary: Disabilita un utente
+      security:
+        - adminBearer: []
+      parameters:
+        - name: user
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Disabilitato
+  /admin/users/{user}/enable:
+    post:
+      tags: [admin]
+      summary: Abilita un utente
+      security:
+        - adminBearer: []
+      parameters:
+        - name: user
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Abilitato
+  /users/{user}/media:
+    post:
+      tags: [relay]
+      summary: Upload media sul relay
+      parameters:
+        - name: user
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Media caricato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Media'
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Fedi3-Internal
+      description: Token interno UI ↔ core.
+    relayToken:
+      type: apiKey
+      in: header
+      name: X-Fedi3-Relay-Token
+      description: Token dell'identità verso il relay.
+    adminBearer:
+      type: http
+      scheme: bearer
+      description: Token admin del relay.
+  parameters:
+    Username:
+      name: username
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_]{1,64}$'
+    Actor:
+      name: actor
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uri
+    ThreadId:
+      name: threadId
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    Query:
+      name: q
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    NotFound:
+      description: Risorsa non trovata
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Token mancante o non valido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Timeline:
+      description: Timeline di note
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TimelineResponse'
+    Search:
+      description: Risultati di ricerca
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SearchResponse'
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Health:
+      type: object
+      additionalProperties: true
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        db:
+          type: string
+    WebFinger:
+      type: object
+      required: [subject, links]
+      properties:
+        subject:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    Actor:
+      type: object
+      required: [id, type, preferredUsername, inbox, outbox]
+      properties:
+        id:
+          type: string
+          format: uri
+        type:
+          type: string
+          example: Person
+        preferredUsername:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        url:
+          type: string
+          format: uri
+        inbox:
+          type: string
+          format: uri
+        outbox:
+          type: string
+          format: uri
+        followers:
+          type: string
+          format: uri
+        following:
+          type: string
+          format: uri
+        icon:
+          $ref: '#/components/schemas/Media'
+        image:
+          $ref: '#/components/schemas/Media'
+    Media:
+      type: object
+      properties:
+        type:
+          type: string
+          example: Image
+        mediaType:
+          type: string
+        url:
+          type: string
+          format: uri
+        name:
+          type: string
+    Note:
+      type: object
+      required: [type, id, attributedTo, content, published]
+      properties:
+        type:
+          type: string
+          example: Note
+        id:
+          type: string
+          format: uri
+        attributedTo:
+          type: string
+          format: uri
+        content:
+          type: string
+        published:
+          type: string
+          format: date-time
+        inReplyTo:
+          type: string
+          format: uri
+          nullable: true
+        to:
+          type: array
+          items:
+            type: string
+        cc:
+          type: array
+          items:
+            type: string
+        attachment:
+          type: array
+          items:
+            $ref: '#/components/schemas/Media'
+        tag:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    OutboxCollection:
+      type: object
+      required: [type, orderedItems]
+      properties:
+        type:
+          type: string
+          example: OrderedCollectionPage
+        totalItems:
+          type: integer
+        orderedItems:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        next:
+          type: string
+          format: uri
+          nullable: true
+    Collection:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+        totalItems:
+          type: integer
+        orderedItems:
+          type: array
+          items:
+            type: string
+        first:
+          type: string
+          format: uri
+    CreateNoteRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          maxLength: 5000
+        inReplyTo:
+          type: string
+          format: uri
+        visibility:
+          type: string
+          enum: [public, unlisted, followers, direct]
+        mediaIds:
+          type: array
+          items:
+            type: string
+        language:
+          type: string
+    TimelineResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        next:
+          type: string
+          nullable: true
+    SearchResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        next:
+          type: string
+          nullable: true
+        total:
+          type: integer
+    Notification:
+      type: object
+      required: [ts, activity]
+      properties:
+        ts:
+          type: integer
+          description: Timestamp epoch in millisecondi
+        activity:
+          type: object
+          additionalProperties: true
+    ChatThread:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        participants:
+          type: array
+          items:
+            type: string
+        lastMessage:
+          type: string
+        unread:
+          type: integer
+        updatedAt:
+          type: integer
+    ChatMessage:
+      type: object
+      required: [id, threadId, sender, content, ts]
+      properties:
+        id:
+          type: string
+        threadId:
+          type: string
+        sender:
+          type: string
+        content:
+          type: string
+        ts:
+          type: integer
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Media'
+        reactions:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    ChatSendRequest:
+      type: object
+      required: [threadId, content]
+      properties:
+        threadId:
+          type: string
+        content:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    RelayUser:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+        domain:
+          type: string
+        actor_url:
+          type: string
+          format: uri
+        created_at:
+          type: integer
+        disabled:
+          type: boolean
