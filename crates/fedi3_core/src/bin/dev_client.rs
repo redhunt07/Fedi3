@@ -115,11 +115,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start queue worker (dev). Shutdown isn't wired here; stop the process to stop.
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let key_id = format!(
-        "{}/users/{}#main-key",
-        cfg.public_base_url.trim_end_matches('/'),
-        username
-    );
+    let key_id = format!("{}#main-key", fedi3_core::ap::canonical_actor_url(&cfg));
     queue.start_worker(
         shutdown_rx.clone(),
         state.delivery.clone(),

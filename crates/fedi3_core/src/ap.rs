@@ -4464,7 +4464,8 @@ pub async fn sync_blocks_to_relay(state: &ApState) {
         .await;
 }
 
-pub(crate) fn canonical_actor_url(cfg: &ApConfig) -> String {
+/// Canonical actor URL: the identity anchor when configured, otherwise the relay base.
+pub fn canonical_actor_url(cfg: &ApConfig) -> String {
     match cfg
         .anchor_actor_url
         .as_deref()
