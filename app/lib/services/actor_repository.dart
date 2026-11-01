@@ -260,6 +260,59 @@ class ActorRepository {
     return out;
   }
 
+  /// Best-effort local user search over the in-memory actor cache. The core
+  /// search index only contains activity objects, so actors seen by the client
+  /// (profiles, follow lists, threads) are matched here instead.
+  List<ActorProfile> searchCached(String query, {int limit = 20}) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return const [];
+    final out = <ActorProfile>[];
+    for (final p in _cache.values) {
+      final hay = '${p.preferredUsername} ${p.displayName} ${p.id} ${p.url}'
+          .toLowerCase();
+      if (!hay.contains(needle)) continue;
+      out.add(p);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /// Reads the actor URLs of a followers/following collection (first page).
+  Future<List<String>> fetchCollectionItems(String collectionUrl,
+      {int limit = 80}) async {
+    final first = await _fetchJson(collectionUrl);
+    if (first == null) return const [];
+
+    Map<String, dynamic>? page = first;
+    final firstLink = first['first'];
+    if (firstLink is String && firstLink.trim().isNotEmpty) {
+      page = await _fetchJson(firstLink.trim());
+    } else if (firstLink is Map) {
+      final href = (firstLink['id'] as String?)?.trim() ??
+          (firstLink['href'] as String?)?.trim() ??
+          '';
+      if (href.isNotEmpty) page = await _fetchJson(href);
+    }
+
+    final raw = (page?['orderedItems'] as List<dynamic>? ??
+        page?['items'] as List<dynamic>? ??
+        const <dynamic>[]);
+    final out = <String>[];
+    for (final it in raw) {
+      String id = '';
+      if (it is String) {
+        id = it.trim();
+      } else if (it is Map) {
+        final v = it['id'] ?? it['actor'] ?? it['href'];
+        if (v is String) id = v.trim();
+      }
+      if (id.isEmpty || out.contains(id)) continue;
+      out.add(id);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
   Future<int?> fetchCollectionCount(String collectionUrl) async {
     final data = await _fetchJson(collectionUrl);
     if (data == null) return null;

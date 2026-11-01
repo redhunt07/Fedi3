@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
+import '../../model/core_config.dart';
 import '../../model/note_models.dart';
 import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
@@ -219,6 +220,19 @@ class _SearchScreenState extends State<SearchScreen>
           list.insert(0, _SearchUserItem(actor, const {}));
         }
       } catch (_) {}
+    } else {
+      // The core user index only knows activity objects, so merge actors already
+      // seen by the client and fall back to the local follow graph.
+      for (final actor in ActorRepository.instance.searchCached(_query)) {
+        if (list.every((p) => p.profile.id != actor.id)) {
+          list.add(_SearchUserItem(actor, const {}));
+        }
+      }
+      if (list.isEmpty) {
+        try {
+          await _searchRelations(cfg, list);
+        } catch (_) {}
+      }
     }
     final next = resp['next'];
     if (mounted) {
@@ -226,6 +240,30 @@ class _SearchScreenState extends State<SearchScreen>
         _userItems = list;
         _usersNext = next is String && next.trim().isNotEmpty ? next : null;
       });
+    }
+  }
+
+  /// Looks for matching actors in the local followers/following collections when
+  /// the core index has no user documents.
+  Future<void> _searchRelations(
+      CoreConfig cfg, List<_SearchUserItem> list) async {
+    final base =
+        '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}';
+    final needle = _query.toLowerCase();
+    for (final kind in const ['followers', 'following']) {
+      final ids = await ActorRepository.instance
+          .fetchCollectionItems('$base/$kind');
+      for (final id in ids) {
+        final profile = await ActorRepository.instance.getActor(id);
+        if (profile == null) continue;
+        final hay =
+            '${profile.preferredUsername} ${profile.displayName} ${profile.id} ${profile.url}'
+                .toLowerCase();
+        if (!hay.contains(needle)) continue;
+        if (list.every((p) => p.profile.id != profile.id)) {
+          list.add(_SearchUserItem(profile, const {}));
+        }
+      }
     }
   }
 

@@ -8085,13 +8085,17 @@ async fn require_relay_search_coverage(state: &ApState) -> Result<(), Response<B
         .unwrap_or(0);
     let now = now_ms();
 
-    let index_ok = indexed_users >= total_users && total_users > 0;
-    let index_fresh = coverage_window_ms <= 0 || (now - last_index_ms) <= coverage_window_ms;
-    let relays_ok = relays_total == 0 || relays_synced >= relays_total;
-    let relays_fresh =
-        relay_sync_window_ms <= 0 || (now - relays_last_sync_ms) <= relay_sync_window_ms;
-
-    if index_ok && index_fresh && relays_ok && relays_fresh {
+    if search_coverage_sufficient(
+        total_users,
+        indexed_users,
+        last_index_ms,
+        coverage_window_ms,
+        relays_total,
+        relays_synced,
+        relays_last_sync_ms,
+        relay_sync_window_ms,
+        now,
+    ) {
         Ok(())
     } else {
         Err(simple(
@@ -8099,6 +8103,35 @@ async fn require_relay_search_coverage(state: &ApState) -> Result<(), Response<B
             "search coverage incomplete (relay index or relay sync not ready)",
         ))
     }
+}
+
+/// Decides whether the relay search index/sync coverage is fresh enough to serve
+/// search results instead of a 503.
+///
+/// An empty relay set (no peer relays configured, e.g. a standalone relay) has
+/// nothing to sync: its missing sync timestamp must not be treated as stale.
+#[allow(clippy::too_many_arguments)]
+fn search_coverage_sufficient(
+    total_users: u64,
+    indexed_users: u64,
+    last_index_ms: i64,
+    coverage_window_ms: i64,
+    relays_total: u64,
+    relays_synced: u64,
+    relays_last_sync_ms: i64,
+    relay_sync_window_ms: i64,
+    now: i64,
+) -> bool {
+    let index_ok = indexed_users >= total_users;
+    let index_fresh = coverage_window_ms <= 0
+        || total_users == 0
+        || (last_index_ms > 0 && now.saturating_sub(last_index_ms) <= coverage_window_ms);
+    let relays_ok = relays_total == 0 || relays_synced >= relays_total;
+    let relays_fresh = relays_total == 0
+        || relay_sync_window_ms <= 0
+        || (relays_last_sync_ms > 0
+            && now.saturating_sub(relays_last_sync_ms) <= relay_sync_window_ms);
+    index_ok && index_fresh && relays_ok && relays_fresh
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -8483,5 +8516,102 @@ mod anchor_tests {
             webfinger["links"][0]["href"],
             "https://alice.test/users/alice"
         );
+    }
+}
+
+#[cfg(test)]
+mod search_coverage_tests {
+    use super::search_coverage_sufficient;
+
+    const DAY: i64 = 24 * 3600 * 1000;
+    const NOW: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn standalone_relay_with_no_peer_relays_is_covered() {
+        // One user indexed recently; zero configured peer relays.
+        assert!(search_coverage_sufficient(
+            1,
+            1,
+            NOW - 1000,
+            DAY,
+            0,
+            0,
+            0,
+            DAY,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn empty_relay_index_is_vacuously_covered() {
+        // No users at all: nothing to index, nothing to sync.
+        assert!(search_coverage_sufficient(0, 0, 0, DAY, 0, 0, 0, DAY, NOW));
+    }
+
+    #[test]
+    fn stale_index_is_rejected() {
+        assert!(!search_coverage_sufficient(
+            1,
+            1,
+            NOW - 2 * DAY,
+            DAY,
+            0,
+            0,
+            0,
+            DAY,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn partial_index_is_rejected() {
+        assert!(!search_coverage_sufficient(
+            3,
+            1,
+            NOW - 1000,
+            DAY,
+            0,
+            0,
+            0,
+            DAY,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn configured_relays_must_all_be_synced_and_fresh() {
+        assert!(search_coverage_sufficient(
+            1,
+            1,
+            NOW - 1000,
+            DAY,
+            2,
+            2,
+            NOW - 1000,
+            DAY,
+            NOW
+        ));
+        assert!(!search_coverage_sufficient(
+            1,
+            1,
+            NOW - 1000,
+            DAY,
+            2,
+            1,
+            NOW - 1000,
+            DAY,
+            NOW
+        ));
+        assert!(!search_coverage_sufficient(
+            1,
+            1,
+            NOW - 1000,
+            DAY,
+            2,
+            2,
+            NOW - 2 * DAY,
+            DAY,
+            NOW
+        ));
     }
 }

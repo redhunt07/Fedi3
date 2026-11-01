@@ -14,6 +14,7 @@ import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../../state/draft_store.dart';
 import '../screens/compose_screen.dart';
+import '../screens/profile_screen.dart';
 import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
 import 'inline_composer.dart';
@@ -277,6 +278,17 @@ class _RightSidebarState extends State<RightSidebar> {
                     ? context.l10n.statusUnknownShort
                     : '${cfg.username}@${cfg.domain}'),
                 trailing: const Icon(Icons.person_outline),
+                onTap: cfg == null
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ProfileScreen(
+                              appState: widget.appState,
+                              actorUrl:
+                                  '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}',
+                            ),
+                          ),
+                        ),
               ),
             ),
             const SizedBox(height: UiTokens.gapMd),

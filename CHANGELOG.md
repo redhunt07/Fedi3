@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Flutter client: followers/following list screens with per-actor follow/unfollow, tappable profile counters, a clickable Account card that opens the local profile, and a user-search fallback over actors already seen by the client and the local follow graph (the core index only stores activity objects).
 
 ### Changed
 - The relay now verifies the HTTP signature on `/inbox` and requires a `Digest` bound to the signed headers.
@@ -33,7 +34,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - The tunnel reconnects with exponential backoff instead of dying on the first network error.
 - `fedi3_core_start` returns success only after the local server is listening.
 - The relay token is optional: local-only and P2P-only instances start without a relay.
-- Outbound HTTP clients use `rustls-tls-native-roots`, so the system CA store is honoured (needed for enterprise/private CAs; public CAs keep working).
+- Outbound HTTP clients use `rustls-tls-native-roots`, so the system CA store is honoured (needed for enterprise/private CAs; public CAs keep working). The tunnel WebSocket client uses the same native-root trust store.
 - Health and readiness endpoints are unauthenticated and side-effect free.
 - Client IP is derived from the proxy-appended `X-Forwarded-For` entry; rate limits are per route.
 - SQLite uses `busy_timeout`; delivery workers survive transient database errors.
@@ -50,6 +51,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - macOS release entitlements granted no network or file access.
 - iOS lacked the ATS exception for the local core.
 - Editing the configuration stopped the core and never restarted it.
+- Search was rejected with `503 search coverage incomplete` on standalone relays with no peer relays and on fresh relays with an empty user index, because a missing relay-sync timestamp was treated as stale. Coverage is now vacuously complete in those cases, with unit tests for the decision logic.
 - The widget test asserted a string the app never rendered.
 - `relay_diagnose.sh` used `wget`, which is not present in the relay image.
 - Backup scripts ignored the configured PostgreSQL user/database and nested media archives incorrectly.

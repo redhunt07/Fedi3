@@ -252,6 +252,54 @@ Verifica di coerenza "vista da client" (timeline e thread delle tre implementazi
 
 Non sono state osservate duplicazioni, note mancanti o media non risolti nei tre client.
 
+## Client Flutter: verifica end-to-end
+
+Il client Fedi3 è stato avviato contro lo stack federato reale (relay, core, Misskey,
+Mastodon) con la stessa identità `alice` usata dal dev client:
+
+```bash
+FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true \
+FEDI3_DATA_DIR=/tmp/fedi3-live4/data/fedi3/dev_client \
+DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 \
+./app/build/linux/x64/debug/bundle/fedi3
+```
+
+Nota: `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` serve solo nei test locali, dove
+`fedi3.test`/`misskey.test`/`mastodon.test` risolvono su loopback e la guardia SSRF
+del core rifiuterebbe gli host (`resolves to non-public address ::1`). In produzione
+gli host pubblici non richiedono la variabile. Il tunnel WebSocket usa ora i root CA
+di sistema (`rustls-tls-native-roots`), quindi `wss://fedi3.test` funziona anche con
+una CA privata installata nel trust store.
+
+Verifiche eseguite dal client:
+
+- **Timeline**: le quattro viste (Home, Locale, Sociale, Federata) si aprono; Home e
+  Locale mostrano le note federate e le interazioni, Federata le note pubbliche di
+  Misskey/Mastodon. Sociale resta vuota con P2P disattivato (comportamento atteso).
+- **Pubblicazione**: una nota scritta dal client compare nella timeline Mastodon
+  (`alice@fedi3.test`) e in quella Misskey, senza duplicazioni.
+- **Nidificazione**: il thread apre padre e risposta annidata; una risposta inviata
+  dal client arriva a Mastodon con `in_reply_to_id` corretto e compare nel thread.
+- **Reazioni**: Like, Announce e EmojiReact dal client sono persistiti e federati;
+  i conteggi si aggiornano nella UI.
+- **Follow/unfollow**: funzionano sia dalla lista follower/following sia dal profilo;
+  lo stato è coerente sul lato Mastodon (`followed_by`/`following`). Le liste
+  follower e seguiti sono raggiungibili dai contatori del profilo e mostrano
+  handle, avatar e azione follow/unfollow.
+- **Media**: immagini e video federati vengono renderizzati; il player audio
+  (media_kit/mpv) viene istanziato per gli MP3.
+- **Schede**: Cerca (post e utenti), Chat, Notifiche, Relay e Configurazioni si
+  aprono senza errori; la ricerca post/utenti restituisce risultati.
+
+Due correzioni emerse da questa verifica sono incluse nel codice:
+
+- la ricerca rispondeva sempre `503 search coverage incomplete` su relay standalone
+  senza relay peer o con indice utenti vuoto: la copertura ora è considerata
+  vacua in quei casi (test unitari in `crates/fedi3_core/src/ap.rs`);
+- la ricerca utenti lato client non trovava gli attori perché l'indice del core
+  contiene solo oggetti attività: il client ora integra gli attori già visti e,
+  come fallback, la rete follow/follower locale.
+
 ## Limiti noti emersi
 
 - **Host con porta**: Misskey usa `domainToASCII` sul dominio e ottiene stringa vuota se il

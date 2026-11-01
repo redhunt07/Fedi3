@@ -703,3 +703,29 @@ le direzioni con timeline e thread coerenti.
 
 Limiti del test: non è in CI (richiede due servizi esterni e un trust store locale); va rieseguito
 manualmente prima di una release che tocchi firma HTTP, delivery o `net_policy`.
+
+### 12.1 Client Flutter contro lo stack reale (manuale)
+
+Il client desktop è stato avviato contro relay, core, Misskey e Mastodon reali con
+`FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` (necessario solo quando gli host federati risolvono
+su loopback nei test locali) e `FEDI3_DATA_DIR` puntato alla stessa identità del dev client.
+
+| Verifica UI | Esito |
+| Timeline Home/Locale/Federata con contenuti federati; Sociale vuota con P2P off | pass |
+| Pubblicazione nota dal client visibile su Mastodon e Misskey | pass |
+| Thread con padre e risposta annidata; risposta dal client con `in_reply_to_id` corretto | pass |
+| Like, Announce, EmojiReact dal client persistiti e federati | pass |
+| Follow/unfollow dal profilo e dalle liste follower/seguiti, stato coerente su Mastodon | pass |
+| Liste follower e seguiti raggiungibili dai contatori del profilo | pass |
+| Media immagine e video renderizzati, player audio istanziato | pass |
+| Cerca (post e utenti), Chat, Notifiche, Relay, Configurazioni | pass |
+| Ricerca utenti con fallback su attori visti/rete follow locale | pass |
+
+Bug corretti durante la verifica:
+
+- `503 search coverage incomplete` su relay standalone senza relay peer o con indice utenti
+  vuoto: la copertura è ora considerata vacua, con test unitari dedicati;
+- tunnel WebSocket con CA privata: il client ora usa i root CA di sistema;
+- ricerca utenti lato client vuota perché l'indice del core contiene solo oggetti attività:
+  aggiunto fallback su cache attori e rete follow/follower locale;
+- lista follower/seguiti assente nel client: aggiunta schermata con follow/unfollow per attore.

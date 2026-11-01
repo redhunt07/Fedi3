@@ -15,6 +15,7 @@ import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
+import 'relations_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen(
@@ -144,6 +145,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onToggleFollow: () => _toggleFollow(api),
               followersCount: _followersCount,
               followingCount: _followingCount,
+              isSelf: _isSelf(_profile!),
+              onOpenFollowers: _profile!.followers.isEmpty
+                  ? null
+                  : () => _openRelations(
+                      _profile!.followers, context.l10n.profileFollowers),
+              onOpenFollowing: _profile!.following.isEmpty
+                  ? null
+                  : () => _openRelations(
+                      _profile!.following, context.l10n.profileFollowing),
             ),
           if (_profile == null && !_loading)
             Center(child: Text(context.l10n.listNoItems)),
@@ -161,6 +171,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
               TimelineActivityCard(appState: widget.appState, activity: a),
           ],
         ],
+      ),
+    );
+  }
+
+  bool _isSelf(ActorProfile profile) {
+    final cfg = widget.appState.config;
+    if (cfg == null) return false;
+    final own =
+        '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}';
+    return own == profile.id.trim().replaceAll(RegExp(r'/+$'), '');
+  }
+
+  void _openRelations(String collectionUrl, String title) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RelationsScreen(
+          appState: widget.appState,
+          actorUrl: _profile!.id,
+          collectionUrl: collectionUrl,
+          title: title,
+        ),
       ),
     );
   }
@@ -217,6 +248,9 @@ class _ProfileHeader extends StatelessWidget {
     required this.onToggleFollow,
     required this.followersCount,
     required this.followingCount,
+    required this.isSelf,
+    required this.onOpenFollowers,
+    required this.onOpenFollowing,
   });
 
   final ActorProfile profile;
@@ -225,6 +259,9 @@ class _ProfileHeader extends StatelessWidget {
   final VoidCallback onToggleFollow;
   final int? followersCount;
   final int? followingCount;
+  final bool isSelf;
+  final VoidCallback? onOpenFollowers;
+  final VoidCallback? onOpenFollowing;
 
   @override
   Widget build(BuildContext context) {
@@ -296,29 +333,33 @@ class _ProfileHeader extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    FilledButton(
-                      onPressed: followBusy ? null : onToggleFollow,
-                      child: followBusy
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : Text(label),
-                    ),
-                    const SizedBox(height: 6),
+                    if (!isSelf)
+                      FilledButton(
+                        onPressed: followBusy ? null : onToggleFollow,
+                        child: followBusy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : Text(label),
+                      ),
+                    if (!isSelf) const SizedBox(height: 6),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (followersCount != null)
                           _StatChip(
                               label: context.l10n.profileFollowers,
-                              value: followersCount!),
+                              value: followersCount!,
+                              onTap: onOpenFollowers),
                         if (followersCount != null && followingCount != null)
                           const SizedBox(width: 6),
                         if (followingCount != null)
                           _StatChip(
                               label: context.l10n.profileFollowing,
-                              value: followingCount!),
+                              value: followingCount!,
+                              onTap: onOpenFollowing),
                       ],
                     ),
                   ],
@@ -357,14 +398,16 @@ class _ProfileHeader extends StatelessWidget {
 }
 
 class _StatChip extends StatelessWidget {
-  const _StatChip({required this.label, required this.value});
+  const _StatChip(
+      {required this.label, required this.value, required this.onTap});
 
   final String label;
   final int value;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final content = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: Theme.of(context)
@@ -379,6 +422,12 @@ class _StatChip extends StatelessWidget {
         '$label $value',
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
       ),
+    );
+    if (onTap == null) return content;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: content,
     );
   }
 }
