@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_URL="https://github.com/redhunt07/Fedi3.git"
+REPO_DIR="/opt/fedi3/src"
+INSTALL_DIR="/opt/fedi3/app"
+FLUTTER_DIR="/opt/flutter"
+ICON_PATH="/opt/fedi3/icon.png"
+DESKTOP_FILE="/usr/share/applications/fedi3.desktop"
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+sudo_cmd() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    if [[ "${FEDI3_FORCE_UPDATE:-}" == "1" ]]; then
+      sudo -E "$@"
+    else
+      sudo "$@"
+    fi
+  fi
+}
+
+sudo_user_cmd() {
+  local user="$1"
+  shift
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    sudo -u "$user" "$@"
+  else
+    "$@"
+  fi
+}
+
+ensure_debian() {
+  if [[ ! -f /etc/os-release ]]; then
+    echo "Unsupported OS: missing /etc/os-release"
+    exit 1
+  fi
+  . /etc/os-release
+  if [[ "${ID:-}" != "debian" && "${ID:-}" != "ubuntu" && "${ID_LIKE:-}" != *"debian"* ]]; then
+    echo "Unsupported OS: ${ID:-unknown}"
+    exit 1
+  fi
+}
+
+install_packages() {
+  sudo_cmd apt-get update
+  sudo_cmd apt-get install -y \
+    git curl unzip xz-utils zip python3 \
+    clang cmake ninja-build pkg-config \
+    libgtk-3-dev libblkid-dev liblzma-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    libsecret-1-dev \
+    libnotify-dev \
+    libmpv-dev libmpv2 \
+    ca-certificates
+
+  if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+    sudo_cmd apt-get install -y libwebkit2gtk-4.1-dev
+  elif apt-cache show libwebkit2gtk-4.0-dev >/dev/null 2>&1; then
+    sudo_cmd apt-get install -y libwebkit2gtk-4.0-dev
+  else
+    echo "Warning: libwebkit2gtk dev package not found; webview build may fail."
+  fi
+}
+
+install_rust() {
+  if require_cmd cargo; then
+    return
+  fi
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+  fi
+}
+
+install_flutter() {
+  if [[ -x "${FLUTTER_DIR}/bin/flutter" ]]; then
+    if flutter_has_modern_dart; then
+      return
+    fi
+    sudo_cmd rm -rf "$FLUTTER_DIR"
+  fi
+  sudo_cmd mkdir -p "$FLUTTER_DIR"
+  local flutter_url
+  flutter_url="$(latest_flutter_stable_url)"
+  curl -L "$flutter_url" -o /tmp/flutter.tar.xz
+  sudo_cmd tar -xJf /tmp/flutter.tar.xz -C /opt
+  rm -f /tmp/flutter.tar.xz
+}
+
+latest_flutter_stable_url() {
+  python3 - <<'PY'
+import json
+import urllib.request
+
+data = json.load(urllib.request.urlopen(
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json"
+))
+base = data["base_url"].rstrip("/")
+stable_hash = data["current_release"]["stable"]
+release = next(r for r in data["releases"] if r["hash"] == stable_hash)
+print(f"{base}/{release['archive']}")
+PY
+}
+
+flutter_has_modern_dart() {
+  local dart_ver
+  dart_ver="$("${FLUTTER_DIR}/bin/flutter" --version --machine | python3 - <<'PY'
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("dartSdkVersion","0.0.0"))
+PY
+)"
+  python3 - <<PY
+import re, sys
+def parse(v):
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", v or "0.0.0")
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
+sys.exit(0 if parse("${dart_ver}") >= (3, 9, 0) else 1)
+PY
+}
+
+clone_or_update_repo() {
+  sudo_cmd mkdir -p /opt/fedi3
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    sudo_cmd git -C "$REPO_DIR" fetch --all --prune
+    if ! sudo_cmd git -C "$REPO_DIR" pull --ff-only; then
+      echo "Errore: branch divergi. Esegui manualmente uno di questi comandi:"
+      echo "  git -C \"$REPO_DIR\" merge --no-ff"
+      echo "  git -C \"$REPO_DIR\" rebase"
+      echo "Per hardening dell'installer non viene piu' eseguito reset distruttivo automatico."
+      exit 1
+    fi
+  else
+    sudo_cmd git clone "$REPO_URL" "$REPO_DIR"
+  fi
+  sudo_cmd chown -R "$(id -u)":"$(id -g)" "$REPO_DIR"
+}
+
+build_core() {
+  local cargo_cmd=""
+  if require_cmd cargo; then
+    cargo_cmd="cargo"
+  elif [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+    cargo_cmd="$HOME/.cargo/bin/cargo"
+  else
+    echo "Missing command: cargo"
+    exit 1
+  fi
+
+  local core_dir="${REPO_DIR}/crates/fedi3_core"
+  local app_dir="${REPO_DIR}/app"
+  local so_path="${REPO_DIR}/target/release/libfedi3_core.so"
+
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --release)
+  if [[ ! -f "$so_path" ]]; then
+    echo "Build completata, ma .so non trovata in: $so_path"
+    exit 1
+  fi
+
+  cp -f "$so_path" "${app_dir}/libfedi3_core.so"
+  for dir in \
+    "${app_dir}/build/linux/x64/debug/bundle/lib" \
+    "${app_dir}/build/linux/x64/release/bundle/lib" \
+    "${app_dir}/build/linux/x64/profile/bundle/lib"; do
+    if [[ -d "$dir" ]]; then
+      cp -f "$so_path" "${dir}/libfedi3_core.so"
+    fi
+  done
+}
+
+build_flutter() {
+  export PATH="${FLUTTER_DIR}/bin:$PATH"
+  pushd "$REPO_DIR/app" >/dev/null
+  flutter precache --linux
+  flutter pub get
+  flutter build linux --release
+  popd >/dev/null
+}
+
+install_app() {
+  sudo_cmd rm -rf "$INSTALL_DIR"
+  sudo_cmd mkdir -p "$INSTALL_DIR"
+  sudo_cmd cp -r "$REPO_DIR/app/build/linux/x64/release/bundle/." "$INSTALL_DIR"
+  sudo_cmd mkdir -p "${INSTALL_DIR}/lib"
+  if [[ -f "$REPO_DIR/app/libfedi3_core.so" ]]; then
+    sudo_cmd cp -f "$REPO_DIR/app/libfedi3_core.so" "${INSTALL_DIR}/lib/libfedi3_core.so"
+    sudo_cmd cp -f "$REPO_DIR/app/libfedi3_core.so" "${INSTALL_DIR}/libfedi3_core.so"
+  elif [[ -f "$REPO_DIR/target/release/libfedi3_core.so" ]]; then
+    sudo_cmd cp -f "$REPO_DIR/target/release/libfedi3_core.so" "${INSTALL_DIR}/lib/libfedi3_core.so"
+    sudo_cmd cp -f "$REPO_DIR/target/release/libfedi3_core.so" "${INSTALL_DIR}/libfedi3_core.so"
+  fi
+  if [[ ! -f "${INSTALL_DIR}/libfedi3_core.so" ]]; then
+    echo "Missing libfedi3_core.so in ${INSTALL_DIR}."
+    echo "Re-run install after ensuring build_core succeeds."
+    exit 1
+  fi
+  sudo_cmd mkdir -p "$(dirname "$ICON_PATH")"
+  if [[ -f "$REPO_DIR/app/web/icons/Icon-512.png" ]]; then
+    sudo_cmd cp "$REPO_DIR/app/web/icons/Icon-512.png" "$ICON_PATH"
+  fi
+  sudo_cmd tee "$DESKTOP_FILE" >/dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Fedi3
+Comment=Fedi3 client
+Exec=${INSTALL_DIR}/fedi3
+Icon=${ICON_PATH}
+Terminal=false
+Categories=Network;Internet;
+StartupWMClass=Fedi3
+EOF
+  sudo_cmd chmod 644 "$DESKTOP_FILE"
+}
+
+install_core_service() {
+  local service_bin="${REPO_DIR}/target/release/fedi3_core_service"
+  if [[ ! -f "$service_bin" ]]; then
+    echo "Warning: core service binary not found ($service_bin)."
+    return
+  fi
+
+  sudo_cmd cp -f "$service_bin" "${INSTALL_DIR}/fedi3_core_service"
+  sudo_cmd chmod 755 "${INSTALL_DIR}/fedi3_core_service"
+
+  local target_user="${SUDO_USER:-$USER}"
+  local target_home
+  target_home="$(getent passwd "$target_user" | cut -d: -f6)"
+  if [[ -z "$target_home" ]]; then
+    target_home="$HOME"
+  fi
+
+  local systemd_dir="${target_home}/.config/systemd/user"
+  sudo_cmd mkdir -p "$systemd_dir"
+  sudo_cmd tee "${systemd_dir}/fedi3-core.service" >/dev/null <<EOF
+[Unit]
+Description=Fedi3 Core Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=${INSTALL_DIR}/fedi3_core_service --config %h/.config/fedi3/config.json
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+EOF
+
+  sudo_cmd chown -R "$target_user":"$target_user" "${target_home}/.config/systemd"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_user_cmd "$target_user" systemctl --user daemon-reload || true
+    sudo_user_cmd "$target_user" systemctl --user enable --now fedi3-core.service || true
+  fi
+}
+
+main() {
+  local mode="full"
+  if [[ "${1:-}" == "--update-only" ]]; then
+    mode="update"
+  fi
+  ensure_debian
+  if [[ "$mode" == "full" ]]; then
+    install_packages
+    install_rust
+    install_flutter
+  fi
+  clone_or_update_repo
+  build_core
+  build_flutter
+  install_app
+  install_core_service
+  echo "Done. Launch from applications menu or run: ${INSTALL_DIR}/fedi3"
+}
+
+main "$@"
