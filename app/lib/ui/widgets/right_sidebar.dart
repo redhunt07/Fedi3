@@ -17,7 +17,6 @@ import '../screens/compose_screen.dart';
 import '../screens/profile_screen.dart';
 import '../theme/ui_tokens.dart';
 import '../utils/time_ago.dart';
-import 'inline_composer.dart';
 
 class RightSidebar extends StatefulWidget {
   const RightSidebar({super.key, required this.appState});
@@ -163,7 +162,7 @@ class _RightSidebarState extends State<RightSidebar> {
                           FilledButton.icon(
                             onPressed: api == null
                                 ? null
-                                : () => _openComposerOverlay(context, api),
+                                : () => _openComposer(context),
                             icon: const Icon(Icons.edit_note),
                             label: Text(context.l10n.composeExpand),
                           ),
@@ -304,55 +303,11 @@ class _RightSidebarState extends State<RightSidebar> {
     );
   }
 
-  Future<void> _openComposerOverlay(BuildContext context, CoreApi api) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (dialogContext) {
-        final size = MediaQuery.of(dialogContext).size;
-        final maxWidth = size.width < 640 ? size.width - 32 : 620.0;
-        final maxHeight = size.height * 0.9;
-        return Dialog(
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: ConstrainedBox(
-            constraints:
-                BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(UiTokens.padCard),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(context.l10n.composeTitle,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w800)),
-                      ),
-                      IconButton(
-                        tooltip: context.l10n.cancel,
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: UiTokens.gapSm),
-                  InlineComposer(
-                    appState: widget.appState,
-                    api: api,
-                    onPosted: () {
-                      _refresh();
-                      _loadDraft();
-                      Navigator.of(dialogContext).maybePop();
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+  void _openComposer(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComposeScreen(appState: widget.appState),
+      ),
     );
   }
 

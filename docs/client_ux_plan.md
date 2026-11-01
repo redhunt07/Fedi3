@@ -181,7 +181,7 @@ stabile.
 |---|---|---|
 | 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route esistenti, empty state; manca un vero router dichiarativo |
 | 1 — Registrazione/login guidati, recovery | completato | onboarding con identità/relay in primo piano, login rapido da URL+token, avanzate collassate e dialog di recovery con copia dei codici |
-| 2 — Home unica con tab | parziale | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer persistente solo su mobile e nella sidebar |
+| 2 — Home unica con tab | completato (base) | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer full-screen da sidebar e FAB mobile |
 | 3 — Profilo proprio/altrui | completato (base) | banner, contatori cliccabili, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati |
 | 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
 | 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |

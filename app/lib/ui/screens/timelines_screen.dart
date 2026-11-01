@@ -13,7 +13,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
-import '../widgets/inline_composer.dart';
+import 'compose_screen.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
@@ -101,9 +101,22 @@ class _TimelinesScreenState extends State<TimelinesScreen>
         final isWide =
             MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
         final useColumns = isWide && widget.appState.prefs.desktopUseColumns;
-        final showInlineComposer = !isWide;
 
         return Scaffold(
+          floatingActionButton: isWide
+              ? null
+              : FloatingActionButton(
+                  tooltip: context.l10n.composeTitle,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ComposeScreen(appState: widget.appState),
+                      ),
+                    );
+                  },
+                  child: const Icon(Icons.edit_rounded),
+                ),
           appBar: AppBar(
             title: InkWell(
               borderRadius: BorderRadius.circular(10),
@@ -182,7 +195,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               headerTitle: context.l10n.timelineTabHome,
                               headerTooltip: context.l10n.timelineHomeTooltip,
                               constrainWidth: false,
-                              showComposer: showInlineComposer,
                             ),
                             const SizedBox(width: 16),
                             _TimelineList(
@@ -193,7 +205,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               headerTitle: context.l10n.timelineTabFollowing,
                               headerTooltip: context.l10n.timelineLocalTooltip,
                               constrainWidth: false,
-                              showComposer: showInlineComposer,
                             ),
                             const SizedBox(width: 16),
                             _TimelineList(
@@ -204,7 +215,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               headerTitle: context.l10n.timelineTabDiscover,
                               headerTooltip: context.l10n.timelineSocialTooltip,
                               constrainWidth: false,
-                              showComposer: showInlineComposer,
                             ),
                             const SizedBox(width: 16),
                             _TimelineList(
@@ -216,7 +226,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               headerTooltip:
                                   context.l10n.timelineFederatedTooltip,
                               constrainWidth: false,
-                              showComposer: showInlineComposer,
                             ),
                           ],
                         ),
@@ -233,7 +242,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           headerTitle: context.l10n.timelineTabHome,
                           headerTooltip: context.l10n.timelineHomeTooltip,
                           constrainWidth: true,
-                          showComposer: showInlineComposer,
                         ),
                         _TimelineList(
                           key: _listKeys[1],
@@ -243,7 +251,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           headerTitle: context.l10n.timelineTabFollowing,
                           headerTooltip: context.l10n.timelineLocalTooltip,
                           constrainWidth: true,
-                          showComposer: showInlineComposer,
                         ),
                         _TimelineList(
                           key: _listKeys[2],
@@ -253,7 +260,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           headerTitle: context.l10n.timelineTabDiscover,
                           headerTooltip: context.l10n.timelineSocialTooltip,
                           constrainWidth: true,
-                          showComposer: showInlineComposer,
                         ),
                         _TimelineList(
                           key: _listKeys[3],
@@ -263,7 +269,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           headerTitle: context.l10n.timelineTabFederated,
                           headerTooltip: context.l10n.timelineFederatedTooltip,
                           constrainWidth: true,
-                          showComposer: showInlineComposer,
                         ),
                       ],
                     ))
@@ -278,7 +283,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       headerTitle: context.l10n.timelineTabHome,
                       headerTooltip: context.l10n.timelineHomeTooltip,
                       constrainWidth: true,
-                      showComposer: showInlineComposer,
                     ),
                     _TimelineList(
                       key: _listKeys[1],
@@ -288,7 +292,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       headerTitle: context.l10n.timelineTabFollowing,
                       headerTooltip: context.l10n.timelineLocalTooltip,
                       constrainWidth: true,
-                      showComposer: showInlineComposer,
                     ),
                     _TimelineList(
                       key: _listKeys[2],
@@ -298,7 +301,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       headerTitle: context.l10n.timelineTabDiscover,
                       headerTooltip: context.l10n.timelineSocialTooltip,
                       constrainWidth: true,
-                      showComposer: showInlineComposer,
                     ),
                     _TimelineList(
                       key: _listKeys[3],
@@ -308,7 +310,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       headerTitle: context.l10n.timelineTabFederated,
                       headerTooltip: context.l10n.timelineFederatedTooltip,
                       constrainWidth: true,
-                      showComposer: showInlineComposer,
                     ),
                   ],
                 ),
@@ -372,7 +373,6 @@ class _TimelineList extends StatefulWidget {
     required this.headerTitle,
     required this.headerTooltip,
     required this.constrainWidth,
-    required this.showComposer,
   });
 
   final AppState appState;
@@ -381,7 +381,6 @@ class _TimelineList extends StatefulWidget {
   final String headerTitle;
   final String headerTooltip;
   final bool constrainWidth;
-  final bool showComposer;
 
   @override
   State<_TimelineList> createState() => _TimelineListState();
@@ -739,14 +738,6 @@ class _TimelineListState extends State<_TimelineList>
                     ],
                   ),
                 ),
-                if (widget.showComposer) ...[
-                  InlineComposer(
-                    appState: widget.appState,
-                    api: widget.api,
-                    onPosted: _refresh,
-                  ),
-                  const SizedBox(height: 10),
-                ],
               ],
             );
           }

@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -35,7 +36,7 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   int _index = 0;
   final GlobalKey _searchScreenKey = GlobalKey();
   late final List<Widget> _pages;
@@ -45,6 +46,11 @@ class _ShellState extends State<Shell> {
   CoreConfig? _chatStreamConfig;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
+  late final AnimationController _sectionFade = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+    value: 1,
+  );
 
   @override
   void initState() {
@@ -86,6 +92,7 @@ class _ShellState extends State<Shell> {
     _chatDebounce?.cancel();
     _chatRetry?.cancel();
     widget.appState.removeListener(_appStateListener);
+    _sectionFade.dispose();
     super.dispose();
   }
 
@@ -150,6 +157,9 @@ class _ShellState extends State<Shell> {
     if (!mounted || index < 0 || index >= _pages.length) return;
     if (_index == index) return;
     setState(() => _index = index);
+    if (!MediaQuery.of(context).disableAnimations) {
+      _sectionFade.forward(from: 0.35);
+    }
   }
 
   void _openComposer() {
@@ -243,10 +253,17 @@ class _ShellState extends State<Shell> {
     if (!isWide) {
       return _wrapWithShortcuts(
         Scaffold(
-          body: IndexedStack(
-            key: const ValueKey('shell-pages'),
-            index: _index,
-            children: _pages,
+          body: AnimatedBuilder(
+            animation: _sectionFade,
+            builder: (context, child) => Opacity(
+              opacity: 0.55 + 0.45 * _sectionFade.value,
+              child: child,
+            ),
+            child: IndexedStack(
+              key: const ValueKey('shell-pages'),
+              index: _index,
+              children: _pages,
+            ),
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,
@@ -283,10 +300,17 @@ class _ShellState extends State<Shell> {
               child: Row(
                 children: [
                   Expanded(
-                    child: IndexedStack(
-                      key: const ValueKey('shell-pages'),
-                      index: _index,
-                      children: _pages,
+                    child: AnimatedBuilder(
+                      animation: _sectionFade,
+                      builder: (context, child) => Opacity(
+                        opacity: 0.55 + 0.45 * _sectionFade.value,
+                        child: child,
+                      ),
+                      child: IndexedStack(
+                        key: const ValueKey('shell-pages'),
+                        index: _index,
+                        children: _pages,
+                      ),
                     ),
                   ),
                   SizedBox(
@@ -474,14 +498,55 @@ class _RailButton extends StatefulWidget {
   State<_RailButton> createState() => _RailButtonState();
 }
 
-class _RailButtonState extends State<_RailButton> {
+class _RailButtonState extends State<_RailButton>
+    with TickerProviderStateMixin {
   bool _hover = false;
   bool _focused = false;
+  bool _pressed = false;
+
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  );
+  late final AnimationController _burst = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RailButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !_spin.isAnimating) {
+      _spin.repeat();
+    } else if (!widget.active && _spin.isAnimating) {
+      _spin.stop();
+      _spin.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    _burst.dispose();
+    super.dispose();
+  }
+
+  void _handleTap() {
+    _burst.forward(from: 0);
+    widget.onTap();
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final active = widget.active;
+    final animate = !MediaQuery.of(context).disableAnimations;
     final bg = active
         ? scheme.primary.withAlpha(26)
         : _hover
@@ -502,7 +567,7 @@ class _RailButtonState extends State<_RailButton> {
           if (event is KeyDownEvent &&
               (event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.space)) {
-            widget.onTap();
+            _handleTap();
             return KeyEventResult.handled;
           }
           return KeyEventResult.ignored;
@@ -512,101 +577,212 @@ class _RailButtonState extends State<_RailButton> {
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
           child: GestureDetector(
-            onTap: widget.onTap,
-            child: ConstrainedBox(
-              constraints:
-                  const BoxConstraints(minWidth: 48, minHeight: 48),
-              child: AnimatedContainer(
-                duration: UiTokens.motionFast,
-                curve: Curves.easeOutCubic,
-                height: 62,
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: active
-                        ? scheme.primary.withAlpha(70)
-                        : _focused
-                            ? scheme.primary.withAlpha(140)
-                            : Colors.transparent,
-                  ),
-                ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (active)
-                  Positioned(
-                    left: 2,
-                    child: AnimatedContainer(
-                      duration: UiTokens.motionBase,
-                      width: 3,
-                      height: 26,
+            onTapDown: (_) => setState(() => _pressed = true),
+            onTapCancel: () => setState(() => _pressed = false),
+            onTapUp: (_) => setState(() => _pressed = false),
+            onTap: _handleTap,
+            child: AnimatedScale(
+              scale: _pressed ? 0.94 : 1,
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOut,
+              child: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(minWidth: 48, minHeight: 48),
+                child: AnimatedBuilder(
+                  animation: Listenable.merge([_spin, _burst]),
+                  builder: (context, child) {
+                    return AnimatedContainer(
+                      duration: UiTokens.motionFast,
+                      curve: Curves.easeOutCubic,
+                      height: 62,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Color(UiTokens.brandViolet),
-                            Color(UiTokens.brandCyan),
-                          ],
+                        color: bg,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: active
+                            ? [
+                                BoxShadow(
+                                  color: scheme.primary.withAlpha(45),
+                                  blurRadius: 14,
+                                  spreadRadius: 1,
+                                ),
+                              ]
+                            : null,
+                        border: Border.all(
+                          color: active
+                              ? Colors.transparent
+                              : _focused
+                                  ? scheme.primary.withAlpha(140)
+                                  : Colors.transparent,
                         ),
                       ),
-                    ),
-                  ),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Icon(widget.item.icon, size: 22, color: fg),
-                        if (widget.item.badge > 0)
-                          Positioned(
-                            right: -9,
-                            top: -7,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 5, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: scheme.error,
-                                borderRadius: BorderRadius.circular(99),
-                              ),
-                              child: Text(
-                                widget.item.badge > 99
-                                    ? '99+'
-                                    : '${widget.item.badge}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w800,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: CustomPaint(
+                                painter: _RailEffectsPainter(
+                                  spin: animate ? _spin.value : 0,
+                                  burst: animate ? _burst.value : 0,
+                                  active: active,
+                                  colorA: const Color(UiTokens.brandViolet),
+                                  colorB: const Color(UiTokens.brandCyan),
                                 ),
                               ),
                             ),
                           ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.item.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: fg,
-                            fontSize: 9.5,
-                            fontWeight:
-                                active ? FontWeight.w800 : FontWeight.w600,
+                          Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Icon(widget.item.icon, size: 22, color: fg),
+                                    if (widget.item.badge > 0)
+                                      Positioned(
+                                        right: -9,
+                                        top: -7,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 5, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: scheme.error,
+                                            borderRadius:
+                                                BorderRadius.circular(99),
+                                          ),
+                                          child: Text(
+                                            widget.item.badge > 99
+                                                ? '99+'
+                                                : '${widget.item.badge}',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  widget.item.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: fg,
+                                        fontSize: 9.5,
+                                        fontWeight: active
+                                            ? FontWeight.w800
+                                            : FontWeight.w600,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
-                    ),
-                  ],
+                        ],
+                      ),
+                    );
+                  },
                 ),
-              ],
+              ),
             ),
           ),
         ),
       ),
-      ),
-      ),
     );
+  }
+}
+
+class _RailEffectsPainter extends CustomPainter {
+  const _RailEffectsPainter({
+    required this.spin,
+    required this.burst,
+    required this.active,
+    required this.colorA,
+    required this.colorB,
+  });
+
+  final double spin;
+  final double burst;
+  final bool active;
+  final Color colorA;
+  final Color colorB;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final center = rect.center;
+    final rrect = RRect.fromRectAndRadius(
+      rect.deflate(1.4),
+      const Radius.circular(18),
+    );
+
+    if (active) {
+      final shader = SweepGradient(
+        colors: [colorA, colorB, colorA, colorB, colorA],
+        transform: GradientRotation(spin * 2 * math.pi),
+      ).createShader(rect);
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3
+          ..shader = shader
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..shader = shader,
+      );
+
+      const particles = 8;
+      for (var i = 0; i < particles; i++) {
+        final phase = spin * 2 * math.pi + i * 2 * math.pi / particles;
+        final radius = size.shortestSide * 0.62 +
+            math.sin(spin * 4 * math.pi + i) * 2.2;
+        final pos = center +
+            Offset(math.cos(phase) * radius, math.sin(phase) * radius);
+        final alpha =
+            (0.30 + 0.25 * math.sin(spin * 6 * math.pi + i)).clamp(0.0, 1.0);
+        final color = i.isEven ? colorB : colorA;
+        canvas.drawCircle(
+          pos,
+          1.2 + 0.7 * math.sin(spin * 3 * math.pi + i).abs(),
+          Paint()..color = color.withAlpha((alpha * 255).round()),
+        );
+      }
+    }
+
+    if (burst > 0 && burst < 1) {
+      const sparks = 14;
+      final fade = 1 - burst;
+      for (var i = 0; i < sparks; i++) {
+        final angle = i * 2 * math.pi / sparks;
+        final distance = size.shortestSide * (0.35 + 0.75 * burst);
+        final pos = center +
+            Offset(math.cos(angle) * distance, math.sin(angle) * distance);
+        final color = i.isEven ? colorB : colorA;
+        canvas.drawCircle(
+          pos,
+          0.8 + 2.2 * fade,
+          Paint()..color = color.withAlpha((fade * 220).round()),
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RailEffectsPainter oldDelegate) {
+    return oldDelegate.spin != spin ||
+        oldDelegate.burst != burst ||
+        oldDelegate.active != active;
   }
 }
