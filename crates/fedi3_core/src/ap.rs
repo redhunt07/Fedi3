@@ -319,6 +319,8 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("POST", "/_fedi3/chat/delete") => chat_delete_post(state, req).await,
         ("POST", "/_fedi3/chat/seen") => chat_seen_post(state, req).await,
         ("POST", "/_fedi3/chat/status") => chat_status_post(state, req).await,
+        ("GET", "/_fedi3/presence") => presence_get(state, req).await,
+        ("POST", "/_fedi3/presence") => presence_post(state, req).await,
         ("GET", "/_fedi3/chat/thread/members") => chat_thread_members_get(state, req).await,
         ("POST", "/_fedi3/chat/thread/update") => chat_thread_update_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/delete") => chat_thread_delete_post(state, req).await,
@@ -3131,6 +3133,11 @@ struct ChatTypingReq {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct PresenceReq {
+    status: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct ChatReactReq {
     message_id: String,
     reaction: String,
@@ -3193,6 +3200,31 @@ async fn chat_inbox_post(state: &ApState, req: Request<Body>) -> Response<Body> 
             .send(UiEvent::new("chat", Some(ty), Some(env.thread_id.clone())));
         return simple(StatusCode::OK, "ok");
     }
+    if payload.op == "presence" {
+        let status = payload
+            .status
+            .as_deref()
+            .unwrap_or("online")
+            .trim()
+            .to_lowercase();
+        let status = if matches!(status.as_str(), "online" | "busy" | "afk" | "offline") {
+            status
+        } else {
+            "online".to_string()
+        };
+        if let Err(e) = state
+            .social
+            .upsert_actor_presence(&env.sender_actor, &status)
+        {
+            return simple(StatusCode::BAD_GATEWAY, &format!("presence db error: {e}"));
+        }
+        let _ = state.ui_events.send(UiEvent::new(
+            "presence",
+            Some(status),
+            Some(env.sender_actor.clone()),
+        ));
+        return simple(StatusCode::OK, "ok");
+    }
     if let Err(e) = chat::store_incoming_payload(state, &env, &payload).await {
         return simple(StatusCode::BAD_GATEWAY, &format!("store failed: {e}"));
     }
@@ -3240,12 +3272,48 @@ async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body>
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
     match chat::list_threads(state, limit, cursor) {
-        Ok(page) => axum::Json(serde_json::json!({
-            "total": page.total,
-            "items": page.items,
-            "next": page.next,
-        }))
-        .into_response(),
+        Ok(page) => {
+            let self_actor = format!(
+                "{}/users/{}",
+                state.cfg.public_base_url.trim_end_matches('/'),
+                state.cfg.username
+            );
+            let mut items = Vec::new();
+            for thread in page.items {
+                let members = state
+                    .social
+                    .list_chat_members(&thread.thread_id)
+                    .unwrap_or_default();
+                let peers: Vec<String> = members
+                    .iter()
+                    .filter(|(actor, _)| actor != &self_actor)
+                    .map(|(actor, _)| {
+                        actor
+                            .trim_end_matches('/')
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .trim_start_matches('@')
+                            .to_string()
+                    })
+                    .filter(|v| !v.is_empty())
+                    .collect();
+                let mut value = serde_json::to_value(&thread).unwrap_or_default();
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "peer_usernames".to_string(),
+                        serde_json::json!(peers),
+                    );
+                }
+                items.push(value);
+            }
+            axum::Json(serde_json::json!({
+                "total": page.total,
+                "items": items,
+                "next": page.next,
+            }))
+            .into_response()
+        }
         Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     }
 }
@@ -3256,7 +3324,8 @@ async fn chat_thread_messages_get(state: &ApState, req: Request<Body>) -> Respon
         return resp;
     }
     let path = parts.uri.path();
-    let thread_id = path.strip_prefix("/_fedi3/chat/threads/").unwrap_or("");
+    let thread_id_raw = path.strip_prefix("/_fedi3/chat/threads/").unwrap_or("");
+    let thread_id = url_decode(thread_id_raw);
     if thread_id.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing thread_id");
     }
@@ -3273,7 +3342,7 @@ async fn chat_thread_messages_get(state: &ApState, req: Request<Body>) -> Respon
         .find(|p| p.starts_with("cursor="))
         .and_then(|p| p.split_once('='))
         .and_then(|(_, v)| v.parse::<i64>().ok());
-    match chat::list_messages(state, thread_id, limit, cursor) {
+    match chat::list_messages(state, &thread_id, limit, cursor) {
         Ok(page) => axum::Json(serde_json::json!({
             "total": page.total,
             "items": page.items,
@@ -3901,6 +3970,135 @@ async fn chat_status_post(state: &ApState, req: Request<Body>) -> Response<Body>
         }));
     }
     axum::Json(serde_json::json!({ "items": items })).into_response()
+}
+
+async fn presence_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let rows = match state.social.list_actor_presence() {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let mut items = Vec::new();
+    for (actor_id, status, updated_at_ms) in rows {
+        items.push(serde_json::json!({
+            "actor_id": actor_id,
+            "status": status,
+            "updated_at_ms": updated_at_ms,
+        }));
+    }
+    axum::Json(serde_json::json!({
+        "self_actor": self_actor,
+        "items": items,
+    }))
+    .into_response()
+}
+
+async fn presence_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: PresenceReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let status = input.status.trim().to_lowercase();
+    if !matches!(status.as_str(), "online" | "busy" | "afk" | "offline") {
+        return simple(StatusCode::BAD_REQUEST, "invalid presence status");
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    if let Err(e) = state.social.upsert_actor_presence(&self_actor, &status) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let st = state.clone();
+    let actor = self_actor.clone();
+    let status_for_broadcast = status.clone();
+    tokio::spawn(async move {
+        let _ = broadcast_presence(&st, &actor, &status_for_broadcast).await;
+    });
+    axum::Json(serde_json::json!({
+        "actor_id": self_actor,
+        "status": status,
+    }))
+    .into_response()
+}
+
+async fn broadcast_presence(
+    state: &ApState,
+    self_actor: &str,
+    status: &str,
+) -> anyhow::Result<()> {
+    let threads = state.social.list_chat_threads(200, None)?;
+    let mut peers: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut seen_actors = std::collections::HashSet::new();
+    for thread in threads.items {
+        let members = state.social.list_chat_members(&thread.thread_id)?;
+        for (actor, _role) in members {
+            if actor == self_actor || !seen_actors.insert(actor.clone()) {
+                continue;
+            }
+            let Ok(actor_peers) = resolve_actor_peers(state, &actor).await else {
+                continue;
+            };
+            if actor_peers.is_empty() {
+                continue;
+            }
+            peers.insert(actor, actor_peers);
+        }
+    }
+    for (actor, actor_peers) in peers {
+        for peer_id in actor_peers {
+            let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await else {
+                continue;
+            };
+            if chat::verify_bundle(state, &bundle).await.is_err() {
+                continue;
+            }
+            let payload = chat::ChatPayload {
+                op: "presence".to_string(),
+                text: None,
+                reply_to: None,
+                message_id: Some(chat::random_id()),
+                status: Some(status.to_string()),
+                thread_id: None,
+                attachments: None,
+                action: None,
+                targets: None,
+                members: None,
+                title: None,
+                reaction: None,
+            };
+            let thread_hint = format!("presence:{actor}");
+            let Ok(env) = chat::encrypt_payload_for_bundle(
+                state,
+                &bundle,
+                &thread_hint,
+                payload.message_id.as_deref().unwrap_or("presence"),
+                &payload,
+            ) else {
+                continue;
+            };
+            let _ = chat::send_envelope_to_peer(state, &peer_id, &env).await;
+        }
+    }
+    Ok(())
 }
 
 async fn chat_thread_members_get(state: &ApState, req: Request<Body>) -> Response<Body> {

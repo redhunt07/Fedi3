@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../../state/peer_presence_store.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
 import 'backup_screen.dart';
@@ -32,6 +33,32 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  String _presenceLabel(BuildContext context, PresenceStatus status) {
+    return switch (status) {
+      PresenceStatus.online => context.l10n.presenceOnline,
+      PresenceStatus.busy => context.l10n.presenceBusy,
+      PresenceStatus.afk => context.l10n.presenceAfk,
+      PresenceStatus.offline => context.l10n.presenceOffline,
+    };
+  }
+
+  Color _presenceColor(PresenceStatus status) {
+    return switch (status) {
+      PresenceStatus.online => const Color(0xFF3DDC97),
+      PresenceStatus.busy => const Color(0xFFFF5A6E),
+      PresenceStatus.afk => const Color(0xFFF2A33A),
+      PresenceStatus.offline => const Color(0xFF8B93A5),
+    };
+  }
+
+  Future<void> _setPresence(PresenceStatus status) async {
+    final prefs = widget.appState.prefs;
+    await widget.appState.savePrefs(
+      prefs.copyWith(presenceStatus: presenceStatusName(status)),
+    );
+    await PeerPresenceStore.instance.setSelfStatus(status);
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -54,6 +81,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                 ),
+              _section(context, context.l10n.presenceTitle),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(UiTokens.padCard),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        context.l10n.presenceHint,
+                        style: TextStyle(
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final status in PresenceStatus.values)
+                            ChoiceChip(
+                              label: Text(_presenceLabel(context, status)),
+                              selected: presenceFromString(
+                                      widget.appState.prefs.presenceStatus) ==
+                                  status,
+                              avatar: Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _presenceColor(status),
+                                ),
+                              ),
+                              onSelected: (_) => _setPresence(status),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               _section(context, context.l10n.settingsAccount),
               _tile(
                 context,

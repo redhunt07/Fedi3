@@ -27,15 +27,15 @@ class StatusAvatar extends StatelessWidget {
     final avatar = _buildAvatar(context);
     final key = statusKey?.trim() ?? '';
     if (!showStatus || key.isEmpty) return avatar;
-    return ValueListenableBuilder<Map<String, bool>>(
-      valueListenable: PeerPresenceStore.instance.onlineByUsername,
+    return ValueListenableBuilder<Map<String, PresenceStatus>>(
+      valueListenable: PeerPresenceStore.instance.statusByUsername,
       builder: (context, map, _) {
-        final online = map[key] == true;
+        final status = map[key] ?? PresenceStatus.offline;
         return Stack(
           clipBehavior: Clip.none,
           children: [
             avatar,
-            _StatusDot(size: size, online: online),
+            _StatusDot(size: size, status: status),
           ],
         );
       },
@@ -75,29 +75,47 @@ class StatusAvatar extends StatelessWidget {
 }
 
 class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.size, required this.online});
+  const _StatusDot({required this.size, required this.status});
 
   final double size;
-  final bool online;
+  final PresenceStatus status;
 
   @override
   Widget build(BuildContext context) {
     final dot = (size * 0.28).clamp(8, 12).toDouble();
     final border = Theme.of(context).colorScheme.surface;
+    final color = switch (status) {
+      PresenceStatus.online => const Color(0xFF3DDC97),
+      PresenceStatus.busy => const Color(0xFFFF5A6E),
+      PresenceStatus.afk => const Color(0xFFF2A33A),
+      PresenceStatus.offline => const Color(0xFF8B93A5),
+    };
+    final label = switch (status) {
+      PresenceStatus.online => context.l10n.presenceOnline,
+      PresenceStatus.busy => context.l10n.presenceBusy,
+      PresenceStatus.afk => context.l10n.presenceAfk,
+      PresenceStatus.offline => context.l10n.presenceOffline,
+    };
     return Positioned(
       right: -1,
       bottom: -1,
       child: Semantics(
-        label: online
-            ? context.l10n.statusConnectedShort
-            : context.l10n.statusDisconnectedShort,
+        label: label,
         child: Container(
           width: dot,
           height: dot,
           decoration: BoxDecoration(
-            color: online ? Colors.green : Colors.grey,
+            color: color,
             shape: BoxShape.circle,
             border: Border.all(color: border, width: 2),
+            boxShadow: status == PresenceStatus.online
+                ? [
+                    BoxShadow(
+                      color: color.withAlpha(140),
+                      blurRadius: 6,
+                    ),
+                  ]
+                : null,
           ),
         ),
       ),

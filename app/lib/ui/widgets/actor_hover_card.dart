@@ -144,7 +144,7 @@ class _HoverCard extends StatelessWidget {
                         _SmallAvatar(
                           url: iconUrl,
                           size: 40,
-                          showStatus: p?.isFedi3 == true,
+                          showStatus: true,
                           statusKey: p?.statusKey,
                         ),
                         const SizedBox(width: 10),

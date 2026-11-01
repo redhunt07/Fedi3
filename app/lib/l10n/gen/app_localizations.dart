@@ -644,6 +644,12 @@ abstract class AppLocalizations {
   /// **'Delivered'**
   String get chatStatusDelivered;
 
+  /// No description provided for @chatStatusSeenAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Read by everyone'**
+  String get chatStatusSeenAll;
+
   /// No description provided for @chatStatusSeen.
   ///
   /// In en, this message translates to:
@@ -2443,6 +2449,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'?'**
   String get statusUnknownShort;
+
+  /// No description provided for @presenceChangeTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Change status'**
+  String get presenceChangeTooltip;
+
+  /// No description provided for @presenceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get presenceTitle;
+
+  /// No description provided for @presenceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose how other Fedi3 users see you.'**
+  String get presenceHint;
+
+  /// No description provided for @presenceOnline.
+  ///
+  /// In en, this message translates to:
+  /// **'Online'**
+  String get presenceOnline;
+
+  /// No description provided for @presenceBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Busy'**
+  String get presenceBusy;
+
+  /// No description provided for @presenceAfk.
+  ///
+  /// In en, this message translates to:
+  /// **'AFK'**
+  String get presenceAfk;
+
+  /// No description provided for @presenceOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline'**
+  String get presenceOffline;
 
   /// No description provided for @statusConnectedShort.
   ///

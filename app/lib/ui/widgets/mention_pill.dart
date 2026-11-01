@@ -81,7 +81,7 @@ class _MentionPillState extends State<MentionPill> {
             _TinyAvatar(
               url: iconUrl,
               size: 16,
-              showStatus: _actor?.isFedi3 == true,
+              showStatus: true,
               statusKey: _actor?.statusKey,
             ),
             const SizedBox(width: 6),

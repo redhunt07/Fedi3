@@ -838,6 +838,25 @@ class CoreApi {
     return _decodeMap(resp, 'chat status');
   }
 
+  Future<Map<String, dynamic>> fetchPresence() async {
+    final uri = _internal('/_fedi3/presence');
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'presence');
+  }
+
+  Future<Map<String, dynamic>> setPresence(String status) async {
+    final uri = _internal('/_fedi3/presence');
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'status': status}),
+      anySuccess: true,
+    );
+    return _decodeMap(resp, 'presence');
+  }
+
   // ---------------------------------------------------------------------------
   // Relays.
   // ---------------------------------------------------------------------------

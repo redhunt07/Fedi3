@@ -433,7 +433,7 @@ class _Header extends StatelessWidget {
         _Avatar(
           url: actor?.iconUrl ?? '',
           size: 40,
-          showStatus: actor?.isFedi3 == true,
+          showStatus: true,
           statusKey: actor?.statusKey,
         ),
         const SizedBox(width: 10),

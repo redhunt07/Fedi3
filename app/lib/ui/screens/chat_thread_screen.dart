@@ -27,6 +27,8 @@ import '../widgets/network_error_card.dart';
 import '../widgets/inline_media_tile.dart';
 import '../screens/media_viewer_screen.dart';
 import '../widgets/emoji_picker.dart';
+import '../widgets/status_avatar.dart';
+import '../../state/peer_presence_store.dart';
 import 'package:http/http.dart' as http;
 
 class ChatThreadScreen extends StatefulWidget {
@@ -63,6 +65,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Map<String, List<_ReactionItem>> _reactions = const {};
   ChatMessageItem? _replyTo;
   final Map<String, int> _typingActors = {};
+  List<String> _recipients = const [];
+  Map<String, ActorProfile> _profiles = const {};
   int _lastTypingSentMs = 0;
   CoreConfig? _streamConfig;
   late bool _lastRunning;
@@ -72,8 +76,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   void initState() {
     super.initState();
     _title = widget.title;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _loadMessages(reset: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadMessages(reset: true);
+      _loadThreadMeta();
+    });
     _markSeen();
     _markThreadSeen();
     _lastRunning = widget.appState.isRunning;
@@ -215,10 +221,51 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
   }
 
+  Future<void> _loadThreadMeta() async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    try {
+      final api = CoreApi(config: cfg);
+      final resp = await api.fetchChatMembers(threadId: widget.threadId);
+      final raw = resp['items'];
+      final members = <String>[];
+      if (raw is List) {
+        for (final it in raw) {
+          if (it is! Map) continue;
+          final id = it['actor_id']?.toString().trim() ?? '';
+          if (id.isNotEmpty && id != _selfActor()) members.add(id);
+        }
+      }
+      final profiles = <String, ActorProfile>{};
+      for (final actor in members.take(12)) {
+        final profile = await ActorRepository.instance.getActor(actor);
+        if (profile != null) profiles[actor] = profile;
+      }
+      if (!mounted) return;
+      setState(() {
+        _recipients = members;
+        _profiles = profiles;
+      });
+    } catch (_) {
+      // Best-effort: bubbles fall back to username initials.
+    }
+  }
+
   String _selfActor() {
     final cfg = widget.appState.config;
     if (cfg == null) return '';
     return '${cfg.publicBaseUrl.replaceAll(RegExp(r"/+$"), "")}/users/${cfg.username}';
+  }
+
+  String _usernameFromActor(String actorUrl) {
+    final uri = Uri.tryParse(actorUrl.trim());
+    if (uri == null) return actorUrl;
+    for (final seg in uri.pathSegments.reversed) {
+      final value = seg.trim();
+      if (value.isEmpty) continue;
+      return value.startsWith('@') ? value.substring(1) : value;
+    }
+    return actorUrl;
   }
 
   String _resolveMediaUrl(String url) {
@@ -828,29 +875,130 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
   }
 
+  String _presenceLabel(BuildContext context, PresenceStatus status) {
+    return switch (status) {
+      PresenceStatus.online => context.l10n.presenceOnline,
+      PresenceStatus.busy => context.l10n.presenceBusy,
+      PresenceStatus.afk => context.l10n.presenceAfk,
+      PresenceStatus.offline => context.l10n.presenceOffline,
+    };
+  }
+
+  Color _presenceColor(PresenceStatus status) {
+    return switch (status) {
+      PresenceStatus.online => const Color(0xFF3DDC97),
+      PresenceStatus.busy => const Color(0xFFFF5A6E),
+      PresenceStatus.afk => const Color(0xFFF2A33A),
+      PresenceStatus.offline => const Color(0xFF8B93A5),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+        title: Row(
           children: [
-            Text(_title),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.lock_outline_rounded,
-                    size: 11,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 3),
-                Text(
-                  context.l10n.chatE2eBadge,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+            if (_recipients.length == 1) ...[
+              StatusAvatar(
+                imageUrl: _profiles[_recipients.first]?.iconUrl ?? '',
+                size: 34,
+                showStatus: true,
+                statusKey: _profiles[_recipients.first]
+                        ?.preferredUsername ??
+                    _usernameFromActor(_recipients.first),
+              ),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_title),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_recipients.length == 1)
+                        ValueListenableBuilder<Map<String, PresenceStatus>>(
+                          valueListenable: PeerPresenceStore
+                              .instance.statusByUsername,
+                          builder: (context, map, _) {
+                            final username = _profiles[_recipients.first]
+                                    ?.preferredUsername ??
+                                _usernameFromActor(_recipients.first);
+                            final status =
+                                map[username] ?? PresenceStatus.offline;
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 7,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: _presenceColor(status),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _presenceLabel(context, status),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text('·',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        )),
+                                const SizedBox(width: 6),
+                              ],
+                            );
+                          },
+                        )
+                      else if (_recipients.isNotEmpty)
+                        Text(
+                          '${context.l10n.chatMembers} ${_recipients.length} · ',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                        ),
+                      Icon(Icons.lock_outline_rounded,
+                          size: 11,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
+                      const SizedBox(width: 3),
+                      Text(
+                        context.l10n.chatE2eBadge,
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelSmall
+                            ?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
                       ),
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -963,19 +1111,64 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             ? _findMessageById(replyId)
             : null;
         final when = DateTime.fromMillisecondsSinceEpoch(message.createdAtMs);
-        final status = isSelf ? _statusMap[message.messageId] : null;
-        final bubbleColor = isSelf
-            ? Theme.of(context).colorScheme.primaryContainer
-            : Theme.of(context).colorScheme.surfaceContainerHighest;
+        final summary = isSelf ? _statusMap[message.messageId] : null;
+        final allSeen = summary != null &&
+            _recipients.isNotEmpty &&
+            summary.seen >= _recipients.length;
         final align =
             isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-        final radius = BorderRadius.circular(16);
+        final radius = BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(isSelf ? 18 : 4),
+          bottomRight: Radius.circular(isSelf ? 4 : 18),
+        );
+        final senderProfile = _profiles[message.senderActor];
+        final senderUsername = senderProfile?.preferredUsername.isNotEmpty == true
+            ? senderProfile!.preferredUsername
+            : _usernameFromActor(message.senderActor);
+        final senderName = senderProfile?.displayName.isNotEmpty == true
+            ? senderProfile!.displayName
+            : senderUsername;
+        final showSender = !isSelf && _recipients.length > 1;
+        final timeColor = isSelf
+            ? Colors.white.withAlpha(190)
+            : Theme.of(context).colorScheme.onSurfaceVariant;
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Column(
-            crossAxisAlignment: align,
+          child: Row(
+            mainAxisAlignment:
+                isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              GestureDetector(
+              if (!isSelf) ...[
+                StatusAvatar(
+                  imageUrl: senderProfile?.iconUrl ?? '',
+                  size: 30,
+                  showStatus: true,
+                  statusKey: senderUsername,
+                ),
+                const SizedBox(width: 6),
+              ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: align,
+                  children: [
+                    if (showSender)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, bottom: 3),
+                        child: Text(
+                          senderName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    GestureDetector(
                 onLongPress: () async {
                   await showModalBottomSheet<void>(
                     context: context,
@@ -1022,8 +1215,28 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   );
                 },
                 child: Container(
-                  decoration:
-                      BoxDecoration(color: bubbleColor, borderRadius: radius),
+                  decoration: BoxDecoration(
+                    gradient: isSelf
+                        ? const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF6D5DF5), Color(0xFF4C7BF4)],
+                          )
+                        : null,
+                    color: isSelf
+                        ? null
+                        : Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
+                    borderRadius: radius,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(isSelf ? 40 : 18),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Column(
@@ -1035,9 +1248,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .surfaceContainerHighest,
+                            color: isSelf
+                                ? Colors.white.withAlpha(30)
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
@@ -1049,7 +1264,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ),
-                      Text(text),
+                      Text(
+                        text,
+                        style: TextStyle(
+                          color: isSelf ? Colors.white : null,
+                          height: 1.35,
+                        ),
+                      ),
                       if (attachments.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         _buildAttachments(attachments),
@@ -1060,18 +1281,20 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                         children: [
                           Text(
                             formatTimeAgo(context, when),
-                            style: Theme.of(context).textTheme.labelSmall,
+                            style: TextStyle(fontSize: 10, color: timeColor),
                           ),
-                          if (status != null) ...[
-                            const SizedBox(width: 6),
+                          if (isSelf) ...[
+                            const SizedBox(width: 5),
                             Tooltip(
-                              message: status.tooltip(context),
-                              child: Icon(
-                                status.icon,
-                                size: 14,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
+                              message: summary == null
+                                  ? context.l10n.chatStatusPending
+                                  : allSeen
+                                      ? context.l10n.chatStatusSeenAll
+                                      : summary.tooltip(context),
+                              child: _DeliveryCheck(
+                                summary: summary,
+                                allSeen: allSeen,
+                                color: timeColor,
                               ),
                             ),
                           ],
@@ -1081,7 +1304,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   ),
                 ),
               ),
-              _buildReactionRow(message, isSelf),
+                    _buildReactionRow(message, isSelf),
+                  ],
+                ),
+              ),
             ],
           ),
         );
@@ -1376,6 +1602,48 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 }
 
+class _DeliveryCheck extends StatelessWidget {
+  const _DeliveryCheck({
+    required this.summary,
+    required this.allSeen,
+    required this.color,
+  });
+
+  final _StatusSummary? summary;
+  final bool allSeen;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = summary?.icon ?? Icons.schedule;
+    final seenColor = allSeen ? const Color(0xFF67E8F9) : color;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(icon, size: 15, color: seenColor),
+        if (allSeen)
+          Positioned(
+            right: -4,
+            top: -4,
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Color(0xFF67E8F9),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.add,
+                size: 6,
+                color: Color(0xFF06121A),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _PickedMedia {
   _PickedMedia({required this.name, required this.bytes});
 
@@ -1407,7 +1675,7 @@ class _StatusSummary {
 
   IconData get icon {
     if (seen > 0) return Icons.done_all;
-    if (delivered > 0) return Icons.done;
+    if (delivered > 0) return Icons.done_all;
     if (sent > 0) return Icons.check;
     if (queued > 0) return Icons.schedule;
     return Icons.schedule;

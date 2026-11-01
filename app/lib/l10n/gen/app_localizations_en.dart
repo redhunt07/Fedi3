@@ -292,6 +292,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatStatusDelivered => 'Delivered';
 
   @override
+  String get chatStatusSeenAll => 'Read by everyone';
+
+  @override
   String get chatStatusSeen => 'Seen';
 
   @override
@@ -1310,6 +1313,27 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get statusUnknownShort => '?';
+
+  @override
+  String get presenceChangeTooltip => 'Change status';
+
+  @override
+  String get presenceTitle => 'Status';
+
+  @override
+  String get presenceHint => 'Choose how other Fedi3 users see you.';
+
+  @override
+  String get presenceOnline => 'Online';
+
+  @override
+  String get presenceBusy => 'Busy';
+
+  @override
+  String get presenceAfk => 'AFK';
+
+  @override
+  String get presenceOffline => 'Offline';
 
   @override
   String get statusConnectedShort => 'on';

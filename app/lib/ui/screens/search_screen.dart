@@ -615,7 +615,7 @@ class _SearchScreenState extends State<SearchScreen>
           leading: StatusAvatar(
             imageUrl: user.profile.iconUrl,
             size: 40,
-            showStatus: user.profile.isFedi3,
+            showStatus: true,
             statusKey: user.profile.statusKey,
           ),
           title: RichText(

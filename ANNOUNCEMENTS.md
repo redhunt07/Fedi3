@@ -3,6 +3,13 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-01 — Chat in stile Telegram e presenza
+
+Le chat hanno bolle con coda, avatar e spunte di consegna: singola, doppia e
+doppia con indicatore quando tutti i membri hanno letto. Lo stato online,
+occupato, AFK e offline viaggia tra utenti Fedi3 anche su relay diversi tramite
+buste cifrate, scade automaticamente ed è visibile sui avatar del client.
+
 ## 2026-11-01 — Restyling del client
 
 Nuova passata grafica: logo Fedi3 fisso con particelle luminose, bagliore aurora

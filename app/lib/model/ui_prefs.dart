@@ -43,6 +43,7 @@ class UiPrefs {
     required this.telemetryEnabled,
     required this.clientMonitoringEnabled,
     required this.relayAdminToken,
+    required this.presenceStatus,
   });
 
   final UiThemeMode themeMode;
@@ -69,6 +70,7 @@ class UiPrefs {
   final bool telemetryEnabled;
   final bool clientMonitoringEnabled;
   final String relayAdminToken;
+  final String presenceStatus;
 
   static UiPrefs defaults() => const UiPrefs(
         themeMode: UiThemeMode.system,
@@ -95,6 +97,7 @@ class UiPrefs {
         telemetryEnabled: false,
         clientMonitoringEnabled: false,
         relayAdminToken: '',
+        presenceStatus: 'online',
       );
 
   UiPrefs copyWith({
@@ -122,6 +125,7 @@ class UiPrefs {
     bool? telemetryEnabled,
     bool? clientMonitoringEnabled,
     String? relayAdminToken,
+    String? presenceStatus,
   }) {
     return UiPrefs(
       themeMode: themeMode ?? this.themeMode,
@@ -150,6 +154,7 @@ class UiPrefs {
       clientMonitoringEnabled:
           clientMonitoringEnabled ?? this.clientMonitoringEnabled,
       relayAdminToken: relayAdminToken ?? this.relayAdminToken,
+      presenceStatus: presenceStatus ?? this.presenceStatus,
     );
   }
 
@@ -178,9 +183,25 @@ class UiPrefs {
         'telemetryEnabled': telemetryEnabled,
         'clientMonitoringEnabled': clientMonitoringEnabled,
         'relayAdminToken': relayAdminToken,
+        'presenceStatus': presenceStatus,
       };
 
   Map<String, dynamic> get json => toJson();
+
+  static String _parsePresence(String? v) {
+    switch (v?.trim().toLowerCase()) {
+      case 'online':
+        return 'online';
+      case 'busy':
+        return 'busy';
+      case 'afk':
+        return 'afk';
+      case 'offline':
+        return 'offline';
+      default:
+        return 'online';
+    }
+  }
 
   static UiPrefs fromJson(Map<String, dynamic> raw) {
     UiThemeMode parseTheme(String? v) {
@@ -287,6 +308,7 @@ class UiPrefs {
       telemetryEnabled: raw['telemetryEnabled'] == true,
       clientMonitoringEnabled: raw['clientMonitoringEnabled'] == true,
       relayAdminToken: (raw['relayAdminToken'] as String? ?? '').trim(),
+      presenceStatus: _parsePresence(raw['presenceStatus']?.toString()),
     );
   }
 

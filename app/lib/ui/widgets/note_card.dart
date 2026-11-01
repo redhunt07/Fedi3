@@ -294,7 +294,7 @@ class _NoteCardState extends State<NoteCard> {
                   _Avatar(
                     url: _noteActor?.iconUrl ?? '',
                     size: 44,
-                    showStatus: _noteActor?.isFedi3 == true,
+                    showStatus: true,
                     statusKey: _noteActor?.statusKey,
                   ),
                   const SizedBox(width: 10),
@@ -1543,7 +1543,7 @@ class _NoteCardState extends State<NoteCard> {
                             leading: _Avatar(
                               url: profile?.iconUrl ?? '',
                               size: 28,
-                              showStatus: profile?.isFedi3 == true,
+                              showStatus: true,
                               statusKey: profile?.statusKey,
                             ),
                             title: Text(name, overflow: TextOverflow.ellipsis),
@@ -2593,7 +2593,7 @@ class _ThreadNotePreviewState extends State<_ThreadNotePreview> {
           _Avatar(
             url: _actor?.iconUrl ?? '',
             size: 28,
-            showStatus: _actor?.isFedi3 == true,
+            showStatus: true,
             statusKey: _actor?.statusKey,
           ),
           const SizedBox(width: 8),

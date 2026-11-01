@@ -17,6 +17,7 @@ import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../theme/ui_tokens.dart';
+import '../../state/peer_presence_store.dart';
 import '../utils/time_ago.dart';
 import 'chat_thread_screen.dart';
 
@@ -332,29 +333,63 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 46,
-                      height: 46,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Color(UiTokens.brandViolet),
-                            Color(UiTokens.brandCyan),
+                    ValueListenableBuilder<Map<String, PresenceStatus>>(
+                      valueListenable:
+                          PeerPresenceStore.instance.statusByUsername,
+                      builder: (context, presence, _) {
+                        final username = thread.peerUsernames.isNotEmpty
+                            ? thread.peerUsernames.first
+                            : '';
+                        final status =
+                            presence[username] ?? PresenceStatus.offline;
+                        return Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Container(
+                              width: 46,
+                              height: 46,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Color(UiTokens.brandViolet),
+                                    Color(UiTokens.brandCyan),
+                                  ],
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                name.characters.first.toUpperCase(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 18,
+                                ),
+                              ),
+                            ),
+                            if (username.isNotEmpty)
+                              Positioned(
+                                right: -1,
+                                bottom: -1,
+                                child: Container(
+                                  width: 13,
+                                  height: 13,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: _presenceColor(status),
+                                    border: Border.all(
+                                      color:
+                                          Theme.of(context).colorScheme.surface,
+                                      width: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
-                        ),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        name.characters.first.toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 18,
-                        ),
-                      ),
+                        );
+                      },
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -449,6 +484,15 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  Color _presenceColor(PresenceStatus status) {
+    return switch (status) {
+      PresenceStatus.online => const Color(0xFF3DDC97),
+      PresenceStatus.busy => const Color(0xFFFF5A6E),
+      PresenceStatus.afk => const Color(0xFFF2A33A),
+      PresenceStatus.offline => const Color(0xFF8B93A5),
+    };
   }
 
   Future<void> _showThreadMenu(ChatThreadItem thread, bool pinned) async {

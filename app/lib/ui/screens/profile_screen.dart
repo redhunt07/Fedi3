@@ -565,7 +565,7 @@ class _ProfileHeader extends StatelessWidget {
                       child: _Avatar(
                         url: profile.iconUrl,
                         size: 78,
-                        showStatus: profile.isFedi3,
+                        showStatus: true,
                         statusKey: profile.statusKey,
                       ),
                     ),

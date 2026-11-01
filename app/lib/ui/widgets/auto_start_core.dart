@@ -66,7 +66,8 @@ class _AutoStartCoreState extends State<AutoStartCore> {
   void _kick() {
     final cfg = widget.appState.config;
     if (cfg != null) {
-      PeerPresenceStore.instance.start(cfg);
+      PeerPresenceStore.instance
+          .start(cfg, selfStatus: widget.appState.prefs.presenceStatus);
     }
     if (_started) return;
     if (cfg == null) return;

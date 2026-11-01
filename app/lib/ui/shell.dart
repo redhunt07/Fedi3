@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
+import '../state/peer_presence_store.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
 import '../services/core_event_stream.dart';
@@ -465,8 +466,6 @@ class _FediRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final running = appState.isRunning;
-    final statusColor =
-        running ? const Color(0xFF3DDC97) : const Color(0xFFF2A33A);
     return Container(
       width: UiTokens.railWidth,
       decoration: BoxDecoration(
@@ -581,24 +580,71 @@ class _FediRail extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(bottom: 18, top: 8),
-            child: Column(
-              children: [
-                StatusDot(color: statusColor, size: 7),
-                const SizedBox(height: 6),
-                Text(
-                  running
-                      ? context.l10n.coreOnline
-                      : context.l10n.coreOffline,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 9,
+            padding: const EdgeInsets.only(bottom: 14, top: 8),
+            child: ValueListenableBuilder<PresenceStatus>(
+              valueListenable: PeerPresenceStore.instance.selfStatus,
+              builder: (context, presence, _) {
+                return PopupMenuButton<PresenceStatus>(
+                  tooltip: context.l10n.presenceChangeTooltip,
+                  onSelected: (status) async {
+                    final prefs = appState.prefs;
+                    await appState.savePrefs(prefs.copyWith(
+                        presenceStatus: presenceStatusName(status)));
+                    await PeerPresenceStore.instance.setSelfStatus(status);
+                  },
+                  itemBuilder: (context) => [
+                    for (final status in PresenceStatus.values)
+                      PopupMenuItem<PresenceStatus>(
+                        value: status,
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 9,
+                              height: 9,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _presenceColor(status),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(_presenceLabel(context, status)),
+                          ],
+                        ),
                       ),
-                ),
-              ],
+                  ],
+                  child: Column(
+                    children: [
+                      StatusDot(color: _presenceColor(presence), size: 7),
+                      const SizedBox(height: 5),
+                      Text(
+                        _presenceLabel(context, presence),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: scheme.onSurface,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        running
+                            ? context.l10n.coreOnline
+                            : context.l10n.coreOffline,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            Theme.of(context).textTheme.labelSmall?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                  fontSize: 8.5,
+                                ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
               ],
@@ -608,6 +654,24 @@ class _FediRail extends StatelessWidget {
       ),
     );
   }
+}
+
+String _presenceLabel(BuildContext context, PresenceStatus status) {
+  return switch (status) {
+    PresenceStatus.online => context.l10n.presenceOnline,
+    PresenceStatus.busy => context.l10n.presenceBusy,
+    PresenceStatus.afk => context.l10n.presenceAfk,
+    PresenceStatus.offline => context.l10n.presenceOffline,
+  };
+}
+
+Color _presenceColor(PresenceStatus status) {
+  return switch (status) {
+    PresenceStatus.online => const Color(0xFF3DDC97),
+    PresenceStatus.busy => const Color(0xFFFF5A6E),
+    PresenceStatus.afk => const Color(0xFFF2A33A),
+    PresenceStatus.offline => const Color(0xFF8B93A5),
+  };
 }
 
 class _RailButton extends StatefulWidget {

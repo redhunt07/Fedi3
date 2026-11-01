@@ -14,6 +14,7 @@ class ChatThreadItem {
     required this.updatedAtMs,
     required this.lastMessageMs,
     required this.lastMessagePreview,
+    this.peerUsernames = const [],
   });
 
   final String threadId;
@@ -23,6 +24,7 @@ class ChatThreadItem {
   final int updatedAtMs;
   final int? lastMessageMs;
   final String? lastMessagePreview;
+  final List<String> peerUsernames;
 
   factory ChatThreadItem.fromJson(Map<String, dynamic> json) {
     return ChatThreadItem(
@@ -33,6 +35,11 @@ class ChatThreadItem {
       updatedAtMs: (json['updated_at_ms'] as num?)?.toInt() ?? 0,
       lastMessageMs: (json['last_message_ms'] as num?)?.toInt(),
       lastMessagePreview: json['last_message_preview']?.toString(),
+      peerUsernames: (json['peer_usernames'] as List?)
+              ?.map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false) ??
+          const [],
     );
   }
 }

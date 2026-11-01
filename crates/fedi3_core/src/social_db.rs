@@ -300,6 +300,11 @@ impl SocialDb {
               PRIMARY KEY(message_id, actor_id, reaction)
             );
             CREATE INDEX IF NOT EXISTS idx_chat_reactions_message ON chat_message_reactions(message_id);
+            CREATE TABLE IF NOT EXISTS actor_presence (
+              actor_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS relay_registry (
               relay_base_url TEXT PRIMARY KEY,
               relay_ws_url TEXT NULL,
@@ -3820,6 +3825,48 @@ impl SocialDb {
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_actor_presence(&self, actor_id: &str, status: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO actor_presence (actor_id, status, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(actor_id)
+            DO UPDATE SET status=excluded.status, updated_at_ms=excluded.updated_at_ms
+            "#,
+            params![actor_id, status, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_actor_presence(&self, actor_id: &str) -> Result<Option<(String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT status, updated_at_ms FROM actor_presence WHERE actor_id=?1",
+        )?;
+        let mut rows = stmt.query(params![actor_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some((row.get(0)?, row.get(1)?)));
+        }
+        Ok(None)
+    }
+
+    pub fn list_actor_presence(&self) -> Result<Vec<(String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT actor_id, status, updated_at_ms FROM actor_presence ORDER BY updated_at_ms DESC LIMIT 1000",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

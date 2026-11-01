@@ -25,6 +25,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - CI pipeline: formatting, linting, build, tests, Flutter analyze/test, platform configuration checks.
 - `scripts/verify_platform_config.sh` to catch release-breaking platform regressions.
 - `SECURITY.md` with disclosure policy and the security model.
+- Chat Telegram-style: gradient outgoing bubbles with tails, incoming avatars, member-aware delivery checks (sent, delivered, seen by all) and peer presence in the thread header.
+- Presence network: Fedi3 peers exchange online/busy/afk/offline status through encrypted chat envelopes, with TTL expiry, relay online fallback and a status selector in Settings; avatars across the app show the matching coloured dot.
 - Flutter client restyling: fixed aurora brand tile with drifting particles and rail ambient glow, mesh profile banner with overlapping avatar ring, card-based chat list, composer prompt card in the sidebar, search action in the timeline bar, compact post actions, branded empty states and actionable account/relay cards.
 - Flutter client: animated Fedi3 logo in the navigation rail; clicking it opens an in-app announcements screen fed by `ANNOUNCEMENTS.md` in the Git repository, with a periodic check (every 6 hours), cached offline copy and a snackbar alert when new maintainer updates are published.
 - Flutter client: removed the quick inline composer everywhere; the sidebar "Componi" card and the mobile FAB open the full rich composer directly. The active navigation item now has an animated rotating aurora border with orbiting particles and a click spark burst, plus a fade transition when switching sections. Motion respects the OS reduce-motion setting.
