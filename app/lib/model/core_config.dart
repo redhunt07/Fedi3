@@ -49,7 +49,8 @@ class CoreConfig {
     this.p2pCacheTtlSecs,
     this.previousPublicBaseUrl,
     this.previousRelayToken,
-  });
+    String? anchorActorUrl,
+  }) : anchorActorUrl = normalizeAnchorActorUrl(anchorActorUrl);
 
   final String username;
   final String domain;
@@ -79,6 +80,11 @@ class CoreConfig {
   final int? p2pCacheTtlSecs;
   final String? previousPublicBaseUrl;
   final String? previousRelayToken;
+
+  /// Optional identity anchor: a static domain that hosts the actor document
+  /// and WebFinger, decoupling the identity from the relay. Normalized to
+  /// `http(s)://host` without a trailing slash, or null when unset/invalid.
+  final String? anchorActorUrl;
 
   Uri get localBaseUri => Uri.parse('http://$bind');
 
@@ -113,6 +119,7 @@ class CoreConfig {
     Object? p2pCacheTtlSecs = _unset,
     Object? previousPublicBaseUrl = _unset,
     Object? previousRelayToken = _unset,
+    Object? anchorActorUrl = _unset,
   }) {
     return CoreConfig(
       username: username ?? this.username,
@@ -154,6 +161,9 @@ class CoreConfig {
       previousRelayToken: previousRelayToken == _unset
           ? this.previousRelayToken
           : previousRelayToken as String?,
+      anchorActorUrl: anchorActorUrl == _unset
+          ? this.anchorActorUrl
+          : anchorActorUrl as String?,
     );
   }
 
@@ -181,6 +191,21 @@ class CoreConfig {
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+  }
+
+  /// Normalizes the optional identity anchor. Only `http://` and `https://`
+  /// URLs are accepted; trailing slashes are stripped and anything else is
+  /// treated as unset (null).
+  static String? normalizeAnchorActorUrl(dynamic value) {
+    if (value is! String) return null;
+    var v = value.trim();
+    while (v.endsWith('/')) {
+      v = v.substring(0, v.length - 1);
+    }
+    if (!v.startsWith('http://') && !v.startsWith('https://')) return null;
+    final rest = v.startsWith('https://') ? v.substring(8) : v.substring(7);
+    if (rest.isEmpty) return null;
+    return v;
   }
 
   /// AM-03/AM-04: missing or wrongly typed fields fall back to safe defaults
@@ -229,6 +254,7 @@ class CoreConfig {
       p2pCacheTtlSecs: _intOrNull(json['p2pCacheTtlSecs']),
       previousPublicBaseUrl: _strOrNull(json['previousPublicBaseUrl']),
       previousRelayToken: _strOrNull(json['previousRelayToken']),
+      anchorActorUrl: normalizeAnchorActorUrl(json['anchorActorUrl']),
     );
   }
 
@@ -261,6 +287,7 @@ class CoreConfig {
         'p2pCacheTtlSecs': p2pCacheTtlSecs,
         'previousPublicBaseUrl': previousPublicBaseUrl,
         'previousRelayToken': previousRelayToken,
+        'anchorActorUrl': anchorActorUrl,
       };
 
   Map<String, dynamic> toCoreStartJson() {
@@ -341,6 +368,9 @@ class CoreConfig {
     }
     if (previousRelayToken != null && previousRelayToken!.trim().isNotEmpty) {
       cfg['previous_relay_token'] = previousRelayToken!.trim();
+    }
+    if (anchorActorUrl != null && anchorActorUrl!.isNotEmpty) {
+      cfg['anchor_actor_url'] = anchorActorUrl;
     }
     return cfg;
   }

@@ -1123,6 +1123,23 @@ class AppLocalizationsIt extends AppLocalizations {
       'Alcune modifiche richiedono il riavvio del core.';
 
   @override
+  String get networkingAnchorTitle => 'Identità (anchor)';
+
+  @override
+  String get networkingAnchorLabel => 'URL anchor dell\'identità';
+
+  @override
+  String get networkingAnchorHint =>
+      'Lascia vuoto per mantenere l\'identità sul relay. Imposta un dominio statico (es. https://alice.example) per separare l\'identità dal relay.';
+
+  @override
+  String get networkingAnchorInvalid =>
+      'URL non valido: usa http:// o https:// senza slash finale.';
+
+  @override
+  String get networkingAnchorSave => 'Salva anchor';
+
+  @override
   String get backupTitle => 'Backup';
 
   @override

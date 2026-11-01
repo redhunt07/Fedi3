@@ -528,6 +528,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       blockedDomains: const [],
       blockedActors: const [],
       postDeliveryMode: _postDeliveryMode,
+      anchorActorUrl: widget.appState.config?.anchorActorUrl,
     );
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();

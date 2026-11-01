@@ -443,6 +443,7 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       p2pCacheTtlSecs: widget.appState.config?.p2pCacheTtlSecs,
       previousPublicBaseUrl: widget.appState.config?.previousPublicBaseUrl,
       previousRelayToken: widget.appState.config?.previousRelayToken,
+      anchorActorUrl: widget.appState.config?.anchorActorUrl,
     );
 
     try {

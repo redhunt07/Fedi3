@@ -71,6 +71,56 @@ void main() {
       expect(decoded.p2pCacheTtlSecs, isNull);
       expect(decoded.webrtcIceUsername, isNull);
     });
+
+    test('AM-08 anchorActorUrl round-trips and is sent to the core', () {
+      final cfg = buildTestConfig(anchorActorUrl: 'https://alice.example/');
+      expect(cfg.anchorActorUrl, 'https://alice.example');
+      expect(cfg.toJson()['anchorActorUrl'], 'https://alice.example');
+      final decoded = CoreConfig.fromJson(
+          jsonDecode(jsonEncode(cfg.toJson())) as Map<String, dynamic>);
+      expect(decoded.anchorActorUrl, 'https://alice.example');
+      expect(decoded.toJson(), equals(cfg.toJson()));
+      expect(decoded.toCoreStartJson()['anchor_actor_url'],
+          'https://alice.example');
+
+      final http = buildTestConfig(anchorActorUrl: 'http://anchor.test');
+      expect(http.toCoreStartJson()['anchor_actor_url'], 'http://anchor.test');
+    });
+
+    test('AM-09 missing anchorActorUrl stays null and is not sent', () {
+      final cfg = buildTestConfig();
+      expect(cfg.anchorActorUrl, isNull);
+      expect(cfg.toJson().containsKey('anchorActorUrl'), isTrue);
+      expect(cfg.toJson()['anchorActorUrl'], isNull);
+      expect(cfg.toCoreStartJson().containsKey('anchor_actor_url'), isFalse);
+
+      final decoded = CoreConfig.fromJson(<String, dynamic>{});
+      expect(decoded.anchorActorUrl, isNull);
+      expect(
+          decoded.toCoreStartJson().containsKey('anchor_actor_url'), isFalse);
+    });
+
+    test('AM-10 invalid anchorActorUrl values normalize to null', () {
+      for (final bad in <dynamic>[
+        'ftp://alice.example',
+        'alice.example',
+        'https://',
+        '   ',
+        42,
+        null,
+      ]) {
+        final decoded = CoreConfig.fromJson(<String, dynamic>{
+          'anchorActorUrl': bad,
+        });
+        expect(decoded.anchorActorUrl, isNull, reason: 'value: $bad');
+        expect(
+            decoded.toCoreStartJson().containsKey('anchor_actor_url'), isFalse,
+            reason: 'value: $bad');
+      }
+      final normalized =
+          buildTestConfig(anchorActorUrl: '  https://alice.example///  ');
+      expect(normalized.anchorActorUrl, 'https://alice.example');
+    });
   });
 
   group('UiPrefs serialization (AM-05)', () {

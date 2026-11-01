@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{from_fn, from_fn_with_state, Next},
     response::{IntoResponse, Redirect, Response},
-    routing::{any, get, post},
+    routing::{any, get, post, put},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -181,6 +181,13 @@ struct RelayMoveNotice {
 }
 
 #[derive(Debug, Clone)]
+struct RelayBlockRow {
+    kind: String,
+    value: String,
+    reason: Option<String>,
+    expires_at_ms: Option<i64>,
+}
+
 struct SpoolItem {
     id: i64,
     method: String,
@@ -488,6 +495,10 @@ struct RelayConfig {
     relay_user_directory_ttl_secs: u64,
     media_max_bytes_per_user: u64,
     spool_max_bytes_per_user: u64,
+    /// How often the relay refreshes the user directory of its peers (seconds).
+    peer_sync_secs: u64,
+    /// Maximum relay-to-relay hops before giving up on routing a request.
+    peer_max_hops: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1076,6 +1087,50 @@ async fn main() {
     let base_domain = state.cfg.base_domain.clone();
     let max_body = state.cfg.max_body_bytes;
 
+    // Relay mesh: periodically learn which users live on peer relays so that requests
+    // addressed to a user hosted elsewhere can be routed to their home relay.
+    {
+        let peer_state = state.clone();
+        tokio::spawn(async move {
+            let secs = peer_state.cfg.peer_sync_secs.max(5);
+            let mut interval = tokio::time::interval(Duration::from_secs(secs));
+            loop {
+                interval.tick().await;
+                let peers = {
+                    let db = peer_state.db.lock().await;
+                    db.list_peers().unwrap_or_default()
+                };
+                for (url, _) in peers {
+                    let dir_url = format!("{}/_fedi3/relay/users", url.trim_end_matches('/'));
+                    let resp = peer_state.http.get(&dir_url).send().await;
+                    if let Ok(resp) = resp {
+                        if resp.status().is_success() {
+                            if let Ok(value) = resp.json::<serde_json::Value>().await {
+                                let users: Vec<String> = value
+                                    .get("users")
+                                    .and_then(|u| u.as_array())
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|u| u.as_str().map(|s| s.to_string()))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                let db = peer_state.db.lock().await;
+                                let _ = db.mark_peer_seen(&url);
+                                for u in users {
+                                    let _ = db.upsert_remote_user(&u, &url);
+                                }
+                            }
+                        }
+                    }
+                }
+                let cutoff = now_ms() - (secs as i64 * 1000 * 5);
+                let db = peer_state.db.lock().await;
+                let _ = db.prune_remote_users(cutoff);
+            }
+        });
+    }
+
     let cleanup_state = state.clone();
     let spool_ttl_secs = cleanup_state.cfg.spool_ttl_secs;
     let webrtc_ttl_secs = cleanup_state.cfg.webrtc_signal_ttl_secs;
@@ -1190,6 +1245,20 @@ async fn main() {
         .route("/nodeinfo/2.0", get(nodeinfo_2))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/inbox", post(shared_inbox))
+        .route("/_fedi3/relay/users", get(relay_user_directory))
+        .route("/_fedi3/relay/user_blocks/:user", put(user_blocks_put))
+        .route(
+            "/admin/peers",
+            get(admin_list_peers)
+                .post(admin_add_peer)
+                .delete(admin_delete_peer),
+        )
+        .route(
+            "/admin/blocks",
+            get(admin_list_blocks)
+                .post(admin_add_block)
+                .delete(admin_delete_block),
+        )
         .route("/admin/users", get(admin_list_users))
         .route(
             "/admin/users/:user",
@@ -1636,6 +1705,16 @@ fn load_config() -> Result<RelayConfig> {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(60);
+    let peer_sync_secs = std::env::var("FEDI3_RELAY_PEER_SYNC_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60)
+        .max(5);
+    let peer_max_hops = std::env::var("FEDI3_RELAY_PEER_MAX_HOPS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(3)
+        .clamp(1, 8);
     let peer_directory_ttl_days = std::env::var("FEDI3_RELAY_PEER_DIRECTORY_TTL_DAYS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -1866,6 +1945,8 @@ fn load_config() -> Result<RelayConfig> {
         relay_user_directory_ttl_secs,
         media_max_bytes_per_user,
         spool_max_bytes_per_user,
+        peer_sync_secs,
+        peer_max_hops,
     })
 }
 
@@ -2934,6 +3015,17 @@ async fn forward_user_root(
 
     let path = format!("/users/{user}");
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
+    let local = {
+        let db = state.db.lock().await;
+        db.user_exists(&user).unwrap_or(false)
+    };
+    if !local {
+        if let Some(resp) =
+            forward_to_peer(&state, &user, &method, &path, &query, &headers, &body).await
+        {
+            return resp.into_response();
+        }
+    }
     forward_to_user(state, user, method, &path, query, headers, body).await
 }
 
@@ -2967,6 +3059,12 @@ async fn forward_user_rest(
     {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
+    // Per-user moderation on the inbox path: a blocked sender is acknowledged and dropped
+    // before it reaches the core, so the relay enforces the user's blocklist as well.
+    if method == Method::POST && rest == "inbox" && sender_blocked(&state, &user, &body).await {
+        return (StatusCode::ACCEPTED, "blocked").into_response();
+    }
+
     // Allow internal UI/core endpoints to be accessed via the relay when the client
     // chooses to talk "through" the relay (e.g. UI-only device). We rewrite:
     //   /users/<user>/_fedi3/...  ->  /_fedi3/...
@@ -2977,7 +3075,92 @@ async fn forward_user_rest(
         format!("/users/{user}/{rest}")
     };
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
+    let local = {
+        let db = state.db.lock().await;
+        db.user_exists(&user).unwrap_or(false)
+    };
+    if !local {
+        if let Some(resp) =
+            forward_to_peer(&state, &user, &method, &path, &query, &headers, &body).await
+        {
+            return resp.into_response();
+        }
+    }
     forward_to_user(state, user, method, &path, query, headers, body).await
+}
+
+/// Route a request for a user hosted on a peer relay (relay mesh). Returns `None` when the
+/// user is unknown, the hop budget is exhausted, or the peer call fails.
+async fn forward_to_peer(
+    state: &AppState,
+    user: &str,
+    method: &Method,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Option<Response> {
+    let relay_url = {
+        let db = state.db.lock().await;
+        db.get_remote_user_relay(user).ok().flatten()
+    }?;
+    let hops = headers
+        .get("x-fedi3-hops")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    if hops >= state.cfg.peer_max_hops {
+        return None;
+    }
+    let mut url = format!("{}{}", relay_url.trim_end_matches('/'), path);
+    if !query.is_empty() {
+        url.push('?');
+        url.push_str(query);
+    }
+    let mut req = state
+        .http
+        .request(method.clone(), &url)
+        .header("x-fedi3-hops", (hops + 1).to_string());
+    for (k, v) in headers.iter() {
+        if k == header::HOST || k.as_str().eq_ignore_ascii_case("x-fedi3-hops") {
+            continue;
+        }
+        req = req.header(k, v);
+    }
+    let resp = req.body(body.clone()).send().await.ok()?;
+    let status = resp.status();
+    let resp_headers = resp.headers().clone();
+    let bytes = resp.bytes().await.ok()?;
+    let mut out = Response::builder().status(status);
+    for (k, v) in resp_headers.iter() {
+        if k == header::CONTENT_LENGTH || k == header::TRANSFER_ENCODING || k == header::CONNECTION
+        {
+            continue;
+        }
+        out = out.header(k, v);
+    }
+    out.body(axum::body::Body::from(bytes)).ok()
+}
+
+/// Extract the sender actor of an activity body (string or embedded object form).
+fn sender_from_body(body: &Bytes) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let actor = v.get("actor")?;
+    if let Some(s) = actor.as_str() {
+        return Some(s.trim().to_string());
+    }
+    actor
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+}
+
+async fn sender_blocked(state: &AppState, user: &str, body: &Bytes) -> bool {
+    let Some(actor) = sender_from_body(body) else {
+        return false;
+    };
+    let db = state.db.lock().await;
+    db.is_blocked(user, &actor).unwrap_or(false)
 }
 
 async fn forward_to_user(
@@ -3504,6 +3687,22 @@ async fn shared_inbox(
     if users.is_empty() {
         return (StatusCode::BAD_REQUEST, "no local recipients").into_response();
     }
+    // Per-user and relay-wide moderation: blocked senders are acknowledged but never
+    // forwarded, so the block is enforced before any core sees the activity.
+    let sender = sender_from_body(&body);
+    let users: Vec<String> = {
+        let db = state.db.lock().await;
+        users
+            .into_iter()
+            .filter(|u| match sender.as_deref() {
+                Some(actor) => !db.is_blocked(u, actor).unwrap_or(false),
+                None => true,
+            })
+            .collect()
+    };
+    if users.is_empty() {
+        return (StatusCode::ACCEPTED, "no local recipients").into_response();
+    }
 
     if users.len() > state.cfg.max_inbox_fanout {
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many recipients").into_response();
@@ -3817,6 +4016,10 @@ fn relay_self_base(cfg: &RelayConfig) -> String {
         ip.to_string()
     };
     format!("http://{}:{}", host, cfg.bind.port())
+}
+
+fn origin_host(url: &str) -> Option<String> {
+    url.parse::<http::Uri>().ok()?.host().map(|h| h.to_string())
 }
 
 fn origin_of(url: &str) -> Option<String> {
@@ -4458,6 +4661,33 @@ impl Db {
               last_seen_ms INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS relay_peers (
+              relay_url TEXT PRIMARY KEY,
+              added_at_ms INTEGER NOT NULL,
+              last_seen_ms INTEGER NULL
+            );
+            CREATE TABLE IF NOT EXISTS remote_users (
+              username TEXT PRIMARY KEY,
+              relay_url TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_remote_users_relay ON remote_users(relay_url);
+            CREATE TABLE IF NOT EXISTS relay_blocks (
+              kind TEXT NOT NULL,
+              value TEXT NOT NULL,
+              reason TEXT NULL,
+              created_at_ms INTEGER NOT NULL,
+              created_by TEXT NULL,
+              expires_at_ms INTEGER NULL,
+              PRIMARY KEY(kind, value)
+            );
+            CREATE TABLE IF NOT EXISTS user_blocks (
+              username TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              value TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY(username, kind, value)
+            );
             CREATE TABLE IF NOT EXISTS peer_directory (
               peer_id TEXT PRIMARY KEY,
               username TEXT NOT NULL,
@@ -6019,6 +6249,408 @@ impl Db {
                 Ok((count.max(0) as u64, bytes.max(0) as u64))
             }
         }
+    }
+
+    fn upsert_peer(&self, relay_url: &str) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_peers(relay_url, added_at_ms, last_seen_ms) VALUES (?1, ?2, NULL) ON CONFLICT(relay_url) DO NOTHING",
+                    params![relay_url, now],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_peers(relay_url, added_at_ms, last_seen_ms) VALUES ($1, $2, NULL) ON CONFLICT(relay_url) DO NOTHING",
+                    &[&relay_url, &now],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_peers(&self) -> Result<Vec<(String, Option<i64>)>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT relay_url, last_seen_ms FROM relay_peers ORDER BY added_at_ms ASC",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.flatten().collect())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT relay_url, last_seen_ms FROM relay_peers ORDER BY added_at_ms ASC",
+                    &[],
+                )?;
+                Ok(rows
+                    .iter()
+                    .map(|r| (r.get::<_, String>(0), r.get::<_, Option<i64>>(1)))
+                    .collect())
+            }
+        }
+    }
+
+    fn mark_peer_seen(&self, relay_url: &str) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "UPDATE relay_peers SET last_seen_ms=?2 WHERE relay_url=?1",
+                    params![relay_url, now],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "UPDATE relay_peers SET last_seen_ms=$2 WHERE relay_url=$1",
+                    &[&relay_url, &now],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn delete_peer(&self, relay_url: &str) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM relay_peers WHERE relay_url=?1",
+                    params![relay_url],
+                )?;
+                conn.execute(
+                    "DELETE FROM remote_users WHERE relay_url=?1",
+                    params![relay_url],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute("DELETE FROM relay_peers WHERE relay_url=$1", &[&relay_url])?;
+                conn.execute("DELETE FROM remote_users WHERE relay_url=$1", &[&relay_url])?;
+                Ok(())
+            }
+        }
+    }
+
+    fn upsert_remote_user(&self, username: &str, relay_url: &str) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO remote_users(username, relay_url, updated_at_ms) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(username) DO UPDATE SET relay_url=excluded.relay_url, updated_at_ms=excluded.updated_at_ms",
+                    params![username, relay_url, now],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO remote_users(username, relay_url, updated_at_ms) VALUES ($1, $2, $3)
+                     ON CONFLICT(username) DO UPDATE SET relay_url=EXCLUDED.relay_url, updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[&username, &relay_url, &now],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn get_remote_user_relay(&self, username: &str) -> Result<Option<String>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.query_row(
+                    "SELECT relay_url FROM remote_users WHERE username=?1",
+                    params![username],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT relay_url FROM remote_users WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(row.map(|r| r.get(0)))
+            }
+        }
+    }
+
+    fn prune_remote_users(&self, older_than_ms: i64) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM remote_users WHERE updated_at_ms < ?1",
+                    params![older_than_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM remote_users WHERE updated_at_ms < $1",
+                    &[&older_than_ms],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_local_usernames(&self) -> Result<Vec<String>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT username FROM users WHERE disabled=0 ORDER BY username ASC LIMIT 5000",
+                )?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.flatten().collect())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT username FROM users WHERE disabled=FALSE ORDER BY username ASC LIMIT 5000",
+                    &[],
+                )?;
+                Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+            }
+        }
+    }
+
+    fn user_token_matches(&self, username: &str, token: &str) -> Result<bool> {
+        let hash = token_hash_hex(token);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let row: Option<(String, i64)> = conn
+                    .query_row(
+                        "SELECT token_sha256, disabled FROM users WHERE username=?1",
+                        params![username],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                Ok(matches!(row, Some((h, d)) if h == hash && d == 0))
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT token_sha256, disabled FROM users WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(matches!(row, Some(r) if r.get::<_, String>(0) == hash && !r.get::<_, bool>(1)))
+            }
+        }
+    }
+
+    fn upsert_relay_block(
+        &self,
+        kind: &str,
+        value: &str,
+        reason: Option<&str>,
+        created_by: Option<&str>,
+        expires_at_ms: Option<i64>,
+    ) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_blocks(kind, value, reason, created_at_ms, created_by, expires_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(kind, value) DO UPDATE SET reason=excluded.reason, created_at_ms=excluded.created_at_ms,
+                       created_by=excluded.created_by, expires_at_ms=excluded.expires_at_ms",
+                    params![kind, value, reason, now, created_by, expires_at_ms],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO relay_blocks(kind, value, reason, created_at_ms, created_by, expires_at_ms)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT(kind, value) DO UPDATE SET reason=EXCLUDED.reason, created_at_ms=EXCLUDED.created_at_ms,
+                       created_by=EXCLUDED.created_by, expires_at_ms=EXCLUDED.expires_at_ms",
+                    &[&kind, &value, &reason, &now, &created_by, &expires_at_ms],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn delete_relay_block(&self, kind: &str, value: &str) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM relay_blocks WHERE kind=?1 AND value=?2",
+                    params![kind, value],
+                )?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM relay_blocks WHERE kind=$1 AND value=$2",
+                    &[&kind, &value],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_relay_blocks(&self) -> Result<Vec<RelayBlockRow>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT kind, value, reason, expires_at_ms FROM relay_blocks ORDER BY created_at_ms DESC LIMIT 5000",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok(RelayBlockRow {
+                        kind: r.get(0)?,
+                        value: r.get(1)?,
+                        reason: r.get(2)?,
+                        expires_at_ms: r.get(3)?,
+                    })
+                })?;
+                Ok(rows.flatten().collect())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT kind, value, reason, expires_at_ms FROM relay_blocks ORDER BY created_at_ms DESC LIMIT 5000",
+                    &[],
+                )?;
+                Ok(rows
+                    .iter()
+                    .map(|r| RelayBlockRow {
+                        kind: r.get::<_, String>(0),
+                        value: r.get::<_, String>(1),
+                        reason: r.get::<_, Option<String>>(2),
+                        expires_at_ms: r.get::<_, Option<i64>>(3),
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    fn replace_user_blocks(
+        &self,
+        username: &str,
+        actors: &[String],
+        domains: &[String],
+    ) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let mut conn = self.open_sqlite_conn()?;
+                let tx = conn.transaction()?;
+                tx.execute(
+                    "DELETE FROM user_blocks WHERE username=?1",
+                    params![username],
+                )?;
+                for a in actors {
+                    tx.execute(
+                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES (?1, 'actor', ?2, ?3) ON CONFLICT DO NOTHING",
+                        params![username, a, now],
+                    )?;
+                }
+                for d in domains {
+                    tx.execute(
+                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES (?1, 'domain', ?2, ?3) ON CONFLICT DO NOTHING",
+                        params![username, d, now],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let mut tx = conn.transaction()?;
+                tx.execute("DELETE FROM user_blocks WHERE username=$1", &[&username])?;
+                for a in actors {
+                    tx.execute(
+                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES ($1, 'actor', $2, $3) ON CONFLICT DO NOTHING",
+                        &[&username, &a, &now],
+                    )?;
+                }
+                for d in domains {
+                    tx.execute(
+                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES ($1, 'domain', $2, $3) ON CONFLICT DO NOTHING",
+                        &[&username, &d, &now],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(())
+            }
+        }
+    }
+
+    fn list_user_blocks(&self, username: &str) -> Result<Vec<(String, String)>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt =
+                    conn.prepare("SELECT kind, value FROM user_blocks WHERE username=?1")?;
+                let rows = stmt.query_map(params![username], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.flatten().collect())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT kind, value FROM user_blocks WHERE username=$1",
+                    &[&username],
+                )?;
+                Ok(rows
+                    .iter()
+                    .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+                    .collect())
+            }
+        }
+    }
+
+    /// Relay-wide or per-user block match (actor exact, domain exact/suffix), honoring expiry.
+    fn is_blocked(&self, username: &str, sender_actor: &str) -> Result<bool> {
+        let now = now_ms();
+        let domain = origin_host(sender_actor).unwrap_or_default();
+        let mut rules: Vec<(String, String, Option<i64>)> = Vec::new();
+        for row in self.list_relay_blocks()? {
+            rules.push((row.kind, row.value, row.expires_at_ms));
+        }
+        for (kind, value) in self.list_user_blocks(username)? {
+            rules.push((kind, value, None));
+        }
+        for (kind, value, expires) in rules {
+            if expires.map(|e| e <= now).unwrap_or(false) {
+                continue;
+            }
+            let value = value.trim().trim_end_matches('/');
+            if value.is_empty() {
+                continue;
+            }
+            match kind.as_str() {
+                "actor" if value == sender_actor.trim().trim_end_matches('/') => return Ok(true),
+                "domain" if value == domain || domain.ends_with(&format!(".{value}")) => {
+                    return Ok(true)
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
     }
 
     fn upsert_actor_cache(&self, username: &str, actor_json: &str) -> Result<()> {
@@ -8129,6 +8761,217 @@ async fn admin_guard(
         return Err((StatusCode::UNAUTHORIZED, "admin token required").into_response());
     }
     Ok(AdminAuditContext { ip, meta })
+}
+
+#[derive(Debug, Deserialize)]
+struct PeerReq {
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserBlocksReq {
+    #[serde(default)]
+    blocked_actors: Vec<String>,
+    #[serde(default)]
+    blocked_domains: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlockReq {
+    kind: String,
+    value: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    expires_at_ms: Option<i64>,
+}
+
+/// Public relay directory used by peers to learn which users are hosted here.
+async fn relay_user_directory(State(state): State<AppState>) -> impl IntoResponse {
+    let db = state.db.lock().await;
+    let users = db.list_local_usernames().unwrap_or_default();
+    drop(db);
+    let body = serde_json::json!({
+        "relay": relay_self_base(&state.cfg),
+        "users": users,
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn admin_list_peers(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_list_peers", None).await {
+        return resp;
+    }
+    let db = state.db.lock().await;
+    let peers = db.list_peers().unwrap_or_default();
+    drop(db);
+    let body = serde_json::json!({
+        "peers": peers
+            .into_iter()
+            .map(|(url, seen)| serde_json::json!({"url": url, "last_seen_ms": seen}))
+            .collect::<Vec<_>>()
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn admin_add_peer(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<PeerReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_add_peer", None).await {
+        return resp;
+    }
+    let url = req.url.trim().trim_end_matches('/').to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return (StatusCode::BAD_REQUEST, "invalid peer url").into_response();
+    }
+    let db = state.db.lock().await;
+    match db.upsert_peer(&url) {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+async fn admin_delete_peer(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_delete_peer", None).await {
+        return resp;
+    }
+    let Some(url) = q
+        .get("url")
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+    else {
+        return (StatusCode::BAD_REQUEST, "missing url").into_response();
+    };
+    let db = state.db.lock().await;
+    match db.delete_peer(&url) {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+async fn admin_list_blocks(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_list_blocks", None).await {
+        return resp;
+    }
+    let db = state.db.lock().await;
+    let blocks = db.list_relay_blocks().unwrap_or_default();
+    drop(db);
+    let body = serde_json::json!({
+        "blocks": blocks
+            .into_iter()
+            .map(|row| serde_json::json!({
+                "kind": row.kind,
+                "value": row.value,
+                "reason": row.reason,
+                "expires_at_ms": row.expires_at_ms,
+            }))
+            .collect::<Vec<_>>()
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn admin_add_block(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<BlockReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_add_block", None).await {
+        return resp;
+    }
+    let kind = req.kind.trim().to_lowercase();
+    if kind != "actor" && kind != "domain" {
+        return (StatusCode::BAD_REQUEST, "kind must be actor or domain").into_response();
+    }
+    let value = req.value.trim().trim_end_matches('/').to_string();
+    if value.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty value").into_response();
+    }
+    let db = state.db.lock().await;
+    match db.upsert_relay_block(
+        &kind,
+        &value,
+        req.reason.as_deref(),
+        Some("admin"),
+        req.expires_at_ms,
+    ) {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+async fn admin_delete_block(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_delete_block", None).await {
+        return resp;
+    }
+    let (Some(kind), Some(value)) = (q.get("kind"), q.get("value")) else {
+        return (StatusCode::BAD_REQUEST, "missing kind or value").into_response();
+    };
+    let db = state.db.lock().await;
+    match db.delete_relay_block(kind.trim(), value.trim().trim_end_matches('/')) {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// Per-user blocklist pushed by the core over the relay token. The relay enforces it on the
+/// inbox path, so a user's moderation choices apply before the core is even reached.
+async fn user_blocks_put(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<UserBlocksReq>,
+) -> impl IntoResponse {
+    let token = headers
+        .get("x-fedi3-relay-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if token.is_empty() {
+        return (StatusCode::UNAUTHORIZED, "missing relay token").into_response();
+    }
+    let db = state.db.lock().await;
+    if !db.user_token_matches(&user, token).unwrap_or(false) {
+        return (StatusCode::UNAUTHORIZED, "invalid relay token").into_response();
+    }
+    match db.replace_user_blocks(&user, &req.blocked_actors, &req.blocked_domains) {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
 }
 
 async fn admin_list_users(
@@ -11339,6 +12182,8 @@ mod tests {
             relay_user_directory_ttl_secs: 3600,
             media_max_bytes_per_user: 1024 * 1024,
             spool_max_bytes_per_user: 1024 * 1024,
+            peer_sync_secs: 60,
+            peer_max_hops: 3,
         }
     }
 

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
+import '../../model/core_config.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import 'relay_admin_screen.dart';
@@ -27,10 +28,56 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   String? _relayError;
   List<Map<String, dynamic>> _relays = const [];
 
+  late final TextEditingController _anchorActorUrl;
+  String? _anchorError;
+  String? _anchorStatus;
+  bool _savingAnchor = false;
+
   @override
   void initState() {
     super.initState();
+    _anchorActorUrl = TextEditingController(
+        text: widget.appState.config?.anchorActorUrl ?? '');
     _loadRelays();
+  }
+
+  @override
+  void dispose() {
+    _anchorActorUrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveAnchor() async {
+    final raw = _anchorActorUrl.text.trim();
+    final normalized = CoreConfig.normalizeAnchorActorUrl(raw);
+    if (raw.isNotEmpty && normalized == null) {
+      setState(() {
+        _anchorError = context.l10n.networkingAnchorInvalid;
+        _anchorStatus = null;
+      });
+      return;
+    }
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    setState(() {
+      _anchorError = null;
+      _anchorStatus = null;
+      _savingAnchor = true;
+    });
+    try {
+      // Same update path used for the other networking/account fields: stop,
+      // persist and restart so the anchor takes effect immediately.
+      await widget.appState
+          .replaceConfig(cfg.copyWith(anchorActorUrl: normalized));
+      if (!mounted) return;
+      _anchorActorUrl.text = normalized ?? '';
+      setState(() => _anchorStatus = context.l10n.ok);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _anchorStatus = context.l10n.err(e.toString()));
+    } finally {
+      if (mounted) setState(() => _savingAnchor = false);
+    }
   }
 
   Future<void> _loadRelays() async {
@@ -169,6 +216,49 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
                   title: Text(r),
                 ),
               ),
+          const SizedBox(height: 20),
+          Text(context.l10n.networkingAnchorTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          TextField(
+            key: const Key('anchorActorUrlField'),
+            controller: _anchorActorUrl,
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: context.l10n.networkingAnchorLabel,
+              hintText: 'https://alice.example',
+              helperText: context.l10n.networkingAnchorHint,
+              helperMaxLines: 4,
+              errorText: _anchorError,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.icon(
+                key: const Key('saveAnchorButton'),
+                onPressed: _savingAnchor ? null : _saveAnchor,
+                icon: _savingAnchor
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.link),
+                label: Text(context.l10n.networkingAnchorSave),
+              ),
+              if (_anchorStatus != null)
+                Text(
+                  _anchorStatus!,
+                  style: _anchorStatus == context.l10n.ok
+                      ? null
+                      : TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: () {

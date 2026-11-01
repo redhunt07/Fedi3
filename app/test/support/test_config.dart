@@ -23,6 +23,7 @@ CoreConfig buildTestConfig({
   String bind = '127.0.0.1:8788',
   String internalToken = 'internal-token-0123456789abcdef',
   bool p2pEnable = false,
+  String? anchorActorUrl,
 }) {
   return CoreConfig(
     username: username,
@@ -44,6 +45,7 @@ CoreConfig buildTestConfig({
     manuallyApprovesFollowers: false,
     blockedDomains: const [],
     blockedActors: const [],
+    anchorActorUrl: anchorActorUrl,
   );
 }
 

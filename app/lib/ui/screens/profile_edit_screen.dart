@@ -412,6 +412,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       p2pCacheTtlSecs: c.p2pCacheTtlSecs,
       previousPublicBaseUrl: c.previousPublicBaseUrl,
       previousRelayToken: c.previousRelayToken,
+      anchorActorUrl: c.anchorActorUrl,
     );
   }
 

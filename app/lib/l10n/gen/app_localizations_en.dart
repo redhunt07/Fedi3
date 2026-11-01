@@ -1118,6 +1118,23 @@ class AppLocalizationsEn extends AppLocalizations {
   String get networkingHint => 'Some changes require restarting the core.';
 
   @override
+  String get networkingAnchorTitle => 'Identity (anchor)';
+
+  @override
+  String get networkingAnchorLabel => 'Identity anchor URL';
+
+  @override
+  String get networkingAnchorHint =>
+      'Leave empty to keep your identity on the relay. Set a static domain (e.g. https://alice.example) to decouple identity from the relay.';
+
+  @override
+  String get networkingAnchorInvalid =>
+      'Invalid URL: use http:// or https:// without a trailing slash.';
+
+  @override
+  String get networkingAnchorSave => 'Save anchor';
+
+  @override
   String get backupTitle => 'Backup';
 
   @override

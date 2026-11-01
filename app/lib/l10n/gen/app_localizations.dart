@@ -2078,6 +2078,36 @@ abstract class AppLocalizations {
   /// **'Some changes require restarting the core.'**
   String get networkingHint;
 
+  /// No description provided for @networkingAnchorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Identity (anchor)'**
+  String get networkingAnchorTitle;
+
+  /// No description provided for @networkingAnchorLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Identity anchor URL'**
+  String get networkingAnchorLabel;
+
+  /// No description provided for @networkingAnchorHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave empty to keep your identity on the relay. Set a static domain (e.g. https://alice.example) to decouple identity from the relay.'**
+  String get networkingAnchorHint;
+
+  /// No description provided for @networkingAnchorInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Invalid URL: use http:// or https:// without a trailing slash.'**
+  String get networkingAnchorInvalid;
+
+  /// No description provided for @networkingAnchorSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save anchor'**
+  String get networkingAnchorSave;
+
   /// No description provided for @backupTitle.
   ///
   /// In en, this message translates to:

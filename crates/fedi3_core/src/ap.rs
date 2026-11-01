@@ -1738,6 +1738,8 @@ async fn blocks_update(state: &ApState, req: Request<Body>) -> Response<Body> {
     } else {
         let _ = state.social.unblock_actor(&upd.actor);
     }
+    // Mirror the change on the relay so the block applies to inbound traffic too.
+    sync_blocks_to_relay(state).await;
     simple(StatusCode::OK, "ok")
 }
 
@@ -4425,6 +4427,43 @@ async fn social_follow_status_get(state: &ApState, req: Request<Body>) -> Respon
         .into_response()
 }
 
+/// Push the user's blocklist to the relay so moderation is enforced before the core.
+/// Best-effort: a relay outage must never block local blocking.
+pub async fn sync_blocks_to_relay(state: &ApState) {
+    let (Some(base), Some(token)) = (
+        state.cfg.relay_base_url.as_deref(),
+        state.cfg.relay_token.as_deref(),
+    ) else {
+        return;
+    };
+    let mut blocked_actors = state
+        .social
+        .list_blocked_actors(1000, 0)
+        .unwrap_or_default();
+    for a in &state.cfg.blocked_actors {
+        let a = a.trim();
+        if !a.is_empty() && !blocked_actors.iter().any(|x| x == a) {
+            blocked_actors.push(a.to_string());
+        }
+    }
+    let body = serde_json::json!({
+        "blocked_actors": blocked_actors,
+        "blocked_domains": state.cfg.blocked_domains,
+    });
+    let url = format!(
+        "{}/_fedi3/relay/user_blocks/{}",
+        base.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let _ = state
+        .http
+        .put(url)
+        .header("X-Fedi3-Relay-Token", token)
+        .json(&body)
+        .send()
+        .await;
+}
+
 pub(crate) fn canonical_actor_url(cfg: &ApConfig) -> String {
     match cfg
         .anchor_actor_url
@@ -4699,7 +4738,7 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
             .clone()
             .filter(|s| !s.trim().is_empty())
             .or_else(|| Some(cfg.username.clone())),
-        url: Some(format!("{base}/users/{}", cfg.username)),
+        url: Some(id.clone()),
         summary: cfg.summary.clone().or_else(|| Some(String::new())),
         published: cfg.published_ms.and_then(|ms| ms_to_rfc3339(ms)),
         manually_approves_followers: Some(cfg.manually_approves_followers),
@@ -8374,5 +8413,74 @@ fn from_hex(c: u8) -> Option<u8> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    fn cfg(anchor: Option<&str>) -> ApConfig {
+        ApConfig {
+            username: "alice".to_string(),
+            domain: "example.test".to_string(),
+            public_base_url: "https://relay.test".to_string(),
+            anchor_actor_url: anchor.map(|s| s.to_string()),
+            relay_base_url: Some("https://relay.test".to_string()),
+            relay_token: Some("token".to_string()),
+            public_key_pem: "key".to_string(),
+            also_known_as: vec![],
+            p2p_peer_id: None,
+            p2p_peer_addrs: vec![],
+            display_name: None,
+            summary: None,
+            icon_url: None,
+            icon_media_type: None,
+            image_url: None,
+            image_media_type: None,
+            profile_fields: vec![],
+            manually_approves_followers: false,
+            published_ms: None,
+            blocked_domains: vec![],
+            blocked_actors: vec![],
+            p2p_cache_ttl_secs: 0,
+        }
+    }
+
+    #[test]
+    fn anchor_moves_identity_but_keeps_transport_on_relay() {
+        let actor = build_local_actor(&cfg(Some("https://alice.test")));
+        assert_eq!(actor.id, "https://alice.test/users/alice");
+        assert_eq!(actor.url.as_deref(), Some("https://alice.test/users/alice"));
+        assert_eq!(actor.inbox, "https://relay.test/users/alice/inbox");
+        assert_eq!(actor.outbox, "https://relay.test/users/alice/outbox");
+        assert_eq!(actor.followers, "https://relay.test/users/alice/followers");
+        assert_eq!(
+            actor.publicKey.id,
+            "https://alice.test/users/alice#main-key"
+        );
+        assert!(actor
+            .also_known_as
+            .iter()
+            .any(|a| a == "https://relay.test/users/alice"));
+    }
+
+    #[test]
+    fn without_anchor_the_actor_stays_on_the_relay() {
+        let actor = build_local_actor(&cfg(None));
+        assert_eq!(actor.id, "https://relay.test/users/alice");
+        assert_eq!(actor.inbox, "https://relay.test/users/alice/inbox");
+    }
+
+    #[test]
+    fn anchor_documents_are_static_and_consistent() {
+        let (actor, webfinger) = anchor_documents(&cfg(Some("https://alice.test")));
+        assert_eq!(actor["id"], "https://alice.test/users/alice");
+        assert_eq!(actor["inbox"], "https://relay.test/users/alice/inbox");
+        assert_eq!(webfinger["subject"], "acct:alice@alice.test");
+        assert_eq!(
+            webfinger["links"][0]["href"],
+            "https://alice.test/users/alice"
+        );
     }
 }

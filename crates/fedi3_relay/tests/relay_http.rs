@@ -523,6 +523,7 @@ async fn reconnect_does_not_lose_new_tunnel() {
     let relay = TestRelay::start().await;
     relay.register("alice", &user_token()).await;
     let url = relay.ws_url(&format!("/tunnel/alice?token={}", user_token()));
+    let relay_base = relay.base_url();
     let (ws1, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     let (mut ws2, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     let responder = tokio::spawn(async move {
@@ -532,7 +533,7 @@ async fn reconnect_does_not_lose_new_tunnel() {
                 let id = v["id"].as_str().unwrap_or_default().to_string();
                 let actor = json!({
                     "@context": "https://www.w3.org/ns/activitystreams",
-                    "id": "http://127.0.0.1/users/alice",
+                    "id": format!("{relay_base}/users/alice"),
                     "type": "Person",
                     "preferredUsername": "alice"
                 });

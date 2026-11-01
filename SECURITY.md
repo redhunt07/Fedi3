@@ -57,6 +57,9 @@ Out of scope:
 - Private keys live in the core data directory with restrictive permissions; the relay never sees them.
 - Chat uses per-message AES-256-GCM keys wrapped with RSA-OAEP; this provides confidentiality and integrity but **not forward secrecy** (documented limitation).
 - The relay stores tokens as SHA-256 hashes; admin access requires a bearer token of at least 32 characters.
+- **Identity anchor (optional)**: the actor `id`/`url`/key can live on a separate static host (`anchor_actor_url`), while inbox/outbox stay on the relay. The relay redirects `GET /users/<user>` to the canonical actor and its WebFinger points there. The anchor host serves only public documents; the private key never leaves the core.
+- **Blind spool**: activities waiting for an offline core are stored encrypted (AES-256-GCM with a one-time key wrapped by RSA-OAEP-SHA256 under the user's public key). The relay forwards ciphertext envelopes to `POST /_fedi3/spool/envelope`; the core alone decrypts, rebuilds the signed request and verifies it. If the public key is not cached yet, the relay falls back to plaintext spool for that item.
+- **Moderation enforcement**: relay-wide blocks (`/admin/blocks`) and per-user blocks pushed by the core with the relay token are applied on the inbox path; a blocked sender gets `202` and is neither forwarded nor spooled.
 - Outbound federation fetches (actor documents, keys, objects, outbox pages, peer relays) go through a shared policy: only `http`/`https`, at most 3–5 redirects, and a DNS check that rejects private, loopback, link-local, unique-local, CGNAT and documentation addresses. Bodies are streamed with a hard cap (256 KiB for actor/key metadata, 2 MiB for objects and pages). The escape hatches `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH` (core) and `FEDI3_ALLOW_PRIVATE_REMOTE_FETCH` (relay) are off by default and exist only for loopback/LAN deployments.
 
 ## Hardening checklist for operators
@@ -68,6 +71,12 @@ Out of scope:
 - Run `scripts/relay_smoke_test.sh` after every deployment.
 - Keep `cargo audit` clean and rebuild images with `--locked`.
 - Leave `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH` / `FEDI3_ALLOW_PRIVATE_REMOTE_FETCH` off unless the instance legitimately talks to a LAN peer; they disable the SSRF address check.
+
+### Known residual risk (identity anchor and spool)
+
+- The anchor is a static host: if it is unreachable, remote servers cannot fetch the actor document or the key, even though the relay and the core are healthy. Host it on reliable static infrastructure; the identity itself remains portable (update the two files and the inbox URL).
+- The relay sees the plaintext body when it first receives an activity (it must route and check the signature); encryption protects the spool at rest and the flush path, not the ingress instant.
+- The extended Date skew for spooled envelopes relies on the unsigned `X-Fedi3-Spooled-Skew-Secs` header, capped at seven days. A sender can always use it, but the signature is still verified against the signed headers.
 
 ### Known residual risk (SSRF)
 

@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- Identity anchor (`anchor_actor_url`): the canonical actor id/key can live on a static domain while inbox/outbox stay on the relay; the relay redirects to the anchor and WebFinger resolves to it. Anchor documents are exported to `<data_dir>/anchor/` and `GET /_fedi3/anchor`.
+- Blind spool: the relay encrypts pending activities with the user's public key (AES-256-GCM + RSA-OAEP) and forwards ciphertext envelopes to `POST /_fedi3/spool/envelope`, where the core decrypts and verifies the original signature.
+- Relay mesh: peer relays exchange user directories (`GET /_fedi3/relay/users`) and forward requests for users hosted elsewhere, with an `X-Fedi3-Hops` loop budget.
+- Relay moderation: admin blocklists (`/admin/blocks`, actor/domain with optional expiry) and per-user blocklists pushed by the core (`PUT /_fedi3/relay/user_blocks/<user>`), enforced on the inbox path with `202` for blocked senders.
+- Core syncs its blocklist to the relay at startup and after every change.
+- End-to-end tests for anchor identity, blind spool, relay mesh and moderation.
 - End-to-end federation test: a real relay binary plus two real core runtimes (Follow, Accept, public note delivery, outbox).
 - Outbound fetch policy with SSRF protection, bounded redirects and streamed body caps (`net_policy`).
 - Pending follow requests for locked accounts, with internal endpoints and a Flutter screen to approve or reject them.

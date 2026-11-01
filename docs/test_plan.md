@@ -597,11 +597,11 @@ I test scritti prima dei fix devono essere marcati come `#[ignore]` con un comme
 
 ## 11. Stato di implementazione
 
-Implementato il 2026-10-31 in due iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:
+Implementato il 2026-10-31 e il 2026-11-01 in tre iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:
 
 | Area | Casi implementati | Dove |
 |---|---|---|
-| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy) | 39 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
+| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy, anchor) | 42 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
 | Integrazione core — ActivityPub e sicurezza | 41 | `crates/fedi3_core/tests/ap_security.rs` |
 | Integrazione core — database e coda di consegna | 19 | `crates/fedi3_core/tests/db_queue.rs` |
 | Integrazione core — FFI e runtime | 12 | `crates/fedi3_core/tests/runtime_ffi.rs` |
@@ -611,11 +611,13 @@ Implementato il 2026-10-31 in due iterazioni. Conteggi reali verificati con l'es
 | Unit relay | 35 | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
 | Integrazione relay | 29 | `crates/fedi3_relay/tests/relay_http.rs` |
 | **End-to-end federazione (relay reale + due core reali)** | **1** | `crates/fedi3_relay/tests/e2e_federation.rs` |
-| **Totale Rust** | **205** | |
-| Unit app (modelli, MFM, store, core API, stato, follow request) | 27 | `app/test/unit/` |
-| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio, richieste di follow) | 46 | `app/test/widget/`, `app/test/widget_test.dart` |
+| **End-to-end identità anchor + spool cieco** | **1** | `crates/fedi3_relay/tests/e2e_anchor_spool.rs` |
+| **Integrazione mesh relay + moderazione** | **1** | `crates/fedi3_relay/tests/mesh_moderation.rs` |
+| **Totale Rust** | **210** | |
+| Unit app (modelli, MFM, store, core API, stato, follow request, anchor) | 30 | `app/test/unit/` |
+| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio, richieste di follow, networking/anchor) | 49 | `app/test/widget/`, `app/test/widget_test.dart` |
 | l10n e configurazione di piattaforma | 9 | `app/test/l10n/`, `app/test/platform_config_test.dart` |
-| **Totale Flutter** | **82** | |
+| **Totale Flutter** | **88** | |
 
 ### Scenario end-to-end implementato (X-01…X-07)
 
@@ -629,6 +631,24 @@ Implementato il 2026-10-31 in due iterazioni. Conteggi reali verificati con l'es
 
 Il test ha fatto emergere due difetti reali (deadlock del tunnel su fetch annidati, shared inbox del relay incapace di espandere `followers`), entrambi corretti.
 
+### Scenario end-to-end decentralizzazione (identità, spool, mesh, moderazione)
+
+`crates/fedi3_relay/tests/e2e_anchor_spool.rs`:
+
+1. il core pubblica i documenti anchor in `<data_dir>/anchor/` e un host statico di test li serve;
+2. il relay reindirizza `GET /users/alice` all'actor canonico e il WebFinger punta all'anchor;
+3. l'actor anchor mantiene `inbox`/`outbox` sul relay e la chiave sull'anchor;
+4. la federazione funziona in modalità anchor (follow e consegna della nota);
+5. con il core fermo il relay mette in spool la richiesta **cifrata**: nel database non compare il plaintext;
+6. alla riconnessione il relay invia l'envelope cifrato, il core decifra, verifica la firma e la notifica arriva.
+
+`crates/fedi3_relay/tests/mesh_moderation.rs`:
+
+1. due relay si registrano come peer e sincronizzano la directory utenti;
+2. una richiesta per un utente ospitato sull'altro relay viene inoltrata al relay di casa;
+3. una blocklist relay-wide e una per-utente bloccano il mittente con `202`, senza forward né spool;
+4. il token errato viene rifiutato e un utente sconosciuto resta `404` (nessun loop di hop).
+
 Gate eseguiti con output reale sullo stato finale:
 
 | Gate | Comando | Esito |
@@ -636,11 +656,11 @@ Gate eseguiti con output reale sullo stato finale:
 | Formattazione Rust | `cargo fmt --all -- --check` | ✅ |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warning |
 | Build | `cargo build --workspace --locked` | ✅ |
-| Test Rust | `cargo test --workspace --locked` | ✅ 205/205 |
-| End-to-end | `cargo test -p fedi3_relay --test e2e_federation` | ✅ 1/1 |
+| Test Rust | `cargo test --workspace --locked` | ✅ 210/210 |
+| End-to-end | `cargo test -p fedi3_relay --test e2e_federation --test e2e_anchor_spool --test mesh_moderation` | ✅ 3/3 |
 | Analisi app | `flutter analyze --fatal-infos` | ✅ |
 | Formattazione app | `dart format --set-exit-if-changed lib test` | ✅ |
-| Test app | `flutter test` | ✅ 82/82 |
+| Test app | `flutter test` | ✅ 88/88 |
 | Configurazione piattaforma | `scripts/verify_platform_config.sh` | ✅ 9/9 |
 
 ### Scostamenti dal piano

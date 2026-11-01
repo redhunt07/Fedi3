@@ -146,6 +146,7 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
         p2pCacheTtlSecs: c.p2pCacheTtlSecs,
         previousPublicBaseUrl: c.previousPublicBaseUrl,
         previousRelayToken: c.previousRelayToken,
+        anchorActorUrl: c.anchorActorUrl,
       );
       await widget.appState.replaceConfig(updated);
       if (!mounted) return;

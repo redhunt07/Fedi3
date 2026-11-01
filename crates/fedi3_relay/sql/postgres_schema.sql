@@ -337,3 +337,34 @@ CREATE TABLE IF NOT EXISTS inbox_dedupe (
   PRIMARY KEY (activity_id, recipient)
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_dedupe_created ON inbox_dedupe (created_at_ms);
+
+CREATE TABLE IF NOT EXISTS relay_peers (
+  relay_url TEXT PRIMARY KEY,
+  added_at_ms BIGINT NOT NULL,
+  last_seen_ms BIGINT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remote_users (
+  username TEXT PRIMARY KEY,
+  relay_url TEXT NOT NULL,
+  updated_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_remote_users_relay ON remote_users (relay_url);
+
+CREATE TABLE IF NOT EXISTS relay_blocks (
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  reason TEXT NULL,
+  created_at_ms BIGINT NOT NULL,
+  created_by TEXT NULL,
+  expires_at_ms BIGINT NULL,
+  PRIMARY KEY (kind, value)
+);
+
+CREATE TABLE IF NOT EXISTS user_blocks (
+  username TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at_ms BIGINT NOT NULL,
+  PRIMARY KEY (username, kind, value)
+);

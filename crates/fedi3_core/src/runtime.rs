@@ -626,6 +626,15 @@ fn run_core(
             }
         }
 
+        // Best-effort: push the local blocklist to the relay so moderation is enforced
+        // before inbound traffic reaches this core.
+        {
+            let st = state.clone();
+            tokio::spawn(async move {
+                crate::ap::sync_blocks_to_relay(&st).await;
+            });
+        }
+
         net.set_p2p_enabled(p2p_cfg.enable);
         // H-42: every background worker is registered here so shutdown can join it.
         let mut shutdown_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
