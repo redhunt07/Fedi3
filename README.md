@@ -51,6 +51,7 @@ Nessun test richiede Docker o servizi esterni: il relay viene testato su SQLite 
 - [`docs/getting_started.md`](docs/getting_started.md) — primi passi
 - [`docs/deploy_relay.md`](docs/deploy_relay.md) — mettere in produzione il relay
 - [`docs/deploy_core.md`](docs/deploy_core.md) — core locale e modalità P2P
+- [`docs/decentralization.md`](docs/decentralization.md) — identità separata dal relay, spool cifrato, mesh e moderazione
 - [`docs/build_linux.md`](docs/build_linux.md) — compilare app e AppImage su Linux
 - [`docs/app_guide.md`](docs/app_guide.md) — guida utente dell'app
 - [`docs/ops_backup_restore.md`](docs/ops_backup_restore.md) — backup e ripristino
