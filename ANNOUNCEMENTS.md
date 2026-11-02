@@ -3,6 +3,12 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-02 — Scopri e notifiche raggruppate
+
+La scheda Scopri ora mostra hashtag in tendenza e account suggeriti con follow
+in un tap. Le notifiche ripetute dello stesso autore vengono raggruppate e
+possono essere espanse.
+
 ## 2026-11-02 — Post salvati e disponibili offline
 
 I segnalibri ora conservano una copia locale del post: la nuova schermata

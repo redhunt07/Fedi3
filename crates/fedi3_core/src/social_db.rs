@@ -1738,6 +1738,42 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
+    pub fn list_suggested_actor_ids(
+        &self,
+        exclude: &[String],
+        limit: u32,
+    ) -> Result<Vec<String>> {
+        let conn = self.connect()?;
+        let limit = limit.min(20).max(1) as i64;
+        let mut sql = String::from(
+            "SELECT actor_id, COUNT(*) AS c FROM federated_feed \
+             WHERE actor_id IS NOT NULL AND actor_id != ''",
+        );
+        if !exclude.is_empty() {
+            sql.push_str(" AND actor_id NOT IN (");
+            for i in 0..exclude.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str(&format!("?{}", i + 1));
+            }
+            sql.push(')');
+        }
+        sql.push_str(&format!(
+            " GROUP BY actor_id ORDER BY c DESC, actor_id ASC LIMIT ?{}",
+            exclude.len() + 1
+        ));
+        let mut stmt = conn.prepare(&sql)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for id in exclude {
+            params_vec.push(id);
+        }
+        let limit_ref = &limit;
+        params_vec.push(limit_ref);
+        let rows = stmt.query_map(params_vec.as_slice(), |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn list_trending_hashtags(&self, limit: u32) -> Result<Vec<(String, u64)>> {
         let conn = self.connect()?;
         let limit = limit.min(50).max(1) as i64;
@@ -4453,6 +4489,24 @@ mod hashtag_tests {
         let notes = db.search_notes_by_tag("fedi3", 10, None).expect("notes");
         assert_eq!(notes.total, 2);
         assert_eq!(notes.items.len(), 2);
+        {
+            let conn = db.connect().expect("connect");
+            for (id, actor) in [
+                ("fed-1", "https://a.test/users/a"),
+                ("fed-2", "https://a.test/users/b"),
+                ("fed-3", "https://a.test/users/b"),
+            ] {
+                conn.execute(
+                    "INSERT INTO federated_feed(activity_id,created_at_ms,actor_id,size_bytes,last_access_ms,activity_json) VALUES (?1,1,?2,2,1,?3)",
+                    params![id, actor, b"{}".to_vec()],
+                )
+                .expect("insert federated feed");
+            }
+        }
+        let suggested = db
+            .list_suggested_actor_ids(&["https://a.test/users/a".to_string()], 10)
+            .expect("suggested");
+        assert_eq!(suggested, vec!["https://a.test/users/b".to_string()]);
         let _ = std::fs::remove_file(&path);
     }
 }

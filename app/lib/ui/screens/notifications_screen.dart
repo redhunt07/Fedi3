@@ -255,12 +255,33 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       BuildContext context, List<Map<String, dynamic>> items) {
     final out = <Widget>[];
     String? last;
+    final cluster = <Map<String, dynamic>>[];
+    String? clusterActor;
+    String? clusterType;
+
+    void flush() {
+      if (cluster.isEmpty) return;
+      if (cluster.length == 1) {
+        out.add(_NotificationItem(
+            appState: widget.appState, item: cluster.first));
+      } else {
+        out.add(_NotificationCluster(
+          appState: widget.appState,
+          items: List<Map<String, dynamic>>.of(cluster),
+        ));
+      }
+      cluster.clear();
+      clusterActor = null;
+      clusterType = null;
+    }
+
     for (final item in items) {
       final ts = (item['ts'] is num)
           ? (item['ts'] as num).toInt()
           : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
       final bucket = _bucket(ts);
       if (bucket != last) {
+        flush();
         out.add(Padding(
           padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
           child: Text(
@@ -274,8 +295,27 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ));
         last = bucket;
       }
-      out.add(_NotificationItem(appState: widget.appState, item: item));
+      final activity = (item['activity'] is Map)
+          ? (item['activity'] as Map).cast<String, dynamic>()
+          : const <String, dynamic>{};
+      final type = _normalizeNotificationType(activity);
+      final actor = (activity['actor'] as String?)?.trim() ?? '';
+      final groupable = type == 'Like' ||
+          type == 'Announce' ||
+          type == 'EmojiReact';
+      if (groupable &&
+          actor.isNotEmpty &&
+          actor == clusterActor &&
+          type == clusterType) {
+        cluster.add(item);
+      } else {
+        flush();
+        cluster.add(item);
+        clusterActor = groupable ? actor : null;
+        clusterType = groupable ? type : null;
+      }
     }
+    flush();
     return out;
   }
 
@@ -457,6 +497,32 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
+String _notificationExcerpt(Map<String, dynamic> activity) {
+  final obj = activity['object'];
+  dynamic content;
+  if (obj is Map) {
+    final m = obj.cast<String, dynamic>();
+    content = m['content'] ?? m['summary'] ?? m['name'] ?? m['id'];
+  } else {
+    content = obj;
+  }
+  if (content is! String) return '';
+  var text = content
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<[^>]+>'), ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (text.length > 180) {
+    text = '${text.substring(0, 180)}…';
+  }
+  return text;
+}
+
 class _NotificationItem extends StatefulWidget {
   const _NotificationItem({required this.appState, required this.item});
 
@@ -511,29 +577,7 @@ class _NotificationItemState extends State<_NotificationItem> {
   }
 
   String _plainExcerpt(Map<String, dynamic> activity) {
-    final obj = activity['object'];
-    dynamic content;
-    if (obj is Map) {
-      final m = obj.cast<String, dynamic>();
-      content = m['content'] ?? m['summary'] ?? m['name'] ?? m['id'];
-    } else {
-      content = obj;
-    }
-    if (content is! String) return '';
-    var text = content
-        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
-        .replaceAll(RegExp(r'<[^>]+>'), ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (text.length > 180) {
-      text = '${text.substring(0, 180)}…';
-    }
-    return text;
+    return _notificationExcerpt(activity);
   }
 
   @override
@@ -724,6 +768,224 @@ class _NotificationItemState extends State<_NotificationItem> {
       'Create' => context.l10n.notificationsMentionOrReply,
       _ => context.l10n.notificationsGeneric,
     };
+  }
+}
+
+class _NotificationCluster extends StatefulWidget {
+  const _NotificationCluster({required this.appState, required this.items});
+
+  final AppState appState;
+  final List<Map<String, dynamic>> items;
+
+  @override
+  State<_NotificationCluster> createState() => _NotificationClusterState();
+}
+
+class _NotificationClusterState extends State<_NotificationCluster> {
+  ActorProfile? _profile;
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadActor();
+  }
+
+  Future<void> _loadActor() async {
+    final first = widget.items.first;
+    final activity = (first['activity'] is Map)
+        ? (first['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    if (actor.isEmpty) return;
+    final profile = await ActorRepository.instance.getActor(actor);
+    if (!mounted) return;
+    setState(() => _profile = profile);
+  }
+
+  String get _actorUrl {
+    final first = widget.items.first;
+    final activity = (first['activity'] is Map)
+        ? (first['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    return (activity['actor'] as String?)?.trim() ?? '';
+  }
+
+  String get _name {
+    final profile = _profile;
+    if (profile != null && profile.displayName.trim().isNotEmpty) {
+      return profile.displayName.trim();
+    }
+    final uri = Uri.tryParse(_actorUrl);
+    if (uri == null) return _actorUrl;
+    for (final seg in uri.pathSegments.reversed) {
+      if (seg.trim().isNotEmpty) return seg.trim();
+    }
+    return _actorUrl;
+  }
+
+  String get _label {
+    final first = widget.items.first;
+    final activity = (first['activity'] is Map)
+        ? (first['activity'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    return switch (_normalizeNotificationType(activity)) {
+      'Like' => context.l10n.notificationsLike,
+      'Announce' => context.l10n.notificationsBoost,
+      'EmojiReact' => context.l10n.notificationsReact,
+      _ => context.l10n.notificationsGeneric,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = _profile;
+    final username = profile?.preferredUsername.isNotEmpty == true
+        ? profile!.preferredUsername
+        : _name;
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(UiTokens.radiusCard),
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  StatusAvatar(
+                    imageUrl: profile?.iconUrl ?? '',
+                    size: 40,
+                    showStatus: true,
+                    statusKey: username,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13.5),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withAlpha(22),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '×${widget.items.length}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color:
+                                      Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _label,
+                          style: TextStyle(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+              if (_expanded) ...[
+                const SizedBox(height: 8),
+                for (final item in widget.items)
+                  Builder(builder: (context) {
+                    final activity = (item['activity'] is Map)
+                        ? (item['activity'] as Map).cast<String, dynamic>()
+                        : const <String, dynamic>{};
+                    final excerpt = _notificationExcerpt(activity);
+                    final ts = (item['ts'] is num)
+                        ? (item['ts'] as num).toInt()
+                        : int.tryParse(item['ts']?.toString() ?? '') ?? 0;
+                    final when = ts > 0
+                        ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal()
+                        : null;
+                    return InkWell(
+                      onTap: () {
+                        final obj = activity['object'];
+                        if (obj is Map) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => NoteDetailScreen(
+                                  appState: widget.appState,
+                                  activity: activity),
+                            ),
+                          );
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        child: Row(
+                          children: [
+                            Icon(Icons.subdirectory_arrow_right_rounded,
+                                size: 15,
+                                color:
+                                    Theme.of(context).colorScheme.primary),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                excerpt.isEmpty
+                                    ? context.l10n.notificationsGeneric
+                                    : excerpt,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                            if (when != null)
+                              Text(
+                                '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -631,6 +631,8 @@
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
   "presenceChangeTooltip": "Cambia stato",
+  "suggestedTitle": "Account suggeriti",
+  "suggestedHint": "Persone attive nel Fediverso che potresti seguire",
   "trendingTitle": "Scopri",
   "trendingHint": "Hashtag in tendenza nel Fediverso",
   "presenceTitle": "Stato",

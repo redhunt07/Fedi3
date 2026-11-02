@@ -11,12 +11,14 @@ import 'package:flutter/rendering.dart';
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import 'compose_screen.dart';
 import 'search_screen.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
+import '../widgets/status_avatar.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
 
@@ -227,6 +229,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                               headerTitle: context.l10n.timelineTabDiscover,
                               headerTooltip: context.l10n.timelineSocialTooltip,
                               constrainWidth: false,
+                              header: _ExploreHeader(appState: widget.appState),
                             ),
                             const SizedBox(width: 16),
                             _TimelineList(
@@ -272,6 +275,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                           headerTitle: context.l10n.timelineTabDiscover,
                           headerTooltip: context.l10n.timelineSocialTooltip,
                           constrainWidth: true,
+                          header: _ExploreHeader(appState: widget.appState),
                         ),
                         _TimelineList(
                           key: _listKeys[3],
@@ -376,6 +380,291 @@ class _TimelinesScreenState extends State<TimelinesScreen>
   }
 }
 
+class _ExploreHeader extends StatefulWidget {
+  const _ExploreHeader({required this.appState});
+
+  final AppState appState;
+
+  @override
+  State<_ExploreHeader> createState() => _ExploreHeaderState();
+}
+
+class _ExploreHeaderState extends State<_ExploreHeader> {
+  List<Map<String, dynamic>> _trending = const [];
+  List<ActorProfile> _suggested = const [];
+  final Set<String> _followed = <String>{};
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final cfg = widget.appState.config;
+    if (cfg == null || !widget.appState.isRunning) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final api = CoreApi(config: cfg);
+    try {
+      final results = await Future.wait([
+        api.fetchTrendingHashtags(limit: 8),
+        api.fetchSuggestedActors(limit: 6),
+      ]);
+      final tags = <Map<String, dynamic>>[];
+      final rawTags = results[0]['items'];
+      if (rawTags is List) {
+        for (final it in rawTags) {
+          if (it is Map) tags.add(it.cast<String, dynamic>());
+        }
+      }
+      final actors = <ActorProfile>[];
+      final rawActors = results[1]['items'];
+      if (rawActors is List) {
+        for (final it in rawActors) {
+          if (it is! String) continue;
+          final profile = await ActorRepository.instance.getActor(it);
+          if (profile != null) actors.add(profile);
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _trending = tags;
+        _suggested = actors;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _follow(ActorProfile profile) async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final api = CoreApi(config: cfg);
+    try {
+      await api.follow(profile.id);
+      if (!mounted) return;
+      setState(() => _followed.add(profile.id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.notificationsFollowedBack)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.l10n.notificationsFollowBackFailed(
+              e.toString())),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 12),
+        child: Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    if (_trending.isEmpty && _suggested.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_trending.isNotEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(UiTokens.padCard),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.trending_up_rounded,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text(context.l10n.trendingTitle,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      context.l10n.trendingHint,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final tag in _trending.take(8))
+                          Builder(builder: (context) {
+                            final name = (tag['name']?.toString() ?? '')
+                                .trim()
+                                .replaceFirst(RegExp(r'^#+'), '');
+                            if (name.isEmpty) return const SizedBox.shrink();
+                            return ActionChip(
+                              label: Text('#$name',
+                                  style: const TextStyle(fontSize: 12)),
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => SearchScreen(
+                                    appState: widget.appState,
+                                    initialQuery: '#$name',
+                                    initialTab: SearchTab.hashtags,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (_suggested.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(UiTokens.padCard),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.people_alt_outlined,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text(context.l10n.suggestedTitle,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      context.l10n.suggestedHint,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 138,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _suggested.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(width: 10),
+                        itemBuilder: (context, index) {
+                          final profile = _suggested[index];
+                          final followed =
+                              _followed.contains(profile.id);
+                          return Container(
+                            width: 168,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest
+                                  .withAlpha(110),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .outlineVariant,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                StatusAvatar(
+                                  imageUrl: profile.iconUrl,
+                                  size: 38,
+                                  showStatus: true,
+                                  statusKey: profile.preferredUsername,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  profile.displayName.trim().isEmpty
+                                      ? profile.preferredUsername
+                                      : profile.displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12.5),
+                                ),
+                                Text(
+                                  '@${profile.preferredUsername}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                                ),
+                                const Spacer(),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: FilledButton.tonal(
+                                    style: FilledButton.styleFrom(
+                                      visualDensity:
+                                          VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8),
+                                    ),
+                                    onPressed: followed
+                                        ? null
+                                        : () => _follow(profile),
+                                    child: Text(
+                                      followed
+                                          ? context.l10n.profileFollowing
+                                          : context.l10n.settingsFollow,
+                                      style:
+                                          const TextStyle(fontSize: 11.5),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _TimelineList extends StatefulWidget {
   const _TimelineList({
     super.key,
@@ -385,6 +674,7 @@ class _TimelineList extends StatefulWidget {
     required this.headerTitle,
     required this.headerTooltip,
     required this.constrainWidth,
+    this.header,
   });
 
   final AppState appState;
@@ -393,6 +683,7 @@ class _TimelineList extends StatefulWidget {
   final String headerTitle;
   final String headerTooltip;
   final bool constrainWidth;
+  final Widget? header;
 
   @override
   State<_TimelineList> createState() => _TimelineListState();
@@ -750,6 +1041,7 @@ class _TimelineListState extends State<_TimelineList>
                     ],
                   ),
                 ),
+                if (widget.header != null) widget.header!,
               ],
             );
           }

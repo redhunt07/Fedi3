@@ -29,6 +29,15 @@ Map<String, dynamic> _follow(String actor) => {
       'activity': {'type': 'Follow', 'actor': actor},
     };
 
+Map<String, dynamic> _like(String actor, String noteId) => {
+      'ts': 1760000000000,
+      'activity': {
+        'type': 'Like',
+        'actor': actor,
+        'object': {'id': noteId, 'content': 'post $noteId'},
+      },
+    };
+
 void main() {
   testWidgets(
       'AW-11 new notification is merged at the head without clearing the list',
@@ -102,6 +111,40 @@ void main() {
     expect(find.text('one'), findsOneWidget);
     // Cursor is preserved: the load-more button remains available.
     expect(find.text('Load more'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('AW-11d notifications from one actor are grouped and expandable',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client = FakeHttpClient();
+    client.json('GET', '/_fedi3/notifications', {
+      'items': [
+        _like('https://a.test/users/one', 'n1'),
+        _like('https://a.test/users/one', 'n2'),
+      ],
+      'next': null,
+    });
+    client.route(
+      'GET',
+      '/_fedi3/stream',
+      FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'}, body: ''),
+    );
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(tester, NotificationsScreen(appState: app));
+    await tester.pumpAndSettle();
+
+    expect(find.text('×2'), findsOneWidget);
+    expect(find.text('post n1'), findsNothing);
+    await tester.tap(find.text('×2'));
+    await tester.pumpAndSettle();
+    expect(find.text('post n1'), findsOneWidget);
+    expect(find.text('post n2'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });

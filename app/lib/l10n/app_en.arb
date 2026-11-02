@@ -631,6 +631,8 @@
   "statusCoreStoppedShort": "core off",
   "statusUnknownShort": "?",
   "presenceChangeTooltip": "Change status",
+  "suggestedTitle": "Suggested accounts",
+  "suggestedHint": "Active people across the Fediverse you might follow",
   "trendingTitle": "Discover",
   "trendingHint": "Trending hashtags across the Fediverse",
   "presenceTitle": "Status",

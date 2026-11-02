@@ -1351,6 +1351,13 @@ class AppLocalizationsIt extends AppLocalizations {
   String get presenceChangeTooltip => 'Cambia stato';
 
   @override
+  String get suggestedTitle => 'Account suggeriti';
+
+  @override
+  String get suggestedHint =>
+      'Persone attive nel Fediverso che potresti seguire';
+
+  @override
   String get trendingTitle => 'Scopri';
 
   @override

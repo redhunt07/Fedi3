@@ -2504,6 +2504,18 @@ abstract class AppLocalizations {
   /// **'Change status'**
   String get presenceChangeTooltip;
 
+  /// No description provided for @suggestedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggested accounts'**
+  String get suggestedTitle;
+
+  /// No description provided for @suggestedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Active people across the Fediverse you might follow'**
+  String get suggestedHint;
+
   /// No description provided for @trendingTitle.
   ///
   /// In en, this message translates to:

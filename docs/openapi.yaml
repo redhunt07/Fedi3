@@ -371,6 +371,24 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Search'
+  /_fedi3/suggested/actors:
+    get:
+      tags: [core]
+      summary: Account suggeriti
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: URL attore suggeriti
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {type: string}
   /_fedi3/trending/hashtags:
     get:
       tags: [core]
