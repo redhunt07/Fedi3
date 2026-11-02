@@ -76,6 +76,40 @@ class ChatSearchHit {
   }
 }
 
+class ChatCallSignal {
+  ChatCallSignal({
+    required this.id,
+    required this.fromActor,
+    required this.toActor,
+    required this.callId,
+    required this.action,
+    required this.data,
+    required this.createdAtMs,
+  });
+
+  final int id;
+  final String fromActor;
+  final String? toActor;
+  final String callId;
+  final String action;
+  final Map<String, dynamic> data;
+  final int createdAtMs;
+
+  factory ChatCallSignal.fromJson(Map<String, dynamic> json) {
+    return ChatCallSignal(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      fromActor: json['from_actor']?.toString() ?? '',
+      toActor: json['to_actor']?.toString(),
+      callId: json['call_id']?.toString() ?? '',
+      action: json['action']?.toString() ?? '',
+      data: (json['data'] is Map)
+          ? (json['data'] as Map).cast<String, dynamic>()
+          : const {},
+      createdAtMs: (json['created_at_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class ChatMessageItem {
   ChatMessageItem({
     required this.messageId,

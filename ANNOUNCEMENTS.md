@@ -1,3 +1,10 @@
+## 2026-11-02 — Chiamate E2E, note audio e video
+
+Chiamate audio/video 1:1 e di gruppo in mesh P2P, con condivisione schermo e
+audio del PC. La segnalazione passa negli envelope cifrati della chat, mentre
+i media viaggiano diretti tra i peer in WebRTC. Aggiunte anche note audio e
+video messaggi registrabili dal composer.
+
 ## 2026-11-02 — Ricerca globale nelle chat
 
 La ricerca ora copre tutte le conversazioni dell'utente, resta locale al core

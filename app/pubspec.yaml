@@ -19,6 +19,8 @@ dependencies:
   intl: ^0.20.2
   flutter_local_notifications: ^17.2.2
   desktop_webview_window: ^0.2.3
+  flutter_webrtc: ^1.6.3
+  record: ^7.1.2
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_windows_video: ^1.0.11

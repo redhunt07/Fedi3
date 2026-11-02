@@ -317,6 +317,63 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatRoleChange => 'Change role';
 
   @override
+  String get callAudio => 'Audio call';
+
+  @override
+  String get callVideo => 'Video call';
+
+  @override
+  String get callIncoming => 'Incoming call';
+
+  @override
+  String get callIncomingVideo => 'Video call';
+
+  @override
+  String get callIncomingAudio => 'Audio call';
+
+  @override
+  String get callAccept => 'Accept';
+
+  @override
+  String get callDecline => 'Decline';
+
+  @override
+  String get chatAudioNote => 'Audio note';
+
+  @override
+  String get chatVideoNote => 'Video message';
+
+  @override
+  String get chatSendNote => 'Send note';
+
+  @override
+  String get callNoPermission => 'Microphone permission denied';
+
+  @override
+  String get callMute => 'Mute';
+
+  @override
+  String get callUnmute => 'Unmute';
+
+  @override
+  String get callCamera => 'Camera';
+
+  @override
+  String get callScreenShare => 'Share screen';
+
+  @override
+  String get callEnd => 'End call';
+
+  @override
+  String get callConnecting => 'Connecting…';
+
+  @override
+  String get callWaiting => 'Waiting…';
+
+  @override
+  String get callNoAnswer => 'No answer';
+
+  @override
   String get chatSearchAllTitle => 'Search chats';
 
   @override

@@ -331,6 +331,19 @@ pub fn store_incoming_payload_db(
                 }
             }
         }
+    } else if payload.op == "call" {
+        let call_id = payload.message_id.as_deref().unwrap_or_default();
+        let action = payload.action.as_deref().unwrap_or("signal");
+        let to = payload.targets.as_ref().and_then(|t| t.first()).cloned();
+        let data = payload.text.clone().unwrap_or_else(|| "{}".to_string());
+        let _ = social.insert_chat_call_signal(
+            thread_id,
+            sender,
+            to.as_deref(),
+            call_id,
+            action,
+            &data,
+        );
     } else if payload.op == "system" {
             // A group can be introduced by its creator: accept the first system message only if
             // the sender is in the announced member list and the local actor is a member too.

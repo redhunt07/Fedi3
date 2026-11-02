@@ -686,6 +686,120 @@ abstract class AppLocalizations {
   /// **'Change role'**
   String get chatRoleChange;
 
+  /// No description provided for @callAudio.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio call'**
+  String get callAudio;
+
+  /// No description provided for @callVideo.
+  ///
+  /// In en, this message translates to:
+  /// **'Video call'**
+  String get callVideo;
+
+  /// No description provided for @callIncoming.
+  ///
+  /// In en, this message translates to:
+  /// **'Incoming call'**
+  String get callIncoming;
+
+  /// No description provided for @callIncomingVideo.
+  ///
+  /// In en, this message translates to:
+  /// **'Video call'**
+  String get callIncomingVideo;
+
+  /// No description provided for @callIncomingAudio.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio call'**
+  String get callIncomingAudio;
+
+  /// No description provided for @callAccept.
+  ///
+  /// In en, this message translates to:
+  /// **'Accept'**
+  String get callAccept;
+
+  /// No description provided for @callDecline.
+  ///
+  /// In en, this message translates to:
+  /// **'Decline'**
+  String get callDecline;
+
+  /// No description provided for @chatAudioNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio note'**
+  String get chatAudioNote;
+
+  /// No description provided for @chatVideoNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Video message'**
+  String get chatVideoNote;
+
+  /// No description provided for @chatSendNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Send note'**
+  String get chatSendNote;
+
+  /// No description provided for @callNoPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone permission denied'**
+  String get callNoPermission;
+
+  /// No description provided for @callMute.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute'**
+  String get callMute;
+
+  /// No description provided for @callUnmute.
+  ///
+  /// In en, this message translates to:
+  /// **'Unmute'**
+  String get callUnmute;
+
+  /// No description provided for @callCamera.
+  ///
+  /// In en, this message translates to:
+  /// **'Camera'**
+  String get callCamera;
+
+  /// No description provided for @callScreenShare.
+  ///
+  /// In en, this message translates to:
+  /// **'Share screen'**
+  String get callScreenShare;
+
+  /// No description provided for @callEnd.
+  ///
+  /// In en, this message translates to:
+  /// **'End call'**
+  String get callEnd;
+
+  /// No description provided for @callConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get callConnecting;
+
+  /// No description provided for @callWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting…'**
+  String get callWaiting;
+
+  /// No description provided for @callNoAnswer.
+  ///
+  /// In en, this message translates to:
+  /// **'No answer'**
+  String get callNoAnswer;
+
   /// No description provided for @chatSearchAllTitle.
   ///
   /// In en, this message translates to:

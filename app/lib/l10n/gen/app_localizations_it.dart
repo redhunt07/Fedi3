@@ -317,6 +317,63 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatRoleChange => 'Cambia ruolo';
 
   @override
+  String get callAudio => 'Chiamata audio';
+
+  @override
+  String get callVideo => 'Chiamata video';
+
+  @override
+  String get callIncoming => 'Chiamata in arrivo';
+
+  @override
+  String get callIncomingVideo => 'Videochiamata';
+
+  @override
+  String get callIncomingAudio => 'Chiamata audio';
+
+  @override
+  String get callAccept => 'Accetta';
+
+  @override
+  String get callDecline => 'Rifiuta';
+
+  @override
+  String get chatAudioNote => 'Nota audio';
+
+  @override
+  String get chatVideoNote => 'Video messaggio';
+
+  @override
+  String get chatSendNote => 'Invia nota';
+
+  @override
+  String get callNoPermission => 'Permesso microfono negato';
+
+  @override
+  String get callMute => 'Microfono';
+
+  @override
+  String get callUnmute => 'Riattiva microfono';
+
+  @override
+  String get callCamera => 'Fotocamera';
+
+  @override
+  String get callScreenShare => 'Condividi schermo';
+
+  @override
+  String get callEnd => 'Termina';
+
+  @override
+  String get callConnecting => 'Connessione…';
+
+  @override
+  String get callWaiting => 'In attesa…';
+
+  @override
+  String get callNoAnswer => 'Nessuna risposta';
+
+  @override
   String get chatSearchAllTitle => 'Cerca nelle chat';
 
   @override

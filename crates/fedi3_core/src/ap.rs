@@ -329,6 +329,8 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("POST", "/_fedi3/chat/thread/delete") => chat_thread_delete_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/members") => chat_thread_members_post(state, req).await,
         ("GET", "/_fedi3/chat/search") => chat_search_all_get(state, req).await,
+        ("POST", "/_fedi3/chat/call/signal") => chat_call_signal_post(state, req).await,
+        ("GET", "/_fedi3/chat/call/signals") => chat_call_signals_get(state, req).await,
         ("GET", "/_fedi3/chat/thread/search") => chat_thread_search_get(state, req).await,
         ("GET", "/_fedi3/chat/thread/pin") => chat_thread_pin_get(state, req).await,
         ("POST", "/_fedi3/chat/thread/pin") => chat_thread_pin_post(state, req).await,
@@ -3240,6 +3242,15 @@ struct ChatThreadPinReq {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct ChatCallSignalReq {
+    thread_id: String,
+    call_id: String,
+    action: String,
+    to: Option<String>,
+    data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct ChatThreadJoinReq {
     thread_id: String,
     title: Option<String>,
@@ -4278,6 +4289,115 @@ async fn chat_thread_members_get(state: &ApState, req: Request<Body>) -> Respons
         .map(|(actor, role)| serde_json::json!({"actor_id": actor, "role": role}))
         .collect::<Vec<_>>();
     axum::Json(serde_json::json!({ "items": items })).into_response()
+}
+
+async fn chat_call_signal_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatCallSignalReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    if input.thread_id.trim().is_empty()
+        || input.call_id.trim().is_empty()
+        || input.action.trim().is_empty()
+    {
+        return simple(StatusCode::BAD_REQUEST, "missing fields");
+    }
+    let self_actor = local_actor(state);
+    let members = state
+        .social
+        .list_chat_members(&input.thread_id)
+        .unwrap_or_default();
+    if !members.iter().any(|(a, _)| a.trim_end_matches('/') == self_actor) {
+        return simple(StatusCode::FORBIDDEN, "not a member");
+    }
+    let data = serde_json::json!({
+        "call_id": input.call_id,
+        "action": input.action,
+        "to": input.to,
+        "data": input.data,
+    });
+    let payload = chat::ChatPayload {
+        op: "call".to_string(),
+        text: Some(serde_json::to_string(&data).unwrap_or_default()),
+        reply_to: None,
+        message_id: Some(input.call_id.clone()),
+        status: None,
+        thread_id: Some(input.thread_id.clone()),
+        attachments: None,
+        action: Some(input.action.clone()),
+        targets: input.to.clone().map(|t| vec![t]),
+        members: None,
+        title: None,
+        reaction: None,
+    };
+    let envelope_id = format!("urn:fedi3:chat:msg:{}", chat::random_id());
+    let sent = send_chat_payload_to_members(
+        state,
+        &input.thread_id,
+        &payload,
+        &envelope_id,
+    )
+    .await;
+    axum::Json(serde_json::json!({"ok": true, "sent": sent})).into_response()
+}
+
+async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let thread_id = chat_query_value(query, "thread_id");
+    let after_ms = chat_query_value(query, "after_ms")
+        .parse::<i64>()
+        .unwrap_or(0);
+    let limit = chat_query_value(query, "limit")
+        .parse::<u32>()
+        .unwrap_or(100);
+    if thread_id.trim().is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+    }
+    let self_actor = local_actor(state);
+    let members = state
+        .social
+        .list_chat_members(&thread_id)
+        .unwrap_or_default();
+    if !members.iter().any(|(a, _)| a.trim_end_matches('/') == self_actor) {
+        return simple(StatusCode::FORBIDDEN, "not a member");
+    }
+    match state
+        .social
+        .list_chat_call_signals(&thread_id, &self_actor, after_ms, limit)
+    {
+        Ok(rows) => {
+            let items = rows
+                .into_iter()
+                .map(|(id, from_actor, to_actor, call_id, action, data_json, created_at_ms)| {
+                    let data = serde_json::from_str::<serde_json::Value>(&data_json)
+                        .unwrap_or_else(|_| serde_json::json!({}));
+                    serde_json::json!({
+                        "id": id,
+                        "from_actor": from_actor,
+                        "to_actor": to_actor,
+                        "call_id": call_id,
+                        "action": action,
+                        "data": data,
+                        "created_at_ms": created_at_ms,
+                    })
+                })
+                .collect::<Vec<_>>();
+            axum::Json(serde_json::json!({"items": items})).into_response()
+        }
+        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
 }
 
 async fn chat_search_all_get(state: &ApState, req: Request<Body>) -> Response<Body> {

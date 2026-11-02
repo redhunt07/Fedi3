@@ -706,6 +706,55 @@ class CoreApi {
         .toList(growable: false);
   }
 
+  Future<void> sendChatCallSignal({
+    required String threadId,
+    required String callId,
+    required String action,
+    String? to,
+    Map<String, dynamic>? data,
+  }) async {
+    final uri = _internal('/_fedi3/chat/call/signal');
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'thread_id': threadId,
+        'call_id': callId,
+        'action': action,
+        if (to != null && to.isNotEmpty) 'to': to,
+        if (data != null) 'data': data,
+      }),
+      anySuccess: true,
+    );
+  }
+
+  Future<List<ChatCallSignal>> fetchChatCallSignals({
+    required String threadId,
+    required int afterMs,
+    int limit = 100,
+  }) async {
+    final uri = _internal('/_fedi3/chat/call/signals', {
+      'thread_id': threadId,
+      'after_ms': '$afterMs',
+      'limit': '$limit',
+    });
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return const [];
+    final map = _decodeMap(resp, 'chat call signals');
+    final raw = map['items'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((m) => ChatCallSignal.fromJson(m.cast<String, dynamic>()))
+        .toList(growable: false);
+  }
+
   Future<Map<String, dynamic>> searchChatMessages({
     required String threadId,
     required String query,

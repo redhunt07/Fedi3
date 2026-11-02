@@ -294,6 +294,18 @@ impl SocialDb {
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY(message_id, actor_id)
             );
+            CREATE TABLE IF NOT EXISTS chat_call_signals (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              thread_id TEXT NOT NULL,
+              from_actor TEXT NOT NULL,
+              to_actor TEXT NULL,
+              call_id TEXT NOT NULL,
+              action TEXT NOT NULL,
+              data_json TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_call_signals_thread
+              ON chat_call_signals(thread_id, created_at_ms ASC);
             CREATE TABLE IF NOT EXISTS chat_pins (
               thread_id TEXT PRIMARY KEY,
               message_id TEXT NOT NULL,
@@ -4095,6 +4107,61 @@ impl SocialDb {
         Ok(())
     }
 
+    pub fn insert_chat_call_signal(
+        &self,
+        thread_id: &str,
+        from_actor: &str,
+        to_actor: Option<&str>,
+        call_id: &str,
+        action: &str,
+        data_json: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO chat_call_signals (thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![thread_id, from_actor, to_actor, call_id, action, data_json, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_chat_call_signals(
+        &self,
+        thread_id: &str,
+        self_actor: &str,
+        after_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(i64, String, Option<String>, String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let limit = limit.clamp(1, 200);
+        let mut stmt = conn.prepare(
+            "SELECT id, from_actor, to_actor, call_id, action, data_json, created_at_ms
+             FROM chat_call_signals
+             WHERE thread_id=?1 AND created_at_ms > ?2
+               AND (to_actor IS NULL OR to_actor=?3)
+             ORDER BY created_at_ms ASC, id ASC
+             LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![thread_id, after_ms, self_actor, limit as i64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn search_all_chat_messages(
         &self,
         self_actor: &str,
@@ -4713,6 +4780,54 @@ mod chat_pin_search_tests {
             .search_chat_messages("t1", "op", 10)
             .expect("search")
             .is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn chat_call_signals_are_scoped_by_thread_and_target() {
+        let (db, path) = setup();
+        db.insert_chat_call_signal(
+            "t1",
+            "https://a.test/users/bob",
+            None,
+            "call-1",
+            "invite",
+            r#"{"media":"video"}"#,
+        )
+        .expect("invite");
+        db.insert_chat_call_signal(
+            "t1",
+            "https://a.test/users/bob",
+            Some("https://a.test/users/alice"),
+            "call-1",
+            "offer",
+            r#"{"sdp":"v=0"}"#,
+        )
+        .expect("offer");
+        db.insert_chat_call_signal(
+            "t1",
+            "https://a.test/users/bob",
+            Some("https://a.test/users/carol"),
+            "call-1",
+            "offer",
+            r#"{"sdp":"other"}"#,
+        )
+        .expect("other");
+        let rows = db
+            .list_chat_call_signals("t1", "https://a.test/users/alice", 0, 10)
+            .expect("list");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(_, _, _, _, _, _, _)| true));
+        assert!(rows.iter().any(|(_, _, _, _, action, _, _)| action == "offer"));
+        let after = db
+            .list_chat_call_signals(
+                "t1",
+                "https://a.test/users/alice",
+                rows.last().unwrap().6,
+                10,
+            )
+            .expect("after");
+        assert!(after.is_empty());
         let _ = std::fs::remove_file(path);
     }
 

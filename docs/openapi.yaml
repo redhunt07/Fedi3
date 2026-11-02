@@ -588,6 +588,58 @@ paths:
       responses:
         '200':
           description: Membri aggiornati
+  /_fedi3/chat/call/signal:
+    post:
+      tags: [chat]
+      summary: Invia un segnale di chiamata cifrato ai membri del thread
+      description: Il relay trasporta solo la segnalazione; audio e video viaggiano P2P in WebRTC.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id, call_id, action]
+              properties:
+                thread_id: {type: string}
+                call_id: {type: string}
+                action: {type: string}
+                to: {type: string, nullable: true}
+                data: {type: object, additionalProperties: true, nullable: true}
+      responses:
+        '200':
+          description: Segnale inviato
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  sent: {type: integer}
+  /_fedi3/chat/call/signals:
+    get:
+      tags: [chat]
+      summary: Segnali di chiamata ricevuti per un thread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - name: after_ms
+          in: query
+          schema: {type: integer, default: 0}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+      responses:
+        '200':
+          description: Segnali indirizzati all'utente locale
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {type: object, additionalProperties: true}
   /_fedi3/chat/search:
     get:
       tags: [chat]

@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,7 +28,10 @@ import '../utils/media_url.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/inline_media_tile.dart';
 import '../screens/media_viewer_screen.dart';
+import 'call_screen.dart';
 import '../widgets/emoji_picker.dart';
+import '../widgets/audio_note_recorder.dart';
+import '../widgets/media_note_recorder.dart';
 import '../widgets/status_avatar.dart';
 import '../../state/peer_presence_store.dart';
 import 'package:http/http.dart' as http;
@@ -67,6 +71,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Timer? _searchDebounce;
   Map<String, dynamic>? _pin;
   String _myRole = 'member';
+  Timer? _callPollTimer;
+  int _lastCallSignalMs = 0;
+  String? _incomingCallId;
+  bool _callPromptOpen = false;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -104,6 +112,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
     _markSeen();
     _markThreadSeen();
+    _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch - 30000;
+    _callPollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _pollCallSignals();
+    });
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
@@ -145,6 +157,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _loadRetry?.cancel();
     _typingDebounce?.cancel();
     _searchDebounce?.cancel();
+    _callPollTimer?.cancel();
     _composerCtrl.dispose();
     _searchCtrl.dispose();
     widget.appState.removeListener(_appStateListener);
@@ -183,6 +196,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         if (actor.isNotEmpty) {
           _markTyping(actor);
         }
+        return;
+      }
+      if (ty == 'call') {
+        _pollCallSignals();
         return;
       }
       if (ty == 'react') {
@@ -394,6 +411,126 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _startCall(String mediaType) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => CallScreen(
+          appState: widget.appState,
+          threadId: widget.threadId,
+          title: _title,
+          mediaType: mediaType,
+          isGroup: widget.isGroup,
+        ),
+      ),
+    );
+    _incomingCallId = null;
+  }
+
+  Future<void> _pollCallSignals() async {
+    final cfg = widget.appState.config;
+    if (cfg == null || _callPromptOpen) return;
+    try {
+      final items = await CoreApi(config: cfg).fetchChatCallSignals(
+        threadId: widget.threadId,
+        afterMs: _lastCallSignalMs,
+      );
+      for (final s in items) {
+        if (s.createdAtMs > _lastCallSignalMs) {
+          _lastCallSignalMs = s.createdAtMs;
+        }
+        if (s.action != 'invite') continue;
+        if (_incomingCallId == s.callId) continue;
+        if (s.fromActor == _selfActor()) continue;
+        final media = s.data['media']?.toString() ?? 'audio';
+        _incomingCallId = s.callId;
+        await _showIncomingCall(s, media);
+        break;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _showIncomingCall(ChatCallSignal signal, String media) async {
+    if (_callPromptOpen || !mounted) return;
+    _callPromptOpen = true;
+    final from = signal.fromActor;
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.callIncoming),
+        content: Row(
+          children: [
+            CircleAvatar(
+              radius: 24,
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withAlpha(35),
+              child: Icon(
+                media == 'video' ? Icons.videocam_rounded : Icons.call_rounded,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_usernameFromActor(from)),
+                  Text(
+                    media == 'video'
+                        ? context.l10n.callIncomingVideo
+                        : context.l10n.callIncomingAudio,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(context.l10n.callDecline),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(context.l10n.callAccept),
+          ),
+        ],
+      ),
+    );
+    _callPromptOpen = false;
+    if (accepted != true) {
+      _incomingCallId = null;
+      try {
+        await CoreApi(config: widget.appState.config!)
+            .sendChatCallSignal(
+          threadId: widget.threadId,
+          callId: signal.callId,
+          action: 'decline',
+          to: from,
+        );
+      } catch (_) {}
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => CallScreen(
+          appState: widget.appState,
+          threadId: widget.threadId,
+          title: _title,
+          mediaType: media,
+          isGroup: widget.isGroup,
+          incoming: true,
+          callId: signal.callId,
+          remoteActor: from,
+        ),
+      ),
+    );
+    _incomingCallId = null;
   }
 
   Future<void> _loadPin() async {
@@ -703,6 +840,56 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       }
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _recordNote(bool video) async {
+    if (video && Platform.isLinux) {
+      await _pickVideoNote();
+      return;
+    }
+    final path = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => video
+          ? const MediaNoteRecorder(video: true)
+          : const AudioNoteRecorder(),
+    );
+    if (path == null || path.trim().isEmpty) return;
+    try {
+      final bytes = await File(path).readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _media.add(_PickedMedia(
+          name: path.split(Platform.pathSeparator).last,
+          bytes: bytes,
+        ));
+      });
+      await _sendMessage();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  Future<void> _pickVideoNote() async {
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: 'video',
+            extensions: ['mp4', 'mov', 'webm', 'mkv', 'm4v'],
+          ),
+        ],
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _media.add(_PickedMedia(name: file.name, bytes: bytes));
+      });
+      await _sendMessage();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
     }
   }
 
@@ -1425,6 +1612,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: context.l10n.callAudio,
+            onPressed: () => _startCall('audio'),
+            icon: const Icon(Icons.call_outlined),
+          ),
+          IconButton(
+            tooltip: context.l10n.callVideo,
+            onPressed: () => _startCall('video'),
+            icon: const Icon(Icons.videocam_outlined),
+          ),
+          IconButton(
             tooltip: context.l10n.chatSearchTooltip,
             onPressed: () => setState(() {
               _searchOpen = !_searchOpen;
@@ -1954,6 +2151,18 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   visualDensity: VisualDensity.compact,
                   onPressed: _sending ? null : _pickFiles,
                   icon: const Icon(Icons.attach_file_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: context.l10n.chatAudioNote,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _sending ? null : () => _recordNote(false),
+                  icon: const Icon(Icons.mic_none_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: context.l10n.chatVideoNote,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _sending ? null : () => _recordNote(true),
+                  icon: const Icon(Icons.videocam_outlined, size: 20),
                 ),
                 Expanded(
                   child: TextField(

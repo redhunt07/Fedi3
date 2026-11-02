@@ -288,6 +288,44 @@ void main() {
       expect(pin?['preview'], 'ciao');
     });
 
+    test('CT-08 sendChatCallSignal posts call routing fields', () async {
+      client.json('POST', '/_fedi3/chat/call/signal', {'ok': true});
+      await api().sendChatCallSignal(
+        threadId: 't1',
+        callId: 'call-1',
+        action: 'offer',
+        to: 'https://a.test/users/bob',
+        data: {'sdp': 'v=0'},
+      );
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['thread_id'], 't1');
+      expect(body['call_id'], 'call-1');
+      expect(body['action'], 'offer');
+      expect(body['to'], 'https://a.test/users/bob');
+      expect(body['data'], {'sdp': 'v=0'});
+    });
+
+    test('CT-09 fetchChatCallSignals parses signals', () async {
+      client.json('GET', '/_fedi3/chat/call/signals', {
+        'items': [
+          {
+            'id': 7,
+            'from_actor': 'https://a.test/users/bob',
+            'to_actor': null,
+            'call_id': 'call-1',
+            'action': 'invite',
+            'data': {'media': 'video'},
+            'created_at_ms': 1000
+          }
+        ]
+      });
+      final items = await api()
+          .fetchChatCallSignals(threadId: 't1', afterMs: 0);
+      expect(items, hasLength(1));
+      expect(items.first.action, 'invite');
+      expect(items.first.data['media'], 'video');
+    });
+
     test('CT-07 searchAllChatMessages parses membership-scoped hits', () async {
       client.json('GET', '/_fedi3/chat/search', {
         'items': [
