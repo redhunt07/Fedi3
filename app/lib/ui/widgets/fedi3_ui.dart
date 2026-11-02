@@ -163,7 +163,8 @@ class _BrandParticlesPainter extends CustomPainter {
       final y = size.height * (0.12 + 0.76 * phase);
       final twinkle = 0.5 + 0.5 * math.sin((progress + i * 0.31) * 2 * math.pi);
       paint.color = Colors.white.withAlpha((28 + 52 * twinkle).round());
-      canvas.drawCircle(Offset(x + drift, y), size.width * (0.008 + 0.006 * twinkle), paint);
+      canvas.drawCircle(
+          Offset(x + drift, y), size.width * (0.008 + 0.006 * twinkle), paint);
     }
   }
 
@@ -269,12 +270,14 @@ class GlassPanel extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(UiTokens.padCard),
     this.onTap,
+    this.onLongPress,
     this.highlight = false,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final bool highlight;
 
   @override
@@ -313,12 +316,13 @@ class GlassPanel extends StatelessWidget {
       ),
       child: child,
     );
-    if (onTap == null) return content;
+    if (onTap == null && onLongPress == null) return content;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(UiTokens.radiusCard),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: content,
       ),
     );

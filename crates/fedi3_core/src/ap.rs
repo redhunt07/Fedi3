@@ -327,6 +327,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/chat/thread/members") => chat_thread_members_get(state, req).await,
         ("POST", "/_fedi3/chat/thread/update") => chat_thread_update_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/delete") => chat_thread_delete_post(state, req).await,
+        ("POST", "/_fedi3/chat/thread/leave") => chat_thread_leave_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/members") => chat_thread_members_post(state, req).await,
         ("GET", "/_fedi3/chat/search") => chat_search_all_get(state, req).await,
         ("POST", "/_fedi3/chat/call/signal") => chat_call_signal_post(state, req).await,
@@ -4785,8 +4786,17 @@ async fn chat_thread_delete_post(state: &ApState, req: Request<Body>) -> Respons
         Ok(v) => v,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    if role.as_deref() != Some("owner") {
-        return simple(StatusCode::FORBIDDEN, "not owner");
+    if role.is_none() {
+        return simple(StatusCode::FORBIDDEN, "not a member");
+    }
+    let kind = match state.social.get_chat_thread_kind(&input.thread_id) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    // A group member who is not the owner cannot delete the thread for everyone;
+    // deleting it from their chat list means leaving the group.
+    if kind.as_deref() == Some("group") && role.as_deref() != Some("owner") {
+        return leave_chat_thread_impl(state, &input.thread_id).await;
     }
     let payload = chat::ChatPayload {
         op: "system".to_string(),
@@ -4811,6 +4821,84 @@ async fn chat_thread_delete_post(state: &ApState, req: Request<Body>) -> Respons
         "chat",
         Some("thread".to_string()),
         Some(input.thread_id.clone()),
+    ));
+    simple(StatusCode::OK, "ok")
+}
+
+async fn chat_thread_leave_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatThreadDeleteReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    if input.thread_id.trim().is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let role = match state
+        .social
+        .get_chat_member_role(&input.thread_id, &self_actor)
+    {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    if role.is_none() {
+        return simple(StatusCode::FORBIDDEN, "not a member");
+    }
+    leave_chat_thread_impl(state, &input.thread_id).await
+}
+
+/// Remove the local user from a thread and notify the other members. For a
+/// direct chat the peer receives a `delete_thread` signal; for a group the
+/// remaining members receive `leave` and promote a new owner when needed.
+async fn leave_chat_thread_impl(state: &ApState, thread_id: &str) -> Response<Body> {
+    let kind = match state.social.get_chat_thread_kind(thread_id) {
+        Ok(v) => v,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let is_group = kind.as_deref() == Some("group");
+    let payload = chat::ChatPayload {
+        op: "system".to_string(),
+        text: Some(if is_group {
+            "Left the group".to_string()
+        } else {
+            "Chat deleted".to_string()
+        }),
+        reply_to: None,
+        message_id: None,
+        status: None,
+        thread_id: Some(thread_id.to_string()),
+        attachments: None,
+        action: Some(if is_group {
+            "leave".to_string()
+        } else {
+            "delete_thread".to_string()
+        }),
+        targets: None,
+        members: None,
+        title: None,
+        reaction: None,
+    };
+    let env_id = chat::random_id();
+    let _sent = send_chat_payload_to_members(state, thread_id, &payload, &env_id).await;
+    if let Err(e) = state.social.delete_chat_thread(thread_id) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("thread".to_string()),
+        Some(thread_id.to_string()),
     ));
     simple(StatusCode::OK, "ok")
 }

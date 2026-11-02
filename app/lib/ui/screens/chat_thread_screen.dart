@@ -171,11 +171,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     widget.appState.clearUnreadChats();
   }
 
-  Future<void> _markThreadSeen() async {
+  Future<void> _markThreadSeen({int? latestMs}) async {
     final prefs = widget.appState.prefs;
     final now = DateTime.now().millisecondsSinceEpoch;
+    final target = latestMs != null && latestMs >= now ? latestMs + 1 : now;
     final next = Map<String, int>.from(prefs.chatThreadSeenMs);
-    next[widget.threadId] = now;
+    next[widget.threadId] = target;
     await widget.appState.savePrefs(prefs.copyWith(chatThreadSeenMs: next));
   }
 
@@ -505,8 +506,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (accepted != true) {
       _incomingCallId = null;
       try {
-        await CoreApi(config: widget.appState.config!)
-            .sendChatCallSignal(
+        await CoreApi(config: widget.appState.config!).sendChatCallSignal(
           threadId: widget.threadId,
           callId: signal.callId,
           action: 'decline',
@@ -537,7 +537,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final cfg = widget.appState.config;
     if (cfg == null) return;
     try {
-      final pin = await CoreApi(config: cfg).fetchChatPin(threadId: widget.threadId);
+      final pin =
+          await CoreApi(config: cfg).fetchChatPin(threadId: widget.threadId);
       if (!mounted) return;
       setState(() => _pin = pin);
     } catch (_) {
@@ -577,8 +578,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final messageId = _pin?['message_id']?.toString();
     if (cfg == null || messageId == null || messageId.isEmpty) return;
     try {
-      await CoreApi(config: cfg)
-          .setChatPin(threadId: widget.threadId, messageId: messageId, pinned: false);
+      await CoreApi(config: cfg).setChatPin(
+          threadId: widget.threadId, messageId: messageId, pinned: false);
       await _loadPin();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -670,7 +671,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         await api.markChatSeen(
             threadId: latest.threadId, messageId: latest.messageId);
         await _markSeen();
-        await _markThreadSeen();
+        await _markThreadSeen(latestMs: latest.createdAtMs);
       }
       final ids =
           items.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
@@ -1061,8 +1062,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   members = [...members, actor];
                 }
                 roles[actor] = 'member';
-                final profile =
-                    await ActorRepository.instance.getActor(actor);
+                final profile = await ActorRepository.instance.getActor(actor);
                 if (profile != null) memberProfiles[actor] = profile;
                 searchCtrl.clear();
                 suggestions = const [];
@@ -1197,9 +1197,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 final host = Uri.tryParse(actor)?.host ?? '';
                                 final user = profile?.preferredUsername ??
                                     _usernameFromActor(actor);
-                                return host.isEmpty
-                                    ? '@$user'
-                                    : '@$user@$host';
+                                return host.isEmpty ? '@$user' : '@$user@$host';
                               }(),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -1233,18 +1231,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                     itemBuilder: (context) => [
                                       PopupMenuItem(
                                         value: 'admin',
-                                        child: Text(
-                                            context.l10n.chatRoleAdmin),
+                                        child: Text(context.l10n.chatRoleAdmin),
                                       ),
                                       PopupMenuItem(
                                         value: 'member',
-                                        child: Text(
-                                            context.l10n.chatRoleMember),
+                                        child:
+                                            Text(context.l10n.chatRoleMember),
                                       ),
                                     ],
                                     child: const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                          horizontal: 4),
+                                      padding:
+                                          EdgeInsets.symmetric(horizontal: 4),
                                       child: Icon(Icons.more_vert, size: 18),
                                     ),
                                   ),
@@ -1457,27 +1454,58 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     await _loadMessages(reset: true);
   }
 
-  Future<void> _deleteChat() async {
+  Future<void> _deleteChat() => _removeChat(
+        title: context.l10n.chatDeleteThread,
+        hint: context.l10n.chatDeleteThreadHint,
+        actionLabel: context.l10n.chatDeleteThread,
+        leave: false,
+      );
+
+  Future<void> _deleteGroup() => _removeChat(
+        title: context.l10n.chatDeleteGroup,
+        hint: context.l10n.chatDeleteGroupHint,
+        actionLabel: context.l10n.chatDeleteGroup,
+        leave: false,
+      );
+
+  Future<void> _leaveChat() => _removeChat(
+        title: context.l10n.chatLeaveGroup,
+        hint: context.l10n.chatLeaveGroupHint,
+        actionLabel: context.l10n.chatLeaveGroup,
+        leave: true,
+      );
+
+  Future<void> _removeChat({
+    required String title,
+    required String hint,
+    required String actionLabel,
+    required bool leave,
+  }) async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(context.l10n.chatDeleteThread),
-        content: Text(context.l10n.chatDeleteThreadHint),
+        title: Text(title),
+        content: Text(hint),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(context).pop(false),
               child: Text(context.l10n.cancel)),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: Text(context.l10n.chatDeleteThread),
+            child: Text(actionLabel),
           ),
         ],
       ),
     );
     if (ok != true) return;
-    await CoreApi(config: cfg).deleteChatThread(threadId: widget.threadId);
+    final api = CoreApi(config: cfg);
+    if (leave) {
+      await api.leaveChatThread(threadId: widget.threadId);
+    } else {
+      await api.deleteChatThread(threadId: widget.threadId);
+    }
     if (mounted) {
       Navigator.of(context).pop();
     }
@@ -1512,8 +1540,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 imageUrl: _profiles[_recipients.first]?.iconUrl ?? '',
                 size: 34,
                 showStatus: true,
-                statusKey: _profiles[_recipients.first]
-                        ?.preferredUsername ??
+                statusKey: _profiles[_recipients.first]?.preferredUsername ??
                     _usernameFromActor(_recipients.first),
               ),
               const SizedBox(width: 10),
@@ -1529,8 +1556,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     children: [
                       if (_recipients.length == 1)
                         ValueListenableBuilder<Map<String, PresenceStatus>>(
-                          valueListenable: PeerPresenceStore
-                              .instance.statusByUsername,
+                          valueListenable:
+                              PeerPresenceStore.instance.statusByUsername,
                           builder: (context, map, _) {
                             final username = _profiles[_recipients.first]
                                     ?.preferredUsername ??
@@ -1578,14 +1605,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       else if (widget.isGroup || _recipients.isNotEmpty)
                         Text(
                           '${context.l10n.chatMembers} ${_recipients.length + 1} · ',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
                         ),
                       Icon(Icons.lock_outline_rounded,
                           size: 11,
@@ -1594,10 +1619,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       const SizedBox(width: 3),
                       Text(
                         context.l10n.chatE2eBadge,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelSmall
-                            ?.copyWith(
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
                               color: Theme.of(context)
                                   .colorScheme
                                   .onSurfaceVariant,
@@ -1630,7 +1652,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 _searchQuery = '';
               }
             }),
-            icon: Icon(_searchOpen ? Icons.search_off_rounded : Icons.search_rounded),
+            icon: Icon(
+                _searchOpen ? Icons.search_off_rounded : Icons.search_rounded),
           ),
           IconButton(
             tooltip: context.l10n.chatRefresh,
@@ -1652,6 +1675,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 _copyInviteLink();
               } else if (value == 'unpin') {
                 _unpinCurrent();
+              } else if (value == 'leave') {
+                _leaveChat();
+              } else if (value == 'delete_group') {
+                _deleteGroup();
               } else if (value == 'delete') {
                 _deleteChat();
               }
@@ -1668,8 +1695,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               if (_canPin && _pin != null)
                 PopupMenuItem(
                     value: 'unpin', child: Text(context.l10n.chatUnpinMessage)),
-              PopupMenuItem(
-                  value: 'delete', child: Text(context.l10n.chatDeleteThread)),
+              if (widget.isGroup)
+                PopupMenuItem(
+                    value: 'leave', child: Text(context.l10n.chatLeaveGroup)),
+              if (widget.isGroup && _myRole == 'owner')
+                PopupMenuItem(
+                    value: 'delete_group',
+                    child: Text(context.l10n.chatDeleteGroup)),
+              if (!widget.isGroup)
+                PopupMenuItem(
+                    value: 'delete',
+                    child: Text(context.l10n.chatDeleteThread)),
             ],
           ),
         ],
@@ -1808,9 +1844,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           bottomRight: Radius.circular(isSelf ? 4 : 18),
         );
         final senderProfile = _profiles[message.senderActor];
-        final senderUsername = senderProfile?.preferredUsername.isNotEmpty == true
-            ? senderProfile!.preferredUsername
-            : _usernameFromActor(message.senderActor);
+        final senderUsername =
+            senderProfile?.preferredUsername.isNotEmpty == true
+                ? senderProfile!.preferredUsername
+                : _usernameFromActor(message.senderActor);
         final senderName = senderProfile?.displayName.isNotEmpty == true
             ? senderProfile!.displayName
             : senderUsername;
@@ -1853,166 +1890,171 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                         ),
                       ),
                     GestureDetector(
-                onLongPress: () async {
-                  await showModalBottomSheet<void>(
-                    context: context,
-                    builder: (context) => SafeArea(
-                      child: Wrap(
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.emoji_emotions_outlined),
-                            title: Text(context.l10n.chatReact),
-                            onTap: () async {
-                              Navigator.of(context).pop();
-                              await _openReactionPicker(message);
-                            },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.reply),
-                            title: Text(context.l10n.chatReply),
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              setState(() => _replyTo = message);
-                            },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.forward_rounded),
-                            title: Text(context.l10n.chatForward),
-                            onTap: () async {
-                              Navigator.of(context).pop();
-                              await _forwardMessage(message);
-                            },
-                          ),
-                          if (_canPin)
-                            ListTile(
-                              leading: Icon(
-                                _pin?['message_id'] == message.messageId
-                                    ? Icons.push_pin
-                                    : Icons.push_pin_outlined,
-                              ),
-                              title: Text(
-                                _pin?['message_id'] == message.messageId
-                                    ? context.l10n.chatUnpinMessage
-                                    : context.l10n.chatPinMessage,
-                              ),
-                              onTap: () async {
-                                Navigator.of(context).pop();
-                                await _togglePin(message);
-                              },
+                      onLongPress: () async {
+                        await showModalBottomSheet<void>(
+                          context: context,
+                          builder: (context) => SafeArea(
+                            child: Wrap(
+                              children: [
+                                ListTile(
+                                  leading:
+                                      const Icon(Icons.emoji_emotions_outlined),
+                                  title: Text(context.l10n.chatReact),
+                                  onTap: () async {
+                                    Navigator.of(context).pop();
+                                    await _openReactionPicker(message);
+                                  },
+                                ),
+                                ListTile(
+                                  leading: const Icon(Icons.reply),
+                                  title: Text(context.l10n.chatReply),
+                                  onTap: () {
+                                    Navigator.of(context).pop();
+                                    setState(() => _replyTo = message);
+                                  },
+                                ),
+                                ListTile(
+                                  leading: const Icon(Icons.forward_rounded),
+                                  title: Text(context.l10n.chatForward),
+                                  onTap: () async {
+                                    Navigator.of(context).pop();
+                                    await _forwardMessage(message);
+                                  },
+                                ),
+                                if (_canPin)
+                                  ListTile(
+                                    leading: Icon(
+                                      _pin?['message_id'] == message.messageId
+                                          ? Icons.push_pin
+                                          : Icons.push_pin_outlined,
+                                    ),
+                                    title: Text(
+                                      _pin?['message_id'] == message.messageId
+                                          ? context.l10n.chatUnpinMessage
+                                          : context.l10n.chatPinMessage,
+                                    ),
+                                    onTap: () async {
+                                      Navigator.of(context).pop();
+                                      await _togglePin(message);
+                                    },
+                                  ),
+                                if (isSelf)
+                                  ListTile(
+                                    leading: const Icon(Icons.edit),
+                                    title: Text(context.l10n.chatEdit),
+                                    onTap: () async {
+                                      Navigator.of(context).pop();
+                                      await _editMessage(message);
+                                    },
+                                  ),
+                                if (isSelf)
+                                  ListTile(
+                                    leading: const Icon(Icons.delete),
+                                    title: Text(context.l10n.chatDelete),
+                                    onTap: () async {
+                                      Navigator.of(context).pop();
+                                      await _deleteMessage(message);
+                                    },
+                                  ),
+                              ],
                             ),
-                          if (isSelf)
-                            ListTile(
-                              leading: const Icon(Icons.edit),
-                              title: Text(context.l10n.chatEdit),
-                              onTap: () async {
-                                Navigator.of(context).pop();
-                                await _editMessage(message);
-                              },
-                            ),
-                          if (isSelf)
-                            ListTile(
-                              leading: const Icon(Icons.delete),
-                              title: Text(context.l10n.chatDelete),
-                              onTap: () async {
-                                Navigator.of(context).pop();
-                                await _deleteMessage(message);
-                              },
-                            ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: isSelf
-                        ? const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFF6D5DF5), Color(0xFF4C7BF4)],
-                          )
-                        : null,
-                    color: isSelf
-                        ? null
-                        : Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                    borderRadius: radius,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha(isSelf ? 40 : 18),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: align,
-                    children: [
-                      if (replyId != null && replyId.isNotEmpty)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 6),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: isSelf
-                                ? Colors.white.withAlpha(30)
-                                : Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(
-                            replyMsg == null
-                                ? context.l10n.chatReplyUnknown
-                                : _replyPreview(replyMsg),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ),
-                      Text(
-                        text,
-                        style: TextStyle(
-                          color: isSelf ? Colors.white : null,
-                          height: 1.35,
-                        ),
-                      ),
-                      if (attachments.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        _buildAttachments(attachments),
-                      ],
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            formatTimeAgo(context, when),
-                            style: TextStyle(fontSize: 10, color: timeColor),
-                          ),
-                          if (isSelf) ...[
-                            const SizedBox(width: 5),
-                            Tooltip(
-                              message: summary == null
-                                  ? context.l10n.chatStatusPending
-                                  : allSeen
-                                      ? context.l10n.chatStatusSeenAll
-                                      : summary.tooltip(context),
-                              child: _DeliveryCheck(
-                                summary: summary,
-                                allSeen: allSeen,
-                                color: timeColor,
-                              ),
+                        );
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: isSelf
+                              ? const LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Color(0xFF6D5DF5),
+                                    Color(0xFF4C7BF4)
+                                  ],
+                                )
+                              : null,
+                          color: isSelf
+                              ? null
+                              : Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                          borderRadius: radius,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(isSelf ? 40 : 18),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
                             ),
                           ],
-                        ],
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: align,
+                          children: [
+                            if (replyId != null && replyId.isNotEmpty)
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isSelf
+                                      ? Colors.white.withAlpha(30)
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  replyMsg == null
+                                      ? context.l10n.chatReplyUnknown
+                                      : _replyPreview(replyMsg),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.labelSmall,
+                                ),
+                              ),
+                            Text(
+                              text,
+                              style: TextStyle(
+                                color: isSelf ? Colors.white : null,
+                                height: 1.35,
+                              ),
+                            ),
+                            if (attachments.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              _buildAttachments(attachments),
+                            ],
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  formatTimeAgo(context, when),
+                                  style:
+                                      TextStyle(fontSize: 10, color: timeColor),
+                                ),
+                                if (isSelf) ...[
+                                  const SizedBox(width: 5),
+                                  Tooltip(
+                                    message: summary == null
+                                        ? context.l10n.chatStatusPending
+                                        : allSeen
+                                            ? context.l10n.chatStatusSeenAll
+                                            : summary.tooltip(context),
+                                    child: _DeliveryCheck(
+                                      summary: summary,
+                                      allSeen: allSeen,
+                                      color: timeColor,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
+                    ),
                     _buildReactionRow(message, isSelf),
                   ],
                 ),
@@ -2121,8 +2163,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       avatar: _media[i].bytes.isNotEmpty &&
                               _looksLikeImage(_media[i].name)
                           ? CircleAvatar(
-                              backgroundImage:
-                                  MemoryImage(_media[i].bytes),
+                              backgroundImage: MemoryImage(_media[i].bytes),
                             )
                           : const Icon(Icons.insert_drive_file, size: 18),
                       label: Text(_media[i].name,
@@ -2177,8 +2218,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
-                      contentPadding:
-                          const EdgeInsets.symmetric(vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
@@ -2282,7 +2322,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       ],
     );
   }
-
 
   bool _looksLikeImage(String name) {
     final n = name.toLowerCase();

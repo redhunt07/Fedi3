@@ -1007,8 +1007,38 @@ abstract class AppLocalizations {
   /// No description provided for @chatDeleteThreadHint.
   ///
   /// In en, this message translates to:
-  /// **'This will delete the entire chat thread for everyone.'**
+  /// **'This chat will be removed from your device.'**
   String get chatDeleteThreadHint;
+
+  /// No description provided for @chatDeleteGroup.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete group'**
+  String get chatDeleteGroup;
+
+  /// No description provided for @chatDeleteGroupHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The group will be deleted for every member.'**
+  String get chatDeleteGroupHint;
+
+  /// No description provided for @chatLeaveGroup.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave group'**
+  String get chatLeaveGroup;
+
+  /// No description provided for @chatLeaveGroupHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The group will remain available to the other members.'**
+  String get chatLeaveGroupHint;
+
+  /// No description provided for @chatMoreActions.
+  ///
+  /// In en, this message translates to:
+  /// **'More actions'**
+  String get chatMoreActions;
 
   /// No description provided for @chatPin.
   ///
@@ -2003,7 +2033,7 @@ abstract class AppLocalizations {
   /// No description provided for @savedHint.
   ///
   /// In en, this message translates to:
-  /// **'Posts saved on this device, available offline too'**
+  /// **'Available offline'**
   String get savedHint;
 
   /// No description provided for @savedEmptyTitle.
@@ -2885,7 +2915,7 @@ abstract class AppLocalizations {
   /// No description provided for @presenceHint.
   ///
   /// In en, this message translates to:
-  /// **'Choose how other Fedi3 users see you.'**
+  /// **'Choose how you appear to others.'**
   String get presenceHint;
 
   /// No description provided for @presenceOnline.

@@ -251,20 +251,20 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
 
   Map<ShortcutActivator, VoidCallback> _shortcutBindings() {
     return {
-      const SingleActivator(LogicalKeyboardKey.digit1, control: true):
-          () => _selectSection(0),
-      const SingleActivator(LogicalKeyboardKey.digit2, control: true):
-          () => _selectSection(1),
-      const SingleActivator(LogicalKeyboardKey.digit3, control: true):
-          () => _selectSection(2),
-      const SingleActivator(LogicalKeyboardKey.digit4, control: true):
-          () => _selectSection(3),
-      const SingleActivator(LogicalKeyboardKey.digit5, control: true):
-          () => _selectSection(4),
-      const SingleActivator(LogicalKeyboardKey.digit6, control: true):
-          () => _selectSection(5),
-      const SingleActivator(LogicalKeyboardKey.digit7, control: true):
-          () => _selectSection(6),
+      const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
+          _selectSection(0),
+      const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
+          _selectSection(1),
+      const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
+          _selectSection(2),
+      const SingleActivator(LogicalKeyboardKey.digit4, control: true): () =>
+          _selectSection(3),
+      const SingleActivator(LogicalKeyboardKey.digit5, control: true): () =>
+          _selectSection(4),
+      const SingleActivator(LogicalKeyboardKey.digit6, control: true): () =>
+          _selectSection(5),
+      const SingleActivator(LogicalKeyboardKey.digit7, control: true): () =>
+          _selectSection(6),
       const SingleActivator(LogicalKeyboardKey.keyN, control: true):
           _openComposer,
       const SingleActivator(LogicalKeyboardKey.keyF, control: true):
@@ -373,8 +373,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     );
   }
 
-  List<_RailItem> _navItems(
-      BuildContext context, int unread, int unreadChats) {
+  List<_RailItem> _navItems(BuildContext context, int unread, int unreadChats) {
     final items = <_RailItem>[
       _RailItem(
           icon: Icons.dynamic_feed_rounded,
@@ -521,132 +520,182 @@ class _FediRail extends StatelessWidget {
               children: [
                 const SizedBox(height: UiTokens.gapLg),
                 Tooltip(
-            message: 'Fedi3',
-            child: GestureDetector(
-              onTap: onBrandTap,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  const BrandMark(size: 46, animated: true),
-                  if (hasBrandNews)
-                    Positioned(
-                      right: -2,
-                      top: -2,
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF22D3EE),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.surface,
-                            width: 2,
-                          ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x8822D3EE),
-                              blurRadius: 8,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: UiTokens.gapLg),
-          Expanded(
-            child: FocusTraversalGroup(
-              policy: OrderedTraversalPolicy(),
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                children: [
-                  for (var i = 0; i < items.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 3),
-                      child: FocusTraversalOrder(
-                        order: NumericFocusOrder(i.toDouble()),
-                        child: _RailButton(
-                          item: items[i],
-                          active: i == index,
-                          onTap: () => onSelect(i),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14, top: 8),
-            child: ValueListenableBuilder<PresenceStatus>(
-              valueListenable: PeerPresenceStore.instance.selfStatus,
-              builder: (context, presence, _) {
-                return PopupMenuButton<PresenceStatus>(
-                  tooltip: context.l10n.presenceChangeTooltip,
-                  onSelected: (status) async {
-                    final prefs = appState.prefs;
-                    await appState.savePrefs(prefs.copyWith(
-                        presenceStatus: presenceStatusName(status)));
-                    await PeerPresenceStore.instance.setSelfStatus(status);
-                  },
-                  itemBuilder: (context) => [
-                    for (final status in PresenceStatus.values)
-                      PopupMenuItem<PresenceStatus>(
-                        value: status,
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 9,
-                              height: 9,
+                  message: 'Fedi3',
+                  child: GestureDetector(
+                    onTap: onBrandTap,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        const BrandMark(size: 46, animated: true),
+                        if (hasBrandNews)
+                          Positioned(
+                            right: -2,
+                            top: -2,
+                            child: Container(
+                              width: 12,
+                              height: 12,
                               decoration: BoxDecoration(
+                                color: const Color(0xFF22D3EE),
                                 shape: BoxShape.circle,
-                                color: _presenceColor(status),
+                                border: Border.all(
+                                  color: Theme.of(context).colorScheme.surface,
+                                  width: 2,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x8822D3EE),
+                                    blurRadius: 8,
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            Text(_presenceLabel(context, status)),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: UiTokens.gapLg),
+                Expanded(
+                  child: FocusTraversalGroup(
+                    policy: OrderedTraversalPolicy(),
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      children: [
+                        for (var i = 0; i < items.length; i++)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 3),
+                            child: FocusTraversalOrder(
+                              order: NumericFocusOrder(i.toDouble()),
+                              child: _RailButton(
+                                item: items[i],
+                                active: i == index,
+                                onTap: () => onSelect(i),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14, top: 8),
+                  child: ValueListenableBuilder<PresenceStatus>(
+                    valueListenable: PeerPresenceStore.instance.selfStatus,
+                    builder: (context, presence, _) {
+                      return PopupMenuButton<PresenceStatus>(
+                        tooltip: context.l10n.presenceChangeTooltip,
+                        position: PopupMenuPosition.over,
+                        offset: const Offset(8, -8),
+                        color: const Color(UiTokens.darkSurface),
+                        surfaceTintColor: Colors.transparent,
+                        elevation: 18,
+                        shape: RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(UiTokens.radiusCardSm),
+                          side: BorderSide(
+                            color: scheme.primary.withAlpha(55),
+                          ),
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 190,
+                          maxWidth: 230,
+                        ),
+                        onSelected: (status) async {
+                          final prefs = appState.prefs;
+                          await appState.savePrefs(prefs.copyWith(
+                              presenceStatus: presenceStatusName(status)));
+                          await PeerPresenceStore.instance
+                              .setSelfStatus(status);
+                        },
+                        itemBuilder: (context) => [
+                          for (final status in PresenceStatus.values)
+                            PopupMenuItem<PresenceStatus>(
+                              value: status,
+                              height: 40,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 14),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: _presenceColor(status),
+                                      boxShadow: status == presence
+                                          ? [
+                                              BoxShadow(
+                                                color: _presenceColor(status)
+                                                    .withAlpha(120),
+                                                blurRadius: 7,
+                                              ),
+                                            ]
+                                          : null,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      _presenceLabel(context, status),
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: status == presence
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                  if (status == presence)
+                                    Icon(
+                                      Icons.check_rounded,
+                                      size: 15,
+                                      color: scheme.primary,
+                                    ),
+                                ],
+                              ),
+                            ),
+                        ],
+                        child: Column(
+                          children: [
+                            StatusDot(color: _presenceColor(presence), size: 7),
+                            const SizedBox(height: 5),
+                            Text(
+                              _presenceLabel(context, presence),
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: scheme.onSurface,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              running
+                                  ? context.l10n.coreOnline
+                                  : context.l10n.coreOffline,
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontSize: 8.5,
+                                  ),
+                            ),
                           ],
                         ),
-                      ),
-                  ],
-                  child: Column(
-                    children: [
-                      StatusDot(color: _presenceColor(presence), size: 7),
-                      const SizedBox(height: 5),
-                      Text(
-                        _presenceLabel(context, presence),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: scheme.onSurface,
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        running
-                            ? context.l10n.coreOnline
-                            : context.l10n.coreOffline,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style:
-                            Theme.of(context).textTheme.labelSmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                  fontSize: 8.5,
-                                ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-          ),
+                ),
               ],
             ),
           ),
@@ -777,8 +826,7 @@ class _RailButtonState extends State<_RailButton>
               duration: const Duration(milliseconds: 120),
               curve: Curves.easeOut,
               child: ConstrainedBox(
-                constraints:
-                    const BoxConstraints(minWidth: 48, minHeight: 48),
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                 child: AnimatedBuilder(
                   animation: Listenable.merge([_spin, _burst]),
                   builder: (context, child) {
@@ -937,10 +985,10 @@ class _RailEffectsPainter extends CustomPainter {
       const particles = 8;
       for (var i = 0; i < particles; i++) {
         final phase = spin * 2 * math.pi + i * 2 * math.pi / particles;
-        final radius = size.shortestSide * 0.62 +
-            math.sin(spin * 4 * math.pi + i) * 2.2;
-        final pos = center +
-            Offset(math.cos(phase) * radius, math.sin(phase) * radius);
+        final radius =
+            size.shortestSide * 0.62 + math.sin(spin * 4 * math.pi + i) * 2.2;
+        final pos =
+            center + Offset(math.cos(phase) * radius, math.sin(phase) * radius);
         final alpha =
             (0.30 + 0.25 * math.sin(spin * 6 * math.pi + i)).clamp(0.0, 1.0);
         final color = i.isEven ? colorB : colorA;

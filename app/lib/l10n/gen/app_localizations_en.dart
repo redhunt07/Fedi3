@@ -478,7 +478,24 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get chatDeleteThreadHint =>
-      'This will delete the entire chat thread for everyone.';
+      'This chat will be removed from your device.';
+
+  @override
+  String get chatDeleteGroup => 'Delete group';
+
+  @override
+  String get chatDeleteGroupHint =>
+      'The group will be deleted for every member.';
+
+  @override
+  String get chatLeaveGroup => 'Leave group';
+
+  @override
+  String get chatLeaveGroupHint =>
+      'The group will remain available to the other members.';
+
+  @override
+  String get chatMoreActions => 'More actions';
 
   @override
   String get chatPin => 'Pin chat';
@@ -1070,7 +1087,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get savedTitle => 'Saved';
 
   @override
-  String get savedHint => 'Posts saved on this device, available offline too';
+  String get savedHint => 'Available offline';
 
   @override
   String get savedEmptyTitle => 'No saved posts';
@@ -1538,7 +1555,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get presenceTitle => 'Status';
 
   @override
-  String get presenceHint => 'Choose how other Fedi3 users see you.';
+  String get presenceHint => 'Choose how you appear to others.';
 
   @override
   String get presenceOnline => 'Online';

@@ -80,6 +80,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Backup scripts ignored the configured PostgreSQL user/database and nested media archives incorrectly.
 - PostgreSQL media quota queries read `SUM(size)` (numeric) as `i64`, causing a panic and a 502 on every media upload. The query now casts to `bigint`; the same fix covers spool bytes and tag counts, and move-notice `BOOLEAN` status is converted before reading.
 - Added the production VPS deployment notes for `fedi3.redhunt07.ovh` in `docs/deploy_vps.md`.
+- Chat list: direct chats can be deleted and groups can be left; group owners can delete the group for everyone. Leaving removes the local thread and notifies remaining members, promoting a new owner when needed.
+- Chat unread indicators were shown for threads with no messages and could survive opening a thread. Empty threads are no longer marked unread, and opening a thread records the latest message timestamp before navigating.
+- After an identity/relay move, old chat memberships and local sender ids are migrated to the current actor URL, so existing threads remain operable.
+- Chat, presence and sidebar surfaces now share the Aurora panel language: compact grouped sidebar actions, one shared presence selector, a styled presence menu and shorter copy.
 
 ### Security
 - SSRF guard on all peer-controlled fetches (core and relay), with body caps against memory exhaustion.

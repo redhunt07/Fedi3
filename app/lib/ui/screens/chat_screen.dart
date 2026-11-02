@@ -17,7 +17,6 @@ import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import '../theme/ui_tokens.dart';
-import '../../state/peer_presence_store.dart';
 import '../utils/time_ago.dart';
 import 'chat_search_screen.dart';
 import 'chat_thread_screen.dart';
@@ -184,7 +183,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final seen = widget.appState.prefs.chatThreadSeenMs;
     var unread = 0;
     for (final t in items) {
-      final lastMs = t.lastMessageMs ?? t.updatedAtMs;
+      final lastMs = t.lastMessageMs;
+      if (lastMs == null) continue;
       final seenMs = seen[t.threadId] ?? 0;
       if (lastMs > seenMs) unread += 1;
     }
@@ -381,180 +381,158 @@ class _ChatScreenState extends State<ChatScreen> {
             ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts) : DateTime.now();
         final seenMs =
             widget.appState.prefs.chatThreadSeenMs[thread.threadId] ?? 0;
-        final isUnread = ts > seenMs;
+        final isUnread = thread.lastMessageMs != null && ts > seenMs;
         final isPinned = pinnedIds.contains(thread.threadId);
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
-          child: Card(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(UiTokens.radiusCard),
-              onLongPress: () => _showThreadMenu(thread, isPinned),
-              onTap: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatThreadScreen(
-                      appState: widget.appState,
-                      threadId: thread.threadId,
-                      title: name,
-                      isGroup: thread.kind == 'group',
+          child: GlassPanel(
+            padding: const EdgeInsets.all(14),
+            onLongPress: () => _showThreadMenu(thread, isPinned),
+            onTap: () async {
+              await _markThreadSeen(thread, ts);
+              if (!context.mounted) return;
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChatThreadScreen(
+                    appState: widget.appState,
+                    threadId: thread.threadId,
+                    title: name,
+                    isGroup: thread.kind == 'group',
+                  ),
+                ),
+              );
+              if (mounted) {
+                await _loadThreads(reset: true);
+              }
+            },
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color(UiTokens.brandViolet),
+                        Color(UiTokens.brandCyan),
+                      ],
                     ),
                   ),
-                );
-                if (mounted) {
-                  await _loadThreads(reset: true);
-                }
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ValueListenableBuilder<Map<String, PresenceStatus>>(
-                      valueListenable:
-                          PeerPresenceStore.instance.statusByUsername,
-                      builder: (context, presence, _) {
-                        final username = thread.peerUsernames.isNotEmpty
-                            ? thread.peerUsernames.first
-                            : '';
-                        final status =
-                            presence[username] ?? PresenceStatus.offline;
-                        return Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Container(
-                              width: 46,
-                              height: 46,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    Color(UiTokens.brandViolet),
-                                    Color(UiTokens.brandCyan),
-                                  ],
-                                ),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                name.characters.first.toUpperCase(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 18,
-                                ),
-                              ),
-                            ),
-                            if (username.isNotEmpty)
-                              Positioned(
-                                right: -1,
-                                bottom: -1,
-                                child: Container(
-                                  width: 13,
-                                  height: 13,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: _presenceColor(status),
-                                    border: Border.all(
-                                      color:
-                                          Theme.of(context).colorScheme.surface,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        );
-                      },
+                  alignment: Alignment.center,
+                  child: Text(
+                    name.characters.first.toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Row(
-                            children: [
-                              if (isPinned) ...[
-                                const Icon(Icons.push_pin_rounded, size: 14),
-                                const SizedBox(width: 5),
-                              ],
-                              Expanded(
-                                child: Text(
-                                  name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                formatTimeAgo(context, when),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
-                              ),
-                            ],
+                          if (isPinned) ...[
+                            const Icon(Icons.push_pin_rounded, size: 14),
+                            const SizedBox(width: 5),
+                          ],
+                          Expanded(
+                            child: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w800),
+                            ),
                           ),
-                          const SizedBox(height: 4),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  preview,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    height: 1.35,
-                                    color: isUnread
-                                        ? Theme.of(context)
-                                            .colorScheme
-                                            .onSurface
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                    fontWeight: isUnread
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
-                                  ),
-                                ),
-                              ),
-                              if (isUnread)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 8, top: 4),
-                                  child: Container(
-                                    width: 9,
-                                    height: 9,
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Color(UiTokens.brandViolet),
-                                          Color(UiTokens.brandCyan),
-                                        ],
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Color(0x667C6CF6),
-                                          blurRadius: 8,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                            ],
+                          const SizedBox(width: 8),
+                          Text(
+                            formatTimeAgo(context, when),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: context.l10n.chatMoreActions,
+                            onPressed: () => _showThreadMenu(thread, isPinned),
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 28,
+                              minHeight: 28,
+                            ),
+                            icon: Icon(
+                              Icons.more_horiz_rounded,
+                              size: 18,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 4),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              preview,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                height: 1.35,
+                                color: isUnread
+                                    ? Theme.of(context).colorScheme.onSurface
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                fontWeight: isUnread
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                          if (isUnread)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8, top: 4),
+                              child: Container(
+                                width: 9,
+                                height: 9,
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Color(UiTokens.brandViolet),
+                                      Color(UiTokens.brandCyan),
+                                    ],
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Color(0x667C6CF6),
+                                      blurRadius: 8,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         );
@@ -562,20 +540,28 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Color _presenceColor(PresenceStatus status) {
-    return switch (status) {
-      PresenceStatus.online => const Color(0xFF3DDC97),
-      PresenceStatus.busy => const Color(0xFFFF5A6E),
-      PresenceStatus.afk => const Color(0xFFF2A33A),
-      PresenceStatus.offline => const Color(0xFF8B93A5),
-    };
+  Future<void> _markThreadSeen(ChatThreadItem thread, int ts) async {
+    final prefs = widget.appState.prefs;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final next = Map<String, int>.from(prefs.chatThreadSeenMs);
+    next[thread.threadId] = ts > now ? ts + 1 : now;
+    await widget.appState.savePrefs(prefs.copyWith(chatThreadSeenMs: next));
+    if (mounted) setState(() {});
   }
 
   Future<void> _showThreadMenu(ChatThreadItem thread, bool pinned) async {
     final prefs = widget.appState.prefs;
     final nextPinned = List<String>.from(prefs.pinnedChatThreads);
+    final isGroup = thread.kind == 'group';
     final action = await showModalBottomSheet<String>(
       context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(UiTokens.radiusCard),
+        ),
+      ),
       builder: (context) {
         return SafeArea(
           child: Wrap(
@@ -587,21 +573,79 @@ class _ChatScreenState extends State<ChatScreen> {
                     pinned ? context.l10n.chatUnpin : context.l10n.chatPin),
                 onTap: () => Navigator.of(context).pop('pin'),
               ),
+              ListTile(
+                leading: Icon(isGroup
+                    ? Icons.logout_rounded
+                    : Icons.delete_outline_rounded),
+                title: Text(isGroup
+                    ? context.l10n.chatLeaveGroup
+                    : context.l10n.chatDeleteThread),
+                subtitle: Text(isGroup
+                    ? context.l10n.chatLeaveGroupHint
+                    : context.l10n.chatDeleteThreadHint),
+                onTap: () => Navigator.of(context).pop(
+                  isGroup ? 'leave' : 'delete',
+                ),
+              ),
             ],
           ),
         );
       },
     );
-    if (action != 'pin') return;
-    if (pinned) {
-      nextPinned.removeWhere((id) => id == thread.threadId);
-    } else {
-      if (!nextPinned.contains(thread.threadId)) {
-        nextPinned.add(thread.threadId);
+    if (action == null) return;
+    if (action == 'pin') {
+      if (pinned) {
+        nextPinned.removeWhere((id) => id == thread.threadId);
+      } else {
+        if (!nextPinned.contains(thread.threadId)) {
+          nextPinned.add(thread.threadId);
+        }
       }
+      await widget.appState
+          .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
+      if (mounted) setState(() {});
+      return;
     }
-    await widget.appState
-        .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
-    if (mounted) setState(() {});
+
+    final cfg = widget.appState.config;
+    if (cfg == null || !mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(action == 'leave'
+            ? context.l10n.chatLeaveGroup
+            : context.l10n.chatDeleteThread),
+        content: Text(action == 'leave'
+            ? context.l10n.chatLeaveGroupHint
+            : context.l10n.chatDeleteThreadHint),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(action == 'leave'
+                ? context.l10n.chatLeaveGroup
+                : context.l10n.chatDeleteThread),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final api = CoreApi(config: cfg);
+      if (action == 'leave') {
+        await api.leaveChatThread(threadId: thread.threadId);
+      } else {
+        await api.deleteChatThread(threadId: thread.threadId);
+      }
+      if (mounted) await _loadThreads(reset: true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
   }
 }

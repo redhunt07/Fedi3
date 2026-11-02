@@ -518,6 +518,11 @@ fn run_core(
             .as_ref()
             .map(|b| format!("{b}/users/{}", cfg.username));
         let new_actor = format!("{}/users/{}", public_base_url.trim_end_matches('/'), cfg.username);
+        if let Some(old) = old_actor.as_deref() {
+            if let Err(e) = social.migrate_chat_actor_identity(old, &new_actor) {
+                tracing::warn!("chat actor identity migration failed: {e:#}");
+            }
+        }
 
         // The signing key id must be the canonical actor (the anchor when configured), or
         // remote servers reject the signature because the advertised publicKey id differs.

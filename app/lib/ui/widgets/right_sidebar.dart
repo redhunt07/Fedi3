@@ -51,8 +51,8 @@ class _RightSidebarState extends State<RightSidebar> {
   void initState() {
     super.initState();
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
-    _trendingTimer = Timer.periodic(
-        const Duration(minutes: 5), (_) => _loadTrending());
+    _trendingTimer =
+        Timer.periodic(const Duration(minutes: 5), (_) => _loadTrending());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refresh();
       _loadTrending();
@@ -223,8 +223,8 @@ class _RightSidebarState extends State<RightSidebar> {
                                 .colorScheme
                                 .primary
                                 .withAlpha(14),
-                            borderRadius: BorderRadius.circular(
-                                UiTokens.radiusCardSm),
+                            borderRadius:
+                                BorderRadius.circular(UiTokens.radiusCardSm),
                             border: Border.all(
                               color: Theme.of(context)
                                   .colorScheme
@@ -259,8 +259,8 @@ class _RightSidebarState extends State<RightSidebar> {
                                 child: IconButton(
                                   visualDensity: VisualDensity.compact,
                                   onPressed: _clearDraft,
-                                  icon:
-                                      const Icon(Icons.delete_outline, size: 18),
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 18),
                                 ),
                               ),
                             ],
@@ -350,8 +350,7 @@ class _RightSidebarState extends State<RightSidebar> {
                         context.l10n.trendingHint,
                         style: TextStyle(
                           fontSize: 11.5,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -389,61 +388,66 @@ class _RightSidebarState extends State<RightSidebar> {
               ),
             ],
             const SizedBox(height: UiTokens.gapMd),
-            Card(
-              child: ListTile(
-                leading: cfg == null
-                    ? const Icon(Icons.person_outline)
-                    : _ComposeAvatar(iconUrl: cfg.iconUrl, size: 34),
-                title: Text(context.l10n.settingsAccount),
-                subtitle: Text(cfg == null
-                    ? context.l10n.statusUnknownShort
-                    : '${cfg.username}@${cfg.domain}'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: cfg == null
-                    ? null
-                    : () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ProfileScreen(
-                              appState: widget.appState,
-                              actorUrl:
-                                  '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}',
+            GlassPanel(
+              padding: const EdgeInsets.all(6),
+              child: Column(
+                children: [
+                  _SidebarAction(
+                    title: context.l10n.settingsAccount,
+                    subtitle: cfg == null
+                        ? context.l10n.statusUnknownShort
+                        : '${cfg.username}@${cfg.domain}',
+                    leading: cfg == null
+                        ? const Icon(Icons.person_outline)
+                        : _ComposeAvatar(iconUrl: cfg.iconUrl, size: 30),
+                    onTap: cfg == null
+                        ? null
+                        : () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => ProfileScreen(
+                                  appState: widget.appState,
+                                  actorUrl:
+                                      '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}',
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-              ),
-            ),
-            const SizedBox(height: UiTokens.gapMd),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.bookmark_border_rounded),
-                title: Text(context.l10n.savedTitle),
-                subtitle: Text(context.l10n.savedHint),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SavedScreen(appState: widget.appState),
                   ),
-                ),
-              ),
-            ),
-            const SizedBox(height: UiTokens.gapMd),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: Text(context.l10n.relaysTitle),
-                subtitle: Text(cfg?.publicBaseUrl ?? ''),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => RelaysScreen(appState: widget.appState),
+                  const _SidebarDivider(),
+                  _SidebarAction(
+                    icon: Icons.bookmark_border_rounded,
+                    title: context.l10n.savedTitle,
+                    subtitle: context.l10n.savedHint,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => SavedScreen(appState: widget.appState),
+                      ),
+                    ),
                   ),
-                ),
+                  const _SidebarDivider(),
+                  _SidebarAction(
+                    icon: Icons.dns_outlined,
+                    title: context.l10n.relaysTitle,
+                    subtitle: _relayHostLabel(cfg?.publicBaseUrl),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => RelaysScreen(appState: widget.appState),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         );
       },
     );
+  }
+
+  String _relayHostLabel(String? publicBaseUrl) {
+    final raw = publicBaseUrl?.trim() ?? '';
+    if (raw.isEmpty) return '';
+    final parsed = Uri.tryParse(raw);
+    return parsed?.host.isNotEmpty == true ? parsed!.host : raw;
   }
 
   void _openComposer(BuildContext context) {
@@ -614,6 +618,105 @@ class _SidebarNotificationRow extends StatelessWidget {
   }
 }
 
+class _SidebarAction extends StatelessWidget {
+  const _SidebarAction({
+    required this.title,
+    required this.subtitle,
+    this.icon,
+    this.leading,
+    this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData? icon;
+  final Widget? leading;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final mark = leading ??
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                scheme.primary.withAlpha(210),
+                const Color(UiTokens.brandCyan).withAlpha(190),
+              ],
+            ),
+          ),
+          child: Icon(icon, size: 16, color: Colors.white),
+        );
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Row(
+            children: [
+              mark,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SidebarDivider extends StatelessWidget {
+  const _SidebarDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      height: 1,
+      indent: 50,
+      endIndent: 12,
+      color: Theme.of(context).colorScheme.onSurface.withAlpha(18),
+    );
+  }
+}
+
 class _ComposeAvatar extends StatelessWidget {
   const _ComposeAvatar({required this.iconUrl, required this.size});
 
@@ -634,8 +737,7 @@ class _ComposeAvatar extends StatelessWidget {
           ],
         ),
       ),
-      child: Icon(Icons.person_rounded,
-          size: size * 0.55, color: Colors.white),
+      child: Icon(Icons.person_rounded, size: size * 0.55, color: Colors.white),
     );
     if (iconUrl.trim().isEmpty) return fallback;
     return ClipOval(

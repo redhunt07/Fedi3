@@ -4084,6 +4084,62 @@ impl SocialDb {
         .map_err(Into::into)
     }
 
+    pub fn get_chat_thread_kind(&self, thread_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT kind FROM chat_threads WHERE thread_id=?1",
+            params![thread_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Rewrite local chat actor references after an identity/relay move.
+    /// Existing threads keep working instead of losing membership because the
+    /// current actor URL no longer matches the rows created under the old one.
+    pub fn migrate_chat_actor_identity(&self, old_actor: &str, new_actor: &str) -> Result<()> {
+        if old_actor == new_actor {
+            return Ok(());
+        }
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE OR IGNORE chat_members SET actor_id=?2 WHERE actor_id=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_members WHERE actor_id=?1",
+            params![old_actor],
+        )?;
+        tx.execute(
+            "UPDATE chat_messages SET sender_actor=?2 WHERE sender_actor=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "UPDATE OR IGNORE chat_message_status SET actor_id=?2 WHERE actor_id=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "UPDATE OR IGNORE chat_message_reactions SET actor_id=?2 WHERE actor_id=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "UPDATE chat_pins SET pinned_by=?2 WHERE pinned_by=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "UPDATE chat_call_signals SET from_actor=?2 WHERE from_actor=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.execute(
+            "UPDATE chat_call_signals SET to_actor=?2 WHERE to_actor=?1",
+            params![old_actor, new_actor],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn set_chat_pin(
         &self,
         thread_id: &str,
@@ -4875,6 +4931,25 @@ mod chat_pin_search_tests {
         assert_eq!(db.get_chat_pin("t1").expect("get").unwrap().0, "m1");
         db.clear_chat_pin("t1").expect("clear");
         assert!(db.get_chat_pin("t1").expect("get").is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn chat_actor_identity_migration_keeps_thread_membership() {
+        let (db, path) = setup();
+        let old = "https://a.test/users/alice";
+        let new = "https://b.test/users/alice";
+        db.migrate_chat_actor_identity(old, new).expect("migrate");
+        assert_eq!(
+            db.get_chat_member_role("t1", new).expect("role").as_deref(),
+            Some("owner")
+        );
+        assert!(db
+            .get_chat_member_role("t1", old)
+            .expect("old role")
+            .is_none());
+        let messages = db.list_chat_messages("t1", 10, None).expect("messages");
+        assert!(messages.items.iter().all(|m| m.sender_actor == new));
         let _ = std::fs::remove_file(path);
     }
 }

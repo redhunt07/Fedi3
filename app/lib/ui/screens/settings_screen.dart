@@ -11,6 +11,7 @@ import '../../state/app_state.dart';
 import '../../state/peer_presence_store.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
+import '../widgets/presence_selector.dart';
 import 'backup_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
@@ -34,24 +35,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _presenceLabel(BuildContext context, PresenceStatus status) {
-    return switch (status) {
-      PresenceStatus.online => context.l10n.presenceOnline,
-      PresenceStatus.busy => context.l10n.presenceBusy,
-      PresenceStatus.afk => context.l10n.presenceAfk,
-      PresenceStatus.offline => context.l10n.presenceOffline,
-    };
-  }
-
-  Color _presenceColor(PresenceStatus status) {
-    return switch (status) {
-      PresenceStatus.online => const Color(0xFF3DDC97),
-      PresenceStatus.busy => const Color(0xFFFF5A6E),
-      PresenceStatus.afk => const Color(0xFFF2A33A),
-      PresenceStatus.offline => const Color(0xFF8B93A5),
-    };
-  }
-
   Future<void> _setPresence(PresenceStatus status) async {
     final prefs = widget.appState.prefs;
     await widget.appState.savePrefs(
@@ -83,45 +66,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               _section(context, context.l10n.presenceTitle),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(UiTokens.padCard),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        context.l10n.presenceHint,
-                        style: TextStyle(
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontSize: 12,
-                        ),
+              GlassPanel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      context.l10n.presenceHint,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 12,
                       ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final status in PresenceStatus.values)
-                            ChoiceChip(
-                              label: Text(_presenceLabel(context, status)),
-                              selected: presenceFromString(
-                                      widget.appState.prefs.presenceStatus) ==
-                                  status,
-                              avatar: Container(
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: _presenceColor(status),
-                                ),
-                              ),
-                              onSelected: (_) => _setPresence(status),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 12),
+                    PresenceSelector(
+                      selected: presenceFromString(
+                          widget.appState.prefs.presenceStatus),
+                      onChanged: _setPresence,
+                    ),
+                  ],
                 ),
               ),
               _section(context, context.l10n.settingsAccount),
@@ -130,24 +92,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: Icons.badge_outlined,
                 title: context.l10n.profileEditTitle,
                 subtitle: context.l10n.profileEditHint,
-                onTap: () => _push(context,
-                    ProfileEditScreen(appState: widget.appState)),
+                onTap: () => _push(
+                    context, ProfileEditScreen(appState: widget.appState)),
               ),
               _tile(
                 context,
                 icon: Icons.alternate_email_rounded,
                 title: context.l10n.settingsAccount,
                 subtitle: '${cfg.username}@${cfg.domain}',
-                onTap: () => _push(context,
-                    EditConfigScreen(appState: widget.appState)),
+                onTap: () =>
+                    _push(context, EditConfigScreen(appState: widget.appState)),
               ),
               _tile(
                 context,
                 icon: Icons.person_add_alt_1_outlined,
                 title: context.l10n.settingsFollowRequests,
                 subtitle: context.l10n.settingsFollowRequestsHint,
-                onTap: () => _push(context,
-                    FollowRequestsScreen(appState: widget.appState)),
+                onTap: () => _push(
+                    context, FollowRequestsScreen(appState: widget.appState)),
               ),
               _tile(
                 context,
@@ -163,16 +125,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: Icons.lock_outline_rounded,
                 title: context.l10n.privacyTitle,
                 subtitle: context.l10n.privacyHint,
-                onTap: () => _push(context,
-                    PrivacySettingsScreen(appState: widget.appState)),
+                onTap: () => _push(
+                    context, PrivacySettingsScreen(appState: widget.appState)),
               ),
               _tile(
                 context,
                 icon: Icons.shield_outlined,
                 title: context.l10n.securityTitle,
                 subtitle: context.l10n.securityHint,
-                onTap: () => _push(context,
-                    SecuritySettingsScreen(appState: widget.appState)),
+                onTap: () => _push(
+                    context, SecuritySettingsScreen(appState: widget.appState)),
               ),
               _tile(
                 context,
@@ -197,8 +159,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: Icons.palette_outlined,
                 title: context.l10n.uiSettingsTitle,
                 subtitle: context.l10n.uiSettingsHint,
-                onTap: () => _push(context,
-                    UiSettingsScreen(appState: widget.appState)),
+                onTap: () =>
+                    _push(context, UiSettingsScreen(appState: widget.appState)),
               ),
               _tile(
                 context,

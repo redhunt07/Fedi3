@@ -427,6 +427,22 @@ pub fn store_incoming_payload_db(
                         let _ = social.remove_chat_member(thread_id, actor);
                     }
                 }
+            } else if action == "leave" {
+                let was_owner = social
+                    .get_chat_member_role(thread_id, &sender)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("owner");
+                let _ = social.remove_chat_member(thread_id, &sender);
+                if was_owner {
+                    if let Ok(members) = social.list_chat_members(thread_id) {
+                        if let Some((next, _)) = members.first() {
+                            let _ = social.upsert_chat_member(thread_id, next, "owner");
+                        }
+                    }
+                }
+                let _ = social.touch_chat_thread(thread_id);
             } else if action == "rename" {
                 let _ = social.update_chat_thread_title(thread_id, title);
             }

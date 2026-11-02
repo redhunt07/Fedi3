@@ -931,6 +931,17 @@ class CoreApi {
     );
   }
 
+  Future<void> leaveChatThread({required String threadId}) async {
+    final uri = _internal('/_fedi3/chat/thread/leave');
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'thread_id': threadId}),
+      anySuccess: true,
+    );
+  }
+
   Future<void> updateChatThreadMembers({
     required String threadId,
     List<String>? add,
