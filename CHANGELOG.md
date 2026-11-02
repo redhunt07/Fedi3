@@ -19,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Pending follow requests for locked accounts, with internal endpoints and a Flutter screen to approve or reject them.
 - Outbox visibility: direct messages never appear in the public outbox, followers-only notes are served only to followers.
 - Chat membership enforcement on every inbound payload path.
+- Chat message search inside a thread and message forwarding to another conversation, with widget tests.
 - Media upload limits: byte cap, magic-byte validation and bounded image decoding.
 - Idempotent PostgreSQL `search_tsv` migration for existing databases.
 - Test infrastructure for the core and the relay: in-process mock ActivityPub servers, request signers, ephemeral-port harnesses.

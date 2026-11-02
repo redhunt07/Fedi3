@@ -57,6 +57,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   List<ChatMessageItem> _messages = const [];
   late String _title;
   final TextEditingController _composerCtrl = TextEditingController();
+  final TextEditingController _searchCtrl = TextEditingController();
+  bool _searchOpen = false;
+  String _searchQuery = '';
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -126,6 +129,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _loadRetry?.cancel();
     _typingDebounce?.cancel();
     _composerCtrl.dispose();
+    _searchCtrl.dispose();
     widget.appState.removeListener(_appStateListener);
     super.dispose();
   }
@@ -934,6 +938,97 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
   }
 
+  Future<void> _forwardMessage(ChatMessageItem message) async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final api = CoreApi(config: cfg);
+    List<ChatThreadItem> threads = const [];
+    try {
+      final resp = await api.fetchChatThreads(limit: 100);
+      final raw = resp['items'];
+      if (raw is List) {
+        threads = raw
+            .whereType<Map>()
+            .map((m) => ChatThreadItem.fromJson(m.cast<String, dynamic>()))
+            .where((t) => t.threadId != widget.threadId)
+            .toList();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+      return;
+    }
+    if (!mounted) return;
+    final target = await showDialog<ChatThreadItem>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.chatForwardTitle),
+        content: SizedBox(
+          width: 380,
+          height: 360,
+          child: threads.isEmpty
+              ? Center(child: Text(context.l10n.chatEmpty))
+              : ListView.builder(
+                  itemCount: threads.length,
+                  itemBuilder: (context, index) {
+                    final t = threads[index];
+                    final title = t.title?.trim().isNotEmpty == true
+                        ? t.title!.trim()
+                        : (t.kind == 'dm'
+                            ? t.peerUsernames.join(', ')
+                            : context.l10n.chatGroup);
+                    return ListTile(
+                      leading: Icon(t.kind == 'dm'
+                          ? Icons.person_outline_rounded
+                          : Icons.group_outlined),
+                      title: Text(
+                        title.isEmpty ? t.threadId : title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => Navigator.of(context).pop(t),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(context.l10n.cancel),
+          ),
+        ],
+      ),
+    );
+    if (target == null) return;
+    if (!mounted) return;
+    final payload = message.payload;
+    final attachments = <Map<String, dynamic>>[];
+    for (final a in payload?.attachments ?? const <ChatAttachment>[]) {
+      attachments.add({
+        'id': a.id,
+        'url': a.url,
+        'media_type': a.mediaType,
+        if (a.name != null && a.name!.trim().isNotEmpty) 'name': a.name,
+      });
+    }
+    final text = _messageText(message).trim().isNotEmpty
+        ? _messageText(message).trim()
+        : context.l10n.chatMediaFallback;
+    try {
+      await api.sendChatMessage(
+        threadId: target.threadId,
+        recipients: const [],
+        text: text,
+        attachments: attachments,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.chatForwarded)),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
   Future<void> _editMessage(ChatMessageItem message) async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
@@ -1148,6 +1243,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: context.l10n.chatSearchTooltip,
+            onPressed: () => setState(() {
+              _searchOpen = !_searchOpen;
+              if (!_searchOpen) {
+                _searchCtrl.clear();
+                _searchQuery = '';
+              }
+            }),
+            icon: Icon(_searchOpen ? Icons.search_off_rounded : Icons.search_rounded),
+          ),
+          IconButton(
             tooltip: context.l10n.chatRefresh,
             onPressed: _loading
                 ? null
@@ -1181,6 +1287,32 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       ),
       body: Column(
         children: [
+          if (_searchOpen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: context.l10n.chatSearchHint,
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(UiTokens.radiusInput),
+                  ),
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              ),
+            ),
           Expanded(child: _buildMessages()),
           if (_typingActors.isNotEmpty)
             Padding(
@@ -1233,11 +1365,20 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       return Center(child: Text(context.l10n.chatEmpty));
     }
     final selfActor = _selfActor();
+    final query = _searchQuery.trim().toLowerCase();
+    final visible = query.isEmpty
+        ? _messages
+        : _messages
+            .where((m) => _messageText(m).toLowerCase().contains(query))
+            .toList(growable: false);
+    if (visible.isEmpty && query.isNotEmpty) {
+      return Center(child: Text(context.l10n.chatSearchNoResults));
+    }
     return ListView.builder(
       reverse: true,
-      itemCount: _messages.length + (_next != null ? 1 : 0),
+      itemCount: visible.length + (_next != null && query.isEmpty ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index >= _messages.length) {
+        if (index >= visible.length) {
           return Padding(
             padding: const EdgeInsets.all(12),
             child: Center(
@@ -1248,7 +1389,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             ),
           );
         }
-        final message = _messages[index];
+        final message = visible[index];
         final payload = message.payload;
         if (payload?.op == 'react') {
           return const SizedBox.shrink();
@@ -1339,6 +1480,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             onTap: () {
                               Navigator.of(context).pop();
                               setState(() => _replyTo = message);
+                            },
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.forward_rounded),
+                            title: Text(context.l10n.chatForward),
+                            onTap: () async {
+                              Navigator.of(context).pop();
+                              await _forwardMessage(message);
                             },
                           ),
                           if (isSelf)

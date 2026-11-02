@@ -686,6 +686,48 @@ abstract class AppLocalizations {
   /// **'Change role'**
   String get chatRoleChange;
 
+  /// No description provided for @chatSearchTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Search messages'**
+  String get chatSearchTooltip;
+
+  /// No description provided for @chatSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search in chat'**
+  String get chatSearchHint;
+
+  /// No description provided for @chatSearchNoResults.
+  ///
+  /// In en, this message translates to:
+  /// **'No messages found'**
+  String get chatSearchNoResults;
+
+  /// No description provided for @chatForward.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward'**
+  String get chatForward;
+
+  /// No description provided for @chatForwardTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward to…'**
+  String get chatForwardTitle;
+
+  /// No description provided for @chatForwarded.
+  ///
+  /// In en, this message translates to:
+  /// **'Message forwarded'**
+  String get chatForwarded;
+
+  /// No description provided for @chatMediaFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'Attachment'**
+  String get chatMediaFallback;
+
   /// No description provided for @chatNewMessage.
   ///
   /// In en, this message translates to:

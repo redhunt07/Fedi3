@@ -1,3 +1,9 @@
+## 2026-11-02 — Chat: cerca e inoltra
+
+Aggiunte la ricerca dei messaggi dentro una conversazione e l'inoltro di un
+messaggio, con allegati, verso un'altra chat o gruppo. La ricerca filtra solo
+i messaggi già caricati; l'inoltro usa il percorso E2E esistente.
+
 # Annunci Fedi3
 
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
