@@ -7018,7 +7018,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_one(
-                    "SELECT COALESCE(SUM(size), 0) FROM media_items WHERE username=$1",
+                    "SELECT COALESCE(SUM(size)::bigint, 0) FROM media_items WHERE username=$1",
                     &[&username],
                 )?;
                 let used: i64 = row.get(0);
