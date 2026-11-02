@@ -285,6 +285,8 @@ impl SocialDb {
               body_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created ON chat_messages(thread_id, created_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_threads_updated ON chat_threads(updated_at_ms DESC);
             CREATE TABLE IF NOT EXISTS chat_message_status (
               message_id TEXT NOT NULL,
               actor_id TEXT NOT NULL,
@@ -4093,6 +4095,56 @@ impl SocialDb {
         Ok(())
     }
 
+    pub fn search_all_chat_messages(
+        &self,
+        self_actor: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<(ChatMessage, String, Option<String>)>> {
+        let conn = self.connect()?;
+        let limit = limit.clamp(1, 100);
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let mut stmt = conn.prepare(
+            r#"SELECT m.message_id, m.thread_id, m.sender_actor, m.sender_device,
+                      m.created_at_ms, m.edited_at_ms, m.deleted, m.body_json,
+                      t.kind, t.title
+               FROM chat_messages m
+               JOIN chat_threads t ON t.thread_id = m.thread_id
+               JOIN chat_members cm ON cm.thread_id = m.thread_id AND cm.actor_id = ?1
+               WHERE m.deleted = 0 AND json_extract(m.body_json, '$.text') LIKE ?2 ESCAPE '\'
+               ORDER BY m.created_at_ms DESC
+               LIMIT ?3"#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![self_actor, pattern, limit as i64],
+            |row| {
+                Ok((
+                    ChatMessage {
+                        message_id: row.get(0)?,
+                        thread_id: row.get(1)?,
+                        sender_actor: row.get(2)?,
+                        sender_device: row.get(3)?,
+                        created_at_ms: row.get(4)?,
+                        edited_at_ms: row.get(5)?,
+                        deleted: row.get::<_, i64>(6)? != 0,
+                        body_json: row.get(7)?,
+                    },
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn get_chat_pin(
         &self,
         thread_id: &str,
@@ -4125,7 +4177,7 @@ impl SocialDb {
             r#"SELECT message_id, thread_id, sender_actor, sender_device, created_at_ms,
                       edited_at_ms, deleted, body_json
                FROM chat_messages
-               WHERE thread_id=?1 AND deleted=0 AND body_json LIKE ?2 ESCAPE '\'
+               WHERE thread_id=?1 AND deleted=0 AND json_extract(body_json, '$.text') LIKE ?2 ESCAPE '\'
                ORDER BY created_at_ms DESC
                LIMIT ?3"#,
         )?;
@@ -4657,6 +4709,42 @@ mod chat_pin_search_tests {
             .search_chat_messages("t1", "assente", 10)
             .expect("search")
             .is_empty());
+        assert!(db
+            .search_chat_messages("t1", "op", 10)
+            .expect("search")
+            .is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn global_chat_search_is_membership_scoped() {
+        let (db, path) = setup();
+        db.create_chat_thread("t2", "group", Some("Altro"))
+            .expect("thread 2");
+        db.upsert_chat_member("t2", "https://a.test/users/bob", "owner")
+            .expect("member 2");
+        db.insert_chat_message(&ChatMessage {
+            message_id: "m4".to_string(),
+            thread_id: "t2".to_string(),
+            sender_actor: "https://a.test/users/bob".to_string(),
+            sender_device: "dev".to_string(),
+            created_at_ms: now_ms(),
+            edited_at_ms: None,
+            deleted: false,
+            body_json: serde_json::json!({"op": "message", "text": "notizia altrui"}).to_string(),
+        })
+        .expect("message 2");
+
+        let hits = db
+            .search_all_chat_messages("https://a.test/users/alice", "notizia", 10)
+            .expect("search");
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|(m, _, _)| m.thread_id == "t1"));
+
+        let escaped = db
+            .search_all_chat_messages("https://a.test/users/alice", "100%", 10)
+            .expect("search");
+        assert_eq!(escaped.len(), 1);
         let _ = std::fs::remove_file(path);
     }
 

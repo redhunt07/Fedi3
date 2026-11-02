@@ -1,3 +1,10 @@
+## 2026-11-02 — Ricerca globale nelle chat
+
+La ricerca ora copre tutte le conversazioni dell'utente, resta locale al core
+(nessuna query inviata alla rete), è limitata ai thread di cui si è membri e
+cerca solo il testo dei messaggi. Il client apre direttamente il thread con il
+filtro attivo.
+
 ## 2026-11-02 — Chat: fissati, ricerca completa e inviti
 
 I gruppi possono fissare un messaggio condiviso (solo proprietario e

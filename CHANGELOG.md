@@ -21,6 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Chat membership enforcement on every inbound payload path.
 - Chat message search inside a thread and message forwarding to another conversation, with widget tests.
 - Shared pinned messages per chat (owner/admin only in groups), full-history search through the core, and group invite links with a join flow. Widget and core tests cover pinning and wildcard-safe search.
+- Local, membership-scoped global chat search across every conversation, with debounced UI and indexes on chat ordering; searches message text only (JSON keys excluded) and never leaves the device.
 - Media upload limits: byte cap, magic-byte validation and bounded image decoding.
 - Idempotent PostgreSQL `search_tsv` migration for existing databases.
 - Test infrastructure for the core and the relay: in-process mock ActivityPub servers, request signers, ephemeral-port harnesses.

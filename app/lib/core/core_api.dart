@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 
+import '../model/chat_models.dart';
 import '../model/core_config.dart';
 import '../model/follow_request.dart';
 import 'core_http.dart';
@@ -678,6 +679,31 @@ class CoreApi {
     );
     if (resp.statusCode == 404) return {'items': const []};
     return _decodeMap(resp, 'chat members');
+  }
+
+  Future<List<ChatSearchHit>> searchAllChatMessages({
+    required String query,
+    int limit = 50,
+  }) async {
+    final uri = _internal('/_fedi3/chat/search', {
+      'q': query,
+      'limit': '$limit',
+    });
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return const [];
+    final map = _decodeMap(resp, 'chat global search');
+    final raw = map['items'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((m) => ChatSearchHit.fromJson(m.cast<String, dynamic>()))
+        .where((h) => h.threadId.isNotEmpty)
+        .toList(growable: false);
   }
 
   Future<Map<String, dynamic>> searchChatMessages({

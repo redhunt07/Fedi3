@@ -39,12 +39,14 @@ class ChatThreadScreen extends StatefulWidget {
     required this.threadId,
     required this.title,
     this.isGroup = false,
+    this.initialSearch,
   });
 
   final AppState appState;
   final String threadId;
   final String title;
   final bool isGroup;
+  final String? initialSearch;
 
   @override
   State<ChatThreadScreen> createState() => _ChatThreadScreenState();
@@ -87,9 +89,18 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   void initState() {
     super.initState();
     _title = widget.title;
+    final initialSearch = widget.initialSearch?.trim() ?? '';
+    if (initialSearch.isNotEmpty) {
+      _searchOpen = true;
+      _searchQuery = initialSearch;
+      _searchCtrl.text = initialSearch;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadMessages(reset: true);
       _loadThreadMeta();
+      if (initialSearch.isNotEmpty) {
+        _runSearch(initialSearch);
+      }
     });
     _markSeen();
     _markThreadSeen();

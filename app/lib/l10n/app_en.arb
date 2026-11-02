@@ -121,6 +121,8 @@
   "chatRoleAdmin": "Admin",
   "chatRoleMember": "Member",
   "chatRoleChange": "Change role",
+  "chatSearchAllTitle": "Search chats",
+  "chatSearchAllHint": "Search all conversations",
   "chatSearchTooltip": "Search messages",
   "chatSearchHint": "Search in chat",
   "chatSearchNoResults": "No messages found",

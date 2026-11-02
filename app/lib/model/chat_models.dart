@@ -44,6 +44,38 @@ class ChatThreadItem {
   }
 }
 
+class ChatSearchHit {
+  ChatSearchHit({
+    required this.messageId,
+    required this.threadId,
+    required this.threadKind,
+    required this.threadTitle,
+    required this.senderActor,
+    required this.createdAtMs,
+    required this.text,
+  });
+
+  final String messageId;
+  final String threadId;
+  final String threadKind;
+  final String? threadTitle;
+  final String senderActor;
+  final int createdAtMs;
+  final String text;
+
+  factory ChatSearchHit.fromJson(Map<String, dynamic> json) {
+    return ChatSearchHit(
+      messageId: json['message_id']?.toString() ?? '',
+      threadId: json['thread_id']?.toString() ?? '',
+      threadKind: json['thread_kind']?.toString() ?? 'group',
+      threadTitle: json['thread_title']?.toString(),
+      senderActor: json['sender_actor']?.toString() ?? '',
+      createdAtMs: (json['created_at_ms'] as num?)?.toInt() ?? 0,
+      text: json['text']?.toString() ?? '',
+    );
+  }
+}
+
 class ChatMessageItem {
   ChatMessageItem({
     required this.messageId,

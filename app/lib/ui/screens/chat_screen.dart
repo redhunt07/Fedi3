@@ -19,6 +19,7 @@ import '../widgets/network_error_card.dart';
 import '../theme/ui_tokens.dart';
 import '../../state/peer_presence_store.dart';
 import '../utils/time_ago.dart';
+import 'chat_search_screen.dart';
 import 'chat_thread_screen.dart';
 import 'new_chat_screen.dart';
 
@@ -280,6 +281,16 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
+          IconButton(
+            tooltip: context.l10n.chatSearchAllTitle,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (context) =>
+                    ChatSearchScreen(appState: widget.appState),
+              ),
+            ),
+            icon: const Icon(Icons.search_rounded),
+          ),
           IconButton(
             tooltip: context.l10n.chatJoinTitle,
             onPressed: _openJoinDialog,

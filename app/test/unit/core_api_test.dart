@@ -288,6 +288,30 @@ void main() {
       expect(pin?['preview'], 'ciao');
     });
 
+    test('CT-07 searchAllChatMessages parses membership-scoped hits', () async {
+      client.json('GET', '/_fedi3/chat/search', {
+        'items': [
+          {
+            'message_id': 'm1',
+            'thread_id': 't1',
+            'thread_kind': 'group',
+            'thread_title': 'Team',
+            'sender_actor': 'https://a.test/users/bob',
+            'created_at_ms': 1,
+            'text': 'ciao'
+          }
+        ]
+      });
+      final hits =
+          await api().searchAllChatMessages(query: 'ciao', limit: 10);
+      expect(hits, hasLength(1));
+      expect(hits.first.threadTitle, 'Team');
+      expect(hits.first.text, 'ciao');
+      final index = client.requests
+          .indexWhere((r) => r.url.path == '/_fedi3/chat/search');
+      expect(client.requests[index].url.queryParameters['q'], 'ciao');
+    });
+
     test('CT-06 joinChatThread posts the thread id', () async {
       client.json('POST', '/_fedi3/chat/thread/join', {
         'ok': true,

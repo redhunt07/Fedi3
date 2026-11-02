@@ -328,6 +328,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("POST", "/_fedi3/chat/thread/update") => chat_thread_update_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/delete") => chat_thread_delete_post(state, req).await,
         ("POST", "/_fedi3/chat/thread/members") => chat_thread_members_post(state, req).await,
+        ("GET", "/_fedi3/chat/search") => chat_search_all_get(state, req).await,
         ("GET", "/_fedi3/chat/thread/search") => chat_thread_search_get(state, req).await,
         ("GET", "/_fedi3/chat/thread/pin") => chat_thread_pin_get(state, req).await,
         ("POST", "/_fedi3/chat/thread/pin") => chat_thread_pin_post(state, req).await,
@@ -4277,6 +4278,49 @@ async fn chat_thread_members_get(state: &ApState, req: Request<Body>) -> Respons
         .map(|(actor, role)| serde_json::json!({"actor_id": actor, "role": role}))
         .collect::<Vec<_>>();
     axum::Json(serde_json::json!({ "items": items })).into_response()
+}
+
+async fn chat_search_all_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let q = chat_query_value(query, "q");
+    let limit = chat_query_value(query, "limit")
+        .parse::<u32>()
+        .unwrap_or(50);
+    if q.trim().is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing q");
+    }
+    let self_actor = local_actor(state);
+    match state
+        .social
+        .search_all_chat_messages(&self_actor, q.trim(), limit)
+    {
+        Ok(items) => {
+            let items = items
+                .into_iter()
+                .map(|(m, kind, title)| {
+                    let text = serde_json::from_str::<chat::ChatPayload>(&m.body_json)
+                        .ok()
+                        .and_then(|p| p.text)
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "message_id": m.message_id,
+                        "thread_id": m.thread_id,
+                        "thread_kind": kind,
+                        "thread_title": title,
+                        "sender_actor": m.sender_actor,
+                        "created_at_ms": m.created_at_ms,
+                        "text": text,
+                    })
+                })
+                .collect::<Vec<_>>();
+            axum::Json(serde_json::json!({"items": items})).into_response()
+        }
+        Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    }
 }
 
 async fn chat_thread_search_get(state: &ApState, req: Request<Body>) -> Response<Body> {

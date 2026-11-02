@@ -588,6 +588,33 @@ paths:
       responses:
         '200':
           description: Membri aggiornati
+  /_fedi3/chat/search:
+    get:
+      tags: [chat]
+      summary: Cerca in tutte le chat dell'utente locale
+      description: Ricerca locale, limitata ai thread di cui l'utente è membro; nessuna chiamata di rete.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        '200':
+          description: Risultati con thread e testo del messaggio
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /_fedi3/chat/thread/search:
     get:
       tags: [chat]

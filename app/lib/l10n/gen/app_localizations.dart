@@ -686,6 +686,18 @@ abstract class AppLocalizations {
   /// **'Change role'**
   String get chatRoleChange;
 
+  /// No description provided for @chatSearchAllTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Search chats'**
+  String get chatSearchAllTitle;
+
+  /// No description provided for @chatSearchAllHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search all conversations'**
+  String get chatSearchAllHint;
+
   /// No description provided for @chatSearchTooltip.
   ///
   /// In en, this message translates to:

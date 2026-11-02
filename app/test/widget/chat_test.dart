@@ -7,6 +7,7 @@ import 'dart:convert';
 
 import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
+import 'package:fedi3/ui/screens/chat_search_screen.dart';
 import 'package:fedi3/ui/screens/chat_thread_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -232,5 +233,39 @@ void main() {
 
     expect(find.text('PINNED MESSAGE'), findsOneWidget);
     expect(find.text('messaggio importante'), findsOneWidget);
+  });
+
+  testWidgets('AW-09e global chat search lists membership-scoped hits',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json('GET', '/_fedi3/chat/search', {
+      'items': [
+        {
+          'message_id': 'm1',
+          'thread_id': 't1',
+          'thread_kind': 'group',
+          'thread_title': 'Team',
+          'sender_actor': 'https://a.test/users/bob',
+          'created_at_ms': 1000,
+          'text': 'ciao a tutti',
+        }
+      ]
+    });
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(tester, ChatSearchScreen(appState: app));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'ciao');
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Team'), findsOneWidget);
+    expect(find.textContaining('ciao a tutti'), findsOneWidget);
+    expect(find.textContaining('@bob'), findsOneWidget);
   });
 }

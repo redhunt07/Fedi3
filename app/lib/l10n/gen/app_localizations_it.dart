@@ -317,6 +317,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatRoleChange => 'Cambia ruolo';
 
   @override
+  String get chatSearchAllTitle => 'Cerca nelle chat';
+
+  @override
+  String get chatSearchAllHint => 'Cerca in tutte le conversazioni';
+
+  @override
   String get chatSearchTooltip => 'Cerca nei messaggi';
 
   @override
