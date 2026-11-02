@@ -78,6 +78,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - The widget test asserted a string the app never rendered.
 - `relay_diagnose.sh` used `wget`, which is not present in the relay image.
 - Backup scripts ignored the configured PostgreSQL user/database and nested media archives incorrectly.
+- PostgreSQL media quota queries read `SUM(size)` (numeric) as `i64`, causing a panic and a 502 on every media upload. The query now casts to `bigint`; the same fix covers spool bytes and tag counts, and move-notice `BOOLEAN` status is converted before reading.
+- Added the production VPS deployment notes for `fedi3.redhunt07.ovh` in `docs/deploy_vps.md`.
 
 ### Security
 - SSRF guard on all peer-controlled fetches (core and relay), with body caps against memory exhaustion.

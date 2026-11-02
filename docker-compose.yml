@@ -214,6 +214,7 @@ services:
       - "--no-cli"
       - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
+      - "--external-ip=${TURN_EXTERNAL_IP}"
       - "--min-port=${TURN_MIN_PORT:-49152}"
       - "--max-port=${TURN_MAX_PORT:-65535}"
       - "--lt-cred-mech"
