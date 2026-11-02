@@ -695,6 +695,43 @@ class CoreApi {
     return _decodeMap(resp, 'chat messages');
   }
 
+  Future<Map<String, dynamic>> createChatThread({
+    required List<String> recipients,
+    String? title,
+    String kind = 'dm',
+  }) async {
+    final uri = _internal('/_fedi3/chat/thread/create');
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'recipients': recipients,
+        if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+        'kind': kind,
+      }),
+    );
+    return _decodeMap(resp, 'chat thread create');
+  }
+
+  Future<void> setChatMemberRole({
+    required String threadId,
+    required String actor,
+    required String role,
+  }) async {
+    final uri = _internal('/_fedi3/chat/thread/members');
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'thread_id': threadId,
+        'roles': {actor: role},
+      }),
+      anySuccess: true,
+    );
+  }
+
   Future<Map<String, dynamic>> sendChatMessage({
     String? threadId,
     required List<String> recipients,

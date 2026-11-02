@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Fixed hashtag cards/tags opening empty searches: tag counts now join stored objects (orphan tags excluded) and trending names are normalized, so clicking a tag always lists its posts.
 - Right sidebar: live "Scopri" card with trending hashtags (new `/_fedi3/trending/hashtags` core endpoint), opening hashtag search on tap.
 - Fixed hashtag search returning no results: the raw SQL `ESCAPE` literal used two backslashes, so SQLite rejected it and the handler silently returned an empty list.
+- Chat: Telegram-style new chat screen with mutual-contact selection (interaction/A-Z sorting), group creation without a first message, direct navigation into the thread, group-only rename and member roles (owner/admin/member).
 - Explore: the Discover feed now opens with trending hashtags and suggested accounts (new `/_fedi3/suggested/actors` endpoint, one-tap follow).
 - Notifications: consecutive likes/boosts/reactions from the same actor are collapsed into an expandable group with a counter.
 - Saved posts: bookmarking now stores a local AP snapshot, with a dedicated "Saved" screen (offline rendering, swipe-to-remove) reachable from Settings and the right sidebar.

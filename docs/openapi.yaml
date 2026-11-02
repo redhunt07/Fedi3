@@ -532,6 +532,35 @@ paths:
       responses:
         '200':
           description: Stato aggiornato
+  /_fedi3/chat/thread/create:
+    post:
+      tags: [chat]
+      summary: Crea una chat senza inviare messaggi
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipients]
+              properties:
+                recipients:
+                  type: array
+                  items: {type: string}
+                title: {type: string}
+                kind: {type: string, enum: [dm, group]}
+      responses:
+        '200':
+          description: Thread creato
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [thread_id, kind]
+                properties:
+                  thread_id: {type: string}
+                  kind: {type: string}
+                  title: {type: string, nullable: true}
   /_fedi3/chat/thread/members:
     get:
       tags: [core]

@@ -315,6 +315,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
             chat_thread_messages_get(state, req).await
         }
         ("POST", "/_fedi3/chat/send") => chat_send_post(state, req).await,
+        ("POST", "/_fedi3/chat/thread/create") => chat_thread_create_post(state, req).await,
         ("POST", "/_fedi3/chat/react") => chat_react_post(state, req).await,
         ("POST", "/_fedi3/chat/reactions") => chat_reactions_post(state, req).await,
         ("POST", "/_fedi3/chat/edit") => chat_edit_post(state, req).await,
@@ -3201,6 +3202,13 @@ struct ChatReactionsReq {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct ChatThreadCreateReq {
+    title: Option<String>,
+    recipients: Vec<String>,
+    kind: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct ChatThreadUpdateReq {
     thread_id: String,
     title: String,
@@ -3211,6 +3219,7 @@ struct ChatThreadMembersReq {
     thread_id: String,
     add: Option<Vec<String>>,
     remove: Option<Vec<String>>,
+    roles: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -4152,6 +4161,81 @@ async fn broadcast_presence(
     Ok(())
 }
 
+async fn chat_thread_create_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let input: ChatThreadCreateReq = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
+    };
+    let recipients: Vec<String> = input
+        .recipients
+        .into_iter()
+        .map(|a| a.trim().trim_end_matches('/').to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+    if recipients.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "missing recipients");
+    }
+    let self_actor = format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    );
+    let mut members = recipients;
+    if !members.contains(&self_actor) {
+        members.push(self_actor.clone());
+    }
+    members.sort();
+    members.dedup();
+    let requested_group = input
+        .kind
+        .as_deref()
+        .map(|k| k.trim().eq_ignore_ascii_case("group"))
+        .unwrap_or(false);
+    let kind = if requested_group || members.len() > 2 {
+        "group"
+    } else {
+        "dm"
+    };
+    let thread_id = if kind == "dm" {
+        chat_dm_thread_id(&members)
+    } else {
+        format!("urn:fedi3:chat:{}", chat::random_id())
+    };
+    let title = input
+        .title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    if let Err(e) = state
+        .social
+        .create_chat_thread(&thread_id, kind, title.as_deref())
+    {
+        return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
+    }
+    for actor in &members {
+        let role = if actor == &self_actor { "owner" } else { "member" };
+        let _ = state.social.upsert_chat_member(&thread_id, actor, role);
+    }
+    let _ = state.ui_events.send(UiEvent::new(
+        "chat",
+        Some("thread".to_string()),
+        Some(thread_id.clone()),
+    ));
+    axum::Json(serde_json::json!({
+      "thread_id": thread_id,
+      "kind": kind,
+      "title": title,
+    }))
+    .into_response()
+}
+
 async fn chat_thread_members_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
@@ -4348,6 +4432,16 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
         Some(new_members),
     )
     .await;
+    if let Some(roles) = input.roles {
+        for (actor, role) in roles {
+            let actor = actor.trim().trim_end_matches('/');
+            let role = role.trim();
+            if actor.is_empty() || role.is_empty() {
+                continue;
+            }
+            let _ = state.social.upsert_chat_member(&input.thread_id, actor, role);
+        }
+    }
     simple(StatusCode::OK, "ok")
 }
 

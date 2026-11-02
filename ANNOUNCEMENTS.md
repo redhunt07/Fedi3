@@ -3,6 +3,13 @@
 Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
 dal repository Git e il client la controlla periodicamente.
 
+## 2026-11-02 — Nuova chat in stile Telegram
+
+La creazione di una chat ora è una schermata dedicata: scegli un contatto
+reciproco (ordinato per interazioni o alfabeticamente) e apri subito la
+conversazione, oppure seleziona più persone e crea un gruppo con nome. Nei
+gruppi sono disponibili ruoli proprietario/amministratore/membro e la rinomina.
+
 ## 2026-11-02 — Scopri e notifiche raggruppate
 
 La scheda Scopri ora mostra hashtag in tendenza e account suggeriti con follow

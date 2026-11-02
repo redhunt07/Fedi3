@@ -11,7 +11,6 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../model/core_config.dart';
-import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
@@ -20,6 +19,7 @@ import '../theme/ui_tokens.dart';
 import '../../state/peer_presence_store.dart';
 import '../utils/time_ago.dart';
 import 'chat_thread_screen.dart';
+import 'new_chat_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.appState});
@@ -192,26 +192,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _openNewChatDialog() async {
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final outerContext = context;
-    final threadId = await showDialog<String>(
-      context: context,
-      builder: (_) => _NewChatDialog(config: cfg),
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NewChatScreen(appState: widget.appState),
+      ),
     );
-
-    if (threadId != null && threadId.isNotEmpty && outerContext.mounted) {
-      await Navigator.of(outerContext).push(
-        MaterialPageRoute(
-          builder: (_) => ChatThreadScreen(
-            appState: widget.appState,
-            threadId: threadId,
-            title: outerContext.l10n.chatThreadTitle,
-          ),
-        ),
-      );
-      if (mounted) {
-        await _loadThreads(reset: true);
-      }
-    }
+    if (mounted) await _loadThreads(reset: true);
   }
 
   @override
@@ -321,6 +307,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       appState: widget.appState,
                       threadId: thread.threadId,
                       title: name,
+                      isGroup: thread.kind == 'group',
                     ),
                   ),
                 );
@@ -527,213 +514,5 @@ class _ChatScreenState extends State<ChatScreen> {
     await widget.appState
         .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
     if (mounted) setState(() {});
-  }
-}
-
-class _NewChatDialog extends StatefulWidget {
-  const _NewChatDialog({required this.config});
-
-  final CoreConfig config;
-
-  @override
-  State<_NewChatDialog> createState() => _NewChatDialogState();
-}
-
-class _NewChatDialogState extends State<_NewChatDialog> {
-  final TextEditingController _recipientsCtrl = TextEditingController();
-  final TextEditingController _messageCtrl = TextEditingController();
-  String? _error;
-  bool _sending = false;
-  bool _searching = false;
-  List<ActorProfile> _suggestions = const [];
-  Timer? _searchDebounce;
-
-  @override
-  void dispose() {
-    _searchDebounce?.cancel();
-    _recipientsCtrl.dispose();
-    _messageCtrl.dispose();
-    super.dispose();
-  }
-
-  void _runSearch(String raw) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () async {
-      final parts = raw.split(RegExp(r'[,\n]'));
-      final last = parts.isNotEmpty ? parts.last.trim() : '';
-      if (last.length < 2) {
-        if (mounted) setState(() => _suggestions = const []);
-        return;
-      }
-      if (mounted) setState(() => _searching = true);
-      try {
-        final api = CoreApi(config: widget.config);
-        final resp = await api.searchUsers(
-          query: last,
-          source: 'all',
-          consistency: 'best',
-          limit: 6,
-        );
-        final rawItems = resp['items'];
-        final list = <ActorProfile>[];
-        if (rawItems is List) {
-          for (final it in rawItems) {
-            if (it is! Map) continue;
-            final profile = ActorProfile.tryParse(it.cast<String, dynamic>());
-            if (profile != null) list.add(profile);
-          }
-        }
-        if (mounted) {
-          setState(() => _suggestions = list);
-        }
-      } catch (_) {
-        if (mounted) setState(() => _suggestions = const []);
-      } finally {
-        if (mounted) setState(() => _searching = false);
-      }
-    });
-  }
-
-  Future<void> _submit() async {
-    final l10n = context.l10n;
-    final recipientsRaw = _recipientsCtrl.text.trim();
-    final message = _messageCtrl.text.trim();
-    if (recipientsRaw.isEmpty || message.isEmpty) {
-      setState(() => _error = l10n.chatNewMissingFields);
-      return;
-    }
-    setState(() {
-      _error = null;
-      _sending = true;
-    });
-    try {
-      final api = CoreApi(config: widget.config);
-      final parts = recipientsRaw
-          .split(RegExp(r'[,\n]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (parts.isEmpty) {
-        throw StateError(l10n.chatNewMissingFields);
-      }
-      final resolved = <String>[];
-      for (final p in parts) {
-        resolved.add(await api.resolveActorInput(p));
-      }
-      final resp =
-          await api.sendChatMessage(recipients: resolved, text: message);
-      final createdId = resp['thread_id']?.toString();
-      if (createdId == null || createdId.isEmpty) {
-        throw StateError(l10n.chatNewFailed);
-      }
-      if (!mounted) return;
-      Navigator.of(context).pop(createdId);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _error = e.toString());
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(context.l10n.chatNewTitle),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _recipientsCtrl,
-              decoration: InputDecoration(
-                labelText: context.l10n.chatRecipients,
-                hintText: context.l10n.chatRecipientsHint,
-              ),
-              onChanged: _runSearch,
-              textInputAction: TextInputAction.next,
-            ),
-            if (_searching)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-            if (_suggestions.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Container(
-                  constraints: const BoxConstraints(maxHeight: 160),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color:
-                        Theme.of(context).colorScheme.surfaceContainerHighest,
-                  ),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: _suggestions.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final profile = _suggestions[index];
-                      return ListTile(
-                        dense: true,
-                        title: Text(profile.displayName,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(profile.id,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        onTap: () {
-                          final raw = _recipientsCtrl.text;
-                          final parts = raw.split(RegExp(r'[,\n]'));
-                          final last = parts.isNotEmpty ? parts.last : '';
-                          final prefix =
-                              raw.substring(0, raw.length - last.length);
-                          final next = '$prefix${profile.id}, ';
-                          _recipientsCtrl.text = next;
-                          _recipientsCtrl.selection =
-                              TextSelection.fromPosition(
-                            TextPosition(offset: next.length),
-                          );
-                          setState(() => _suggestions = const []);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _messageCtrl,
-              decoration: InputDecoration(
-                labelText: context.l10n.chatMessage,
-                hintText: context.l10n.chatMessageHint,
-              ),
-              minLines: 2,
-              maxLines: 6,
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _sending ? null : () => Navigator.of(context).pop(),
-          child: Text(context.l10n.cancel),
-        ),
-        FilledButton(
-          onPressed: _sending ? null : _submit,
-          child: _sending
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Text(context.l10n.chatCreate),
-        ),
-      ],
-    );
   }
 }

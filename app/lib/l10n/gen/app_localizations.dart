@@ -578,6 +578,114 @@ abstract class AppLocalizations {
   /// **'Save'**
   String get chatSave;
 
+  /// No description provided for @chatNewDmTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Message'**
+  String get chatNewDmTab;
+
+  /// No description provided for @chatNewGroupTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Group'**
+  String get chatNewGroupTab;
+
+  /// No description provided for @chatNewSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search mutual contacts'**
+  String get chatNewSearchHint;
+
+  /// No description provided for @chatNewMutualEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No mutual contacts'**
+  String get chatNewMutualEmpty;
+
+  /// No description provided for @chatNewMutualHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow someone and have them follow you back to start a chat.'**
+  String get chatNewMutualHint;
+
+  /// No description provided for @chatNewSortTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sort'**
+  String get chatNewSortTitle;
+
+  /// No description provided for @chatNewSortInteractions.
+  ///
+  /// In en, this message translates to:
+  /// **'Interactions'**
+  String get chatNewSortInteractions;
+
+  /// No description provided for @chatNewSortAlpha.
+  ///
+  /// In en, this message translates to:
+  /// **'A-Z'**
+  String get chatNewSortAlpha;
+
+  /// No description provided for @chatNewInteractions.
+  ///
+  /// In en, this message translates to:
+  /// **'Interactions: {count}'**
+  String chatNewInteractions(int count);
+
+  /// No description provided for @chatNewGroupName.
+  ///
+  /// In en, this message translates to:
+  /// **'Group name'**
+  String get chatNewGroupName;
+
+  /// No description provided for @chatNewGroupNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'e.g. Project team'**
+  String get chatNewGroupNameHint;
+
+  /// No description provided for @chatNewCreateGroup.
+  ///
+  /// In en, this message translates to:
+  /// **'Create group'**
+  String get chatNewCreateGroup;
+
+  /// No description provided for @chatNewSelectedCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} selected'**
+  String chatNewSelectedCount(int count);
+
+  /// No description provided for @chatNewGroupDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Group'**
+  String get chatNewGroupDefault;
+
+  /// No description provided for @chatRoleOwner.
+  ///
+  /// In en, this message translates to:
+  /// **'Owner'**
+  String get chatRoleOwner;
+
+  /// No description provided for @chatRoleAdmin.
+  ///
+  /// In en, this message translates to:
+  /// **'Admin'**
+  String get chatRoleAdmin;
+
+  /// No description provided for @chatRoleMember.
+  ///
+  /// In en, this message translates to:
+  /// **'Member'**
+  String get chatRoleMember;
+
+  /// No description provided for @chatRoleChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Change role'**
+  String get chatRoleChange;
+
   /// No description provided for @chatNewMessage.
   ///
   /// In en, this message translates to:

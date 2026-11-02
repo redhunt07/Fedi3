@@ -38,11 +38,13 @@ class ChatThreadScreen extends StatefulWidget {
     required this.appState,
     required this.threadId,
     required this.title,
+    this.isGroup = false,
   });
 
   final AppState appState;
   final String threadId;
   final String title;
+  final bool isGroup;
 
   @override
   State<ChatThreadScreen> createState() => _ChatThreadScreenState();
@@ -94,6 +96,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         _startStream();
         if (mounted && _messages.isEmpty) {
           _loadMessages(reset: true);
+        }
+        if (mounted && _recipients.isEmpty) {
+          _loadThreadMeta();
         }
       }
       _lastRunning = running;
@@ -237,15 +242,31 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           if (id.isNotEmpty && id != _selfActor()) members.add(id);
         }
       }
+      if (!mounted) return;
+      setState(() => _recipients = members);
       final profiles = <String, ActorProfile>{};
       for (final actor in members.take(12)) {
-        final profile = await ActorRepository.instance.getActor(actor);
-        if (profile != null) profiles[actor] = profile;
+        try {
+          final profile = await ActorRepository.instance.getActor(actor);
+          if (profile != null) profiles[actor] = profile;
+        } catch (_) {
+          // Keep the actor id: the header and bubbles fall back to initials.
+        }
       }
       if (!mounted) return;
       setState(() {
-        _recipients = members;
         _profiles = profiles;
+        if (!widget.isGroup && members.length == 1 && profiles.isNotEmpty) {
+          final peer = profiles.values.first;
+          final name = peer.displayName.trim().isEmpty
+              ? peer.preferredUsername
+              : peer.displayName.trim();
+          if (_title == context.l10n.chatDirectMessage ||
+              _title == context.l10n.chatThreadTitle ||
+              _title.trim().isEmpty) {
+            _title = name;
+          }
+        }
       });
     } catch (_) {
       // Best-effort: bubbles fall back to username initials.
@@ -317,6 +338,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             _title = titleFromSystem;
           }
         });
+        if (_recipients.isEmpty) {
+          unawaited(_loadThreadMeta());
+        }
       }
       if (items.isNotEmpty) {
         final latest = items.first;
@@ -565,11 +589,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final api = CoreApi(config: cfg);
     final searchCtrl = TextEditingController();
     List<String> members = const [];
+    final Map<String, ActorProfile> memberProfiles = {};
+    final Map<String, String> roles = {};
     List<ActorProfile> suggestions = const [];
     bool loading = true;
     bool working = false;
     String? error;
     Timer? debounce;
+    final selfActor =
+        '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username}';
 
     Future<void> loadMembers() async {
       try {
@@ -580,8 +608,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           for (final it in raw) {
             if (it is! Map) continue;
             final id = it['actor_id']?.toString() ?? '';
-            if (id.isNotEmpty) list.add(id);
+            final role = it['role']?.toString() ?? 'member';
+            if (id.isNotEmpty) {
+              list.add(id);
+              roles[id] = role;
+            }
           }
+        }
+        for (final id in list) {
+          final profile = await ActorRepository.instance.getActor(id);
+          if (profile != null) memberProfiles[id] = profile;
         }
         members = list;
       } catch (e) {
@@ -647,6 +683,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 if (!members.contains(actor)) {
                   members = [...members, actor];
                 }
+                roles[actor] = 'member';
+                final profile =
+                    await ActorRepository.instance.getActor(actor);
+                if (profile != null) memberProfiles[actor] = profile;
                 searchCtrl.clear();
                 suggestions = const [];
                 if (context.mounted) setState(() {});
@@ -664,6 +704,26 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 await api.updateChatThreadMembers(
                     threadId: widget.threadId, remove: [actor]);
                 members = members.where((m) => m != actor).toList();
+                roles.remove(actor);
+                memberProfiles.remove(actor);
+                if (context.mounted) setState(() {});
+              } catch (e) {
+                if (context.mounted) setState(() => error = e.toString());
+              } finally {
+                if (context.mounted) setState(() => working = false);
+              }
+            }
+
+            Future<void> setRole(String actor, String role) async {
+              if (!context.mounted) return;
+              setState(() => working = true);
+              try {
+                await api.setChatMemberRole(
+                  threadId: widget.threadId,
+                  actor: actor,
+                  role: role,
+                );
+                roles[actor] = role;
                 if (context.mounted) setState(() {});
               } catch (e) {
                 if (context.mounted) setState(() => error = e.toString());
@@ -728,20 +788,99 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                               color: Theme.of(context).colorScheme.error)),
                     const SizedBox(height: 8),
                     SizedBox(
-                      height: 200,
+                      height: 260,
                       child: ListView.builder(
                         itemCount: members.length,
                         itemBuilder: (context, index) {
                           final actor = members[index];
+                          final profile = memberProfiles[actor];
+                          final role = roles[actor] ?? 'member';
+                          final isOwner = role == 'owner';
+                          final canManage =
+                              roles[selfActor] == 'owner' && actor != selfActor;
                           return ListTile(
                             dense: true,
-                            title: Text(actor,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                            trailing: IconButton(
-                              tooltip: context.l10n.chatRemoveMember,
-                              onPressed:
-                                  working ? null : () => removeMember(actor),
-                              icon: const Icon(Icons.person_remove),
+                            leading: StatusAvatar(
+                              imageUrl: profile?.iconUrl ?? '',
+                              size: 34,
+                              showStatus: true,
+                              statusKey: profile?.preferredUsername ?? '',
+                            ),
+                            title: Text(
+                              profile == null
+                                  ? actor
+                                  : (profile.displayName.trim().isEmpty
+                                      ? profile.preferredUsername
+                                      : profile.displayName),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              () {
+                                final host = Uri.tryParse(actor)?.host ?? '';
+                                final user =
+                                    profile?.preferredUsername ?? actor;
+                                return host.isEmpty
+                                    ? '@$user'
+                                    : '@$user@$host';
+                              }(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    role == 'owner'
+                                        ? context.l10n.chatRoleOwner
+                                        : role == 'admin'
+                                            ? context.l10n.chatRoleAdmin
+                                            : context.l10n.chatRoleMember,
+                                    style: const TextStyle(fontSize: 10),
+                                  ),
+                                ),
+                                if (canManage)
+                                  PopupMenuButton<String>(
+                                    enabled: !working,
+                                    tooltip: context.l10n.chatRoleChange,
+                                    onSelected: (r) => setRole(actor, r),
+                                    itemBuilder: (context) => [
+                                      PopupMenuItem(
+                                        value: 'admin',
+                                        child: Text(
+                                            context.l10n.chatRoleAdmin),
+                                      ),
+                                      PopupMenuItem(
+                                        value: 'member',
+                                        child: Text(
+                                            context.l10n.chatRoleMember),
+                                      ),
+                                    ],
+                                    child: const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: 4),
+                                      child: Icon(Icons.more_vert, size: 18),
+                                    ),
+                                  ),
+                                if (!isOwner)
+                                  IconButton(
+                                    tooltip: context.l10n.chatRemoveMember,
+                                    onPressed: working
+                                        ? null
+                                        : () => removeMember(actor),
+                                    icon: const Icon(Icons.person_remove,
+                                        size: 18),
+                                  ),
+                              ],
                             ),
                           );
                         },
@@ -970,7 +1109,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                         )
                       else if (_recipients.isNotEmpty)
                         Text(
-                          '${context.l10n.chatMembers} ${_recipients.length} · ',
+                          '${context.l10n.chatMembers} ${_recipients.length + 1} · ',
                           style: Theme.of(context)
                               .textTheme
                               .labelSmall
@@ -1006,7 +1145,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         actions: [
           IconButton(
             tooltip: context.l10n.chatRefresh,
-            onPressed: _loading ? null : () => _loadMessages(reset: true),
+            onPressed: _loading
+                ? null
+                : () {
+                    _loadMessages(reset: true);
+                    _loadThreadMeta();
+                  },
             icon: const Icon(Icons.refresh),
           ),
           PopupMenuButton<String>(
@@ -1022,8 +1166,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             itemBuilder: (context) => [
               PopupMenuItem(
                   value: 'members', child: Text(context.l10n.chatMembers)),
-              PopupMenuItem(
-                  value: 'rename', child: Text(context.l10n.chatRename)),
+              if (widget.isGroup)
+                PopupMenuItem(
+                    value: 'rename', child: Text(context.l10n.chatRename)),
               PopupMenuItem(
                   value: 'delete', child: Text(context.l10n.chatDeleteThread)),
             ],

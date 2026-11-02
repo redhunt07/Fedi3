@@ -258,6 +258,65 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatSave => 'Salva';
 
   @override
+  String get chatNewDmTab => 'Messaggio';
+
+  @override
+  String get chatNewGroupTab => 'Gruppo';
+
+  @override
+  String get chatNewSearchHint => 'Cerca tra i contatti reciproci';
+
+  @override
+  String get chatNewMutualEmpty => 'Nessun contatto reciproco';
+
+  @override
+  String get chatNewMutualHint =>
+      'Segui qualcuno e fatti seguire per iniziare una chat.';
+
+  @override
+  String get chatNewSortTitle => 'Ordina';
+
+  @override
+  String get chatNewSortInteractions => 'Interazioni';
+
+  @override
+  String get chatNewSortAlpha => 'A-Z';
+
+  @override
+  String chatNewInteractions(int count) {
+    return 'Interazioni: $count';
+  }
+
+  @override
+  String get chatNewGroupName => 'Nome del gruppo';
+
+  @override
+  String get chatNewGroupNameHint => 'Es. Team progetto';
+
+  @override
+  String get chatNewCreateGroup => 'Crea gruppo';
+
+  @override
+  String chatNewSelectedCount(int count) {
+    return '$count selezionati';
+  }
+
+  @override
+  String get chatNewGroupDefault => 'Gruppo';
+
+  @override
+  String get chatRoleOwner => 'Proprietario';
+
+  @override
+  String get chatRoleAdmin => 'Amministratore';
+
+  @override
+  String get chatRoleMember => 'Membro';
+
+  @override
+  String get chatRoleChange => 'Cambia ruolo';
+
+  @override
   String get chatNewMessage => 'Nuovo messaggio';
 
   @override

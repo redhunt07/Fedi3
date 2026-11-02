@@ -223,4 +223,34 @@ void main() {
     expect(apiSmall.fetchTimeline('home'), throwsA(isA<CoreApiException>()));
     await Future<void>.delayed(const Duration(milliseconds: 350));
   });
+
+  group('CoreApi chat creation (CT-01..02)', () {
+    test('CT-01 createChatThread posts recipients/kind and returns the id',
+        () async {
+      client.json('POST', '/_fedi3/chat/thread/create', {
+        'thread_id': 'urn:fedi3:chat:dm:abc',
+        'kind': 'dm',
+      });
+      final resp = await api().createChatThread(
+        recipients: const ['https://a.test/users/bob'],
+        kind: 'dm',
+      );
+      expect(resp['thread_id'], 'urn:fedi3:chat:dm:abc');
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['recipients'], ['https://a.test/users/bob']);
+      expect(body['kind'], 'dm');
+    });
+
+    test('CT-02 setChatMemberRole sends a roles map', () async {
+      client.json('POST', '/_fedi3/chat/thread/members', {'ok': true});
+      await api().setChatMemberRole(
+        threadId: 't1',
+        actor: 'https://a.test/users/bob',
+        role: 'admin',
+      );
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['thread_id'], 't1');
+      expect(body['roles'], {'https://a.test/users/bob': 'admin'});
+    });
+  });
 }
