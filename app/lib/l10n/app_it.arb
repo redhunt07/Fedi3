@@ -156,6 +156,18 @@
   "chatDeleteThreadHint": "Questo eliminerà l'intera chat per tutti.",
   "chatPin": "Fissa chat",
   "chatUnpin": "Rimuovi fissata",
+  "chatPinMessage": "Fissa messaggio",
+  "chatUnpinMessage": "Rimuovi messaggio fissato",
+  "chatPinned": "Messaggio fissato",
+  "chatPinnedMessage": "MESSAGGIO FISSATO",
+  "chatUnpinned": "Messaggio rimosso dai fissati",
+  "chatInviteLink": "Copia link invito",
+  "chatInviteCopied": "Link invito copiato",
+  "chatJoinTitle": "Unisciti a un gruppo",
+  "chatJoinHint": "Incolla il link invito (fedi3://chat/...)",
+  "chatJoinAction": "Unisciti",
+  "chatJoinInvalid": "Link invito non valido",
+  "chatJoinSuccess": "Sei entrato nel gruppo",
   "chatTyping": "{name} sta scrivendo…",
   "@chatTyping": {
     "placeholders": {

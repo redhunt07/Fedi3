@@ -314,7 +314,24 @@ pub fn store_incoming_payload_db(
             social.create_chat_thread(thread_id, "dm", None)?;
             social.upsert_chat_member(thread_id, sender, "member")?;
             social.upsert_chat_member(thread_id, local_actor, "owner")?;
-        } else if payload.op == "system" {
+        } else if payload.op == "pin" {
+        if let Some(message_id) = payload.message_id.as_deref() {
+            let belongs = social
+                .get_chat_message_thread_id(message_id)
+                .ok()
+                .flatten()
+                .map(|tid| tid == thread_id)
+                .unwrap_or(false);
+            if belongs {
+                let action = payload.action.as_deref().unwrap_or("pin");
+                if action == "unpin" {
+                    let _ = social.clear_chat_pin(thread_id);
+                } else {
+                    let _ = social.set_chat_pin(thread_id, message_id, sender);
+                }
+            }
+        }
+    } else if payload.op == "system" {
             // A group can be introduced by its creator: accept the first system message only if
             // the sender is in the announced member list and the local actor is a member too.
             let members = payload.members.clone().unwrap_or_default();

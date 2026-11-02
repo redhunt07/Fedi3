@@ -156,6 +156,18 @@
   "chatDeleteThreadHint": "This will delete the entire chat thread for everyone.",
   "chatPin": "Pin chat",
   "chatUnpin": "Unpin chat",
+  "chatPinMessage": "Pin message",
+  "chatUnpinMessage": "Unpin message",
+  "chatPinned": "Message pinned",
+  "chatPinnedMessage": "PINNED MESSAGE",
+  "chatUnpinned": "Message unpinned",
+  "chatInviteLink": "Copy invite link",
+  "chatInviteCopied": "Invite link copied",
+  "chatJoinTitle": "Join a group",
+  "chatJoinHint": "Paste the invite link (fedi3://chat/...)",
+  "chatJoinAction": "Join",
+  "chatJoinInvalid": "Invalid invite link",
+  "chatJoinSuccess": "You joined the group",
   "chatTyping": "{name} is typing…",
   "@chatTyping": {
     "placeholders": {

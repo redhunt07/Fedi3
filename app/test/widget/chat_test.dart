@@ -86,6 +86,9 @@ void main() {
       ],
       'next': null,
     });
+    client.json('GET', '/_fedi3/chat/thread/search', {
+      'items': [message('m2', 'seconda notizia', 2000)],
+    });
     client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
     client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
     client.route(
@@ -181,5 +184,53 @@ void main() {
         jsonDecode(client.requestBodies[index]) as Map<String, dynamic>;
     expect(payload['thread_id'], 't2');
     expect(payload['text'], 'da inoltrare');
+  });
+
+  testWidgets('AW-09d chat shows the pinned message banner', (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json('GET', '/_fedi3/chat/threads/t1', {
+      'items': <dynamic>[],
+      'next': null,
+    });
+    client.json('GET', '/_fedi3/chat/thread/members', {
+      'items': [
+        {'actor_id': 'https://fedi3.test/users/alice', 'role': 'owner'}
+      ]
+    });
+    client.json('GET', '/_fedi3/chat/thread/pin', {
+      'pin': {
+        'message_id': 'm1',
+        'pinned_by': 'https://fedi3.test/users/alice',
+        'pinned_at_ms': 1,
+        'preview': 'messaggio importante',
+      }
+    });
+    client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
+    client.route(
+      'GET',
+      '/_fedi3/stream',
+      FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'}, body: ''),
+    );
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(
+      tester,
+      ChatThreadScreen(
+        appState: app,
+        threadId: 't1',
+        title: 'Team',
+        isGroup: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('PINNED MESSAGE'), findsOneWidget);
+    expect(find.text('messaggio importante'), findsOneWidget);
   });
 }

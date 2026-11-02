@@ -424,6 +424,42 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatUnpin => 'Rimuovi fissata';
 
   @override
+  String get chatPinMessage => 'Fissa messaggio';
+
+  @override
+  String get chatUnpinMessage => 'Rimuovi messaggio fissato';
+
+  @override
+  String get chatPinned => 'Messaggio fissato';
+
+  @override
+  String get chatPinnedMessage => 'MESSAGGIO FISSATO';
+
+  @override
+  String get chatUnpinned => 'Messaggio rimosso dai fissati';
+
+  @override
+  String get chatInviteLink => 'Copia link invito';
+
+  @override
+  String get chatInviteCopied => 'Link invito copiato';
+
+  @override
+  String get chatJoinTitle => 'Unisciti a un gruppo';
+
+  @override
+  String get chatJoinHint => 'Incolla il link invito (fedi3://chat/...)';
+
+  @override
+  String get chatJoinAction => 'Unisciti';
+
+  @override
+  String get chatJoinInvalid => 'Link invito non valido';
+
+  @override
+  String get chatJoinSuccess => 'Sei entrato nel gruppo';
+
+  @override
   String chatTyping(String name) {
     return '$name sta scrivendo…';
   }

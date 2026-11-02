@@ -424,6 +424,42 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatUnpin => 'Unpin chat';
 
   @override
+  String get chatPinMessage => 'Pin message';
+
+  @override
+  String get chatUnpinMessage => 'Unpin message';
+
+  @override
+  String get chatPinned => 'Message pinned';
+
+  @override
+  String get chatPinnedMessage => 'PINNED MESSAGE';
+
+  @override
+  String get chatUnpinned => 'Message unpinned';
+
+  @override
+  String get chatInviteLink => 'Copy invite link';
+
+  @override
+  String get chatInviteCopied => 'Invite link copied';
+
+  @override
+  String get chatJoinTitle => 'Join a group';
+
+  @override
+  String get chatJoinHint => 'Paste the invite link (fedi3://chat/...)';
+
+  @override
+  String get chatJoinAction => 'Join';
+
+  @override
+  String get chatJoinInvalid => 'Invalid invite link';
+
+  @override
+  String get chatJoinSuccess => 'You joined the group';
+
+  @override
   String chatTyping(String name) {
     return '$name is typing…';
   }

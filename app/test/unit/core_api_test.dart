@@ -252,5 +252,51 @@ void main() {
       expect(body['thread_id'], 't1');
       expect(body['roles'], {'https://a.test/users/bob': 'admin'});
     });
+
+    test('CT-03 searchChatMessages sends thread_id/q/limit', () async {
+      client.json('GET', '/_fedi3/chat/thread/search', {
+        'items': [
+          {'message_id': 'm1', 'thread_id': 't1', 'body_json': '{}'}
+        ]
+      });
+      final resp = await api()
+          .searchChatMessages(threadId: 't1', query: 'ciao', limit: 10);
+      expect((resp['items'] as List), hasLength(1));
+      final index = client.requests
+          .indexWhere((r) => r.url.path == '/_fedi3/chat/thread/search');
+      expect(client.requests[index].url.queryParameters['thread_id'], 't1');
+      expect(client.requests[index].url.queryParameters['q'], 'ciao');
+      expect(client.requests[index].url.queryParameters['limit'], '10');
+    });
+
+    test('CT-04 setChatPin posts thread/message/pinned', () async {
+      client.json('POST', '/_fedi3/chat/thread/pin', {'ok': true});
+      await api()
+          .setChatPin(threadId: 't1', messageId: 'm1', pinned: true);
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['thread_id'], 't1');
+      expect(body['message_id'], 'm1');
+      expect(body['pinned'], isTrue);
+    });
+
+    test('CT-05 fetchChatPin returns the pin map', () async {
+      client.json('GET', '/_fedi3/chat/thread/pin', {
+        'pin': {'message_id': 'm1', 'preview': 'ciao'}
+      });
+      final pin = await api().fetchChatPin(threadId: 't1');
+      expect(pin?['message_id'], 'm1');
+      expect(pin?['preview'], 'ciao');
+    });
+
+    test('CT-06 joinChatThread posts the thread id', () async {
+      client.json('POST', '/_fedi3/chat/thread/join', {
+        'ok': true,
+        'thread_id': 't1'
+      });
+      final resp = await api().joinChatThread(threadId: 't1');
+      expect(resp['thread_id'], 't1');
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['thread_id'], 't1');
+    });
   });
 }

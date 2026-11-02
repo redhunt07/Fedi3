@@ -588,6 +588,85 @@ paths:
       responses:
         '200':
           description: Membri aggiornati
+  /_fedi3/chat/thread/search:
+    get:
+      tags: [chat]
+      summary: Cerca nei messaggi di un thread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+        - name: q
+          in: query
+          required: true
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        '200':
+          description: Messaggi corrispondenti
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {type: object, additionalProperties: true}
+  /_fedi3/chat/thread/pin:
+    get:
+      tags: [chat]
+      summary: Messaggio fissato del thread
+      parameters:
+        - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '200':
+          description: Pin corrente o null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pin: {type: object, nullable: true, additionalProperties: true}
+    post:
+      tags: [chat]
+      summary: Fissa o rimuove un messaggio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id, message_id]
+              properties:
+                thread_id: {type: string}
+                message_id: {type: string}
+                pinned: {type: boolean, default: true}
+      responses:
+        '200':
+          description: Pin aggiornato
+  /_fedi3/chat/thread/join:
+    post:
+      tags: [chat]
+      summary: Unisciti a un gruppo tramite link invito
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id]
+              properties:
+                thread_id: {type: string}
+                title: {type: string}
+      responses:
+        '200':
+          description: Iscrizione completata
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   /_fedi3/reactions:
     get:
       tags: [core]

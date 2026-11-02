@@ -292,6 +292,12 @@ impl SocialDb {
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY(message_id, actor_id)
             );
+            CREATE TABLE IF NOT EXISTS chat_pins (
+              thread_id TEXT PRIMARY KEY,
+              message_id TEXT NOT NULL,
+              pinned_by TEXT NOT NULL,
+              pinned_at_ms INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS chat_message_reactions (
               message_id TEXT NOT NULL,
               actor_id TEXT NOT NULL,
@@ -4007,6 +4013,16 @@ impl SocialDb {
         Ok(rows)
     }
 
+    pub fn get_chat_message_body(&self, message_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare("SELECT body_json FROM chat_messages WHERE message_id=?1")?;
+        let mut rows = stmt.query(rusqlite::params![message_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row.get(0)?));
+        }
+        Ok(None)
+    }
+
     pub fn get_chat_message_thread_id(&self, message_id: &str) -> Result<Option<String>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare("SELECT thread_id FROM chat_messages WHERE message_id=?1")?;
@@ -4052,6 +4068,87 @@ impl SocialDb {
         )
         .optional()
         .map_err(Into::into)
+    }
+
+    pub fn set_chat_pin(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+        pinned_by: &str,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO chat_pins (thread_id, message_id, pinned_by, pinned_at_ms) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![thread_id, message_id, pinned_by, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_chat_pin(&self, thread_id: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM chat_pins WHERE thread_id=?1",
+            rusqlite::params![thread_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_chat_pin(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT message_id, pinned_by, pinned_at_ms FROM chat_pins WHERE thread_id=?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![thread_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some((row.get(0)?, row.get(1)?, row.get(2)?)));
+        }
+        Ok(None)
+    }
+
+    pub fn search_chat_messages(
+        &self,
+        thread_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>> {
+        let conn = self.connect()?;
+        let limit = limit.clamp(1, 100);
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let mut stmt = conn.prepare(
+            r#"SELECT message_id, thread_id, sender_actor, sender_device, created_at_ms,
+                      edited_at_ms, deleted, body_json
+               FROM chat_messages
+               WHERE thread_id=?1 AND deleted=0 AND body_json LIKE ?2 ESCAPE '\'
+               ORDER BY created_at_ms DESC
+               LIMIT ?3"#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![thread_id, pattern, limit as i64],
+            |row| {
+                Ok(ChatMessage {
+                    message_id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    sender_actor: row.get(2)?,
+                    sender_device: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                    edited_at_ms: row.get(5)?,
+                    deleted: row.get::<_, i64>(6)? != 0,
+                    body_json: row.get(7)?,
+                })
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn delete_chat_thread(&self, thread_id: &str) -> Result<()> {
@@ -4508,5 +4605,73 @@ mod hashtag_tests {
             .expect("suggested");
         assert_eq!(suggested, vec!["https://a.test/users/b".to_string()]);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+mod chat_pin_search_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_DB: AtomicUsize = AtomicUsize::new(0);
+
+    fn setup() -> (SocialDb, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "fedi3_chat_test_{}_{}_{}.db",
+            std::process::id(),
+            now_ms(),
+            NEXT_DB.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = SocialDb::open(&path).expect("open db");
+        db.create_chat_thread("t1", "group", Some("Team")).expect("thread");
+        db.upsert_chat_member("t1", "https://a.test/users/alice", "owner")
+            .expect("member");
+        for (id, text) in [
+            ("m1", "ciao 100% mondo"),
+            ("m2", "seconda notizia"),
+            ("m3", "prima notizia"),
+        ] {
+            db.insert_chat_message(&ChatMessage {
+                message_id: id.to_string(),
+                thread_id: "t1".to_string(),
+                sender_actor: "https://a.test/users/alice".to_string(),
+                sender_device: "dev".to_string(),
+                created_at_ms: now_ms(),
+                edited_at_ms: None,
+                deleted: false,
+                body_json: serde_json::json!({"op": "message", "text": text}).to_string(),
+            })
+            .expect("message");
+        }
+        (db, path)
+    }
+
+    #[test]
+    fn chat_search_matches_text_and_escapes_wildcards() {
+        let (db, path) = setup();
+        let hits = db.search_chat_messages("t1", "notizia", 10).expect("search");
+        assert_eq!(hits.len(), 2);
+        let percent = db.search_chat_messages("t1", "100%", 10).expect("search");
+        assert_eq!(percent.len(), 1);
+        assert!(db
+            .search_chat_messages("t1", "assente", 10)
+            .expect("search")
+            .is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn chat_pin_is_single_and_clearable() {
+        let (db, path) = setup();
+        db.set_chat_pin("t1", "m2", "https://a.test/users/alice")
+            .expect("pin");
+        let pin = db.get_chat_pin("t1").expect("get pin").expect("pin");
+        assert_eq!(pin.0, "m2");
+        db.set_chat_pin("t1", "m1", "https://a.test/users/alice")
+            .expect("repin");
+        assert_eq!(db.get_chat_pin("t1").expect("get").unwrap().0, "m1");
+        db.clear_chat_pin("t1").expect("clear");
+        assert!(db.get_chat_pin("t1").expect("get").is_none());
+        let _ = std::fs::remove_file(path);
     }
 }

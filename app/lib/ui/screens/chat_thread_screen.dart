@@ -4,9 +4,9 @@
  */
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mime/mime.dart';
 
@@ -60,6 +60,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
   bool _searchOpen = false;
   String _searchQuery = '';
+  List<ChatMessageItem> _searchResults = const [];
+  bool _searching = false;
+  Timer? _searchDebounce;
+  Map<String, dynamic>? _pin;
+  String _myRole = 'member';
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -128,6 +133,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _streamRetry?.cancel();
     _loadRetry?.cancel();
     _typingDebounce?.cancel();
+    _searchDebounce?.cancel();
     _composerCtrl.dispose();
     _searchCtrl.dispose();
     widget.appState.removeListener(_appStateListener);
@@ -239,15 +245,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       final resp = await api.fetchChatMembers(threadId: widget.threadId);
       final raw = resp['items'];
       final members = <String>[];
+      var myRole = 'member';
       if (raw is List) {
         for (final it in raw) {
           if (it is! Map) continue;
           final id = it['actor_id']?.toString().trim() ?? '';
-          if (id.isNotEmpty && id != _selfActor()) members.add(id);
+          if (id == _selfActor()) {
+            final role = it['role']?.toString().trim() ?? '';
+            if (role.isNotEmpty) myRole = role;
+          } else if (id.isNotEmpty) {
+            members.add(id);
+          }
         }
       }
       if (!mounted) return;
-      setState(() => _recipients = members);
+      setState(() {
+        _recipients = members;
+        _myRole = myRole;
+      });
+      await _loadPin();
       final profiles = <String, ActorProfile>{};
       for (final actor in members.take(12)) {
         try {
@@ -275,6 +291,161 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     } catch (_) {
       // Best-effort: bubbles fall back to username initials.
     }
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value;
+      _searching = false;
+    });
+    _searchDebounce?.cancel();
+    final q = value.trim();
+    if (q.length < 2) {
+      setState(() => _searchResults = const []);
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _runSearch(q);
+    });
+  }
+
+  Future<void> _runSearch(String query) async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    setState(() => _searching = true);
+    try {
+      final resp = await CoreApi(config: cfg)
+          .searchChatMessages(threadId: widget.threadId, query: query);
+      final raw = resp['items'];
+      final items = <ChatMessageItem>[];
+      if (raw is List) {
+        for (final m in raw.whereType<Map>()) {
+          items.add(ChatMessageItem.fromJson(m.cast<String, dynamic>()));
+        }
+      }
+      if (!mounted || query != _searchQuery.trim()) return;
+      setState(() {
+        _searchResults = items;
+        _searching = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _searching = false);
+    }
+  }
+
+  Widget _buildPinBanner() {
+    final pin = _pin;
+    if (pin == null) return const SizedBox.shrink();
+    final preview = pin['preview']?.toString().trim() ?? '';
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(UiTokens.radiusInput),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.primary.withAlpha(60),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.push_pin_rounded,
+              size: 18, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.l10n.chatPinnedMessage,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                Text(
+                  preview.isEmpty ? context.l10n.chatPinned : preview,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          if (_canPin)
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: context.l10n.chatUnpinMessage,
+              onPressed: _unpinCurrent,
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadPin() async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    try {
+      final pin = await CoreApi(config: cfg).fetchChatPin(threadId: widget.threadId);
+      if (!mounted) return;
+      setState(() => _pin = pin);
+    } catch (_) {
+      // Best-effort: the banner is optional.
+    }
+  }
+
+  bool get _canPin =>
+      !widget.isGroup || _myRole == 'owner' || _myRole == 'admin';
+
+  Future<void> _togglePin(ChatMessageItem message) async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final pinned = _pin?['message_id'] == message.messageId;
+    try {
+      await CoreApi(config: cfg).setChatPin(
+        threadId: widget.threadId,
+        messageId: message.messageId,
+        pinned: !pinned,
+      );
+      await _loadPin();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            pinned ? context.l10n.chatUnpinned : context.l10n.chatPinned,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  Future<void> _unpinCurrent() async {
+    final cfg = widget.appState.config;
+    final messageId = _pin?['message_id']?.toString();
+    if (cfg == null || messageId == null || messageId.isEmpty) return;
+    try {
+      await CoreApi(config: cfg)
+          .setChatPin(threadId: widget.threadId, messageId: messageId, pinned: false);
+      await _loadPin();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.chatUnpinned)),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  void _copyInviteLink() {
+    Clipboard.setData(ClipboardData(text: 'fedi3://chat/${widget.threadId}'));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.chatInviteCopied)),
+    );
   }
 
   String _selfActor() {
@@ -1206,7 +1377,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             );
                           },
                         )
-                      else if (_recipients.isNotEmpty)
+                      else if (widget.isGroup || _recipients.isNotEmpty)
                         Text(
                           '${context.l10n.chatMembers} ${_recipients.length + 1} · ',
                           style: Theme.of(context)
@@ -1269,6 +1440,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 _openRenameDialog();
               } else if (value == 'members') {
                 _openMembersDialog();
+              } else if (value == 'invite') {
+                _copyInviteLink();
+              } else if (value == 'unpin') {
+                _unpinCurrent();
               } else if (value == 'delete') {
                 _deleteChat();
               }
@@ -1279,6 +1454,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               if (widget.isGroup)
                 PopupMenuItem(
                     value: 'rename', child: Text(context.l10n.chatRename)),
+              if (widget.isGroup)
+                PopupMenuItem(
+                    value: 'invite', child: Text(context.l10n.chatInviteLink)),
+              if (_canPin && _pin != null)
+                PopupMenuItem(
+                    value: 'unpin', child: Text(context.l10n.chatUnpinMessage)),
               PopupMenuItem(
                   value: 'delete', child: Text(context.l10n.chatDeleteThread)),
             ],
@@ -1310,9 +1491,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     borderRadius: BorderRadius.circular(UiTokens.radiusInput),
                   ),
                 ),
-                onChanged: (v) => setState(() => _searchQuery = v),
+                onChanged: _onSearchChanged,
               ),
             ),
+          if (_searching) const LinearProgressIndicator(minHeight: 2),
+          if (_pin != null) _buildPinBanner(),
           Expanded(child: _buildMessages()),
           if (_typingActors.isNotEmpty)
             Padding(
@@ -1368,10 +1551,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final query = _searchQuery.trim().toLowerCase();
     final visible = query.isEmpty
         ? _messages
-        : _messages
-            .where((m) => _messageText(m).toLowerCase().contains(query))
-            .toList(growable: false);
-    if (visible.isEmpty && query.isNotEmpty) {
+        : (_searchResults.isNotEmpty
+            ? _searchResults
+            : _messages
+                .where((m) => _messageText(m).toLowerCase().contains(query))
+                .toList(growable: false));
+    if (visible.isEmpty && query.isNotEmpty && !_searching) {
       return Center(child: Text(context.l10n.chatSearchNoResults));
     }
     return ListView.builder(
@@ -1490,6 +1675,23 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                               await _forwardMessage(message);
                             },
                           ),
+                          if (_canPin)
+                            ListTile(
+                              leading: Icon(
+                                _pin?['message_id'] == message.messageId
+                                    ? Icons.push_pin
+                                    : Icons.push_pin_outlined,
+                              ),
+                              title: Text(
+                                _pin?['message_id'] == message.messageId
+                                    ? context.l10n.chatUnpinMessage
+                                    : context.l10n.chatPinMessage,
+                              ),
+                              onTap: () async {
+                                Navigator.of(context).pop();
+                                await _togglePin(message);
+                              },
+                            ),
                           if (isSelf)
                             ListTile(
                               leading: const Icon(Icons.edit),

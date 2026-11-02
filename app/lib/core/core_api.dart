@@ -680,6 +680,77 @@ class CoreApi {
     return _decodeMap(resp, 'chat members');
   }
 
+  Future<Map<String, dynamic>> searchChatMessages({
+    required String threadId,
+    required String query,
+    int limit = 50,
+  }) async {
+    final uri = _internal('/_fedi3/chat/thread/search', {
+      'thread_id': threadId,
+      'q': query,
+      'limit': '$limit',
+    });
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return {'items': const []};
+    return _decodeMap(resp, 'chat search');
+  }
+
+  Future<Map<String, dynamic>?> fetchChatPin({required String threadId}) async {
+    final uri = _internal('/_fedi3/chat/thread/pin', {'thread_id': threadId});
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return null;
+    final map = _decodeMap(resp, 'chat pin');
+    final pin = map['pin'];
+    return pin is Map ? pin.cast<String, dynamic>() : null;
+  }
+
+  Future<void> setChatPin({
+    required String threadId,
+    required String messageId,
+    required bool pinned,
+  }) async {
+    final uri = _internal('/_fedi3/chat/thread/pin');
+    await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'thread_id': threadId,
+        'message_id': messageId,
+        'pinned': pinned,
+      }),
+      anySuccess: true,
+    );
+  }
+
+  Future<Map<String, dynamic>> joinChatThread({
+    required String threadId,
+    String? title,
+  }) async {
+    final uri = _internal('/_fedi3/chat/thread/join');
+    final resp = await _request(
+      method: 'POST',
+      uri: uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'thread_id': threadId,
+        if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+      }),
+      anySuccess: true,
+    );
+    return _decodeMap(resp, 'join chat');
+  }
+
   Future<Map<String, dynamic>> fetchChatMessages({
     required String threadId,
     String? cursor,

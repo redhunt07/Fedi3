@@ -1,3 +1,10 @@
+## 2026-11-02 — Chat: fissati, ricerca completa e inviti
+
+I gruppi possono fissare un messaggio condiviso (solo proprietario e
+amministratori), la ricerca ora interroga tutta la cronologia nel core e i
+gruppi hanno un link invito copiabile e un flusso per unirsi dalla schermata
+Chat.
+
 ## 2026-11-02 — Chat: cerca e inoltra
 
 Aggiunte la ricerca dei messaggi dentro una conversazione e l'inoltro di un

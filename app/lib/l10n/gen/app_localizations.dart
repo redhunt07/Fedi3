@@ -896,6 +896,78 @@ abstract class AppLocalizations {
   /// **'Unpin chat'**
   String get chatUnpin;
 
+  /// No description provided for @chatPinMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Pin message'**
+  String get chatPinMessage;
+
+  /// No description provided for @chatUnpinMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Unpin message'**
+  String get chatUnpinMessage;
+
+  /// No description provided for @chatPinned.
+  ///
+  /// In en, this message translates to:
+  /// **'Message pinned'**
+  String get chatPinned;
+
+  /// No description provided for @chatPinnedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'PINNED MESSAGE'**
+  String get chatPinnedMessage;
+
+  /// No description provided for @chatUnpinned.
+  ///
+  /// In en, this message translates to:
+  /// **'Message unpinned'**
+  String get chatUnpinned;
+
+  /// No description provided for @chatInviteLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy invite link'**
+  String get chatInviteLink;
+
+  /// No description provided for @chatInviteCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Invite link copied'**
+  String get chatInviteCopied;
+
+  /// No description provided for @chatJoinTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Join a group'**
+  String get chatJoinTitle;
+
+  /// No description provided for @chatJoinHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Paste the invite link (fedi3://chat/...)'**
+  String get chatJoinHint;
+
+  /// No description provided for @chatJoinAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Join'**
+  String get chatJoinAction;
+
+  /// No description provided for @chatJoinInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Invalid invite link'**
+  String get chatJoinInvalid;
+
+  /// No description provided for @chatJoinSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'You joined the group'**
+  String get chatJoinSuccess;
+
   /// No description provided for @chatTyping.
   ///
   /// In en, this message translates to:

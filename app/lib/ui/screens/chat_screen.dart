@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -200,6 +201,78 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) await _loadThreads(reset: true);
   }
 
+  Future<void> _openJoinDialog() async {
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    final controller = TextEditingController(text: clip?.text?.trim() ?? '');
+    if (!mounted) {
+      controller.dispose();
+      return;
+    }
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.chatJoinTitle),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: context.l10n.chatJoinHint,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(UiTokens.radiusInput),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: Text(context.l10n.chatJoinAction),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (raw == null || raw.trim().isEmpty) return;
+    final match =
+        RegExp(r'urn:fedi3:chat:[A-Za-z0-9:_-]+').firstMatch(raw.trim());
+    final threadId = match?.group(0) ?? '';
+    if (threadId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.chatJoinInvalid)),
+      );
+      return;
+    }
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    try {
+      await CoreApi(config: cfg).joinChatThread(threadId: threadId);
+      await _loadThreads(reset: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.chatJoinSuccess)),
+      );
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => ChatThreadScreen(
+            appState: widget.appState,
+            threadId: threadId,
+            title: context.l10n.chatGroup,
+            isGroup: true,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      await _loadThreads(reset: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final title = context.l10n.chatTitle;
@@ -207,6 +280,11 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
+          IconButton(
+            tooltip: context.l10n.chatJoinTitle,
+            onPressed: _openJoinDialog,
+            icon: const Icon(Icons.group_add_outlined),
+          ),
           IconButton(
             tooltip: context.l10n.chatRefresh,
             onPressed: _loading ? null : () => _loadThreads(reset: true),
