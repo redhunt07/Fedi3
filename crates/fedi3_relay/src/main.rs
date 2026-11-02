@@ -5760,7 +5760,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_opt(
-                    "SELECT tries, last_try_ms, sent_ok FROM move_notice_fanout WHERE notice_id=$1 AND relay_url=$2",
+                    "SELECT tries, last_try_ms, CASE WHEN sent_ok THEN 1 ELSE 0 END::bigint FROM move_notice_fanout WHERE notice_id=$1 AND relay_url=$2",
                     &[&notice_id, &relay_url],
                 )?;
                 Ok(row.map(|r| (r.get(0), r.get(1), r.get(2))))
@@ -6052,7 +6052,7 @@ impl Db {
                         anyhow::bail!("spool body exceeds per-user byte cap");
                     }
                     let row = conn.query_one(
-                        "SELECT COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=$1",
+                        "SELECT COALESCE(SUM(body_len)::bigint, 0) FROM inbox_spool WHERE username=$1",
                         &[&username],
                     )?;
                     let used: i64 = row.get(0);
@@ -6241,7 +6241,7 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let row = conn.query_one(
-                    "SELECT COUNT(*), COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=$1",
+                    "SELECT COUNT(*), COALESCE(SUM(body_len)::bigint, 0) FROM inbox_spool WHERE username=$1",
                     &[&username],
                 )?;
                 let count: i64 = row.get(0);
@@ -7420,7 +7420,7 @@ impl Db {
                     SearchTotalMode::Approx => {
                         if !tag_norm.is_empty() {
                             let row = conn.query_one(
-                                "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE $1 ESCAPE '\\'",
+                                "SELECT COALESCE(SUM(count)::bigint, 0) FROM relay_tag_counts WHERE lower(tag) LIKE $1 ESCAPE '\\'",
                                 &[&tag_like],
                             )?;
                             let n: i64 = row.get(0);
