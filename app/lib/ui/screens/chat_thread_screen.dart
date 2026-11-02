@@ -615,11 +615,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             }
           }
         }
-        for (final id in list) {
-          final profile = await ActorRepository.instance.getActor(id);
-          if (profile != null) memberProfiles[id] = profile;
-        }
         members = list;
+        for (final id in list) {
+          try {
+            final profile = await ActorRepository.instance.getActor(id);
+            if (profile != null) memberProfiles[id] = profile;
+          } catch (_) {
+            // Keep the actor id if its profile cannot be fetched.
+          }
+        }
       } catch (e) {
         final msg = e.toString();
         if (!msg.contains('404')) {
@@ -808,7 +812,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             ),
                             title: Text(
                               profile == null
-                                  ? actor
+                                  ? _usernameFromActor(actor)
                                   : (profile.displayName.trim().isEmpty
                                       ? profile.preferredUsername
                                       : profile.displayName),
@@ -818,8 +822,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             subtitle: Text(
                               () {
                                 final host = Uri.tryParse(actor)?.host ?? '';
-                                final user =
-                                    profile?.preferredUsername ?? actor;
+                                final user = profile?.preferredUsername ??
+                                    _usernameFromActor(actor);
                                 return host.isEmpty
                                     ? '@$user'
                                     : '@$user@$host';

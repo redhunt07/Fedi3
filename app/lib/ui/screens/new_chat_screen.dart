@@ -76,8 +76,12 @@ class _NewChatScreenState extends State<NewChatScreen>
       final mutual = results[1].where(followers.contains).toList();
       final profiles = <ActorProfile>[];
       for (final id in mutual) {
-        final profile = await ActorRepository.instance.getActor(id);
-        if (profile != null) profiles.add(profile);
+        try {
+          final profile = await ActorRepository.instance.getActor(id);
+          if (profile != null) profiles.add(profile);
+        } catch (_) {
+          // Skip profiles that cannot be fetched; the rest stay selectable.
+        }
       }
       final scores = <String, int>{};
       final api = CoreApi(config: cfg);
