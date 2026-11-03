@@ -10,10 +10,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/core_api.dart';
 import '../state/app_state.dart';
 import '../state/peer_presence_store.dart';
 import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
+import '../model/chat_models.dart';
 import '../services/core_event_stream.dart';
 import '../services/announcements_service.dart';
 import '../services/notification_service.dart';
@@ -26,6 +28,7 @@ import 'screens/search_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/timelines_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/call_screen.dart';
 import 'widgets/fedi3_ui.dart';
 import 'widgets/right_sidebar.dart';
 import 'theme/ui_tokens.dart';
@@ -53,6 +56,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   Timer? _announcementsInitialCheck;
   bool _announcementsUnread = false;
   bool _announcementsChecking = false;
+  Timer? _callPollTimer;
+  int _lastCallSignalMs = 0;
+  String? _incomingCallId;
+  bool _callPromptOpen = false;
   late final AnimationController _sectionFade = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 220),
@@ -82,14 +89,17 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       final configChanged = !identical(_chatStreamConfig, cfg);
       if (!running) {
         _stopChatStream();
+        _stopCallPolling();
       } else if (running && (!_lastRunning || configChanged)) {
         _startChatStream();
+        _startCallPolling();
       }
       _lastRunning = running;
     };
     widget.appState.addListener(_appStateListener);
     if (widget.appState.isRunning) {
       _startChatStream();
+      _startCallPolling();
     }
     _announcementsTimer =
         Timer.periodic(const Duration(hours: 6), (_) => _checkAnnouncements());
@@ -136,6 +146,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _chatRetry?.cancel();
     _announcementsTimer?.cancel();
     _announcementsInitialCheck?.cancel();
+    _callPollTimer?.cancel();
     widget.appState.removeListener(_appStateListener);
     _sectionFade.dispose();
     super.dispose();
@@ -185,6 +196,161 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       if (!mounted) return;
       _startChatStream();
     });
+  }
+
+  void _startCallPolling() {
+    if (!widget.appState.isRunning || _callPollTimer != null) return;
+    if (_lastCallSignalMs == 0) {
+      _lastCallSignalMs =
+          DateTime.now().millisecondsSinceEpoch - const Duration(seconds: 30).inMilliseconds;
+    }
+    _callPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _pollIncomingCall();
+    });
+    _pollIncomingCall();
+  }
+
+  void _stopCallPolling() {
+    _callPollTimer?.cancel();
+    _callPollTimer = null;
+  }
+
+  Future<void> _pollIncomingCall() async {
+    if (!mounted || !widget.appState.isRunning || _callPromptOpen) return;
+    // When a pushed route (e.g. the chat thread) is active, that screen owns
+    // incoming-call polling; avoid showing two prompts for the same call.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    final api = CoreApi(config: cfg);
+    final self = _selfActorUrl(cfg);
+    try {
+      final threads = await api.fetchChatThreads(limit: 100);
+      final rawThreads = threads['items'];
+      if (rawThreads is! List) return;
+      for (final raw in rawThreads.whereType<Map>()) {
+        final thread = raw.cast<String, dynamic>();
+        final threadId = thread['thread_id']?.toString() ?? '';
+        if (threadId.isEmpty) continue;
+        final signals = await api.fetchChatCallSignals(
+          threadId: threadId,
+          afterMs: _lastCallSignalMs,
+          limit: 100,
+        );
+        for (final signal in signals) {
+          if (signal.createdAtMs > _lastCallSignalMs) {
+            _lastCallSignalMs = signal.createdAtMs;
+          }
+          if (signal.action != 'invite') continue;
+          if (signal.fromActor == self) continue;
+          if (signal.callId == _incomingCallId) continue;
+          _incomingCallId = signal.callId;
+          final peers = thread['peer_usernames'];
+          final title = (thread['title']?.toString().trim().isNotEmpty ?? false)
+              ? thread['title'].toString()
+              : (peers is List && peers.isNotEmpty
+                  ? peers.first.toString()
+                  : 'Chat');
+          final media = signal.data['media']?.toString() ?? 'audio';
+          await _showGlobalIncomingCall(
+            threadId: threadId,
+            title: title,
+            media: media,
+            signal: signal,
+          );
+          return;
+        }
+      }
+    } catch (_) {
+      // Polling is best-effort; the chat thread screen still polls when open.
+    }
+  }
+
+  Future<void> _showGlobalIncomingCall({
+    required String threadId,
+    required String title,
+    required String media,
+    required ChatCallSignal signal,
+  }) async {
+    if (_callPromptOpen || !mounted) return;
+    _callPromptOpen = true;
+    final from = signal.fromActor;
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.callIncoming),
+        content: Row(
+          children: [
+            CircleAvatar(
+              radius: 24,
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withAlpha(35),
+              child: Icon(
+                media == 'video' ? Icons.videocam_rounded : Icons.call_rounded,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title),
+                  Text(
+                    media == 'video'
+                        ? context.l10n.callIncomingVideo
+                        : context.l10n.callIncomingAudio,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(context.l10n.callDecline),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(context.l10n.callAccept),
+          ),
+        ],
+      ),
+    );
+    _callPromptOpen = false;
+    if (accepted != true) {
+      _incomingCallId = null;
+      try {
+        await CoreApi(config: widget.appState.config!).sendChatCallSignal(
+          threadId: threadId,
+          callId: signal.callId,
+          action: 'decline',
+          to: from,
+        );
+      } catch (_) {}
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CallScreen(
+          appState: widget.appState,
+          threadId: threadId,
+          title: title,
+          mediaType: media,
+          isGroup: false,
+          incoming: true,
+          callId: signal.callId,
+          remoteActor: from,
+        ),
+      ),
+    );
+    _incomingCallId = null;
   }
 
   bool get _isDesktopPlatform =>
