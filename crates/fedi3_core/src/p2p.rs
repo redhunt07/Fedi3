@@ -539,12 +539,9 @@ async fn run_p2p_with_shutdown(
         gossip,
     };
 
-    let mut swarm = Swarm::new(
-        transport,
-        behaviour,
-        peer_id,
-        libp2p::swarm::Config::with_tokio_executor(),
-    );
+    let swarm_config = libp2p::swarm::Config::with_tokio_executor()
+        .with_idle_connection_timeout(Duration::from_secs(120));
+    let mut swarm = Swarm::new(transport, behaviour, peer_id, swarm_config);
 
     if !force_relay_only {
         if let Some(listen) = cfg.listen.as_deref() {
@@ -568,8 +565,14 @@ async fn run_p2p_with_shutdown(
                 if !has_peer {
                     continue;
                 }
+                // Dial the relay first so the reservation listener has an
+                // established transport when it is registered.
+                let _ = swarm.dial(addr.clone());
                 addr.push(Protocol::P2pCircuit);
-                let _ = swarm.listen_on(addr);
+                match swarm.listen_on(addr.clone()) {
+                    Ok(id) => tracing::info!(?id, %addr, "relay reservation listener"),
+                    Err(e) => tracing::warn!(%addr, error=%e, "relay reservation listen failed"),
+                }
             }
         }
     }
@@ -1033,7 +1036,9 @@ async fn run_p2p_with_shutdown(
                             _ => {}
                         }
                     }
-                    SwarmEvent::Behaviour(BehaviourEvent::Relay(_)) => {}
+                    SwarmEvent::Behaviour(BehaviourEvent::Relay(ev)) => {
+                        tracing::info!(?ev, "relay client event");
+                    }
                     SwarmEvent::Behaviour(BehaviourEvent::Dcutr(_)) => {}
                     _ => {}
                 }

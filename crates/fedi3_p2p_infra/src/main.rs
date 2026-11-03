@@ -29,6 +29,7 @@ use mailbox::{MailboxMessage, MailboxStore};
 #[derive(Debug, Clone)]
 struct Config {
     listen: Vec<Multiaddr>,
+    external_addrs: Vec<Multiaddr>,
     enable_relay_server: bool,
     enable_kad_server: bool,
     bootstrap: Vec<Multiaddr>,
@@ -52,6 +53,14 @@ fn load_config() -> Result<Config> {
         .filter(|s| !s.is_empty())
         .map(|s| s.parse::<Multiaddr>().context("parse listen addr"))
         .collect::<Result<Vec<_>>>()?;
+
+    let external_addrs = std::env::var("FEDI3_P2P_EXTERNAL_ADDR")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .collect::<Vec<_>>();
 
     let bootstrap = std::env::var("FEDI3_P2P_BOOTSTRAP").unwrap_or_default();
     let bootstrap = bootstrap
@@ -118,6 +127,7 @@ fn load_config() -> Result<Config> {
 
     Ok(Config {
         listen,
+        external_addrs,
         enable_relay_server,
         enable_kad_server,
         bootstrap,
@@ -621,6 +631,10 @@ async fn main() -> Result<()> {
     for addr in cfg.listen {
         swarm.listen_on(addr)?;
     }
+    for addr in &cfg.external_addrs {
+        info!(%peer_id, %addr, "advertising external address");
+        swarm.add_external_address(addr.clone());
+    }
 
     for addr in cfg.bootstrap {
         let _ = swarm.dial(addr);
@@ -637,17 +651,27 @@ async fn main() -> Result<()> {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!(%peer_id, %address, "listening");
                     }
-                    SwarmEvent::ConnectionEstablished { .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                        info!(peer=%peer_id, "p2p connection established");
                         if !bootstrapped && cfg.enable_kad_server && !bootstrap_peers.is_empty() {
                             let _ = swarm.behaviour_mut().kad.bootstrap();
                             bootstrapped = true;
                         }
                     }
+                    SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                        info!(peer=%peer_id, ?cause, "p2p connection closed");
+                    }
                     SwarmEvent::Behaviour(BehaviourEvent::Relay(ev)) => {
                         if cfg.enable_relay_server {
                             match ev {
-                                relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
-                                    info!(peer=%src_peer_id, "relay reservation accepted");
+                                relay::Event::ReservationReqAccepted { src_peer_id, renewed } => {
+                                    info!(peer=%src_peer_id, renewed, "relay reservation accepted");
+                                }
+                                relay::Event::ReservationReqDenied { src_peer_id } => {
+                                    warn!(peer=%src_peer_id, "relay reservation denied");
+                                }
+                                relay::Event::ReservationReqAcceptFailed { src_peer_id, error } => {
+                                    warn!(peer=%src_peer_id, %error, "relay reservation accept failed");
                                 }
                                 relay::Event::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
                                     info!(src=%src_peer_id, dst=%dst_peer_id, "relay circuit accepted");
