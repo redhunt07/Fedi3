@@ -265,7 +265,12 @@ impl Delivery {
                 req = enc;
             }
         }
-        let resp = handle.request(peer_id, req).await?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle.request(peer_id, req),
+        )
+        .await
+        .map_err(|_| anyhow!("p2p request timeout"))??;
         if (200..300).contains(&resp.status) || resp.status == 202 {
             return Ok(());
         }
@@ -291,7 +296,12 @@ impl Delivery {
             inbox_url,
             body,
         )?;
-        let resp = handle.request(peer_actor_url, peer_id, req).await?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            handle.request(peer_actor_url, peer_id, req),
+        )
+        .await
+        .map_err(|_| anyhow!("webrtc request timeout"))??;
         if (200..300).contains(&resp.status) || resp.status == 202 {
             return Ok(());
         }
