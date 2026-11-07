@@ -18,6 +18,7 @@ in [`audit/`](audit/).
 - [Core locale e modalità P2P](deploy_core.md)
 - [Backup e ripristino](ops_backup_restore.md)
 - [API di sync del relay](relay_sync_api.md)
+- [Directory relay](relay_directory.md)
 - [Specifica OpenAPI](../openapi.yaml)
 
 ## Architettura e protocollo

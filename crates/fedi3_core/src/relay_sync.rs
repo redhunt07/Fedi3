@@ -5,6 +5,7 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
+use std::time::Duration;
 use tokio::sync::watch;
 use tracing::info;
 
@@ -30,6 +31,25 @@ struct RelayListItem {
 #[derive(Debug, serde::Deserialize)]
 struct PeerRelayListResponse {
     items: Option<Vec<RelayListItem>>,
+}
+
+/// Shared relay directory maintained in the Fedi3 repository. Clients and the
+/// core read the same file, so relay discovery does not depend on a single
+/// relay being reachable.
+pub const DEFAULT_RELAY_DIRECTORY_URLS: &[&str] = &[
+    "https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json",
+    "https://cdn.jsdelivr.net/gh/redhunt07/Fedi3@main/relays/relays.json",
+];
+
+#[derive(Debug, serde::Deserialize)]
+struct RelayDirectoryResponse {
+    relays: Option<Vec<RelayDirectoryItem>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RelayDirectoryItem {
+    url: String,
+    ws: Option<String>,
 }
 
 pub fn start_relay_sync_worker(
@@ -61,7 +81,11 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
     // Always store current relay.
     if let Some(base) = state.cfg.relay_base_url.as_ref() {
         state.social.upsert_relay_entry(base, None, "self").ok();
+        state.social.remove_stale_self_relays(base).ok();
     }
+
+    // Shared directory: bootstrap discovery even when the current relay is down.
+    fetch_directory_once(state).await;
 
     // Fetch relay list from current relay (best-effort).
     if let Some(base) = state.cfg.relay_base_url.as_ref() {
@@ -159,6 +183,74 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Directory sources: `FEDI3_RELAY_DIRECTORY_URLS` overrides the defaults; an
+/// explicitly empty value disables directory discovery.
+pub fn relay_directory_urls() -> Vec<String> {
+    match std::env::var("FEDI3_RELAY_DIRECTORY_URLS") {
+        Ok(value) => value
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => DEFAULT_RELAY_DIRECTORY_URLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+/// Parses a relay directory document into `(base, ws)` pairs, dropping
+/// malformed or duplicate entries.
+pub fn parse_directory_items(body: &[u8]) -> Vec<(String, Option<String>)> {
+    let Ok(doc) = serde_json::from_slice::<RelayDirectoryResponse>(body) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for item in doc.relays.unwrap_or_default() {
+        let base = item.url.trim().trim_end_matches('/');
+        if base.is_empty() || !(base.starts_with("https://") || base.starts_with("http://")) {
+            continue;
+        }
+        if out.iter().any(|(b, _)| b == base) {
+            continue;
+        }
+        let ws = item
+            .ws
+            .map(|w| w.trim().trim_end_matches('/').to_string())
+            .filter(|w| !w.is_empty());
+        out.push((base.to_string(), ws));
+    }
+    out
+}
+
+async fn fetch_directory_once(state: &ApState) {
+    let urls = relay_directory_urls();
+    for url in urls {
+        let req = state.http.get(&url).timeout(Duration::from_secs(10));
+        let Ok(resp) = req.send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(body) = resp.bytes().await else {
+            continue;
+        };
+        let items = parse_directory_items(&body);
+        if items.is_empty() {
+            continue;
+        }
+        let count = items.len();
+        for (base, ws) in items {
+            let inferred = infer_ws_from_base(&base);
+            let ws_ref = ws.as_deref().or(inferred.as_deref());
+            let _ = state.social.upsert_relay_entry(&base, ws_ref, "directory");
+        }
+        info!("relay directory: imported {count} relays from {url}");
+        return;
+    }
+}
+
 fn store_relay_items(state: &ApState, items: Vec<RelayListItem>, source: &str) {
     for item in items {
         let base = item
@@ -201,4 +293,43 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_directory_items_and_skips_invalid_entries() {
+        let body = br#"{
+            "schema": "fedi3-relay-directory/v1",
+            "updated_at": "2026-11-07T12:00:00Z",
+            "relays": [
+                {"url": "https://relay-a.example.test/", "ws": "wss://relay-a.example.test"},
+                {"url": "ftp://ignored.example.test"},
+                {"url": "https://relay-a.example.test"},
+                {"url": "https://relay-b.example.test"}
+            ]
+        }"#;
+        let items = parse_directory_items(body);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "https://relay-a.example.test");
+        assert_eq!(items[0].1.as_deref(), Some("wss://relay-a.example.test"));
+        assert_eq!(items[1].0, "https://relay-b.example.test");
+        assert_eq!(items[1].1, None);
+    }
+
+    #[test]
+    fn invalid_directory_body_yields_no_items() {
+        assert!(parse_directory_items(b"not json").is_empty());
+        assert!(parse_directory_items(br#"{"relays": []}"#).is_empty());
+    }
+
+    #[test]
+    fn default_directory_sources_are_https() {
+        assert!(!DEFAULT_RELAY_DIRECTORY_URLS.is_empty());
+        for url in DEFAULT_RELAY_DIRECTORY_URLS {
+            assert!(url.starts_with("https://"));
+        }
+    }
 }

@@ -146,6 +146,7 @@ Italiano:
 
 - [Primi passi](docs/it/getting_started.md)
 - [Deploy del relay](docs/it/deploy_relay.md)
+- [Directory relay](docs/it/relay_directory.md)
 - [Core locale e modalità P2P](docs/it/deploy_core.md)
 - [Deploy su VPS](docs/it/deploy_vps.md)
 - [Modello di decentralizzazione](docs/it/decentralization.md)

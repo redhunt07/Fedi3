@@ -345,6 +345,52 @@
   "firstRunRelayPreviewPeers": "Peers",
   "firstRunRelayPreviewEmpty": "No data yet",
   "firstRunRelayPreviewError": "Failed to load relay preview.",
+  "relayDirectoryTitle": "Relay directory",
+  "relayDirectoryHint": "Relays published in relays/relays.json, ranked by the latency measured from this device.",
+  "relayDirectoryRefresh": "Refresh",
+  "relayDirectoryMeasuring": "Measuring relay latency…",
+  "relayDirectoryEmpty": "No relays available",
+  "relayDirectoryError": "Directory unavailable: {error}",
+  "@relayDirectoryError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "relayDirectoryAddYours": "Add your relay",
+  "relayDirectoryUse": "Use",
+  "relayDirectoryRank": "#{rank}",
+  "@relayDirectoryRank": {
+    "placeholders": {
+      "rank": {
+        "type": "int"
+      }
+    }
+  },
+  "relayDirectoryTapHint": "Tap a relay to use it.",
+  "relayLatencyMs": "{ms} ms",
+  "@relayLatencyMs": {
+    "placeholders": {
+      "ms": {
+        "type": "int"
+      }
+    }
+  },
+  "relayLatencyOffline": "unreachable",
+  "relayLatencyTlsMismatch": "TLS host mismatch",
+  "relayLatencyTlsCertificate": "invalid TLS certificate",
+  "relayLatencyTimeout": "timeout",
+  "relayLatencyHttpError": "HTTP error",
+  "relayLatencyNetworkError": "network error",
+  "relayLatencyMeasuredAt": "Measured at {time}",
+  "@relayLatencyMeasuredAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
   "onboardingCreateTitle": "Create account",
   "onboardingCreateIntro": "Fill the required fields to create a new setup. The core will start automatically after saving.",
   "onboardingLoginTitle": "Log in",
@@ -606,6 +652,8 @@
     }
   },
   "networkingRelaysEmpty": "No relays yet",
+  "networkingRelayDirectoryTitle": "Shared relay directory",
+  "networkingRelayDirectoryHint": "Ranked by latency measured from this device. Refresh to probe again.",
   "relayAdminTitle": "Relay admin",
   "relayAdminHint": "Manage relay users and audit",
   "relayAdminRelayWsLabel": "Relay WS",
@@ -789,8 +837,8 @@
   "editAccountTitle": "Edit account",
   "editAccountSave": "Save",
   "editAccountCoreRunningWarning": "Core is running: it will be stopped automatically before saving to avoid inconsistencies.",
-  "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
-  "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
+  "editAccountRelayPublicUrl": "Relay public URL (https://relay.example.com)",
+  "editAccountRelayWs": "Relay WS (wss://relay.example.com)",
   "editAccountRegenerateInternal": "Regenerate internal token",
   "devCoreTitle": "Dev core controls",
   "devCoreConfigSaved": "Config (saved)",

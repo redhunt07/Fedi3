@@ -146,6 +146,7 @@ English (default):
 
 - [Getting started](docs/getting_started.md)
 - [Relay deployment](docs/deploy_relay.md)
+- [Relay directory](docs/relay_directory.md)
 - [Local core and P2P mode](docs/deploy_core.md)
 - [VPS deployment](docs/deploy_vps.md)
 - [Decentralization model](docs/decentralization.md)

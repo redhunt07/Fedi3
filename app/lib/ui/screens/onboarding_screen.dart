@@ -6,15 +6,15 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../model/relay_directory.dart';
 import '../../services/call_ice_config.dart';
+import '../../services/relay_directory_service.dart';
 import '../../services/backup_codec.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
+import '../widgets/relay_latency_badge.dart';
 
 enum OnboardingMode { loginExisting, createNew }
 
@@ -22,10 +22,14 @@ class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen(
       {super.key,
       required this.appState,
-      this.mode = OnboardingMode.createNew});
+      this.mode = OnboardingMode.createNew,
+      this.initialRelay});
 
   final AppState appState;
   final OnboardingMode mode;
+
+  /// Relay picked from the shared directory on the first-run screen.
+  final RelayDirectoryEntry? initialRelay;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -53,12 +57,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _formError;
   bool _importing = false;
   bool _discovering = false;
+  String? _relayDiscoveryError;
   final List<_RelayOption> _relayOptions = [];
   _RelayOption? _selectedRelay;
-
-  static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
-  ];
 
   @override
   void initState() {
@@ -176,7 +177,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         child: Text(context.l10n.onboardingRelayCustom),
                       ),
                     ),
-                  if (_customRelay || _relayOptions.isEmpty) ...[
+                  if (_customRelay ||
+                      _selectedRelay == null ||
+                      _relayOptions.isEmpty) ...[
                     _field(context.l10n.onboardingDomain, _domain),
                     _field(
                         context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
@@ -339,11 +342,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            context.l10n.onboardingRelayListHint,
+            context.l10n.relayDirectoryHint,
             style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
                 fontSize: 12),
           ),
+          if (_relayDiscoveryError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _relayDiscoveryError!,
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.error, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
@@ -351,59 +362,62 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _seedRelayOptions() {
     final set = <String>{};
-    for (final url in _bootstrapRelays) {
-      final opt = _relayOptionFromUrl(url);
-      if (opt != null && set.add(opt.publicUrl)) {
+    final initial = widget.initialRelay;
+    if (initial != null) {
+      final opt = _relayOptionFromEntry(initial);
+      if (set.add(opt.publicUrl)) {
         _relayOptions.add(opt);
+        _selectedRelay = opt;
+        _applyRelayOption(opt);
       }
     }
-    if (_relayOptions.isNotEmpty) {
-      _selectedRelay = _relayOptions.first;
-      _applyRelayOption(_selectedRelay!);
-    }
+    _loadCachedDirectory(set);
+  }
+
+  Future<void> _loadCachedDirectory(Set<String> seen) async {
+    final snapshot = await RelayDirectoryService.cachedOrBundled();
+    if (snapshot == null || !mounted) return;
+    final cached = snapshot.entries
+        .map(_relayOptionFromEntry)
+        .where((opt) => seen.add(opt.publicUrl))
+        .toList(growable: false);
+    if (cached.isEmpty) return;
+    setState(() => _relayOptions.addAll(cached));
   }
 
   Future<void> _discoverRelays() async {
-    setState(() => _discovering = true);
+    setState(() {
+      _discovering = true;
+      _relayDiscoveryError = null;
+    });
     try {
+      final snapshot = await RelayDirectoryService.fetch();
+      final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
       final found = <_RelayOption>[];
-      final seen = <String>{};
-      for (final base in _bootstrapRelays) {
-        final uri = Uri.parse(base).replace(path: '/_fedi3/relay/relays');
-        final resp = await http.get(uri);
-        if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
-        final json = jsonDecode(resp.body);
-        if (json is! Map) continue;
-        final relays =
-            (json['relays'] is List) ? json['relays'] : json['items'];
-        if (relays is! List) continue;
-        for (final item in relays) {
-          if (item is! Map) continue;
-          final base =
-              (item['relay_base_url'] ?? item['relay_url'] ?? item['base'])
-                  ?.toString()
-                  .trim();
-          if (base == null || base.isEmpty) continue;
-          final ws = (item['relay_ws_url'] ?? item['relay_ws'] ?? item['ws'])
-              ?.toString()
-              .trim();
-          final opt = _relayOptionFromParts(base, ws);
-          if (opt != null && seen.add(opt.publicUrl)) {
-            found.add(opt);
-          }
-        }
+      for (var i = 0; i < latencies.length; i++) {
+        found.add(_relayOptionFromLatency(latencies[i], rank: i + 1));
       }
-      if (found.isNotEmpty) {
+      if (found.isEmpty) {
+        if (!mounted) return;
         setState(() {
-          _relayOptions
-            ..clear()
-            ..addAll(found);
-          _selectedRelay = _relayOptions.first;
-          _applyRelayOption(_selectedRelay!);
+          _relayDiscoveryError = context.l10n.relayDirectoryEmpty;
         });
+        return;
       }
-    } catch (_) {
-      // Silent discovery failure; user can still enter values manually.
+      if (!mounted) return;
+      setState(() {
+        _relayOptions
+          ..clear()
+          ..addAll(found);
+        final reachable = found.where((r) => r.latencyMs != null).toList();
+        _selectedRelay = reachable.isNotEmpty ? reachable.first : found.first;
+        if (reachable.isNotEmpty) {
+          _applyRelayOption(_selectedRelay!);
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _relayDiscoveryError = e.toString());
     } finally {
       if (mounted) setState(() => _discovering = false);
     }
@@ -417,50 +431,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _autofillNetworkingDefaults(force: true);
   }
 
-  _RelayOption? _relayOptionFromUrl(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.host.isEmpty) return null;
-    final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri
-        .replace(scheme: scheme)
-        .toString()
-        .trim()
-        .replaceAll(RegExp(r'/$'), '');
-    final wsScheme = scheme == 'https' ? 'wss' : 'ws';
-    final wsUrl = uri
-        .replace(scheme: wsScheme)
-        .toString()
-        .trim()
-        .replaceAll(RegExp(r'/$'), '');
-    final domain = uri.host;
+  _RelayOption _relayOptionFromEntry(RelayDirectoryEntry entry) {
     return _RelayOption(
-      publicUrl: publicUrl,
-      wsUrl: wsUrl,
-      domain: domain,
-      label: uri.host,
+      publicUrl: entry.url,
+      wsUrl: entry.ws,
+      domain: entry.host,
+      label: entry.name,
     );
   }
 
-  _RelayOption? _relayOptionFromParts(String base, String? ws) {
-    final uri = Uri.tryParse(base);
-    if (uri == null || uri.host.isEmpty) return null;
-    final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri
-        .replace(scheme: scheme)
-        .toString()
-        .trim()
-        .replaceAll(RegExp(r'/$'), '');
-    final wsUrl = (ws != null && ws.trim().isNotEmpty)
-        ? ws.trim().replaceAll(RegExp(r'/$'), '')
-        : (scheme == 'https'
-            ? publicUrl.replaceFirst('https://', 'wss://')
-            : publicUrl.replaceFirst('http://', 'ws://'));
-    final domain = uri.host;
+  _RelayOption _relayOptionFromLatency(RelayLatency latency, {int? rank}) {
+    final entry = latency.entry;
+    final suffix = relayLatencyLabel(context, latency);
     return _RelayOption(
-      publicUrl: publicUrl,
-      wsUrl: wsUrl,
-      domain: domain,
-      label: uri.host,
+      publicUrl: entry.url,
+      wsUrl: entry.ws,
+      domain: entry.host,
+      label: rank == null
+          ? '${entry.host} — $suffix'
+          : '#$rank ${entry.host} — $suffix',
+      latencyMs: latency.latencyMs,
+      failure: latency.failure,
+      rank: rank,
     );
   }
 
@@ -717,10 +709,16 @@ class _RelayOption {
     required this.wsUrl,
     required this.domain,
     required this.label,
+    this.latencyMs,
+    this.failure,
+    this.rank,
   });
 
   final String publicUrl;
   final String wsUrl;
   final String domain;
   final String label;
+  final int? latencyMs;
+  final RelayProbeFailure? failure;
+  final int? rank;
 }

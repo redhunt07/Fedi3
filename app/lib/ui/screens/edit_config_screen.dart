@@ -4,13 +4,14 @@
  */
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../model/relay_directory.dart';
 import '../../services/call_ice_config.dart';
+import '../../services/relay_directory_service.dart';
 import '../../state/app_state.dart';
+import '../widgets/relay_latency_badge.dart';
 
 class EditConfigScreen extends StatefulWidget {
   const EditConfigScreen({super.key, required this.appState});
@@ -38,12 +39,9 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
   String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
   bool _customRelay = false;
   bool _discovering = false;
+  String? _relayDiscoveryError;
   final List<_RelayOption> _relayOptions = [];
   _RelayOption? _selectedRelay;
-
-  static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
-  ];
 
   @override
   void initState() {
@@ -248,11 +246,19 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            context.l10n.onboardingRelayListHint,
+            context.l10n.relayDirectoryHint,
             style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
                 fontSize: 12),
           ),
+          if (_relayDiscoveryError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _relayDiscoveryError!,
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.error, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
@@ -267,51 +273,79 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       _selectedRelay = currentOpt;
       _applyRelayOption(currentOpt);
     }
-    for (final url in _bootstrapRelays) {
-      final opt = _relayOptionFromUrl(url);
-      if (opt != null && set.add(opt.publicUrl)) {
-        _relayOptions.add(opt);
-      }
-    }
+    _loadDirectoryOptions(set);
+  }
+
+  Future<void> _loadDirectoryOptions(Set<String> seen) async {
+    final snapshot = await RelayDirectoryService.cachedOrBundled();
+    if (snapshot == null || !mounted) return;
+    final options = snapshot.entries
+        .map(_relayOptionFromEntry)
+        .where((opt) => seen.add(opt.publicUrl))
+        .toList(growable: false);
+    if (options.isEmpty) return;
+    setState(() => _relayOptions.addAll(options));
   }
 
   Future<void> _discoverRelays() async {
-    setState(() => _discovering = true);
+    setState(() {
+      _discovering = true;
+      _relayDiscoveryError = null;
+    });
     try {
+      final snapshot = await RelayDirectoryService.fetch();
+      final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
       final found = <_RelayOption>[];
-      final seen = <String>{};
-      for (final base in _bootstrapRelays) {
-        final uri = Uri.parse(base).replace(path: '/_fedi3/relay/relays');
-        final resp = await http.get(uri);
-        if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
-        final json = jsonDecode(resp.body);
-        if (json is! Map) continue;
-        final relays = json['relays'];
-        if (relays is! List) continue;
-        for (final item in relays) {
-          if (item is! Map) continue;
-          final url = (item['relay_url'] as String?)?.trim();
-          if (url == null || url.isEmpty) continue;
-          final opt = _relayOptionFromUrl(url);
-          if (opt != null && seen.add(opt.publicUrl)) {
-            found.add(opt);
-          }
-        }
+      for (var i = 0; i < latencies.length; i++) {
+        found.add(_relayOptionFromLatency(latencies[i], rank: i + 1));
       }
-      if (found.isNotEmpty) {
-        setState(() {
-          _relayOptions
-            ..clear()
-            ..addAll(found);
-          _selectedRelay = _relayOptions.first;
+      if (found.isEmpty) {
+        if (!mounted) return;
+        setState(() => _relayDiscoveryError = context.l10n.relayDirectoryEmpty);
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _relayOptions
+          ..clear()
+          ..addAll(found);
+        final reachable = found.where((r) => r.latencyMs != null).toList();
+        _selectedRelay = reachable.isNotEmpty ? reachable.first : found.first;
+        if (reachable.isNotEmpty) {
           _applyRelayOption(_selectedRelay!);
-        });
-      }
-    } catch (_) {
-      // Silent discovery failure; user can still enter values manually.
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _relayDiscoveryError = e.toString());
     } finally {
       if (mounted) setState(() => _discovering = false);
     }
+  }
+
+  _RelayOption _relayOptionFromEntry(RelayDirectoryEntry entry) {
+    return _RelayOption(
+      publicUrl: entry.url,
+      wsUrl: entry.ws,
+      domain: entry.host,
+      label: entry.name,
+    );
+  }
+
+  _RelayOption _relayOptionFromLatency(RelayLatency latency, {int? rank}) {
+    final entry = latency.entry;
+    final suffix = relayLatencyLabel(context, latency);
+    return _RelayOption(
+      publicUrl: entry.url,
+      wsUrl: entry.ws,
+      domain: entry.host,
+      label: rank == null
+          ? '${entry.host} — $suffix'
+          : '#$rank ${entry.host} — $suffix',
+      latencyMs: latency.latencyMs,
+      failure: latency.failure,
+      rank: rank,
+    );
   }
 
   void _applyRelayOption(_RelayOption relay) {
@@ -432,10 +466,16 @@ class _RelayOption {
     required this.wsUrl,
     required this.domain,
     required this.label,
+    this.latencyMs,
+    this.failure,
+    this.rank,
   });
 
   final String publicUrl;
   final String wsUrl;
   final String domain;
   final String label;
+  final int? latencyMs;
+  final RelayProbeFailure? failure;
+  final int? rank;
 }

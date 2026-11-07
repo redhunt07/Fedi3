@@ -4,14 +4,18 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../model/relay_directory.dart';
+import '../../services/relay_directory_service.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
+import '../widgets/relay_latency_badge.dart';
 import 'relay_admin_screen.dart';
 import 'edit_config_screen.dart';
 
@@ -29,6 +33,11 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   bool _loadingRelays = false;
   String? _relayError;
   List<Map<String, dynamic>> _relays = const [];
+
+  bool _loadingDirectory = false;
+  String? _directoryError;
+  List<RelayLatency> _directoryLatencies = const [];
+  DateTime? _directoryMeasuredAt;
 
   late final TextEditingController _anchorActorUrl;
   String? _anchorError;
@@ -51,6 +60,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     _publicDiscovery = cfg?.p2pPublicDiscovery ?? true;
     _peerExchange = cfg?.p2pPeerExchange ?? true;
     _loadRelays();
+    _loadDirectory();
   }
 
   @override
@@ -155,6 +165,122 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     } catch (e) {
       if (mounted) setState(() => _relayError = e.toString());
     }
+  }
+
+  Future<void> _loadDirectory() async {
+    setState(() {
+      _loadingDirectory = true;
+      _directoryError = null;
+    });
+    try {
+      RelayDirectorySnapshot? snapshot;
+      Object? fetchError;
+      try {
+        snapshot = await RelayDirectoryService.fetch();
+      } catch (e) {
+        fetchError = e;
+        snapshot = await RelayDirectoryService.cachedOrBundled();
+      }
+      if (snapshot == null) {
+        throw fetchError ?? StateError('relay directory unavailable');
+      }
+      final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
+      if (!mounted) return;
+      setState(() {
+        _directoryLatencies = latencies;
+        _directoryMeasuredAt = DateTime.now();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _directoryError = e.toString());
+    } finally {
+      if (mounted) setState(() => _loadingDirectory = false);
+    }
+  }
+
+  Widget _directorySection(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurface.withAlpha(160);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _section(context, context.l10n.networkingRelayDirectoryTitle),
+        Text(context.l10n.networkingRelayDirectoryHint,
+            style: TextStyle(color: muted, fontSize: 12)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Text(
+              _directoryLatencies.isEmpty
+                  ? context.l10n.relayDirectoryEmpty
+                  : context.l10n
+                      .networkingRelaysCount(_directoryLatencies.length),
+            ),
+            const Spacer(),
+            IconButton(
+              tooltip: context.l10n.relayDirectoryRefresh,
+              onPressed: _loadingDirectory ? null : _loadDirectory,
+              icon: _loadingDirectory
+                  ? const Icon(Icons.hourglass_top)
+                  : const Icon(Icons.speed),
+            ),
+          ],
+        ),
+        if (_directoryError != null)
+          NetworkErrorCard(
+            message: context.l10n.relayDirectoryError(_directoryError!),
+            onRetry: _loadDirectory,
+            compact: true,
+          ),
+        if (_directoryLatencies.isNotEmpty)
+          GlassPanel(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < _directoryLatencies.length; i++)
+                  ListTile(
+                    dense: true,
+                    leading: Text('#${i + 1}',
+                        style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700)),
+                    title: Text(_directoryLatencies[i].entry.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(_directoryLatencies[i].entry.host,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    trailing:
+                        RelayLatencyBadge(latency: _directoryLatencies[i]),
+                  ),
+              ],
+            ),
+          ),
+        if (_directoryMeasuredAt != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              context.l10n
+                  .relayLatencyMeasuredAt(_formatClock(_directoryMeasuredAt!)),
+              style: TextStyle(color: muted, fontSize: 11),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => launchUrl(Uri.parse(RelayDirectory.submitUrl),
+                mode: LaunchMode.externalApplication),
+            icon: const Icon(Icons.add, size: 16),
+            label: Text(context.l10n.relayDirectoryAddYours),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatClock(DateTime value) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(value.hour)}:${two(value.minute)}:${two(value.second)}';
   }
 
   Widget _section(BuildContext context, String title) {
@@ -304,6 +430,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
               if (_discoveryStatus != null) Text(_discoveryStatus!),
             ]),
           ),
+          _directorySection(context),
           _section(context, context.l10n.networkingRelaysTitle),
           if (_relayError != null)
             NetworkErrorCard(

@@ -83,7 +83,7 @@ def has_attachments(note_obj):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--actor", required=True, help="Actor URL, es. https://relay.fedi3.com/users/alice")
+    ap.add_argument("--actor", required=True, help="Actor URL, es. https://relay.example.com/users/alice")
     ap.add_argument("--outbox-limit", type=int, default=20)
     ap.add_argument("--csv", action="store_true", help="Output CSV instead of JSON")
     args = ap.parse_args()
