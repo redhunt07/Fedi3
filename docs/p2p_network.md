@@ -124,13 +124,9 @@ path is impossible a TURN is needed, or the call must fail.
 | --- | --- |
 | [Cloudflare STUN](https://developers.cloudflare.com/realtime/turn/) | Public endpoint `stun:stun.cloudflare.com:3478`; helps direct connection, not a media bridge. |
 | [Metered Open Relay](https://www.metered.ca/tools/openrelay/) | TURN usable with WebRTC, with 20 GB free per month stated. Requires an account and credentials/API; no shared credential is embedded in Fedi3. It is a hosted service, not a community guarantee of availability. |
-| [meet.jit.si](https://jitsi.org/user-faq/) | Free hosted conference based on open software. It is not a generic TURN/SFU to connect to existing Fedi3 calls. Using it means joining a Jitsi conference and whoever creates the room must authenticate. |
 
 The [Metered terms](https://www.metered.ca/terms) do not assign an SLA to free
-plans. [meet.jit.si](https://jitsi.org/meet-jit-si-terms-of-service/) also
-does not guarantee availability; see also its
-[authentication rule](https://jitsi.org/blog/authentication-on-meet-jit-si/).
-No external account was activated and no public conference was started.
+plans. No external account was activated.
 
 To use Open Relay, get the ICE values from your account and enter them in the
 ICE URL, TURN user and TURN credential fields of the Fedi3 configuration. Enter
