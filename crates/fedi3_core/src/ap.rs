@@ -8235,7 +8235,13 @@ pub(crate) async fn process_inbox_activity(
             if obj_actor != me || obj_object.is_empty() {
                 return Ok(());
             }
-            if accept_actor.trim_end_matches('/') != obj_object.trim_end_matches('/') {
+            // Mastodon exposes two actor URLs for the same account
+            // (/users/<name> from WebFinger, /ap/users/<id> as canonical id).
+            // Treat the canonical alias as the same target, but never accept a
+            // different origin.
+            if accept_actor.trim_end_matches('/') != obj_object.trim_end_matches('/')
+                && !same_origin(accept_actor, obj_object)
+            {
                 return Ok(());
             }
             state

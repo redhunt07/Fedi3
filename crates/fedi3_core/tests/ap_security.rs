@@ -473,6 +473,51 @@ async fn i13b_correct_accept_marks_follow_accepted() {
 }
 
 #[tokio::test]
+async fn i13c_same_origin_actor_alias_accept_marks_follow_accepted() {
+    let core = TestCore::new().unwrap();
+    let mock_b = MockActorServer::new("bob").await.unwrap();
+    let signer_b = Signer::new(mock_b.key_id.clone());
+    // Mastodon publishes /users/<name> via WebFinger but signs Accept as the
+    // canonical /ap/users/<id> actor on the same origin.
+    let alias = mock_b
+        .actor_url
+        .replace("/users/bob", "/ap/users/bob-canonical");
+    {
+        let conn = rusqlite::Connection::open(core.db_path()).unwrap();
+        conn.execute(
+            "INSERT INTO following(actor_id,status,created_at_ms) VALUES (?1,0,?2)",
+            rusqlite::params![alias, 1i64],
+        )
+        .unwrap();
+    }
+    let me = core.actor_url();
+    let follow = serde_json::json!({
+        "id": format!("{}/activities/follow-alias", me),
+        "type": "Follow",
+        "actor": me,
+        "object": alias,
+    });
+    let accept = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}/activities/accept-alias", mock_b.actor_url),
+        "type": "Accept",
+        "actor": mock_b.actor_url,
+        "object": follow,
+    });
+    let resp = core.post_inbox_signed(&signer_b, &json_body(&accept)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let status: i64 = sqlite_count(
+        &core.db_path(),
+        "SELECT status FROM following WHERE actor_id=?1",
+        &[&alias],
+    );
+    assert_eq!(
+        status, 1,
+        "same-origin canonical alias must mark the follow accepted"
+    );
+}
+
+#[tokio::test]
 async fn i15_public_note_appears_in_federated_feed() {
     let core = TestCore::new().unwrap();
     let mock = MockActorServer::new("bob").await.unwrap();
