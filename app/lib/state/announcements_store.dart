@@ -44,17 +44,21 @@ class AnnouncementsStore {
     await _write(data);
   }
 
-  static Future<String?> cached() async {
+  static String _cacheKey(String languageCode) {
+    final lang = languageCode.trim().toLowerCase();
+    return lang.startsWith('it') ? 'cached_md_it' : 'cached_md';
+  }
+
+  static Future<String?> cached({String languageCode = 'en'}) async {
     final data = await _read();
-    final raw = data['cached_md'];
+    final raw = data[_cacheKey(languageCode)];
     return raw is String && raw.isNotEmpty ? raw : null;
   }
 
-  static Future<void> cache(String raw) async {
+  static Future<void> cache(String raw, {String languageCode = 'en'}) async {
     final data = await _read();
-    data['cached_md'] = raw;
-    data['cached_at_ms'] =
-        DateTime.now().millisecondsSinceEpoch;
+    data[_cacheKey(languageCode)] = raw;
+    data['cached_at_ms'] = DateTime.now().millisecondsSinceEpoch;
     await _write(data);
   }
 }

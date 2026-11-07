@@ -110,12 +110,24 @@
   "chatNewSortInteractions": "Interazioni",
   "chatNewSortAlpha": "A-Z",
   "chatNewInteractions": "Interazioni: {count}",
-  "@chatNewInteractions": {"placeholders": {"count": {"type": "int"}}},
+  "@chatNewInteractions": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "chatNewGroupName": "Nome del gruppo",
   "chatNewGroupNameHint": "Es. Team progetto",
   "chatNewCreateGroup": "Crea gruppo",
   "chatNewSelectedCount": "{count} selezionati",
-  "@chatNewSelectedCount": {"placeholders": {"count": {"type": "int"}}},
+  "@chatNewSelectedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "chatNewGroupDefault": "Gruppo",
   "chatRoleOwner": "Proprietario",
   "chatRoleAdmin": "Amministratore",
@@ -780,10 +792,10 @@
   "editAccountRelayPublicUrl": "Relay public URL (https://relay.fedi3.com)",
   "editAccountRelayWs": "Relay WS (wss://relay.fedi3.com)",
   "editAccountRegenerateInternal": "Rigenera internal token",
-  "devCoreTitle": "Dev core controls",
+  "devCoreTitle": "Controlli core (dev)",
   "devCoreConfigSaved": "Config (salvata)",
-  "devCoreStart": "Start",
-  "devCoreStop": "Stop",
+  "devCoreStart": "Avvia",
+  "devCoreStop": "Ferma",
   "devCoreFetchMigration": "Leggi status migrazione",
   "devCoreVersion": "Versione core: {version}",
   "@devCoreVersion": {
@@ -1042,5 +1054,22 @@
       }
     }
   },
-  "followRequestsCoreStopped": "Avvia il core per vedere le richieste di follow."
+  "followRequestsCoreStopped": "Avvia il core per vedere le richieste di follow.",
+  "networkingDiscoveryTitle": "Scoperta dei peer",
+  "networkingPublicDiscovery": "Usa la rete pubblica IPFS per trovare peer",
+  "networkingPublicDiscoveryHint": "Bootstrap e ricerca aggiuntivi. I messaggi Fedi3 non vengono salvati in IPFS.",
+  "networkingPeerExchange": "Ricorda i peer e scambia contatti firmati",
+  "networkingPeerExchangeHint": "Ricollega i peer conosciuti e aiuta la rete Fedi3 a crescere. Gli annunci pubblici espongono gli indirizzi di rete.",
+  "networkingBootstrapLabel": "Nodi bootstrap Fedi3 indipendenti",
+  "networkingBootstrapHint": "Un multiindirizzo libp2p per riga. Le modifiche riavviano il core locale.",
+  "profileImagesTitle": "Immagini profilo",
+  "profileImageDropHint": "Trascina qui un'immagine o clicca per sceglierla",
+  "profilePasteImage": "Incolla immagine",
+  "profileRemoveImage": "Rimuovi immagine",
+  "profileDetailsTitle": "Dettagli profilo",
+  "backupScopeWarning": "Backup cifrato delle impostazioni: non include identità crittografica, messaggi o media. Per trasferire la stessa identità occorre anche una copia protetta della cartella dati del core. Conserva la passphrase separatamente.",
+  "backupPassphrase": "Passphrase (almeno 12 caratteri)",
+  "configRecoveryTitle": "Configurazione non disponibile",
+  "keyringUnavailableHint": "Sblocca il portachiavi di sistema e premi Riprova. Su Linux serve un servizio Secret Service attivo (GNOME Keyring o KWallet) e libsecret. La configurazione esistente è conservata.",
+  "corruptConfigHint": "Impossibile leggere la configurazione e la sua copia di sicurezza. Ripristina una copia valida del file, poi premi Riprova. I dati esistenti sono conservati."
 }

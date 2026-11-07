@@ -58,6 +58,7 @@ class _SearchScreenState extends State<SearchScreen>
   bool _notesLoadingMore = false;
   bool _usersLoadingMore = false;
   List<String> _history = const [];
+  int _searchGen = 0;
 
   @override
   void initState() {
@@ -119,7 +120,6 @@ class _SearchScreenState extends State<SearchScreen>
     });
   }
 
-
   Future<void> _loadHistory() async {
     final items = await SearchHistoryStore.read();
     if (!mounted) return;
@@ -135,6 +135,7 @@ class _SearchScreenState extends State<SearchScreen>
 
   Future<void> _runSearch({bool reset = true}) async {
     if (!mounted) return;
+    final gen = ++_searchGen;
     setState(() {
       _loading = true;
       _error = null;
@@ -146,29 +147,32 @@ class _SearchScreenState extends State<SearchScreen>
     try {
       switch (_activeTab) {
         case SearchTab.posts:
-          await _searchNotes(reset: reset);
+          await _searchNotes(reset: reset, gen: gen);
           break;
         case SearchTab.users:
-          await _searchUsers(reset: reset);
+          await _searchUsers(reset: reset, gen: gen);
           break;
         case SearchTab.hashtags:
-          await _searchTags();
+          await _searchTags(gen: gen);
           break;
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && gen == _searchGen) {
         setState(() => _error = e.toString());
       }
     } finally {
-      if (mounted) {
+      if (mounted && gen == _searchGen) {
         setState(() => _loading = false);
       }
     }
   }
 
-  Future<void> _searchNotes({bool reset = true}) async {
+  Future<void> _searchNotes({bool reset = true, int? gen}) async {
+    final searchGen = gen ?? _searchGen;
     if (_query.isEmpty) {
-      setState(() => _noteItems = const []);
+      if (mounted && searchGen == _searchGen) {
+        setState(() => _noteItems = const []);
+      }
       return;
     }
     final cfg = widget.appState.config;
@@ -196,7 +200,7 @@ class _SearchScreenState extends State<SearchScreen>
       }
     }
     final next = resp['next'];
-    if (mounted) {
+    if (mounted && searchGen == _searchGen) {
       setState(() {
         _noteItems = items;
         _notesNext = next is String && next.trim().isNotEmpty ? next : null;
@@ -204,9 +208,12 @@ class _SearchScreenState extends State<SearchScreen>
     }
   }
 
-  Future<void> _searchUsers({bool reset = true}) async {
+  Future<void> _searchUsers({bool reset = true, int? gen}) async {
+    final searchGen = gen ?? _searchGen;
     if (_query.isEmpty) {
-      setState(() => _userItems = const []);
+      if (mounted && searchGen == _searchGen) {
+        setState(() => _userItems = const []);
+      }
       return;
     }
     final cfg = widget.appState.config;
@@ -253,7 +260,7 @@ class _SearchScreenState extends State<SearchScreen>
       }
     }
     final next = resp['next'];
-    if (mounted) {
+    if (mounted && searchGen == _searchGen) {
       setState(() {
         _userItems = list;
         _usersNext = next is String && next.trim().isNotEmpty ? next : null;
@@ -269,8 +276,8 @@ class _SearchScreenState extends State<SearchScreen>
         '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}';
     final needle = _query.toLowerCase();
     for (final kind in const ['followers', 'following']) {
-      final ids = await ActorRepository.instance
-          .fetchCollectionItems('$base/$kind');
+      final ids =
+          await ActorRepository.instance.fetchCollectionItems('$base/$kind');
       for (final id in ids) {
         final profile = await ActorRepository.instance.getActor(id);
         if (profile == null) continue;
@@ -285,7 +292,8 @@ class _SearchScreenState extends State<SearchScreen>
     }
   }
 
-  Future<void> _searchTags() async {
+  Future<void> _searchTags({int? gen}) async {
+    final searchGen = gen ?? _searchGen;
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
@@ -305,7 +313,9 @@ class _SearchScreenState extends State<SearchScreen>
         list.add(_HashtagItem(name, count));
       }
     }
-    if (mounted) setState(() => _tagItems = list);
+    if (mounted && searchGen == _searchGen) {
+      setState(() => _tagItems = list);
+    }
   }
 
   bool _looksLikeHandleOrUrl(String input) {

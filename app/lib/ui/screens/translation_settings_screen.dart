@@ -78,8 +78,8 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                         ],
                         selected: {provider},
                         onSelectionChanged: (v) {
-                          widget.appState.savePrefs(
-                              prefs.copyWith(translationProvider: v.first));
+                          widget.appState.updatePrefs((current) =>
+                              current.copyWith(translationProvider: v.first));
                         },
                       ),
                       const SizedBox(height: 10),
@@ -112,8 +112,9 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                           controller: _authKeyCtrl,
                           focusNode: _authFocus,
                           obscureText: true,
-                          onChanged: (v) => widget.appState.savePrefs(
-                              prefs.copyWith(translationAuthKey: v.trim())),
+                          onChanged: (v) => widget.appState.updatePrefs(
+                              (current) => current.copyWith(
+                                  translationAuthKey: v.trim())),
                           decoration: InputDecoration(
                             hintText: context.l10n.translationAuthKeyHint,
                             border: const OutlineInputBorder(),
@@ -122,8 +123,9 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                         const SizedBox(height: 8),
                         SwitchListTile(
                           value: prefs.translationUsePro,
-                          onChanged: (v) => widget.appState
-                              .savePrefs(prefs.copyWith(translationUsePro: v)),
+                          onChanged: (v) => widget.appState.updatePrefs(
+                              (current) =>
+                                  current.copyWith(translationUsePro: v)),
                           title: Text(context.l10n.translationUseProLabel),
                           subtitle: Text(context.l10n.translationUseProHint),
                         ),
@@ -147,8 +149,9 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                         TextField(
                           controller: _deeplxCtrl,
                           focusNode: _deeplxFocus,
-                          onChanged: (v) => widget.appState.savePrefs(
-                              prefs.copyWith(translationDeepLxUrl: v.trim())),
+                          onChanged: (v) => widget.appState.updatePrefs(
+                              (current) => current.copyWith(
+                                  translationDeepLxUrl: v.trim())),
                           decoration: InputDecoration(
                             hintText: context.l10n.translationDeepLXUrlHint,
                             border: const OutlineInputBorder(),
@@ -178,8 +181,9 @@ class _TranslationSettingsScreenState extends State<TranslationSettingsScreen> {
                         divisions: 29,
                         label: context.l10n.translationTimeoutValue(
                             (prefs.translationTimeoutMs / 1000).round()),
-                        onChanged: (v) => widget.appState.savePrefs(
-                            prefs.copyWith(translationTimeoutMs: v.round())),
+                        onChanged: (v) => widget.appState.updatePrefs(
+                            (current) => current.copyWith(
+                                translationTimeoutMs: v.round())),
                       ),
                     ],
                   ),

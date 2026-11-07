@@ -90,10 +90,10 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
   }
 
   Widget _hitTile(ChatSearchHit hit) {
-    final title = hit.threadTitle?.trim().isNotEmpty == true
-        ? hit.threadTitle!.trim()
-        : (hit.threadKind == 'dm'
-            ? context.l10n.chatDirectMessage
+    final title = hit.threadKind == 'dm'
+        ? context.l10n.chatDirectMessage
+        : (hit.threadTitle?.trim().isNotEmpty == true
+            ? hit.threadTitle!.trim()
             : context.l10n.chatGroup);
     final text = hit.text.trim().isEmpty
         ? context.l10n.chatMediaFallback
@@ -152,8 +152,9 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
                           DateTime.fromMillisecondsSinceEpoch(hit.createdAtMs),
                         ),
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color:
-                                  Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
                       ),
                     ],

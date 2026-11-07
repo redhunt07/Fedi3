@@ -729,6 +729,32 @@ class CoreApi {
     );
   }
 
+  Future<List<ChatCallSignal>> fetchGlobalChatCallSignals({
+    required int afterId,
+    required int afterMs,
+    int limit = 100,
+  }) async {
+    final uri = _internal('/_fedi3/chat/call/signals', {
+      'after_id': afterId.toString(),
+      'after_ms': '$afterMs',
+      'limit': '$limit',
+    });
+    final resp = await _request(
+      method: 'GET',
+      uri: uri,
+      headers: _internalHeaders,
+      okStatus: const {200, 404},
+    );
+    if (resp.statusCode == 404) return const [];
+    final map = _decodeMap(resp, 'chat call signals');
+    final raw = map['items'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((m) => ChatCallSignal.fromJson(m.cast<String, dynamic>()))
+        .toList(growable: false);
+  }
+
   Future<List<ChatCallSignal>> fetchChatCallSignals({
     required String threadId,
     required int afterMs,

@@ -109,8 +109,8 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
             onPressed: () async {
               final next = !_autoplay;
               setState(() => _autoplay = next);
-              await widget.appState.savePrefs(
-                  widget.appState.prefs.copyWith(mediaAutoplay: next));
+              await widget.appState.updatePrefs(
+                  (current) => current.copyWith(mediaAutoplay: next));
             },
             icon:
                 Icon(_autoplay ? Icons.play_circle : Icons.play_circle_outline),
@@ -122,7 +122,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
               final next = !_muted;
               setState(() => _muted = next);
               await widget.appState
-                  .savePrefs(widget.appState.prefs.copyWith(mediaMuted: next));
+                  .updatePrefs((current) => current.copyWith(mediaMuted: next));
             },
             icon: Icon(_muted ? Icons.volume_off : Icons.volume_up),
           ),

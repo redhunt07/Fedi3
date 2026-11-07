@@ -10,6 +10,7 @@ import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/screens/chat_search_screen.dart';
 import 'package:fedi3/ui/screens/chat_thread_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_core.dart';
@@ -25,6 +26,32 @@ Future<AppState> _runningApp() async {
 }
 
 void main() {
+  testWidgets('failed chat delivery preserves the complete draft for retry',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json('GET', '/_fedi3/chat/threads/t1', {'items': [], 'next': null});
+    client.route('POST', '/_fedi3/chat/send',
+        FakeHttpResponse(statusCode: 503, body: 'offline'));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester,
+        ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'));
+    await tester.pumpAndSettle();
+    const draft =
+        '  A long message that must survive a network error.\nSecond line.  ';
+    final field = find.byType(TextField).last;
+    await tester.enterText(field, draft);
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, draft);
+    client.json('POST', '/_fedi3/chat/send', {'message_id': 'sent'});
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+  });
   testWidgets('AW-09 chat sends the typed message with the correct payload',
       (tester) async {
     await setUpPumpEnv(tester);
@@ -66,6 +93,52 @@ void main() {
     expect(payload['text'], 'hello from the test');
   });
 
+  testWidgets('AW-09f chat sends on Enter and inserts newline on Alt+Enter',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json(
+        'GET', '/_fedi3/chat/threads/t1', {'items': <dynamic>[], 'next': null});
+    client
+        .json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
+    client.route(
+      'GET',
+      '/_fedi3/stream',
+      FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'}, body: ''),
+    );
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(
+      tester,
+      ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.byType(TextField).last;
+    await tester.enterText(field, 'sent with enter');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(client.requestsFor('POST', '/_fedi3/chat/send'), hasLength(1));
+    final composer = tester.widget<TextField>(field);
+    expect(composer.focusNode?.hasFocus, isTrue);
+
+    await tester.enterText(field, 'first line');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.pump();
+
+    final controller = tester.widget<TextField>(field).controller!;
+    expect(controller.text, contains('\n'));
+    expect(client.requestsFor('POST', '/_fedi3/chat/send'), hasLength(1));
+  });
+
   testWidgets('AW-09b chat search filters loaded messages', (tester) async {
     await setUpPumpEnv(tester);
     Map<String, dynamic> message(String id, String text, int at) => {
@@ -90,7 +163,8 @@ void main() {
     client.json('GET', '/_fedi3/chat/thread/search', {
       'items': [message('m2', 'seconda notizia', 2000)],
     });
-    client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client
+        .json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
     client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
     client.route(
       'GET',
@@ -152,7 +226,8 @@ void main() {
       ],
       'next': null,
     });
-    client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client
+        .json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
     client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
     client.route(
       'GET',
@@ -208,7 +283,8 @@ void main() {
         'preview': 'messaggio importante',
       }
     });
-    client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client
+        .json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
     client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
     client.route(
       'GET',

@@ -1,3 +1,4 @@
+import '../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -19,9 +20,11 @@ import '../model/chat_models.dart';
 import '../services/core_event_stream.dart';
 import '../services/announcements_service.dart';
 import '../services/notification_service.dart';
+import '../services/sound_service.dart';
 import 'screens/announcements_screen.dart';
 import 'screens/compose_screen.dart';
 import 'screens/notifications_screen.dart';
+import 'screens/chat_thread_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/relays_screen.dart';
 import 'screens/search_screen.dart';
@@ -56,8 +59,13 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   Timer? _announcementsInitialCheck;
   bool _announcementsUnread = false;
   bool _announcementsChecking = false;
+  StreamSubscription<String>? _notificationTaps;
   Timer? _callPollTimer;
   int _lastCallSignalMs = 0;
+  int _lastCallSignalId = 0;
+  int _idleCallPolls = 0;
+  int _callPollTicks = 0;
+  bool _pollingCalls = false;
   String? _incomingCallId;
   bool _callPromptOpen = false;
   late final AnimationController _sectionFade = AnimationController(
@@ -69,6 +77,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _notificationTaps = NotificationService.taps.listen(_openNotifiedThread);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = NotificationService.pendingThread;
+      if (pending != null) _openNotifiedThread(pending);
+    });
     _pages = <Widget>[
       TimelinesScreen(appState: widget.appState),
       SearchScreen(key: _searchScreenKey, appState: widget.appState),
@@ -101,8 +114,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       _startChatStream();
       _startCallPolling();
     }
-    _announcementsTimer =
-        Timer.periodic(const Duration(hours: 6), (_) => _checkAnnouncements());
+    _announcementsTimer = AppActivity.periodic(
+        const Duration(hours: 6), (_) => _checkAnnouncements());
     _announcementsInitialCheck =
         Timer(const Duration(seconds: 4), _checkAnnouncements);
   }
@@ -111,7 +124,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (_announcementsChecking) return;
     _announcementsChecking = true;
     try {
-      final update = await AnnouncementsService.checkForUpdates();
+      final update = await AnnouncementsService.checkForUpdates(
+        languageCode:
+            WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+      );
       if (!mounted) return;
       if (update.hasNew) {
         setState(() => _announcementsUnread = true);
@@ -141,6 +157,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
 
   @override
   void dispose() {
+    _notificationTaps?.cancel();
+    unawaited(SoundService.stopCall());
     _chatStream?.cancel();
     _chatDebounce?.cancel();
     _chatRetry?.cancel();
@@ -150,6 +168,24 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     widget.appState.removeListener(_appStateListener);
     _sectionFade.dispose();
     super.dispose();
+  }
+
+  Future<void> _openNotifiedThread(String threadId) async {
+    if (!mounted || !widget.appState.isRunning) return;
+    NotificationService.pendingThread = null;
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    try {
+      // Resolve a local thread rather than trusting a URL from the payload.
+      await CoreApi(config: cfg)
+          .fetchChatMessages(threadId: threadId, limit: 1);
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => ChatThreadScreen(
+              appState: widget.appState,
+              threadId: threadId,
+              title: context.l10n.chatTitle)));
+    } catch (_) {}
   }
 
   void _startChatStream() {
@@ -163,6 +199,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'chat') return;
+      if (ev.activityType == 'call') {
+        _pollIncomingCall();
+        return;
+      }
+      if (ev.activityType != 'message' && ev.activityType != 'system') return;
       final lastSeen = widget.appState.prefs.lastChatSeenMs;
       if (ev.tsMs <= lastSeen) return;
       _chatDebounce?.cancel();
@@ -172,9 +213,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         if (!onChatTab) {
           widget.appState.incrementUnreadChats();
           _showChatSnack();
+          unawaited(SoundService.playChat());
           NotificationService.showChatNotification(
             title: context.l10n.chatTitle,
             body: context.l10n.chatNewMessageBody,
+            threadId: ev.activityId,
           );
         }
       });
@@ -201,22 +244,35 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   void _startCallPolling() {
     if (!widget.appState.isRunning || _callPollTimer != null) return;
     if (_lastCallSignalMs == 0) {
-      _lastCallSignalMs =
-          DateTime.now().millisecondsSinceEpoch - const Duration(seconds: 30).inMilliseconds;
+      _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch -
+          const Duration(seconds: 30).inMilliseconds;
     }
-    _callPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      _pollIncomingCall();
+    _callPollTimer = AppActivity.periodic(const Duration(seconds: 3), (_) {
+      if (++_callPollTicks % (_idleCallPolls >= 3 ? 5 : 1) == 0) {
+        _pollIncomingCall();
+      }
     });
-    _pollIncomingCall();
+    // ModalRoute is an inherited dependency and cannot be read in initState.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _callPollTimer != null) _pollIncomingCall();
+    });
   }
 
   void _stopCallPolling() {
     _callPollTimer?.cancel();
     _callPollTimer = null;
+    _lastCallSignalMs = 0;
+    _lastCallSignalId = 0;
+    _idleCallPolls = 0;
   }
 
   Future<void> _pollIncomingCall() async {
-    if (!mounted || !widget.appState.isRunning || _callPromptOpen) return;
+    if (!mounted ||
+        !widget.appState.isRunning ||
+        _callPromptOpen ||
+        _pollingCalls) {
+      return;
+    }
     // When a pushed route (e.g. the chat thread) is active, that screen owns
     // incoming-call polling; avoid showing two prompts for the same call.
     final route = ModalRoute.of(context);
@@ -225,45 +281,40 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
     final self = _selfActorUrl(cfg);
+    _pollingCalls = true;
     try {
-      final threads = await api.fetchChatThreads(limit: 100);
-      final rawThreads = threads['items'];
-      if (rawThreads is! List) return;
-      for (final raw in rawThreads.whereType<Map>()) {
-        final thread = raw.cast<String, dynamic>();
-        final threadId = thread['thread_id']?.toString() ?? '';
-        if (threadId.isEmpty) continue;
-        final signals = await api.fetchChatCallSignals(
-          threadId: threadId,
-          afterMs: _lastCallSignalMs,
-          limit: 100,
-        );
-        for (final signal in signals) {
-          if (signal.createdAtMs > _lastCallSignalMs) {
-            _lastCallSignalMs = signal.createdAtMs;
-          }
-          if (signal.action != 'invite') continue;
-          if (signal.fromActor == self) continue;
-          if (signal.callId == _incomingCallId) continue;
-          _incomingCallId = signal.callId;
-          final peers = thread['peer_usernames'];
-          final title = (thread['title']?.toString().trim().isNotEmpty ?? false)
-              ? thread['title'].toString()
-              : (peers is List && peers.isNotEmpty
-                  ? peers.first.toString()
-                  : 'Chat');
-          final media = signal.data['media']?.toString() ?? 'audio';
-          await _showGlobalIncomingCall(
-            threadId: threadId,
-            title: title,
-            media: media,
-            signal: signal,
-          );
-          return;
+      final signals = await api.fetchGlobalChatCallSignals(
+          afterId: _lastCallSignalId, afterMs: _lastCallSignalMs, limit: 200);
+      _idleCallPolls = signals.isEmpty ? _idleCallPolls + 1 : 0;
+      final ended = signals
+          .where((s) => s.action == 'leave' || s.action == 'reject')
+          .map((s) => s.callId)
+          .toSet();
+      // Advance in ID order: two events in the same millisecond are distinct.
+      for (final signal in signals) {
+        if (signal.id > _lastCallSignalId) _lastCallSignalId = signal.id;
+        if (signal.action != 'invite' ||
+            signal.fromActor == self ||
+            ended.contains(signal.callId) ||
+            signal.callId == _incomingCallId ||
+            DateTime.now().millisecondsSinceEpoch - signal.createdAtMs >
+                60000) {
+          continue;
         }
+        _incomingCallId = signal.callId;
+        await _showGlobalIncomingCall(
+            threadId: signal.threadId,
+            title: signal.threadTitle.isNotEmpty
+                ? signal.threadTitle
+                : signal.fromActor.split('/').last,
+            media: signal.data['media']?.toString() ?? 'audio',
+            signal: signal);
+        return;
       }
     } catch (_) {
       // Polling is best-effort; the chat thread screen still polls when open.
+    } finally {
+      _pollingCalls = false;
     }
   }
 
@@ -275,6 +326,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   }) async {
     if (_callPromptOpen || !mounted) return;
     _callPromptOpen = true;
+    // Loop the dedicated ringtone while the incoming-call prompt is open.
+    unawaited(SoundService.playCallLoop());
     final from = signal.fromActor;
     final accepted = await showDialog<bool>(
       context: context,
@@ -322,6 +375,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         ],
       ),
     );
+    await SoundService.stopCall();
     _callPromptOpen = false;
     if (accepted != true) {
       _incomingCallId = null;
@@ -768,9 +822,9 @@ class _FediRail extends StatelessWidget {
                           maxWidth: 230,
                         ),
                         onSelected: (status) async {
-                          final prefs = appState.prefs;
-                          await appState.savePrefs(prefs.copyWith(
-                              presenceStatus: presenceStatusName(status)));
+                          await appState.updatePrefs((current) =>
+                              current.copyWith(
+                                  presenceStatus: presenceStatusName(status)));
                           await PeerPresenceStore.instance
                               .setSelfStatus(status);
                         },

@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -39,8 +40,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
   void initState() {
     super.initState();
     _refresh();
-    _peerRefresh =
-        Timer.periodic(const Duration(seconds: 10), (_) => _refreshPeers());
+    _peerRefresh = AppActivity.periodic(
+        const Duration(seconds: 10), (_) => _refreshPeers());
   }
 
   @override

@@ -76,8 +76,8 @@ class _GifSettingsScreenState extends State<GifSettingsScreen> {
                         controller: _keyCtrl,
                         focusNode: _keyFocus,
                         obscureText: true,
-                        onChanged: (v) => widget.appState
-                            .savePrefs(prefs.copyWith(gifApiKey: v.trim())),
+                        onChanged: (v) => widget.appState.updatePrefs(
+                            (current) => current.copyWith(gifApiKey: v.trim())),
                         decoration: InputDecoration(
                           hintText: context.l10n.gifApiKeyHint,
                           border: const OutlineInputBorder(),
@@ -98,8 +98,9 @@ class _GifSettingsScreenState extends State<GifSettingsScreen> {
                         ),
                       if (prefs.gifApiKey.trim().isEmpty)
                         TextButton(
-                          onPressed: () => widget.appState.savePrefs(
-                              prefs.copyWith(gifApiKey: _defaultGiphyKey)),
+                          onPressed: () => widget.appState.updatePrefs(
+                              (current) => current.copyWith(
+                                  gifApiKey: _defaultGiphyKey)),
                           child: Text(context.l10n.gifSettingsUseDefault),
                         ),
                     ],

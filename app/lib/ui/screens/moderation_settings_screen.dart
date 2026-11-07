@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
+import '../widgets/fedi3_ui.dart';
 
 class ModerationSettingsScreen extends StatefulWidget {
   const ModerationSettingsScreen({super.key, required this.appState});
@@ -54,7 +56,7 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
           if (_status != null)
             Padding(
@@ -67,24 +69,23 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
                         : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.moderationBlockedDomains,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _blockedDomains,
-            maxLines: 6,
-            decoration: InputDecoration(
-                hintText: context.l10n.moderationBlockedDomainsHint),
+          _section(context, context.l10n.moderationBlockedDomains),
+          GlassPanel(
+            child: TextField(
+              controller: _blockedDomains,
+              maxLines: 6,
+              decoration: InputDecoration(
+                  hintText: context.l10n.moderationBlockedDomainsHint),
+            ),
           ),
-          const SizedBox(height: 16),
-          Text(context.l10n.moderationBlockedActors,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _blockedActors,
-            maxLines: 6,
-            decoration: InputDecoration(
-                hintText: context.l10n.moderationBlockedActorsHint),
+          _section(context, context.l10n.moderationBlockedActors),
+          GlassPanel(
+            child: TextField(
+              controller: _blockedActors,
+              maxLines: 6,
+              decoration: InputDecoration(
+                  hintText: context.l10n.moderationBlockedActorsHint),
+            ),
           ),
           const SizedBox(height: 16),
           Text(
@@ -93,6 +94,20 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
                 color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _section(BuildContext context, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
       ),
     );
   }
@@ -127,6 +142,9 @@ class _ModerationSettingsScreenState extends State<ModerationSettingsScreen> {
         internalToken: c.internalToken,
         p2pEnable: c.p2pEnable,
         p2pRelayReserve: c.p2pRelayReserve,
+        p2pBootstrap: c.p2pBootstrap,
+        p2pPublicDiscovery: c.p2pPublicDiscovery,
+        p2pPeerExchange: c.p2pPeerExchange,
         webrtcEnable: c.webrtcEnable,
         webrtcIceUrls: c.webrtcIceUrls,
         webrtcIceUsername: c.webrtcIceUsername,

@@ -21,6 +21,7 @@ class AutoStartCore extends StatefulWidget {
 class _AutoStartCoreState extends State<AutoStartCore> {
   bool _started = false;
   bool _wasRunning = false;
+  Object? _attemptedConfig;
 
   @override
   void initState() {
@@ -65,21 +66,27 @@ class _AutoStartCoreState extends State<AutoStartCore> {
 
   void _kick() {
     final cfg = widget.appState.config;
+    if (!identical(cfg, _attemptedConfig)) _started = false;
     if (cfg != null) {
       PeerPresenceStore.instance
           .start(cfg, selfStatus: widget.appState.prefs.presenceStatus);
     }
     if (_started) return;
     if (cfg == null) return;
+    if (identical(cfg, _attemptedConfig) && widget.appState.lastError != null) {
+      return;
+    }
     if (widget.appState.isRunning) {
       _started = true;
       _wasRunning = true;
       return;
     }
     _started = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    _attemptedConfig = cfg;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      widget.appState.startCore();
+      await widget.appState.startCore();
+      if (mounted && !widget.appState.isRunning) _started = false;
     });
   }
 

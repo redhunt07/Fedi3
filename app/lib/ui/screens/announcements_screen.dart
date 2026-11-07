@@ -34,14 +34,16 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
   }
 
   Future<void> _load({bool refresh = false}) async {
+    final languageCode =
+        WidgetsBinding.instance.platformDispatcher.locale.languageCode;
     setState(() {
       _loading = true;
       _error = null;
       _errorDetail = null;
     });
     try {
-      final entries =
-          await AnnouncementsService.load(refresh: refresh);
+      final entries = await AnnouncementsService.load(
+          refresh: refresh, languageCode: languageCode);
       final newest = entries.isEmpty ? null : entries.first.id;
       await AnnouncementsStore.markSeen(newest);
       if (!mounted) return;
@@ -50,9 +52,11 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
         _lastSync = DateTime.now();
       });
     } catch (e) {
-      final cached = await AnnouncementsStore.cached();
-      final entries =
-          cached == null ? const <AnnouncementEntry>[] : AnnouncementsService.parse(cached);
+      final cached =
+          await AnnouncementsStore.cached(languageCode: languageCode);
+      final entries = cached == null
+          ? const <AnnouncementEntry>[]
+          : AnnouncementsService.parse(cached);
       if (!mounted) return;
       setState(() {
         _entries = entries;
@@ -116,14 +120,12 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
                               ? context.l10n.announcementsSource
                               : context.l10n.announcementsLastSync(
                                   '${_lastSync!.hour.toString().padLeft(2, '0')}:${_lastSync!.minute.toString().padLeft(2, '0')}'),
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
                         ),
                       ],
                     ),
@@ -131,8 +133,9 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
                   IconButton(
                     tooltip: context.l10n.announcementsSource,
                     onPressed: () => launchUrl(
-                      Uri.parse(
-                          'https://github.com/redhunt07/Fedi3/blob/main/ANNOUNCEMENTS.md'),
+                      Uri.parse(AnnouncementsService.sourcePageFor(
+                          WidgetsBinding.instance.platformDispatcher.locale
+                              .languageCode)),
                       mode: LaunchMode.externalApplication,
                     ),
                     icon: const Icon(Icons.open_in_new_rounded, size: 18),

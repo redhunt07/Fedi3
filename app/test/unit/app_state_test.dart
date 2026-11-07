@@ -1,3 +1,4 @@
+import 'package:fedi3/state/prefs_store.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -5,15 +6,116 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
+import 'package:fedi3/core/fedi3_core.dart';
 
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/state/config_store.dart';
+import 'package:fedi3/model/ui_prefs.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_core.dart';
 import '../support/test_config.dart';
 
+class DelayedStopCore extends FakeCoreRuntime implements AsyncCoreStop {
+  final release = Completer<void>();
+  @override
+  Future<void> stopAsync(int handle) async {
+    stop(handle);
+    await release.future;
+  }
+}
+
 void main() {
+  test('a failed first start still installs an automatic recovery watchdog',
+      () async {
+    final core =
+        FakeCoreRuntime(startError: StateError('port temporarily busy'));
+    final app = AppState(
+        config: buildTestConfig(),
+        prefs: UiPrefs.defaults(),
+        core: core,
+        watchdogInterval: const Duration(milliseconds: 10),
+        restartBaseDelay: Duration.zero,
+        healthCheck: (_) async => true);
+    try {
+      await app.startCore();
+      expect(app.isRunning, isFalse);
+      core.startError = null;
+      for (var tick = 0; tick < 100 && !app.isRunning; tick++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(app.isRunning, isTrue);
+    } finally {
+      app.dispose();
+    }
+  });
+  test(
+      'dead core handle is stopped and a manual retry can recover after the retry limit',
+      () async {
+    final core = FakeCoreRuntime(handle: 7);
+    final app = buildTestAppState(
+        config: buildTestConfig(), core: core, watchdogEnabled: true);
+    await app.startCore();
+    app.markCoreDead('failed health probe');
+    expect(core.stopCalls, 1);
+    expect(app.coreHandle, isNull);
+    core.startError = StateError('temporarily unavailable');
+    for (var attempt = 0; attempt < 8; attempt++) {
+      await app.runWatchdogOnce();
+    }
+    core.startError = null;
+    await app.startCore();
+    expect(app.isRunning, isTrue);
+    app.dispose();
+  });
+  test('markCoreDead returns immediately and restart waits for native cleanup',
+      () async {
+    final core = DelayedStopCore();
+    final app = buildTestAppState(config: buildTestConfig(), core: core);
+    await app.startCore();
+    app.markCoreDead('health failed');
+    expect(app.isRunning, isFalse);
+    expect(app.lastError, 'health failed');
+    var timerRan = false;
+    await Future<void>.delayed(Duration.zero, () => timerRan = true);
+    expect(timerRan, isTrue);
+    final restart = app.startCore();
+    await Future<void>.delayed(Duration.zero);
+    expect(core.startCalls, 1);
+    core.release.complete();
+    await restart;
+    expect(core.startCalls, 2);
+    app.dispose();
+  });
+  test(
+      'queued preference mutations preserve concurrent read cursors and UI settings',
+      () async {
+    final app =
+        buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime());
+    final writes = <Future<void>>[];
+    for (var i = 0; i < 20; i++) {
+      writes.add(app.updatePrefs((current) => current.copyWith(
+          chatThreadSeenMs: {'thread-$i': i + 1}, lastChatSeenMs: i + 1)));
+    }
+    writes.add(app.updatePrefs((current) => current.copyWith(localeTag: 'it')));
+    await Future.wait(writes);
+    expect(app.prefs.chatThreadSeenMs.length, 20);
+    expect(app.prefs.lastChatSeenMs, 20);
+    expect(app.prefs.localeTag, 'it');
+    final disk = await PrefsStore.read();
+    expect(disk.chatThreadSeenMs, app.prefs.chatThreadSeenMs);
+    expect(disk.localeTag, 'it');
+    app.dispose();
+  });
+  test('queued preference write can finish after notifier disposal', () async {
+    final app =
+        buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime());
+    final write = app.updatePrefs((prefs) => prefs.copyWith(localeTag: 'it'));
+    app.dispose();
+    await write;
+    expect((await PrefsStore.read()).localeTag, 'it');
+  });
   late Directory tempDir;
 
   setUp(() async {

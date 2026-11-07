@@ -1,3 +1,4 @@
+import '../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -28,7 +29,15 @@ PresenceStatus presenceFromString(String? raw) {
 String presenceStatusName(PresenceStatus status) => status.name;
 
 class PeerPresenceStore {
-  PeerPresenceStore._();
+  PeerPresenceStore._({CoreApi Function(CoreConfig)? createApi})
+      : _createApi = createApi ?? ((config) => CoreApi(config: config));
+
+  @visibleForTesting
+  factory PeerPresenceStore.forTesting(
+          CoreApi Function(CoreConfig) createApi) =>
+      PeerPresenceStore._(createApi: createApi);
+
+  final CoreApi Function(CoreConfig) _createApi;
 
   static final PeerPresenceStore instance = PeerPresenceStore._();
 
@@ -52,14 +61,18 @@ class PeerPresenceStore {
 
   void start(CoreConfig config, {String selfStatus = 'online'}) {
     final sameConfig = _config?.publicBaseUrl == config.publicBaseUrl &&
-        _config?.relayWs == config.relayWs;
+        _config?.relayWs == config.relayWs &&
+        _config?.username == config.username &&
+        _config?.bind == config.bind &&
+        _config?.internalToken == config.internalToken;
     _config = config;
     this.selfStatus.value = presenceFromString(selfStatus);
     if (sameConfig && _poll != null) return;
     _poll?.cancel();
     _heartbeat?.cancel();
-    _poll = Timer.periodic(pollInterval, (_) => refresh());
-    _heartbeat = Timer.periodic(heartbeatInterval, (_) => _heartbeatTick());
+    _poll = AppActivity.periodic(pollInterval, (_) => refresh());
+    _heartbeat =
+        AppActivity.periodic(heartbeatInterval, (_) => _heartbeatTick());
     _publishSelf();
     refresh();
   }
@@ -80,7 +93,7 @@ class PeerPresenceStore {
     if (_setting) return;
     _setting = true;
     try {
-      await CoreApi(config: config).setPresence(presenceStatusName(status));
+      await _createApi(config).setPresence(presenceStatusName(status));
       await refresh();
     } catch (_) {
       // Best-effort: the local state still reflects the chosen status.
@@ -93,7 +106,7 @@ class PeerPresenceStore {
     final config = _config;
     if (config == null) return;
     try {
-      await CoreApi(config: config)
+      await _createApi(config)
           .setPresence(presenceStatusName(selfStatus.value));
     } catch (_) {
       // Ignore: the periodic heartbeat retries.
@@ -111,9 +124,25 @@ class PeerPresenceStore {
     if (config == null) return;
     _loading = true;
     try {
-      final api = CoreApi(config: config);
-      final relay = await api.fetchRelayPeers(limit: 500);
-      final presence = await api.fetchPresence();
+      final api = _createApi(config);
+      // The relay directory is optional. A failed directory request must not
+      // discard presence received directly from P2P contacts (or vice versa).
+      Future<Map<String, dynamic>> optional(
+          Future<Map<String, dynamic>> request) async {
+        try {
+          return await request;
+        } catch (_) {
+          return const {};
+        }
+      }
+
+      final snapshots = await Future.wait([
+        optional(api.fetchRelayPeers(limit: 500)),
+        optional(api.fetchPresence()),
+      ]);
+      if (!identical(config, _config)) return;
+      final relay = snapshots[0];
+      final presence = snapshots[1];
       final next = <String, PresenceStatus>{};
 
       // Relay directory: online/offline fallback for Fedi3 accounts.
@@ -121,10 +150,12 @@ class PeerPresenceStore {
       if (relayItems is List) {
         for (final it in relayItems) {
           if (it is! Map) continue;
-          final username = (it['username'] as String?)?.trim() ?? '';
+          final username =
+              (it['username'] as String?)?.trim().toLowerCase() ?? '';
           if (username.isEmpty) continue;
-          next[username] =
-              it['online'] == true ? PresenceStatus.online : PresenceStatus.offline;
+          next[username] = it['online'] == true
+              ? PresenceStatus.online
+              : PresenceStatus.offline;
         }
       }
 
@@ -167,7 +198,7 @@ class PeerPresenceStore {
   }
 
   PresenceStatus statusFor(String? username) {
-    final key = username?.trim() ?? '';
+    final key = username?.trim().toLowerCase() ?? '';
     if (key.isEmpty) return PresenceStatus.offline;
     return statusByUsername.value[key] ?? PresenceStatus.offline;
   }
@@ -178,7 +209,7 @@ class PeerPresenceStore {
     for (final seg in uri.pathSegments.reversed) {
       final value = seg.trim();
       if (value.isEmpty) continue;
-      return value.startsWith('@') ? value.substring(1) : value;
+      return (value.startsWith('@') ? value.substring(1) : value).toLowerCase();
     }
     return '';
   }

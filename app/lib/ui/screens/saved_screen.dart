@@ -89,8 +89,8 @@ class _SavedScreenState extends State<SavedScreen> {
                           padding: const EdgeInsets.only(right: 20),
                           decoration: BoxDecoration(
                             color: Theme.of(context).colorScheme.errorContainer,
-                            borderRadius: BorderRadius.circular(
-                                UiTokens.radiusCard),
+                            borderRadius:
+                                BorderRadius.circular(UiTokens.radiusCard),
                           ),
                           child: Icon(Icons.delete_outline_rounded,
                               color: Theme.of(context)

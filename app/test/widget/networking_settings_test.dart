@@ -24,6 +24,33 @@ Future<void> _scrollToAnchor(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets(
+      'discovery settings persist and restart the core with independent seeds',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    CoreHttp.useTestClient(
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}')));
+    addTearDown(CoreHttp.reset);
+    final core = FakeCoreRuntime();
+    final app = buildTestAppState(config: buildTestConfig(), core: core);
+    await pumpScreen(tester, NetworkingSettingsScreen(appState: app));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.byKey(const Key('p2pBootstrapField')), 200,
+        scrollable: find.byType(Scrollable).first);
+    const seed =
+        '/dns4/seed.example/tcp/4001/p2p/12D3KooWPpcLibPJjBRmyk296HPrNjGdbGSkZqAEV8jEftUHPe9i';
+    await tester.enterText(
+        find.byKey(const Key('p2pBootstrapField')), '$seed\n$seed');
+    await tester.ensureVisible(find.byKey(const Key('saveDiscoveryButton')));
+    await tester.tap(find.byKey(const Key('saveDiscoveryButton')));
+    await tester.pumpAndSettle();
+    expect(app.config!.p2pBootstrap, [seed]);
+    expect(ConfigStore.load().data!['p2pBootstrap'], [seed]);
+    expect(core.startCalls, 1);
+    expect(core.lastConfigJson, contains('"public_discovery_enable":true'));
+    expect(core.lastConfigJson, contains(seed));
+  });
   testWidgets('AW-14 anchor field loads the configured identity anchor',
       (tester) async {
     await setUpPumpEnv(tester);

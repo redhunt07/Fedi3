@@ -14,6 +14,24 @@ import '../support/test_config.dart';
 
 void main() {
   group('CoreConfig serialization (AM-01..04)', () {
+    test('peer discovery options survive edits and reach the Rust core', () {
+      final cfg = buildTestConfig().copyWith(
+        p2pBootstrap: ['/dns4/seed.example/tcp/4001/p2p/test'],
+        p2pPublicDiscovery: false,
+        p2pPeerExchange: false,
+      );
+      final decoded =
+          CoreConfig.fromJson(cfg.toJson()).copyWith(displayName: 'Alice');
+      expect(decoded.p2pBootstrap, cfg.p2pBootstrap);
+      expect(decoded.p2pPublicDiscovery, isFalse);
+      expect(decoded.p2pPeerExchange, isFalse);
+      final p2p = decoded.toCoreStartJson()['p2p'] as Map;
+      expect(p2p['bootstrap'], cfg.p2pBootstrap);
+      expect(p2p['public_discovery_enable'], isFalse);
+      expect(p2p['peer_exchange_enable'], isFalse);
+      expect(CoreConfig.fromJson({}).p2pPublicDiscovery, isTrue);
+      expect(CoreConfig.fromJson({}).p2pPeerExchange, isTrue);
+    });
     test('AM-01 fromJson(toJson()) round-trips identically', () {
       final cfg = buildTestConfig(
         p2pEnable: true,

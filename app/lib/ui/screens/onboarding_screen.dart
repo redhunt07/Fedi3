@@ -11,6 +11,7 @@ import 'dart:convert';
 
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../services/call_ice_config.dart';
 import '../../services/backup_codec.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
@@ -45,7 +46,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   late final TextEditingController _quickUrl;
   late final TextEditingController _quickToken;
   bool _manualLogin = false;
-  bool _p2pEnable = false;
+  bool _p2pEnable = true;
   bool _webrtcEnable = false;
   String _postDeliveryMode = CoreConfig.postDeliveryP2pRelay;
   bool _customRelay = false;
@@ -192,8 +193,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               collapsedShape: const Border(),
               leading: const Icon(Icons.tune_rounded),
               title: Text(context.l10n.onboardingAdvanced),
-              childrenPadding:
-                  const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               children: [
                 _field(context.l10n.onboardingRelayToken, _relayToken),
                 _field(context.l10n.onboardingBind, _bind),
@@ -242,16 +242,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
-                    onPressed: () =>
-                        setState(() => _autofillNetworkingDefaults(force: true)),
+                    onPressed: () => setState(
+                        () => _autofillNetworkingDefaults(force: true)),
                     icon: const Icon(Icons.bolt),
                     label: Text(context.l10n.webrtcAutofill),
                   ),
                 ),
                 _field(context.l10n.webrtcIceUrlsLabel, _webrtcIceUrls,
                     maxLines: 3),
-                _field(
-                    context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
+                _field(context.l10n.webrtcIceUsernameLabel, _webrtcIceUsername),
                 _field(context.l10n.webrtcIceCredentialLabel,
                     _webrtcIceCredential),
               ],
@@ -466,49 +465,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _autofillNetworkingDefaults({required bool force}) {
-    final domain = _domain.text.trim().isNotEmpty
-        ? _domain.text.trim()
-        : (Uri.tryParse(_publicBaseUrl.text.trim())?.host ?? '');
-    if (domain.isEmpty) return;
     if (_webrtcEnable == false && _p2pEnable) {
       _webrtcEnable = true;
     }
     if (force || _webrtcIceUrls.text.trim().isEmpty) {
-      _webrtcIceUrls.text = [
-        'stun:$domain:3478',
-        'turn:$domain:3478?transport=udp',
-        'turn:$domain:3478?transport=tcp',
-      ].join('\n');
-    }
-    _autofillP2pRelayReserve(force: force, domain: domain);
-  }
-
-  Future<void> _autofillP2pRelayReserve(
-      {required bool force, required String domain}) async {
-    if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
-      return;
-    }
-    final base = _publicBaseUrl.text.trim().isNotEmpty
-        ? _publicBaseUrl.text.trim()
-        : 'https://$domain';
-    final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
-    if (uri == null) return;
-    try {
-      final resp = await http.get(uri).timeout(const Duration(seconds: 5));
-      if (resp.statusCode != 200) return;
-      final data = jsonDecode(resp.body);
-      if (data is! Map) return;
-      final items = data['multiaddrs'];
-      if (items is! List) return;
-      final multiaddrs = items
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (multiaddrs.isEmpty) return;
-      _p2pRelayReserve.text = multiaddrs.join('\n');
-    } catch (_) {
-      // Silent fallback; user can still enter multiaddrs manually.
+      _webrtcIceUrls.text = defaultCallIceUrls.join('\n');
     }
   }
 
@@ -603,14 +564,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();
     if (!mounted) return;
+    if (!widget.appState.isRunning) {
+      setState(() => _formError =
+          widget.appState.lastError ?? context.l10n.networkErrorTitle);
+      return;
+    }
     if (widget.mode == OnboardingMode.createNew) {
       await _showRecoveryCode(cfg);
       if (!mounted) return;
     }
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
-
-
 
   Future<void> _quickConnect() async {
     final raw = _quickUrl.text.trim();
@@ -655,8 +619,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Expanded(
                   child: SelectableText(
                     value,
-                    style: const TextStyle(
-                        fontFamily: 'monospace', fontSize: 12),
+                    style:
+                        const TextStyle(fontFamily: 'monospace', fontSize: 12),
                   ),
                 ),
                 IconButton(

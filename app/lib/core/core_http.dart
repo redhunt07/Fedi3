@@ -25,12 +25,19 @@ class CoreHttp {
   static const Duration totalTimeout = Duration(seconds: 15);
 
   static http.Client? _client;
+  static http.Client? _testClient;
+  static http.Client streamClient() => _testClient ?? _defaultClient();
+  static bool ownsStreamClient(http.Client client) =>
+      !identical(client, _testClient);
 
   /// The client every [CoreApi] instance uses unless one is injected.
   static http.Client get client => _client ??= _defaultClient();
 
   /// Replace the shared client (tests only).
-  static set client(http.Client value) => _client = value;
+  static set client(http.Client value) {
+    _client = value;
+    _testClient = value;
+  }
 
   static http.Client _defaultClient() {
     final inner = HttpClient()..connectionTimeout = connectionTimeout;
@@ -41,6 +48,7 @@ class CoreHttp {
   @visibleForTesting
   static void useTestClient(http.Client testClient) {
     _client = testClient;
+    _testClient = testClient;
   }
 
   /// Restore the default IO client (tests only).
@@ -48,5 +56,6 @@ class CoreHttp {
   static void reset() {
     _client?.close();
     _client = null;
+    _testClient = null;
   }
 }
