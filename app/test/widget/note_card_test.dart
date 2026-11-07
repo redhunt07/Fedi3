@@ -11,6 +11,7 @@ import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/widgets/note_card.dart';
 import 'package:fedi3/ui/widgets/status_avatar.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_core.dart';
@@ -25,12 +26,12 @@ Future<AppState> _runningApp() async {
   return app;
 }
 
-TimelineItem _item() {
+TimelineItem _item({String content = '<p>hello world</p>'}) {
   final note = Note.tryParse({
     'id': 'https://other.test/notes/1',
     'type': 'Note',
     'attributedTo': 'https://other.test/users/bob',
-    'content': '<p>hello world</p>',
+    'content': content,
     'published': '2026-10-31T10:00:00Z',
   })!;
   return TimelineItem(
@@ -45,6 +46,65 @@ TimelineItem _item() {
 }
 
 void main() {
+  testWidgets('a normal note opens external links through the URL policy',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    CoreHttp.useTestClient(
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}')));
+    addTearDown(CoreHttp.reset);
+    final opened = <String>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const linuxLaunch = BasicMessageChannel<Object?>(
+        'dev.flutter.pigeon.url_launcher_linux.UrlLauncherApi.launchUrl',
+        StandardMessageCodec());
+    messenger.setMockDecodedMessageHandler(linuxLaunch, (message) async {
+      if (message is List && message.first is String) {
+        opened.add(message.first as String);
+      }
+      return <Object?>[null];
+    });
+    addTearDown(
+        () => messenger.setMockDecodedMessageHandler(linuxLaunch, null));
+    for (final channel in [
+      'plugins.flutter.io/url_launcher',
+      'plugins.flutter.io/url_launcher_linux'
+    ]) {
+      messenger.setMockMethodCallHandler(MethodChannel(channel), (call) async {
+        if (call.arguments is Map) {
+          final url = (call.arguments as Map)['url'];
+          if (url is String) opened.add(url);
+        }
+        return true;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(MethodChannel(channel), null));
+    }
+    final app = await _runningApp();
+    await pumpScreen(
+        tester,
+        NoteCard(
+            appState: app,
+            item: _item(
+                content:
+                    '<p><a href="https://external.example/article">External link</a></p>')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    for (var attempt = 0;
+        attempt < 50 &&
+            find.text('External link', findRichText: true).evaluate().isEmpty;
+        attempt++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.tapAt(
+        tester.getTopLeft(find.text('External link', findRichText: true)) +
+            const Offset(12, 8));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(opened, contains('https://external.example/article'));
+  });
   testWidgets('AW-08 note card like triggers the correct outbox call',
       (tester) async {
     await setUpPumpEnv(tester);

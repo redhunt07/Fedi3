@@ -57,6 +57,82 @@ fn message_payload(text: &str) -> ChatPayload {
     }
 }
 
+#[test]
+fn chat_mutations_require_the_original_author_and_receipts_stay_in_the_thread() {
+    let (_dir, db) = test_db("chat-mutation-auth");
+    let local = "https://local.test/users/alice";
+    let bob = "https://remote.test/users/bob";
+    let eve = "https://remote.test/users/eve";
+    for thread in ["one", "two"] {
+        db.create_chat_thread(thread, "group", None).unwrap();
+        for member in [local, bob, eve] {
+            db.upsert_chat_member(thread, member, "member").unwrap();
+        }
+    }
+    fedi3_core::chat::store_incoming_payload_db(
+        &db,
+        local,
+        &envelope("one", bob, "original"),
+        &message_payload("Bob's text"),
+    )
+    .unwrap();
+    for operation in ["edit", "delete"] {
+        let mut payload = message_payload("forged");
+        payload.op = operation.into();
+        payload.message_id = Some("original".into());
+        fedi3_core::chat::store_incoming_payload_db(
+            &db,
+            local,
+            &envelope("one", eve, "forged"),
+            &payload,
+        )
+        .unwrap();
+        fedi3_core::chat::store_incoming_payload_db(
+            &db,
+            local,
+            &envelope("two", bob, "wrong-thread"),
+            &payload,
+        )
+        .unwrap();
+        assert_eq!(
+            db.get_chat_message_meta("original").unwrap(),
+            Some((bob.into(), false))
+        );
+        assert!(db
+            .get_chat_message_body("original")
+            .unwrap()
+            .unwrap()
+            .contains("Bob's text"));
+    }
+    let mut receipt = message_payload("");
+    receipt.op = "receipt".into();
+    receipt.message_id = Some("original".into());
+    receipt.status = Some("seen".into());
+    fedi3_core::chat::store_incoming_payload_db(
+        &db,
+        local,
+        &envelope("two", eve, "receipt"),
+        &receipt,
+    )
+    .unwrap();
+    assert!(!db.chat_message_seen_by_others("original", bob).unwrap());
+    let mut edit = message_payload("Bob's revised text");
+    edit.op = "edit".into();
+    edit.message_id = Some("original".into());
+    fedi3_core::chat::store_incoming_payload_db(
+        &db,
+        local,
+        &envelope("one", bob, "legitimate"),
+        &edit,
+    )
+    .unwrap();
+    assert!(db
+        .get_chat_message_body("original")
+        .unwrap()
+        .unwrap()
+        .contains("revised text"));
+}
+
 // ---------------------------------------------------------------------------
 // H-17: chat membership on inbound paths.
 // ---------------------------------------------------------------------------
@@ -680,4 +756,63 @@ async fn h19_sqlite_db_file_is_0600() {
             assert_eq!(mode, 0o600, "{suffix} must be owner-only");
         }
     }
+}
+
+#[test]
+fn chat_receipt_status_never_regresses_when_transport_finishes_late() {
+    let (_dir, db) = test_db("chat-status-order");
+    let actor = "https://remote.test/users/bob";
+    for status in [
+        "queued",
+        "sent",
+        "delivered",
+        "sent",
+        "queued",
+        "seen",
+        "delivered",
+    ] {
+        db.upsert_chat_message_status("m1", actor, status).unwrap();
+    }
+    let statuses = db.list_chat_message_statuses(&["m1".to_string()]).unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].2, "seen");
+    db.upsert_chat_message_status("m2", actor, "delivered")
+        .unwrap();
+    db.upsert_chat_message_status("m2", actor, "sent").unwrap();
+    let statuses = db.list_chat_message_statuses(&["m2".to_string()]).unwrap();
+    assert_eq!(statuses[0].2, "delivered");
+}
+
+#[test]
+fn call_signaling_requires_existing_thread_and_member_and_unwraps_data() {
+    let (_dir, db) = test_db("call-membership");
+    let local = "https://local.test/users/alice";
+    let sender = "https://remote.test/users/bob";
+    let mut payload = message_payload("");
+    payload.op = "call".into();
+    payload.action = Some("offer".into());
+    payload.message_id = Some("call1".into());
+    payload.targets = Some(vec![local.into()]);
+    payload.text = Some(json!({"data": {"sdp": "test-sdp", "type": "offer"}}).to_string());
+    let env = envelope("thread", sender, "signal1");
+    fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
+    assert!(!db.chat_thread_exists("thread").unwrap());
+    assert!(db
+        .list_chat_call_signals("thread", local, 0, 10)
+        .unwrap()
+        .is_empty());
+    db.create_chat_thread("thread", "dm", None).unwrap();
+    db.upsert_chat_member("thread", local, "owner").unwrap();
+    fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
+    assert!(db
+        .list_chat_call_signals("thread", local, 0, 10)
+        .unwrap()
+        .is_empty());
+    db.upsert_chat_member("thread", sender, "member").unwrap();
+    fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
+    let signals = db.list_chat_call_signals("thread", local, 0, 10).unwrap();
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].3, "call1");
+    let data: Value = serde_json::from_str(&signals[0].5).unwrap();
+    assert_eq!(data["sdp"], "test-sdp");
 }

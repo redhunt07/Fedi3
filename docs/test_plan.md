@@ -1,552 +1,552 @@
-# FEDI3 — Piano dei test
+# FEDI3 — Test plan
 
-**Obiettivo:** una suite che provi ogni funzione dell'applicativo — core Rust, relay, app Flutter e configurazioni di piattaforma — e che sia eseguibile in locale e in CI senza servizi esterni.
+**Goal:** a suite that tests every function of the application — Rust core, relay, Flutter app and platform configurations — and that is runnable locally and in CI without external services.
 
-**Riferimenti:** [production_readiness_audit.md](production_readiness_audit.md), [remediation_plan.md](remediation_plan.md)
+**References:** [production_readiness_audit.md](audit/production_readiness_audit.md), [remediation_plan.md](audit/remediation_plan.md)
 
 ---
 
-## 1. Strategia
+## 1. Strategy
 
-| Livello | Cosa prova | Dove gira | Servizi esterni |
+| Level | What it tests | Where it runs | External services |
 |---|---|---|---|
-| **Unit** | Funzioni pure: firme, digest, parsing, escaping, serializzazione, regole di config, rate limiter, CIDR, codec | `cargo test` (moduli `#[cfg(test)]` nei crate), `flutter test` | nessuno |
-| **Integration** | Server axum reali su porta effimera, DB SQLite temporaneo, richieste HTTP vere, mock di peer remoti | `crates/*/tests/*.rs` | nessuno (SQLite, mock HTTP) |
-| **Contract** | Documenti ActivityPub (actor, Note, attività) confrontati con fixture canoniche Mastodon/Misskey | integration | nessuno |
-| **Security** | Bypass di autenticazione, impersonificazione, SSRF, path traversal, timing, replay | unit + integration | nessuno |
-| **Concurrency/chaos** | Scritture parallele, client lenti, disconnessioni, worker che falliscono | integration | nessuno |
-| **UI** | Widget, stati di caricamento/errore, validazione form, navigazione, timeout | `flutter test` con client HTTP fake | nessuno |
-| **Static config** | Manifest Android, entitlements macOS, Info.plist iOS, gradle | script bash | nessuno |
-| **E2E smoke** | Core + relay sqlite in-process, flusso publish → deliver | script + integration | nessuno |
+| **Unit** | Pure functions: signatures, digest, parsing, escaping, serialization, config rules, rate limiter, CIDR, codec | `cargo test` (`#[cfg(test)]` modules in the crates), `flutter test` | none |
+| **Integration** | Real axum servers on an ephemeral port, temporary SQLite DB, real HTTP requests, mocks of remote peers | `crates/*/tests/*.rs` | none (SQLite, HTTP mocks) |
+| **Contract** | ActivityPub documents (actor, Note, activities) compared with canonical Mastodon/Misskey fixtures | integration | none |
+| **Security** | Authentication bypass, impersonation, SSRF, path traversal, timing, replay | unit + integration | none |
+| **Concurrency/chaos** | Parallel writes, slow clients, disconnections, failing workers | integration | none |
+| **UI** | Widgets, loading/error states, form validation, navigation, timeouts | `flutter test` with fake HTTP client | none |
+| **Static config** | Android manifest, macOS entitlements, iOS Info.plist, gradle | bash script | none |
+| **E2E smoke** | Core + in-process sqlite relay, publish → deliver flow | script + integration | none |
 
-**Regole:**
-- Nessun test dipende da rete esterna o da Docker.
-- Ogni test crea il proprio `tempdir` e la propria porta; nessuno stato condiviso.
-- I test di sicurezza devono **fallire** sul codice attuale non corretto e passare dopo il fix.
-- I mock server remoti sono implementati con axum e verificano le firme ricevute.
-- Niente `sleep` arbitrari: usare attese su condizione con timeout.
+**Rules:**
+- No test depends on an external network or Docker.
+- Every test creates its own `tempdir` and its own port; no shared state.
+- Security tests must **fail** on the current incorrect code and pass after the fix.
+- Remote mock servers are implemented with axum and verify the received signatures.
+- No arbitrary `sleep`: use condition waits with timeout.
 
 ---
 
-## 2. Infrastruttura di test condivisa
+## 2. Shared test infrastructure
 
-Da creare una volta e riusare:
+To be created once and reused:
 
-| Componente | Path | Funzione |
+| Component | Path | Function |
 |---|---|---|
-| `TestCore` | `crates/fedi3_core/tests/common/mod.rs` | Avvia un core reale su porta effimera con data dir temporanea, espone base URL e token interno, chiude in `Drop` |
-| `TestRelay` | `crates/fedi3_relay/tests/common/mod.rs` | Avvia il relay in modalità SQLite senza Redis/Meili su porta effimera |
-| `MockActorServer` | `tests/common/mock_actor.rs` | Serve un actor document, una chiave pubblica e un inbox; registra le richieste ricevute; opzioni: lento, 500, corpo enorme, redirect |
-| `TempDb` | `tests/common/db.rs` | Crea un DB SQLite in tempdir, espone helper di seeding |
-| `Signer` | `tests/common/signer.rs` | Genera coppie RSA, firma richieste HTTP, costruisce header `Signature`/`Digest` |
-| `FakeHttpClient` | `app/test/support/fake_http.dart` | Client Dart deterministico con risposte programmabili, ritardi e errori |
-| `pumpApp` | `app/test/support/pump_app.dart` | Monta l'app con `AppState` iniettato e repository fake |
+| `TestCore` | `crates/fedi3_core/tests/common/mod.rs` | Starts a real core on an ephemeral port with a temporary data dir, exposes base URL and internal token, closes in `Drop` |
+| `TestRelay` | `crates/fedi3_relay/tests/common/mod.rs` | Starts the relay in SQLite mode without Redis/Meili on an ephemeral port |
+| `MockActorServer` | `tests/common/mock_actor.rs` | Serves an actor document, a public key and an inbox; records received requests; options: slow, 500, huge body, redirect |
+| `TempDb` | `tests/common/db.rs` | Creates a SQLite DB in a tempdir, exposes seeding helpers |
+| `Signer` | `tests/common/signer.rs` | Generates RSA pairs, signs HTTP requests, builds `Signature`/`Digest` headers |
+| `FakeHttpClient` | `app/test/support/fake_http.dart` | Deterministic Dart client with programmable responses, delays and errors |
+| `pumpApp` | `app/test/support/pump_app.dart` | Mounts the app with injected `AppState` and fake repositories |
 
 ---
 
-## 3. Matrice di copertura — Core Rust
+## 3. Coverage matrix — Rust core
 
-### 3.1 Chiavi e identità (`keys.rs`)
+### 3.1 Keys and identity (`keys.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| K-01 | unit | Generazione identità in dir vuota | File creati, PEM valido, DID deterministico dal PEM |
-| K-02 | unit | Caricamento identità esistente | Stessa chiave, nessuna rigenerazione |
-| K-03 | unit | File corrotto | Errore esplicito, non rigenerazione silenziosa |
-| K-04 | unit | Permessi su Unix | 0600 sul file chiave, 0700 sulla dir |
-| K-05 | unit | DID da PEM con nuova riga/spazi | Normalizzazione stabile |
+| K-01 | unit | Identity generation in an empty dir | Files created, valid PEM, DID deterministic from the PEM |
+| K-02 | unit | Loading an existing identity | Same key, no regeneration |
+| K-03 | unit | Corrupted file | Explicit error, no silent regeneration |
+| K-04 | unit | Permissions on Unix | 0600 on the key file, 0700 on the dir |
+| K-05 | unit | DID from PEM with newline/spaces | Stable normalization |
 
 ### 3.2 HTTP Signatures (`http_sig.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| S-01 | unit | `parse_signature_header` con `keyId`, `headers`, `signature` | Campi corretti, header lowercase |
-| S-02 | unit | Header con `algorithm="hs2019"` e virgole in quoted string | Parsing corretto |
-| S-03 | unit | Header senza `signature` | Errore |
-| S-04 | unit | `build_signing_string` con `(request-target)` e query | Stringa conforme alla spec |
-| S-05 | unit | Header firmato mancante nella richiesta | Errore |
-| S-06 | unit | Round-trip firma/verifica RSA-SHA256 su richiesta reale | Verifica OK |
-| S-07 | unit | Firma alterata di 1 byte | Verifica fallisce |
-| S-08 | unit | Chiave pubblica diversa | Verifica fallisce |
-| S-09 | unit | `verify_digest_if_present` con digest corretto | OK |
-| S-10 | unit | Digest errato | Errore |
-| S-11 | unit | Digest assente su POST | Errore (nuovo comportamento) |
-| S-12 | unit | Digest multi-algoritmo `SHA-256=...,SHA-512=...` | Accetta SHA-256 |
-| S-13 | unit | `verify_date` con skew 300 s e 3600 s | Rifiuta oltre soglia, accetta entro |
-| S-14 | unit | Data non parsabile | Errore |
-| S-15 | unit | Set di header firmati minimo assente (`(request-target)`/`host`/`date`) | Errore |
-| S-16 | integration | KeyResolver con mock server: chiave valida, 500, corpo enorme, redirect | Cache, errore gestito, cap dimensione, redirect limitato |
+| S-01 | unit | `parse_signature_header` with `keyId`, `headers`, `signature` | Correct fields, lowercase headers |
+| S-02 | unit | Header with `algorithm="hs2019"` and commas in a quoted string | Correct parsing |
+| S-03 | unit | Header without `signature` | Error |
+| S-04 | unit | `build_signing_string` with `(request-target)` and query | Spec-conformant string |
+| S-05 | unit | Signed header missing in the request | Error |
+| S-06 | unit | RSA-SHA256 sign/verify round-trip on a real request | Verification OK |
+| S-07 | unit | Signature altered by 1 byte | Verification fails |
+| S-08 | unit | Different public key | Verification fails |
+| S-09 | unit | `verify_digest_if_present` with correct digest | OK |
+| S-10 | unit | Wrong digest | Error |
+| S-11 | unit | Digest missing on POST | Error (new behaviour) |
+| S-12 | unit | Multi-algorithm digest `SHA-256=...,SHA-512=...` | Accepts SHA-256 |
+| S-13 | unit | `verify_date` with 300 s and 3600 s skew | Rejects beyond the threshold, accepts within it |
+| S-14 | unit | Unparsable date | Error |
+| S-15 | unit | Minimum signed header set missing (`(request-target)`/`host`/`date`) | Error |
+| S-16 | integration | KeyResolver with mock server: valid key, 500, huge body, redirect | Cache, handled error, size cap, limited redirect |
 
-### 3.3 Envelope cifrato (`crypto_envelope.rs`)
+### 3.3 Encrypted envelope (`crypto_envelope.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| E-01 | unit | Encrypt/decrypt round-trip | Payload identico |
-| E-02 | unit | Ciphertext alterato | Decrypt fallisce con errore (non silenzioso) |
-| E-03 | unit | Nonce di lunghezza errata | Errore |
-| E-04 | unit | Envelope JSON malformato | Errore |
-| E-05 | unit | Body vuoto | Nessuna cifratura, invariato |
-| E-06 | unit | Due messaggi con stessa chiave: nonce diversi | Nonce diversi, entrambi decifrabili |
-| E-07 | unit | `x-fedi3-encrypted` assente | Nessuna decifratura |
+| E-01 | unit | Encrypt/decrypt round-trip | Identical payload |
+| E-02 | unit | Altered ciphertext | Decrypt fails with an error (not silently) |
+| E-03 | unit | Nonce of wrong length | Error |
+| E-04 | unit | Malformed JSON envelope | Error |
+| E-05 | unit | Empty body | No encryption, unchanged |
+| E-06 | unit | Two messages with the same key: different nonces | Different nonces, both decryptable |
+| E-07 | unit | `x-fedi3-encrypted` missing | No decryption |
 
-### 3.4 ActivityPub — actor e discovery (`ap.rs`)
+### 3.4 ActivityPub — actor and discovery (`ap.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| A-01 | integration | `GET /users/{u}` | `@context` AP, `id`, `inbox`, `outbox`, `followers`, `publicKey`, `preferredUsername` |
-| A-02 | contract | Actor document contro fixture Mastodon/Misskey | Campi obbligatori presenti, tipi corretti |
-| A-03 | integration | `GET /.well-known/webfinger?resource=acct:u@domain` | `subject`, link `self` con `activity+json` |
-| A-04 | integration | webfinger con risorsa non locale | 404 |
-| A-05 | integration | `GET /nodeinfo/2.0` e `/.well-known/nodeinfo` | Schema corretto, versione, statistiche |
-| A-06 | integration | `GET /users/{u}/followers` e `/following` | Collection con `totalItems`, paginazione |
-| A-07 | integration | `GET /healthz`, `/_fedi3/health` | 200; `/_fedi3/health` richiede token interno |
-| A-08 | integration | `GET /_fedi3/*` senza token | 401 |
-| A-09 | integration | `GET /_fedi3/*` con token errato | 401 |
-| A-10 | integration | `GET /_fedi3/*` con token corretto | 200 |
+| A-01 | integration | `GET /users/{u}` | AP `@context`, `id`, `inbox`, `outbox`, `followers`, `publicKey`, `preferredUsername` |
+| A-02 | contract | Actor document against Mastodon/Misskey fixtures | Mandatory fields present, correct types |
+| A-03 | integration | `GET /.well-known/webfinger?resource=acct:u@domain` | `subject`, `self` link with `activity+json` |
+| A-04 | integration | webfinger with a non-local resource | 404 |
+| A-05 | integration | `GET /nodeinfo/2.0` and `/.well-known/nodeinfo` | Correct schema, version, statistics |
+| A-06 | integration | `GET /users/{u}/followers` and `/following` | Collection with `totalItems`, pagination |
+| A-07 | integration | `GET /healthz`, `/_fedi3/health` | 200; `/_fedi3/health` requires the internal token |
+| A-08 | integration | `GET /_fedi3/*` without token | 401 |
+| A-09 | integration | `GET /_fedi3/*` with wrong token | 401 |
+| A-10 | integration | `GET /_fedi3/*` with correct token | 200 |
 
 ### 3.5 ActivityPub — inbox
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| I-01 | integration | POST senza `Signature` | 401 |
-| I-02 | integration | POST con firma invalida | 401 |
-| I-03 | integration | POST con firma valida di un actor remoto | 202, attività memorizzata |
-| I-04 | integration | **POST firmato da A con `actor=B`** | 401 (nuovo: binding) |
-| I-05 | integration | POST con `Digest` assente | 401 (nuovo) |
-| I-06 | integration | POST con `Digest` errato | 401 |
-| I-07 | integration | Data oltre lo skew | 401 |
-| I-08 | integration | Stessa attività due volte | 202, seconda è duplicate, nessuna doppia memorizzazione |
-| I-09 | integration | Processing fallito (DB chiuso) e retry | Il retry riprocessa (dedup solo dopo successo) |
-| I-10 | integration | Follow | Follower aggiunto, Accept inviato al mock |
-| I-11 | integration | Follow con `manually_approves_followers` | Stato pending, nessun Accept |
-| I-12 | integration | Accept di un Follow nostro | Stato accepted |
-| I-13 | integration | **Accept da attore diverso dal target del Follow** | Non marca accepted |
-| I-14 | integration | Undo Follow | Follower rimosso |
-| I-15 | integration | Create Note pubblica | Nota memorizzata, feed federato aggiornato |
-| I-16 | integration | Create Note con `inReplyTo` | Indice risposte aggiornato |
-| I-17 | integration | **Update di nota di un altro attore** | Ignorato (nuovo: ownership) |
-| I-18 | integration | **Delete di nota di un altro attore** | Ignorato (nuovo) |
-| I-19 | integration | Delete della propria nota | Tombstone, oggetto marcato deleted |
-| I-20 | integration | Announce | Boost memorizzato con attore corretto |
-| I-21 | integration | Like/EmojiReact | Reazione memorizzata |
-| I-22 | integration | Undo Like | Reazione rimossa |
-| I-23 | integration | Attività bloccata da `blocked_actors` | 403, non memorizzata |
-| I-24 | integration | Attività da dominio bloccato | Non memorizzata |
-| I-25 | integration | Rate limit per keyId superato | 429 |
-| I-26 | integration | Body oltre il limite | 413 |
-| I-27 | integration | JSON non valido | 400 |
-| I-28 | integration | Attività con profondità/array enormi | Nessun panic, risposta controllata |
+| I-01 | integration | POST without `Signature` | 401 |
+| I-02 | integration | POST with invalid signature | 401 |
+| I-03 | integration | POST with valid signature of a remote actor | 202, activity stored |
+| I-04 | integration | **POST signed by A with `actor=B`** | 401 (new: binding) |
+| I-05 | integration | POST with `Digest` missing | 401 (new) |
+| I-06 | integration | POST with wrong `Digest` | 401 |
+| I-07 | integration | Date beyond the skew | 401 |
+| I-08 | integration | Same activity twice | 202, the second is duplicate, no double storage |
+| I-09 | integration | Failed processing (DB closed) and retry | The retry reprocesses (dedup only after success) |
+| I-10 | integration | Follow | Follower added, Accept sent to the mock |
+| I-11 | integration | Follow with `manually_approves_followers` | Pending state, no Accept |
+| I-12 | integration | Accept of one of our Follows | Accepted state |
+| I-13 | integration | **Accept from an actor different from the Follow target** | Does not mark accepted |
+| I-14 | integration | Undo Follow | Follower removed |
+| I-15 | integration | Create public Note | Note stored, federated feed updated |
+| I-16 | integration | Create Note with `inReplyTo` | Reply index updated |
+| I-17 | integration | **Update of another actor's note** | Ignored (new: ownership) |
+| I-18 | integration | **Delete of another actor's note** | Ignored (new) |
+| I-19 | integration | Delete of one's own note | Tombstone, object marked deleted |
+| I-20 | integration | Announce | Boost stored with the correct actor |
+| I-21 | integration | Like/EmojiReact | Reaction stored |
+| I-22 | integration | Undo Like | Reaction removed |
+| I-23 | integration | Activity blocked by `blocked_actors` | 403, not stored |
+| I-24 | integration | Activity from a blocked domain | Not stored |
+| I-25 | integration | Rate limit per keyId exceeded | 429 |
+| I-26 | integration | Body beyond the limit | 413 |
+| I-27 | integration | Invalid JSON | 400 |
+| I-28 | integration | Activity with huge depth/arrays | No panic, controlled response |
 
 ### 3.6 ActivityPub — outbox
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| O-01 | integration | POST outbox senza token interno | 401 (nuovo) |
-| O-02 | integration | POST outbox con token interno, Create valido | 202, consegna accodata |
-| O-03 | integration | POST outbox con `actor` diverso dal nostro | 403 |
-| O-04 | integration | POST outbox con JSON invalido | 400 |
-| O-05 | integration | GET outbox | Paginazione, `orderedItems` |
-| O-06 | integration | **GET outbox: i DM non compaiono** | Attività direct escluse (nuovo) |
-| O-07 | integration | Paginazione con due elementi nello stesso millisecondo | Nessun elemento perso (cursore composito) |
-| O-08 | integration | Post pubblico con allegati | `to` include Public, `cc` followers |
+| O-01 | integration | POST outbox without internal token | 401 (new) |
+| O-02 | integration | POST outbox with internal token, valid Create | 202, delivery queued |
+| O-03 | integration | POST outbox with an `actor` different from ours | 403 |
+| O-04 | integration | POST outbox with invalid JSON | 400 |
+| O-05 | integration | GET outbox | Pagination, `orderedItems` |
+| O-06 | integration | **GET outbox: DMs do not appear** | Direct activities excluded (new) |
+| O-07 | integration | Pagination with two items in the same millisecond | No item lost (composite cursor) |
+| O-08 | integration | Public post with attachments | `to` includes Public, `cc` followers |
 
 ### 3.7 Media
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| M-01 | integration | Upload con token interno valido | 201, file su disco, riga DB |
-| M-02 | integration | Upload senza token | 401 |
-| M-03 | integration | Upload oltre il limite configurato | 413 (non `usize::MAX`) |
-| M-04 | integration | Upload di un PNG che decodifica enorme | Rifiutato o gestito con limiti |
-| M-05 | integration | MIME non in allowlist (`text/html`) | Rifiutato |
-| M-06 | integration | GET media di un altro utente | 404 |
-| M-07 | integration | GET media con id `../` | 400 |
-| M-08 | integration | Quota per utente superata | 413 |
-| M-09 | integration | DELETE media | File e riga rimossi |
-| M-10 | unit | `sanitize_key` con `../`, `/`, `\` | Nessun traversal |
+| M-01 | integration | Upload with valid internal token | 201, file on disk, DB row |
+| M-02 | integration | Upload without token | 401 |
+| M-03 | integration | Upload beyond the configured limit | 413 (not `usize::MAX`) |
+| M-04 | integration | Upload of a PNG that decodes huge | Rejected or handled with limits |
+| M-05 | integration | MIME not in allowlist (`text/html`) | Rejected |
+| M-06 | integration | GET media of another user | 404 |
+| M-07 | integration | GET media with id `../` | 400 |
+| M-08 | integration | Per-user quota exceeded | 413 |
+| M-09 | integration | DELETE media | File and row removed |
+| M-10 | unit | `sanitize_key` with `../`, `/`, `\` | No traversal |
 
 ### 3.8 Chat
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| C-01 | integration | Invio messaggio a thread nuovo | Thread creato, envelope cifrato, membri corretti |
-| C-02 | integration | Envelope da attore non membro di un thread esistente | Rifiutato |
-| C-03 | integration | Envelope per thread inesistente | Creato con membri corretti |
-| C-04 | unit | Bundle di un peer diverso dall'atteso | Rifiutato |
-| C-05 | unit | Decifratura di un messaggio | Testo corretto |
-| C-06 | integration | Reazioni e read receipt | Stato aggiornato |
+| C-01 | integration | Sending a message to a new thread | Thread created, encrypted envelope, correct members |
+| C-02 | integration | Envelope from an actor who is not a member of an existing thread | Rejected |
+| C-03 | integration | Envelope for a non-existent thread | Created with correct members |
+| C-04 | unit | Bundle from a peer different from the expected one | Rejected |
+| C-05 | unit | Decryption of a message | Correct text |
+| C-06 | integration | Reactions and read receipts | State updated |
 
 ### 3.9 Database (`social_db.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| D-01 | unit | Schema creation su DB vuoto | Tabelle e indici presenti |
-| D-02 | unit | Migrazione da schema vecchio | Colonne aggiunte, dati preservati |
-| D-03 | unit | Versione schema più nuova del binario | Errore esplicito |
-| D-04 | unit | Inserimento e lettura oggetto | Round-trip JSON identico |
-| D-05 | unit | Dedup inbox | Secondo insert → false |
-| D-06 | unit | Paginazione con timestamp uguali | Nessuna perdita |
-| D-07 | unit | Pruning TTL per inbox/feed/oggetti | Conteggi attesi |
-| D-08 | unit | Quote per attore | Gli eccessi vengono rimossi |
-| D-09 | concurrency | 8 writer paralleli su DB con `busy_timeout` | Zero errori `SQLITE_BUSY` |
-| D-10 | unit | SQL injection su ricerca (`100%`, `foo_bar`) | Match corretti con `ESCAPE` |
-| D-11 | unit | Cursore invalido/negativo | Pagina vuota, nessun errore |
+| D-01 | unit | Schema creation on an empty DB | Tables and indexes present |
+| D-02 | unit | Migration from an old schema | Columns added, data preserved |
+| D-03 | unit | Schema version newer than the binary | Explicit error |
+| D-04 | unit | Object insertion and reading | Identical JSON round-trip |
+| D-05 | unit | Inbox dedup | Second insert → false |
+| D-06 | unit | Pagination with equal timestamps | No loss |
+| D-07 | unit | TTL pruning per inbox/feed/objects | Expected counts |
+| D-08 | unit | Per-actor quotas | Excesses are removed |
+| D-09 | concurrency | 8 parallel writers on a DB with `busy_timeout` | Zero `SQLITE_BUSY` errors |
+| D-10 | unit | SQL injection on search (`100%`, `foo_bar`) | Correct matches with `ESCAPE` |
+| D-11 | unit | Invalid/negative cursor | Empty page, no error |
 
-### 3.10 Coda di consegna (`delivery_queue.rs`)
+### 3.10 Delivery queue (`delivery_queue.rs`)
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| Q-01 | unit | Enqueue attività | Job persistito con destinatari |
-| Q-02 | unit | Scheduling con backoff | Intervalli crescenti, cap |
-| Q-03 | unit | Superamento `max_attempts` | Dead-letter |
-| Q-04 | unit | Receipt ricevuto | Job marcato delivered |
-| Q-05 | unit | Receipt mai ricevuto | Raggiunge comunque `max_attempts` (nuovo) |
-| Q-06 | unit | Errore DB durante il fetch | Il worker continua, non muore (nuovo) |
-| Q-07 | unit | Pruning dei job vecchi | Righe rimosse |
-| Q-08 | integration | Consegna a mock server: 200 | Delivered |
-| Q-09 | integration | Consegna a mock server: 500 ripetuto | Retry, poi dead-letter |
-| Q-10 | integration | Consegna a mock server: timeout | Retry con backoff |
-| Q-11 | unit | Ripresa dopo riavvio | I job pendenti vengono ripresi |
+| Q-01 | unit | Enqueue activity | Job persisted with recipients |
+| Q-02 | unit | Scheduling with backoff | Increasing intervals, cap |
+| Q-03 | unit | Exceeding `max_attempts` | Dead-letter |
+| Q-04 | unit | Receipt received | Job marked delivered |
+| Q-05 | unit | Receipt never received | Reaches `max_attempts` anyway (new) |
+| Q-06 | unit | DB error during the fetch | The worker continues, does not die (new) |
+| Q-07 | unit | Pruning of old jobs | Rows removed |
+| Q-08 | integration | Delivery to mock server: 200 | Delivered |
+| Q-09 | integration | Delivery to mock server: repeated 500 | Retry, then dead-letter |
+| Q-10 | integration | Delivery to mock server: timeout | Retry with backoff |
+| Q-11 | unit | Resumption after restart | Pending jobs are resumed |
 
-### 3.11 Object fetch e GC
+### 3.11 Object fetch and GC
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| F-01 | integration | Fetch di un oggetto remoto valido | Memorizzato |
-| F-02 | integration | Oggetto oltre il cap dimensione | Scartato con errore |
-| F-03 | integration | 404 | Dead-letter dopo N tentativi |
-| F-04 | integration | SSRF: oggetto su `127.0.0.1` | Rifiutato (nuovo) |
-| G-01 | unit | GC inbox/feed/oggetti/media | Conteggi e file coerenti |
-| G-02 | unit | GC con `cache_only_followed_fedi3=false` | Le quote media restano attive (nuovo) |
+| F-01 | integration | Fetch of a valid remote object | Stored |
+| F-02 | integration | Object beyond the size cap | Discarded with an error |
+| F-03 | integration | 404 | Dead-letter after N attempts |
+| F-04 | integration | SSRF: object on `127.0.0.1` | Rejected (new) |
+| G-01 | unit | GC of inbox/feed/objects/media | Consistent counts and files |
+| G-02 | unit | GC with `cache_only_followed_fedi3=false` | Media quotas remain active (new) |
 
 ### 3.12 P2P, tunnel, WebRTC
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| P-01 | unit | Codec frame con lunghezza 0xFFFFFFFF | Errore, nessuna allocazione 4 GiB (nuovo) |
-| P-02 | unit | Codec frame valido | Round-trip |
-| P-03 | unit | Mailbox put/get/ttl | Messaggio recuperato, TTL rispettato |
-| P-04 | unit | Mailbox id collision tra peer diversi | Nessuna sovrascrittura (nuovo) |
-| P-05 | unit | Rate limiter mailbox | 429 dopo soglia |
-| T-01 | integration | Tunnel: connessione e ping/pong | RTT misurato |
-| T-02 | integration | **Tunnel: relay chiude la connessione** | Riconnessione entro il backoff (nuovo) |
-| T-03 | integration | Tunnel: nessun pong per N secondi | Riconnessione (nuovo) |
-| T-04 | integration | Tunnel: shutdown | Chiusura pulita, nessun task orfano |
-| T-05 | unit | `relay_bridge` con path senza `/` | 400, nessun panic (nuovo) |
-| T-06 | unit | `relay_bridge` con path contenente spazi | 400 |
-| T-07 | unit | `relay_bridge` con header hop-by-hop | Header filtrati |
-| W-01 | unit | Parsing ICE/TURN config | URL e credenziali corretti |
-| W-02 | unit | Segnale WebRTC firmato | Accettato; firma invalida rifiutata |
+| P-01 | unit | Frame codec with length 0xFFFFFFFF | Error, no 4 GiB allocation (new) |
+| P-02 | unit | Valid frame codec | Round-trip |
+| P-03 | unit | Mailbox put/get/ttl | Message retrieved, TTL respected |
+| P-04 | unit | Mailbox id collision between different peers | No overwrite (new) |
+| P-05 | unit | Mailbox rate limiter | 429 after threshold |
+| T-01 | integration | Tunnel: connection and ping/pong | RTT measured |
+| T-02 | integration | **Tunnel: relay closes the connection** | Reconnection within the backoff (new) |
+| T-03 | integration | Tunnel: no pong for N seconds | Reconnection (new) |
+| T-04 | integration | Tunnel: shutdown | Clean closure, no orphan task |
+| T-05 | unit | `relay_bridge` with a path without `/` | 400, no panic (new) |
+| T-06 | unit | `relay_bridge` with a path containing spaces | 400 |
+| T-07 | unit | `relay_bridge` with hop-by-hop headers | Filtered headers |
+| W-01 | unit | ICE/TURN config parsing | Correct URLs and credentials |
+| W-02 | unit | Signed WebRTC signal | Accepted; invalid signature rejected |
 
-### 3.13 FFI e runtime
+### 3.13 FFI and runtime
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| R-01 | unit | `fedi3_core_version` | Stringa non vuota, liberabile |
-| R-02 | unit | `start` con JSON invalido | Codice 2, messaggio, nessuna perdita |
-| R-03 | unit | `start` con config valida | Handle > 0, server in ascolto (readiness) |
-| R-04 | unit | **`start` con porta occupata** | Errore (nuovo), non handle vivo |
-| R-05 | unit | `stop` con handle inesistente | Codice d'errore, nessun panic |
-| R-06 | unit | Doppio `start` | Due handle indipendenti, due porte |
-| R-07 | unit | **Config che provoca panic interno** | Codice d'errore, processo vivo (catch_unwind) |
-| R-08 | unit | `stop` due volte | Secondo stop → errore gestito |
-| R-09 | unit | `start` senza relay token | Avvio locale/P2P, nessun bail (nuovo) |
-| R-10 | unit | Username con `../` | Rifiutato all'avvio |
-| R-11 | unit | `previous_public_base_url` con follower legacy | Migrazione richiesta, errore esplicito |
-| R-12 | integration | Shutdown con task attivi | Tutti i task joinati entro il timeout |
+| R-01 | unit | `fedi3_core_version` | Non-empty string, releasable |
+| R-02 | unit | `start` with invalid JSON | Code 2, message, no leak |
+| R-03 | unit | `start` with valid config | Handle > 0, server listening (readiness) |
+| R-04 | unit | **`start` with port busy** | Error (new), not a live handle |
+| R-05 | unit | `stop` with a non-existent handle | Error code, no panic |
+| R-06 | unit | Double `start` | Two independent handles, two ports |
+| R-07 | unit | **Config that causes an internal panic** | Error code, process alive (catch_unwind) |
+| R-08 | unit | `stop` twice | Second stop → handled error |
+| R-09 | unit | `start` without relay token | Local/P2P startup, no bail (new) |
+| R-10 | unit | Username with `../` | Rejected at startup |
+| R-11 | unit | `previous_public_base_url` with legacy followers | Migration required, explicit error |
+| R-12 | integration | Shutdown with active tasks | All tasks joined within the timeout |
 
-### 3.14 Metriche e stream
+### 3.14 Metrics and streams
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| N-01 | unit | `net_metrics` snapshot | JSON con campi attesi |
-| N-02 | unit | Prune su timer | Le entry vecchie vengono rimosse (nuovo) |
-| N-03 | unit | Poisoning del mutex | Nessun panic (nuovo) |
-| U-01 | integration | `/_fedi3/stream` SSE | Eventi emessi, auth richiesta |
-| U-02 | unit | Evento malformato | Scartato senza panic |
+| N-01 | unit | `net_metrics` snapshot | JSON with the expected fields |
+| N-02 | unit | Prune on timer | Old entries are removed (new) |
+| N-03 | unit | Mutex poisoning | No panic (new) |
+| U-01 | integration | `/_fedi3/stream` SSE | Events emitted, auth required |
+| U-02 | unit | Malformed event | Discarded without panic |
 
 ---
 
-## 4. Matrice di copertura — Relay
+## 4. Coverage matrix — Relay
 
-### 4.1 Config e validazione
+### 4.1 Config and validation
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RC-01 | unit | Variabile numerica invalida (`MAX_BODY_BYTES=64M`) | Errore all'avvio (nuovo) |
-| RC-02 | unit | `DB_DRIVER=pg16` | Errore, non fallback silenzioso |
-| RC-03 | unit | `SEARCH_BACKEND=meilisearch` | Errore |
-| RC-04 | unit | Admin token assente o corto | Errore all'avvio |
-| RC-05 | unit | Default sicuri | `hsts>0`, `trust_proxy_headers` documentato |
-| RC-06 | unit | Clamp dei valori | Valori fuori range vengono limitati o rifiutati |
+| RC-01 | unit | Invalid numeric variable (`MAX_BODY_BYTES=64M`) | Error at startup (new) |
+| RC-02 | unit | `DB_DRIVER=pg16` | Error, not a silent fallback |
+| RC-03 | unit | `SEARCH_BACKEND=meilisearch` | Error |
+| RC-04 | unit | Admin token missing or short | Error at startup |
+| RC-05 | unit | Safe defaults | `hsts>0`, `trust_proxy_headers` documented |
+| RC-06 | unit | Value clamping | Out-of-range values are clamped or rejected |
 
-### 4.2 Autenticazione e token
+### 4.2 Authentication and tokens
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RA-01 | unit | Admin token corretto | Autorizzato |
-| RA-02 | unit | Token errato | 401 |
-| RA-03 | unit | Token con prefisso corretto e suffisso errato | 401 |
-| RA-04 | unit | Token vuoto | 401, non `Bearer ` |
-| RA-05 | unit | Confronto constant-time | Nessuna differenza misurabile (test funzionale) |
-| RA-06 | unit | Hash token utente | SHA-256, confronto corretto |
-| RA-07 | unit | Utente disabilitato | 401 |
+| RA-01 | unit | Correct admin token | Authorized |
+| RA-02 | unit | Wrong token | 401 |
+| RA-03 | unit | Token with correct prefix and wrong suffix | 401 |
+| RA-04 | unit | Empty token | 401, not `Bearer ` |
+| RA-05 | unit | Constant-time comparison | No measurable difference (functional test) |
+| RA-06 | unit | User token hash | SHA-256, correct comparison |
+| RA-07 | unit | Disabled user | 401 |
 
-### 4.3 Rate limiting e IP
+### 4.3 Rate limiting and IP
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RL-01 | unit | Fixed window | Blocca dopo soglia, riapre dopo la finestra |
-| RL-02 | unit | Weighted (fan-out) | Peso corretto |
-| RL-03 | unit | Fallback in memoria senza Redis | Funziona |
-| RL-04 | unit | Noisy backoff | Backoff crescente |
-| RL-05 | unit | `parse_ip_rule` CIDR | Match corretti, edge case /32 e /0 |
-| RL-06 | unit | `client_ip` con XFF spoofato (primo elemento falso) | Usa l'IP reale (nuovo) |
-| RL-07 | unit | `client_ip` senza proxy | Usa peer IP |
-| RL-08 | unit | Allowlist/denylist | 403 per IP escluso |
-| RL-09 | unit | **Rate limit su `/webrtc/poll` con IP reali diversi** | Bucket separati (nuovo) |
+| RL-01 | unit | Fixed window | Blocks after threshold, reopens after the window |
+| RL-02 | unit | Weighted (fan-out) | Correct weight |
+| RL-03 | unit | In-memory fallback without Redis | Works |
+| RL-04 | unit | Noisy backoff | Increasing backoff |
+| RL-05 | unit | `parse_ip_rule` CIDR | Correct matches, /32 and /0 edge cases |
+| RL-06 | unit | `client_ip` with spoofed XFF (fake first element) | Uses the real IP (new) |
+| RL-07 | unit | `client_ip` without proxy | Uses the peer IP |
+| RL-08 | unit | Allowlist/denylist | 403 for excluded IP |
+| RL-09 | unit | **Rate limit on `/webrtc/poll` with different real IPs** | Separate buckets (new) |
 
-### 4.4 Tunnel e forward
+### 4.4 Tunnel and forward
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RT-01 | integration | Upgrade tunnel con token valido | Connesso |
-| RT-02 | integration | Tunnel con token errato | Chiusura 401 |
-| RT-03 | integration | Tunnel con username non valido | 400 (nuovo) |
-| RT-04 | integration | Riconnessione: il vecchio disconnect non rimuove il nuovo | Il nuovo tunnel resta attivo (nuovo) |
-| RT-05 | integration | **Forward con client lento** | Un secondo client riceve la risposta entro il timeout (nuovo) |
-| RT-06 | integration | Forward con utente offline | Spool + 503 (nuovo) |
-| RT-07 | integration | Forward con inflight pieno | 429 e spool |
-| RT-08 | integration | Timeout del tunnel | 504 e spool |
-| RT-09 | unit | Entry `inflight` rimossa al timeout | Nessun leak (nuovo) |
+| RT-01 | integration | Tunnel upgrade with valid token | Connected |
+| RT-02 | integration | Tunnel with wrong token | 401 closure |
+| RT-03 | integration | Tunnel with invalid username | 400 (new) |
+| RT-04 | integration | Reconnection: the old disconnect does not remove the new one | The new tunnel stays active (new) |
+| RT-05 | integration | **Forward with a slow client** | A second client receives the response within the timeout (new) |
+| RT-06 | integration | Forward with offline user | Spool + 503 (new) |
+| RT-07 | integration | Forward with full inflight | 429 and spool |
+| RT-08 | integration | Tunnel timeout | 504 and spool |
+| RT-09 | unit | `inflight` entry removed on timeout | No leak (new) |
 
-### 4.5 Inbox e federazione
+### 4.5 Inbox and federation
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RI-01 | integration | POST `/inbox` senza firma | 401 (nuovo) |
-| RI-02 | integration | POST con firma valida | 202, fan-out |
-| RI-03 | integration | Firma alterata | 401 |
-| RI-04 | integration | Attività con 30 destinatari (oltre `max_inbox_fanout`) | 413 |
-| RI-05 | integration | Destinatari non locali | 400 |
-| RI-06 | integration | Stessa attività due volte | Dedupe, nessuna doppia consegna (nuovo) |
-| RI-07 | integration | Consegna fallita a utente online | Spool, 503 al sender (nuovo) |
-| RI-08 | integration | Spool oltre il cap in byte | 413 o scarto del più vecchio |
-| RI-09 | unit | Spool: body in BLOB, non base64 | Dimensione coerente |
-| RI-10 | integration | Due flush concorrenti | Nessuna doppia consegna |
+| RI-01 | integration | POST `/inbox` without signature | 401 (new) |
+| RI-02 | integration | POST with valid signature | 202, fan-out |
+| RI-03 | integration | Altered signature | 401 |
+| RI-04 | integration | Activity with 30 recipients (beyond `max_inbox_fanout`) | 413 |
+| RI-05 | integration | Non-local recipients | 400 |
+| RI-06 | integration | Same activity twice | Dedupe, no double delivery (new) |
+| RI-07 | integration | Failed delivery to an online user | Spool, 503 to the sender (new) |
+| RI-08 | integration | Spool beyond the byte cap | 413 or discard of the oldest |
+| RI-09 | unit | Spool: body in BLOB, not base64 | Consistent size |
+| RI-10 | integration | Two concurrent flushes | No double delivery |
 
 ### 4.6 Media
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RM-01 | integration | Upload autenticato | 201, DB e backend coerenti |
-| RM-02 | integration | Upload senza token | 401 |
-| RM-03 | integration | Upload con MIME `text/html` | 415 (nuovo) |
-| RM-04 | integration | Upload oltre la quota utente | 413 |
-| RM-05 | integration | GET media con id malevolo | 400 |
-| RM-06 | integration | GET media di utente offline | Forward al tunnel |
-| RM-07 | integration | DELETE media | Oggetto rimosso dal backend (nuovo) |
-| RM-08 | unit | `sanitize_key` con estensione strana | Chiave valida |
-| RM-09 | unit | Upload non atomico | Scrittura temp+rename (nuovo) |
+| RM-01 | integration | Authenticated upload | 201, DB and backend consistent |
+| RM-02 | integration | Upload without token | 401 |
+| RM-03 | integration | Upload with MIME `text/html` | 415 (new) |
+| RM-04 | integration | Upload beyond the user quota | 413 |
+| RM-05 | integration | GET media with malicious id | 400 |
+| RM-06 | integration | GET media of an offline user | Forward to the tunnel |
+| RM-07 | integration | DELETE media | Object removed from the backend (new) |
+| RM-08 | unit | `sanitize_key` with a strange extension | Valid key |
+| RM-09 | unit | Non-atomic upload | temp+rename write (new) |
 
-### 4.7 Admin, health, metriche
+### 4.7 Admin, health, metrics
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RH-01 | integration | `/healthz` senza token | 200, nessuna riga di audit (nuovo) |
-| RH-02 | integration | `/readyz` senza token | 200/503 senza audit |
-| RH-03 | integration | `/readyz` con DB rotto | 503 |
-| RH-04 | integration | Endpoint admin senza token | 401 |
-| RH-05 | integration | `admin_delete_user` | Media, note e segnali rimossi (nuovo) |
-| RH-06 | integration | Audit su azione admin | Riga con request id e IP |
-| RH-07 | integration | `/metrics.prom` con token separato | 200 |
-| RH-08 | unit | Metriche: counter e histogram presenti | Formato Prometheus valido |
+| RH-01 | integration | `/healthz` without token | 200, no audit row (new) |
+| RH-02 | integration | `/readyz` without token | 200/503 without audit |
+| RH-03 | integration | `/readyz` with broken DB | 503 |
+| RH-04 | integration | Admin endpoint without token | 401 |
+| RH-05 | integration | `admin_delete_user` | Media, notes and signals removed (new) |
+| RH-06 | integration | Audit on admin action | Row with request id and IP |
+| RH-07 | integration | `/metrics.prom` with separate token | 200 |
+| RH-08 | unit | Metrics: counters and histograms present | Valid Prometheus format |
 
-### 4.8 Ricerca, webfinger, host routing
+### 4.8 Search, webfinger, host routing
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RS-01 | unit | `escape_like` + `ESCAPE` | `100%` e `foo_bar` corretti (nuovo) |
-| RS-02 | integration | Ricerca con backend DB | Risultati, nessuna scansione di HTML |
-| RS-03 | integration | Ricerca con caratteri speciali | Nessun errore SQL |
-| RS-04 | integration | Cache TTL | Scade correttamente |
-| RW-01 | integration | webfinger per utente locale | `subject` e `href` corretti |
-| RW-02 | integration | webfinger con `Host` non valido in host-routing | 421/404 (nuovo) |
-| RW-03 | unit | Redirect canonico con porta esplicita | Nessun loop (nuovo) |
-| RW-04 | unit | `host_only` con porta | Porta preservata dove serve |
+| RS-01 | unit | `escape_like` + `ESCAPE` | `100%` and `foo_bar` correct (new) |
+| RS-02 | integration | Search with DB backend | Results, no HTML scan |
+| RS-03 | integration | Search with special characters | No SQL error |
+| RS-04 | integration | TTL cache | Expires correctly |
+| RW-01 | integration | webfinger for a local user | Correct `subject` and `href` |
+| RW-02 | integration | webfinger with invalid `Host` in host-routing | 421/404 (new) |
+| RW-03 | unit | Canonical redirect with explicit port | No loop (new) |
+| RW-04 | unit | `host_only` with port | Port preserved where needed |
 
-### 4.9 Move notice, telemetria, WebRTC signaling
+### 4.9 Move notice, telemetry, WebRTC signaling
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RN-01 | integration | Move notice firmato | Accettato, fan-out |
-| RN-02 | integration | **Fan-out con `Signature`** | Accettato dal relay remoto (nuovo) |
-| RN-03 | integration | Move notice senza firma | 401 |
-| RN-04 | unit | TTL e retry del fan-out | Cap e scadenza |
-| RY-01 | integration | Telemetria firmata | Accettata, registry aggiornato |
-| RY-02 | integration | Telemetria con 100.000 relay | Cap applicato (nuovo) |
-| RY-03 | unit | TOFU pinning della chiave relay | Chiave cambiata → rifiuto |
-| RX-01 | integration | WebRTC signal firmato | Accettato |
-| RX-02 | integration | Signal con `keyId` privato (SSRF) | Rifiutato (nuovo) |
+| RN-01 | integration | Signed move notice | Accepted, fan-out |
+| RN-02 | integration | **Fan-out with `Signature`** | Accepted by the remote relay (new) |
+| RN-03 | integration | Move notice without signature | 401 |
+| RN-04 | unit | Fan-out TTL and retry | Cap and expiry |
+| RY-01 | integration | Signed telemetry | Accepted, registry updated |
+| RY-02 | integration | Telemetry with 100,000 relays | Cap applied (new) |
+| RY-03 | unit | TOFU pinning of the relay key | Changed key → rejection |
+| RX-01 | integration | Signed WebRTC signal | Accepted |
+| RX-02 | integration | Signal with private `keyId` (SSRF) | Rejected (new) |
 
-### 4.10 Schema e migrazioni relay
+### 4.10 Relay schema and migrations
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| RD-01 | unit | Init su DB vuoto (sqlite e postgres) | Schema completo |
-| RD-02 | unit | Migrazione da schema vecchio | Colonne aggiunte, errori non inghiottiti |
-| RD-03 | unit | Versione schema più nuova | Errore esplicito |
-| RD-04 | unit | Due istanze sullo stesso DB | Migrazione idempotente |
-| RD-05 | unit | Cleanup retention (audit, note, registry) | Righe vecchie rimosse (nuovo) |
+| RD-01 | unit | Init on an empty DB (sqlite and postgres) | Complete schema |
+| RD-02 | unit | Migration from an old schema | Columns added, errors not swallowed |
+| RD-03 | unit | Newer schema version | Explicit error |
+| RD-04 | unit | Two instances on the same DB | Idempotent migration |
+| RD-05 | unit | Retention cleanup (audit, notes, registry) | Old rows removed (new) |
 
 ---
 
-## 5. Matrice di copertura — App Flutter
+## 5. Coverage matrix — Flutter app
 
-### 5.1 Modelli e serializzazione
+### 5.1 Models and serialization
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AM-01 | unit | `CoreConfig.fromJson(toJson())` | Round-trip identico |
-| AM-02 | unit | `toCoreStartJson` | Chiavi snake_case, token inclusi |
-| AM-03 | unit | JSON con campi mancanti | Default sicuri, nessun crash |
-| AM-04 | unit | JSON con tipi errati | Default, nessun crash |
-| AM-05 | unit | `UiPrefs` round-trip | Identico |
-| AM-06 | unit | `BackupCodec` encode/decode | Round-trip; versione sconosciuta → errore (nuovo) |
-| AM-07 | unit | `BackupCodec` con JSON corrotto | `FormatException` chiara |
+| AM-01 | unit | `CoreConfig.fromJson(toJson())` | Identical round-trip |
+| AM-02 | unit | `toCoreStartJson` | snake_case keys, tokens included |
+| AM-03 | unit | JSON with missing fields | Safe defaults, no crash |
+| AM-04 | unit | JSON with wrong types | Defaults, no crash |
+| AM-05 | unit | `UiPrefs` round-trip | Identical |
+| AM-06 | unit | `BackupCodec` encode/decode | Round-trip; unknown version → error (new) |
+| AM-07 | unit | `BackupCodec` with corrupted JSON | Clear `FormatException` |
 
-### 5.2 MFM e HTML
+### 5.2 MFM and HTML
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AF-01 | unit | `MfmCodec.toHtml` con `<`, `&`, `"`, `'` | Entità corrette |
-| AF-02 | unit | Testo senza marker | Sempre HTML escapato (nuovo) |
+| AF-01 | unit | `MfmCodec.toHtml` with `<`, `&`, `"`, `'` | Correct entities |
+| AF-02 | unit | Text without markers | Always escaped HTML (new) |
 | AF-03 | unit | Newline | `<br>` |
-| AF-04 | unit | Marker MFM (`**bold**`, `:emoji:`) | HTML atteso |
-| AF-05 | unit | Input vuoto | Stringa vuota, nessun `<p></p>` spurio |
+| AF-04 | unit | MFM markers (`**bold**`, `:emoji:`) | Expected HTML |
+| AF-05 | unit | Empty input | Empty string, no spurious `<p></p>` |
 
-### 5.3 Persistenza locale
+### 5.3 Local persistence
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AS-01 | unit | `ConfigStore.write` atomico | Nessun file troncato su errore simulato |
-| AS-02 | unit | File corrotto + `.bak` valido | Recupero dal backup (nuovo) |
-| AS-03 | unit | File corrotto senza `.bak` | Stato "corrotto" distinto da "assente" (nuovo) |
-| AS-04 | unit | Permessi su POSIX | 600 (nuovo) |
-| AS-05 | unit | `PrefsStore` corrotto | Default, con flag di errore |
-| AS-06 | unit | Store concorrenti (`note_flags`, `reactions`) | Nessuna perdita di aggiornamenti (nuovo) |
+| AS-01 | unit | `ConfigStore.write` atomic | No truncated file on a simulated error |
+| AS-02 | unit | Corrupted file + valid `.bak` | Recovery from the backup (new) |
+| AS-03 | unit | Corrupted file without `.bak` | "corrupted" state distinct from "missing" (new) |
+| AS-04 | unit | Permissions on POSIX | 600 (new) |
+| AS-05 | unit | `PrefsStore` corrupted | Defaults, with an error flag |
+| AS-06 | unit | Concurrent stores (`note_flags`, `reactions`) | No update loss (new) |
 
-### 5.4 Rete e API
+### 5.4 Network and API
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AN-01 | unit | Richiesta senza token interno | Nessun header `X-Fedi3-Internal` |
-| AN-02 | unit | Timeout del server | `CoreApiException.timeout` entro 15 s (nuovo) |
-| AN-03 | unit | 401 | Eccezione `unauthorized`, messaggio chiaro |
-| AN-04 | unit | 500 | Eccezione `server`, retryable |
-| AN-05 | unit | JSON malformato | Eccezione `decode`, nessun crash |
-| AN-06 | unit | `X-Filename` non ASCII | Encoding corretto (nuovo) |
-| AN-07 | unit | `threadId` con `/` e `%` | Path encodato (nuovo) |
-| AN-08 | unit | `CoreEventStream` con frame valido | Evento emesso |
-| AN-09 | unit | `CoreEventStream` con frame malformato | Scartato, stream vivo |
-| AN-10 | unit | `CoreEventStream` con errore di rete | Errore propagato, retry con backoff |
+| AN-01 | unit | Request without internal token | No `X-Fedi3-Internal` header |
+| AN-02 | unit | Server timeout | `CoreApiException.timeout` within 15 s (new) |
+| AN-03 | unit | 401 | `unauthorized` exception, clear message |
+| AN-04 | unit | 500 | `server` exception, retryable |
+| AN-05 | unit | Malformed JSON | `decode` exception, no crash |
+| AN-06 | unit | Non-ASCII `X-Filename` | Correct encoding (new) |
+| AN-07 | unit | `threadId` with `/` and `%` | Encoded path (new) |
+| AN-08 | unit | `CoreEventStream` with valid frame | Event emitted |
+| AN-09 | unit | `CoreEventStream` with malformed frame | Discarded, stream alive |
+| AN-10 | unit | `CoreEventStream` with network error | Error propagated, retry with backoff |
 
-### 5.5 Stato e ciclo di vita del core
+### 5.5 Core state and lifecycle
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AP-01 | unit | `startCore` con config valida (FFI fake) | Handle impostato solo dopo readiness (nuovo) |
-| AP-02 | unit | `startCore` con errore FFI | `lastError` impostato, nessun handle |
-| AP-03 | unit | `stopCore` | Handle azzerato, FFI chiamato |
-| AP-04 | unit | Watchdog: health fallisce | `markCoreDead`, restart tentato (nuovo) |
-| AP-05 | unit | `replaceConfig` | stop → save → start → readiness (nuovo) |
-| AP-06 | unit | Doppio `startCore` concorrente | Una sola chiamata FFI |
+| AP-01 | unit | `startCore` with valid config (fake FFI) | Handle set only after readiness (new) |
+| AP-02 | unit | `startCore` with FFI error | `lastError` set, no handle |
+| AP-03 | unit | `stopCore` | Handle cleared, FFI called |
+| AP-04 | unit | Watchdog: health fails | `markCoreDead`, restart attempted (new) |
+| AP-05 | unit | `replaceConfig` | stop → save → start → readiness (new) |
+| AP-06 | unit | Concurrent double `startCore` | A single FFI call |
 
-### 5.6 Widget
+### 5.6 Widgets
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AW-01 | widget | Primo avvio senza config | Schermata di setup con titolo corretto (test riparato) |
-| AW-02 | widget | Onboarding: validazione username/domain/bind | Errori inline (nuovo) |
-| AW-03 | widget | Timeline: caricamento | Skeleton, non errore |
-| AW-04 | widget | Timeline: errore rete | `NetworkErrorCard` con retry |
-| AW-05 | widget | Timeline: vuota | Stato empty con messaggio |
-| AW-06 | widget | Compose: testo vuoto | Pulsante disabilitato |
-| AW-07 | widget | Compose: invio | Chiamata API con payload corretto |
-| AW-08 | widget | Note card: like/boost/reply | Chiamate corrette, stato ottimistico |
-| AW-09 | widget | Chat: invio messaggio | Payload corretto, stato aggiornato |
-| AW-10 | widget | Impostazioni: salvataggio | `replaceConfig` invocato (nuovo) |
-| AW-11 | widget | Notifiche: nuovo evento | Item aggiunto in testa senza azzerare la lista (nuovo) |
-| AW-12 | widget | Media viewer su mobile | Nessuna eccezione `getSaveLocation` (nuovo) |
-| AW-13 | widget | Testo a 1.5× scale | Nessun overflow nei layout principali |
-| AW-14 | widget | Semantica | `semanticLabel` presenti su avatar/media (nuovo) |
+| AW-01 | widget | First run without config | Setup screen with the correct title (repaired test) |
+| AW-02 | widget | Onboarding: username/domain/bind validation | Inline errors (new) |
+| AW-03 | widget | Timeline: loading | Skeleton, not an error |
+| AW-04 | widget | Timeline: network error | `NetworkErrorCard` with retry |
+| AW-05 | widget | Timeline: empty | Empty state with message |
+| AW-06 | widget | Compose: empty text | Button disabled |
+| AW-07 | widget | Compose: send | API call with correct payload |
+| AW-08 | widget | Note card: like/boost/reply | Correct calls, optimistic state |
+| AW-09 | widget | Chat: send message | Correct payload, state updated |
+| AW-10 | widget | Settings: save | `replaceConfig` invoked (new) |
+| AW-11 | widget | Notifications: new event | Item prepended without clearing the list (new) |
+| AW-12 | widget | Media viewer on mobile | No `getSaveLocation` exception (new) |
+| AW-13 | widget | Text at 1.5× scale | No overflow in the main layouts |
+| AW-14 | widget | Semantics | `semanticLabel` present on avatars/media (new) |
 
-### 5.7 l10n e piattaforma
+### 5.7 l10n and platform
 
-| ID | Livello | Caso | Atteso |
+| ID | Level | Case | Expected |
 |---|---|---|---|
-| AL-01 | unit | Chiavi ARB en/it | Parità esatta |
-| AL-02 | unit | Nessuna stringa hardcoded nelle schermate | Gate CI (nuovo) |
-| AL-03 | script | Manifest Android | INTERNET, network security config, allowBackup=false |
-| AL-04 | script | Entitlements macOS | network.client/server, file access |
-| AL-05 | script | Info.plist iOS | ATS, usage descriptions |
-| AL-06 | script | gradle | App id non `com.example`, signing release |
+| AL-01 | unit | ARB keys en/it | Exact parity |
+| AL-02 | unit | No hardcoded strings in the screens | CI gate (new) |
+| AL-03 | script | Android manifest | INTERNET, network security config, allowBackup=false |
+| AL-04 | script | macOS entitlements | network.client/server, file access |
+| AL-05 | script | iOS Info.plist | ATS, usage descriptions |
+| AL-06 | script | gradle | App id not `com.example`, release signing |
 
 ---
 
-## 6. Test end-to-end (senza servizi esterni)
+## 6. End-to-end tests (without external services)
 
-| ID | Livello | Scenario | Atteso |
+| ID | Level | Scenario | Expected |
 |---|---|---|---|
-| X-01 | e2e | Core A pubblica una nota pubblica; Core B (mock peer) la riceve firmata | B verifica la firma, la memorizza |
-| X-02 | e2e | Follow A→B, Accept B→A, consegna | Stato accepted su A |
-| X-03 | e2e | Relay sqlite + core: tunnel, pubblicazione, fan-out | Attività consegnata |
-| X-04 | e2e | Relay sqlite: utente offline, attività in spool, riconnessione, flush | Attività consegnata una sola volta |
-| X-05 | e2e | Migrazione: `Move` verso un nuovo actor | I follower ricevono `Move` |
-| X-06 | e2e | Chat: invio cifrato tra due core mock | Messaggio decifrato correttamente |
-| X-07 | e2e | Media: upload sul relay, GET, cache locale nel core | Byte identici |
+| X-01 | e2e | Core A publishes a public note; Core B (mock peer) receives it signed | B verifies the signature, stores it |
+| X-02 | e2e | Follow A→B, Accept B→A, delivery | Accepted state on A |
+| X-03 | e2e | Relay sqlite + core: tunnel, publishing, fan-out | Activity delivered |
+| X-04 | e2e | Relay sqlite: offline user, activity in spool, reconnection, flush | Activity delivered only once |
+| X-05 | e2e | Migration: `Move` to a new actor | Followers receive `Move` |
+| X-06 | e2e | Chat: encrypted sending between two mock cores | Message decrypted correctly |
+| X-07 | e2e | Media: upload on the relay, GET, local cache in the core | Identical bytes |
 
 ---
 
-## 7. Test di sicurezza mirati (devono fallire sul codice attuale)
+## 7. Targeted security tests (they must fail on the current code)
 
-| ID | Area | Attacco | Atteso dopo il fix |
+| ID | Area | Attack | Expected after the fix |
 |---|---|---|---|
-| SEC-01 | relay inbox | POST senza firma | 401 |
-| SEC-02 | core inbox | Attività firmata da A con `actor=B` | 401 |
-| SEC-03 | core outbox | POST senza token dal tunnel | 401 |
-| SEC-04 | core inbox | POST senza Digest | 401 |
-| SEC-05 | relay | XFF spoofato per bypassare rate limit | Limite applicato all'IP reale |
-| SEC-06 | core | `keyId` che punta a `127.0.0.1` | Rifiutato |
-| SEC-07 | relay | `keyId` che punta a IP privato | Rifiutato |
-| SEC-08 | core media | id `../../etc/passwd` | 400/404, nessuna scrittura fuori |
+| SEC-01 | relay inbox | POST without signature | 401 |
+| SEC-02 | core inbox | Activity signed by A with `actor=B` | 401 |
+| SEC-03 | core outbox | POST without token from the tunnel | 401 |
+| SEC-04 | core inbox | POST without Digest | 401 |
+| SEC-05 | relay | XFF spoofed to bypass the rate limit | Limit applied to the real IP |
+| SEC-06 | core | `keyId` pointing to `127.0.0.1` | Rejected |
+| SEC-07 | relay | `keyId` pointing to a private IP | Rejected |
+| SEC-08 | core media | id `../../etc/passwd` | 400/404, no write outside |
 | SEC-09 | relay media | MIME `text/html` | 415 |
-| SEC-10 | relay | Token admin con timing | Confronto constant-time |
-| SEC-11 | core | Replay di una POST firmata con body alterato | 401 |
-| SEC-12 | relay | Attività duplicata | Consegna una sola volta |
-| SEC-13 | core | P2P frame da 4 GiB | Rifiutato senza OOM |
-| SEC-14 | relay | `admin_delete_user` | Nessun blob orfano |
-| SEC-15 | core | Delete di nota altrui | Ignorato |
+| SEC-10 | relay | Admin token with timing | Constant-time comparison |
+| SEC-11 | core | Replay of a signed POST with altered body | 401 |
+| SEC-12 | relay | Duplicate activity | Delivered only once |
+| SEC-13 | core | 4 GiB P2P frame | Rejected without OOM |
+| SEC-14 | relay | `admin_delete_user` | No orphan blob |
+| SEC-15 | core | Delete of another actor's note | Ignored |
 
 ---
 
-## 8. CI e ambiente
+## 8. CI and environment
 
-### 8.1 Job della pipeline
+### 8.1 Pipeline jobs
 
-| Job | Comando | Bloccante |
+| Job | Command | Blocking |
 |---|---|---|
-| rust-fmt | `cargo fmt --all -- --check` | sì |
-| rust-clippy | `cargo clippy --workspace --all-targets -- -D warnings` | sì |
-| rust-build | `cargo build --workspace --locked` | sì |
-| rust-test | `cargo test --workspace --locked` | sì |
-| rust-audit | `cargo audit` (o `cargo deny check`) | no (warning) |
-| flutter-analyze | `flutter analyze --fatal-infos` | sì |
-| flutter-test | `flutter test` | sì |
-| platform-config | `scripts/verify_platform_config.sh` | sì |
-| appimage | `scripts/build_appimage.sh` (solo su tag) | no |
+| rust-fmt | `cargo fmt --all -- --check` | yes |
+| rust-clippy | `cargo clippy --workspace --all-targets -- -D warnings` | yes |
+| rust-build | `cargo build --workspace --locked` | yes |
+| rust-test | `cargo test --workspace --locked` | yes |
+| rust-audit | `cargo audit` (or `cargo deny check`) | no (warning) |
+| flutter-analyze | `flutter analyze --fatal-infos` | yes |
+| flutter-test | `flutter test` | yes |
+| platform-config | `scripts/verify_platform_config.sh` | yes |
+| appimage | `scripts/build_appimage.sh` (tags only) | no |
 
-### 8.2 Ambiente locale
+### 8.2 Local environment
 
 ```
 export PATH="$HOME/.cargo/bin:$HOME/flutter/bin:$PATH"
@@ -555,177 +555,177 @@ cd app && flutter test
 scripts/verify_platform_config.sh
 ```
 
-### 8.3 Vincoli
+### 8.3 Constraints
 
-- Nessun test richiede Docker, Postgres, Redis o Meilisearch.
-- Il relay nei test usa `FEDI3_RELAY_DB_DRIVER=sqlite`, `SEARCH_BACKEND=db`, Redis assente.
-- Ogni test ha timeout esplicito; nessun test dura più di 30 s.
-- I test di rete usano porte effimere assegnate dal SO.
+- No test requires Docker, Postgres, Redis or Meilisearch.
+- The relay in the tests uses `FEDI3_RELAY_DB_DRIVER=sqlite`, `SEARCH_BACKEND=db`, Redis absent.
+- Every test has an explicit timeout; no test lasts more than 30 s.
+- Network tests use ephemeral ports assigned by the OS.
 
 ---
 
-## 9. Metriche di accettazione
+## 9. Acceptance metrics
 
-| Metrica | Soglia |
+| Metric | Threshold |
 |---|---|
-| Test Rust totali | ≥ 120 casi, tutti verdi |
-| Test Flutter totali | ≥ 40 casi, tutti verdi |
-| Aree funzionali coperte | 100% delle aree elencate nelle sezioni 3–5 |
-| Test di sicurezza | 15/15 implementati e verdi |
-| Test e2e | 7/7 implementati e verdi |
-| `cargo clippy -D warnings` | pulito |
-| `flutter analyze --fatal-infos` | pulito |
-| Tempo pipeline | < 20 minuti su runner standard |
-| Regressioni | zero sui test esistenti |
+| Total Rust tests | ≥ 120 cases, all green |
+| Total Flutter tests | ≥ 40 cases, all green |
+| Functional areas covered | 100% of the areas listed in sections 3–5 |
+| Security tests | 15/15 implemented and green |
+| E2E tests | 7/7 implemented and green |
+| `cargo clippy -D warnings` | clean |
+| `flutter analyze --fatal-infos` | clean |
+| Pipeline time | < 20 minutes on a standard runner |
+| Regressions | zero on the existing tests |
 
 ---
 
-## 10. Ordine di implementazione dei test
+## 10. Test implementation order
 
-1. **Infrastruttura** (`TestCore`, `TestRelay`, `MockActorServer`, `Signer`, `FakeHttpClient`) — sblocca tutto il resto.
-2. **Sicurezza** (SEC-01…15) — definiscono il comportamento atteso dei fix.
-3. **Unit core** (S-*, E-*, K-*, D-*, Q-*, P-*) — veloci, alta resa.
-4. **Integration core** (A-*, I-*, O-*, M-*, C-*).
+1. **Infrastructure** (`TestCore`, `TestRelay`, `MockActorServer`, `Signer`, `FakeHttpClient`) — it unblocks everything else.
+2. **Security** (SEC-01…15) — they define the expected behaviour of the fixes.
+3. **Core unit** (S-*, E-*, K-*, D-*, Q-*, P-*) — fast, high yield.
+4. **Core integration** (A-*, I-*, O-*, M-*, C-*).
 5. **Relay** (RC-*, RA-*, RL-*, RT-*, RI-*, RM-*, RH-*, RS-*, RW-*, RN-*, RY-*, RX-*, RD-*).
 6. **App** (AM-*, AF-*, AS-*, AN-*, AP-*, AW-*, AL-*).
 7. **E2E** (X-*).
 8. **Static config** (AL-03…06).
 
-I test scritti prima dei fix devono essere marcati come `#[ignore]` con un commento che cita il finding, e riabilitati dopo la correzione. Questo evita una pipeline rossa durante il lavoro e documenta l'intenzione.
+Tests written before the fixes must be marked `#[ignore]` with a comment citing the finding, and re-enabled after the correction. This avoids a red pipeline during the work and documents the intention.
 
 ---
 
-## 11. Stato di implementazione
+## 11. Implementation status
 
-Implementato il 2026-10-31 e il 2026-11-01 in tre iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:
+Implemented on 2026-10-31 and 2026-11-01 in three iterations. Real counts verified by running the final suite:
 
-| Area | Casi implementati | Dove |
+| Area | Implemented cases | Where |
 |---|---|---|
-| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy, anchor) | 42 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
-| Integrazione core — ActivityPub e sicurezza | 41 | `crates/fedi3_core/tests/ap_security.rs` |
-| Integrazione core — database e coda di consegna | 19 | `crates/fedi3_core/tests/db_queue.rs` |
-| Integrazione core — FFI e runtime | 12 | `crates/fedi3_core/tests/runtime_ffi.rs` |
-| Integrazione core — tunnel | 4 | `crates/fedi3_core/tests/tunnel.rs` |
-| Integrazione core — gap semantici (chat, outbox, account bloccati, media, permessi DB) | 19 | `crates/fedi3_core/tests/semantics.rs` |
-| Integrazione core — policy di rete e cap dei corpi | 6 | `crates/fedi3_core/tests/net_policy.rs` |
-| Unit relay | 35 | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
-| Integrazione relay | 29 | `crates/fedi3_relay/tests/relay_http.rs` |
-| **End-to-end federazione (relay reale + due core reali)** | **1** | `crates/fedi3_relay/tests/e2e_federation.rs` |
-| **End-to-end identità anchor + spool cieco** | **1** | `crates/fedi3_relay/tests/e2e_anchor_spool.rs` |
-| **Integrazione mesh relay + moderazione** | **1** | `crates/fedi3_relay/tests/mesh_moderation.rs` |
-| **Totale Rust** | **210** | |
-| Unit app (modelli, MFM, store, core API, stato, follow request, anchor) | 30 | `app/test/unit/` |
-| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio, richieste di follow, networking/anchor) | 49 | `app/test/widget/`, `app/test/widget_test.dart` |
-| l10n e configurazione di piattaforma | 9 | `app/test/l10n/`, `app/test/platform_config_test.dart` |
-| **Totale Flutter** | **88** | |
+| Core unit (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy, anchor) | 42 | `crates/fedi3_core/src/*.rs` (`tests` mod) |
+| Core integration — ActivityPub and security | 41 | `crates/fedi3_core/tests/ap_security.rs` |
+| Core integration — database and delivery queue | 19 | `crates/fedi3_core/tests/db_queue.rs` |
+| Core integration — FFI and runtime | 12 | `crates/fedi3_core/tests/runtime_ffi.rs` |
+| Core integration — tunnel | 4 | `crates/fedi3_core/tests/tunnel.rs` |
+| Core integration — semantic gaps (chat, outbox, locked accounts, media, DB permissions) | 19 | `crates/fedi3_core/tests/semantics.rs` |
+| Core integration — network policy and body caps | 6 | `crates/fedi3_core/tests/net_policy.rs` |
+| Relay unit | 35 | `crates/fedi3_relay/src/main.rs` (`tests` mod) |
+| Relay integration | 29 | `crates/fedi3_relay/tests/relay_http.rs` |
+| **Federation end-to-end (real relay + two real cores)** | **1** | `crates/fedi3_relay/tests/e2e_federation.rs` |
+| **Anchor identity + blind spool end-to-end** | **1** | `crates/fedi3_relay/tests/e2e_anchor_spool.rs` |
+| **Relay mesh + moderation integration** | **1** | `crates/fedi3_relay/tests/mesh_moderation.rs` |
+| **Rust total** | **210** | |
+| App unit (models, MFM, stores, core API, state, follow request, anchor) | 30 | `app/test/unit/` |
+| App widgets (onboarding, timeline, compose, note card, settings, chat, notifications, media viewer, first run, follow requests, networking/anchor) | 49 | `app/test/widget/`, `app/test/widget_test.dart` |
+| l10n and platform configuration | 9 | `app/test/l10n/`, `app/test/platform_config_test.dart` |
+| **Flutter total** | **88** | |
 
-### Scenario end-to-end implementato (X-01…X-07)
+### Implemented end-to-end scenario (X-01…X-07)
 
-`crates/fedi3_relay/tests/e2e_federation.rs` avvia il binario reale del relay con SQLite e due runtime core reali in-process (identità, database e tunnel separati), poi verifica:
+`crates/fedi3_relay/tests/e2e_federation.rs` starts the real relay binary with SQLite and two real core runtimes in-process (separate identity, database and tunnel), then verifies:
 
-1. i due tunnel si connettono e il relay serve l'actor document di entrambi;
-2. bob segue alice attraverso il relay: Follow firmato, verifica della firma, Accept consegnato, stato `accepted` su bob;
-3. alice pubblica una nota pubblica dal proprio outbox;
-4. la Create firmata arriva nell'inbox di bob e compare nella sua home timeline;
-5. l'outbox pubblico è leggibile attraverso il relay e contiene la nota.
+1. the two tunnels connect and the relay serves both actor documents;
+2. bob follows alice through the relay: signed Follow, signature verification, Accept delivered, `accepted` state on bob;
+3. alice publishes a public note from her own outbox;
+4. the signed Create arrives in bob's inbox and appears in his home timeline;
+5. the public outbox is readable through the relay and contains the note.
 
-Il test ha fatto emergere due difetti reali (deadlock del tunnel su fetch annidati, shared inbox del relay incapace di espandere `followers`), entrambi corretti.
+The test surfaced two real defects (tunnel deadlock on nested fetches, relay shared inbox unable to expand `followers`), both fixed.
 
-### Scenario end-to-end decentralizzazione (identità, spool, mesh, moderazione)
+### Decentralization end-to-end scenario (identity, spool, mesh, moderation)
 
 `crates/fedi3_relay/tests/e2e_anchor_spool.rs`:
 
-1. il core pubblica i documenti anchor in `<data_dir>/anchor/` e un host statico di test li serve;
-2. il relay reindirizza `GET /users/alice` all'actor canonico e il WebFinger punta all'anchor;
-3. l'actor anchor mantiene `inbox`/`outbox` sul relay e la chiave sull'anchor;
-4. la federazione funziona in modalità anchor (follow e consegna della nota);
-5. con il core fermo il relay mette in spool la richiesta **cifrata**: nel database non compare il plaintext;
-6. alla riconnessione il relay invia l'envelope cifrato, il core decifra, verifica la firma e la notifica arriva.
+1. the core publishes the anchor documents in `<data_dir>/anchor/` and a static test host serves them;
+2. the relay redirects `GET /users/alice` to the canonical actor and WebFinger points to the anchor;
+3. the anchor actor keeps `inbox`/`outbox` on the relay and the key on the anchor;
+4. federation works in anchor mode (follow and note delivery);
+5. with the core stopped the relay spools the request **encrypted**: the plaintext does not appear in the database;
+6. on reconnection the relay sends the encrypted envelope, the core decrypts it, verifies the signature and the notification arrives.
 
 `crates/fedi3_relay/tests/mesh_moderation.rs`:
 
-1. due relay si registrano come peer e sincronizzano la directory utenti;
-2. una richiesta per un utente ospitato sull'altro relay viene inoltrata al relay di casa;
-3. una blocklist relay-wide e una per-utente bloccano il mittente con `202`, senza forward né spool;
-4. il token errato viene rifiutato e un utente sconosciuto resta `404` (nessun loop di hop).
+1. two relays register as peers and synchronize the user directory;
+2. a request for a user hosted on the other relay is forwarded to the home relay;
+3. a relay-wide blocklist and a per-user one block the sender with `202`, without forward or spool;
+4. the wrong token is rejected and an unknown user stays `404` (no hop loop).
 
-Gate eseguiti con output reale sullo stato finale:
+Gates executed with real output on the final state:
 
-| Gate | Comando | Esito |
+| Gate | Command | Outcome |
 |---|---|---|
-| Formattazione Rust | `cargo fmt --all -- --check` | ✅ |
-| Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warning |
+| Rust formatting | `cargo fmt --all -- --check` | ✅ |
+| Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warnings |
 | Build | `cargo build --workspace --locked` | ✅ |
-| Test Rust | `cargo test --workspace --locked` | ✅ 210/210 |
+| Rust tests | `cargo test --workspace --locked` | ✅ 210/210 |
 | End-to-end | `cargo test -p fedi3_relay --test e2e_federation --test e2e_anchor_spool --test mesh_moderation` | ✅ 3/3 |
-| Analisi app | `flutter analyze --fatal-infos` | ✅ |
-| Formattazione app | `dart format --set-exit-if-changed lib test` | ✅ |
-| Test app | `flutter test` | ✅ 88/88 |
-| Configurazione piattaforma | `scripts/verify_platform_config.sh` | ✅ 9/9 |
+| App analysis | `flutter analyze --fatal-infos` | ✅ |
+| App formatting | `dart format --set-exit-if-changed lib test` | ✅ |
+| App tests | `flutter test` | ✅ 88/88 |
+| Platform configuration | `scripts/verify_platform_config.sh` | ✅ 9/9 |
 
-### Scostamenti dal piano
+### Deviations from the plan
 
-- I casi di integrazione del relay sono 29: i casi di configurazione, token, `client_ip`, rate limiter, firme e migrazioni sono coperti come unit test dentro `main.rs` (35 casi), quindi la copertura delle sezioni §4.1–§4.10 è completa anche se distribuita diversamente.
-- X-01…X-07 sono ora coperti dal test end-to-end reale, non solo indirettamente.
-- Il Dockerfile del relay non è stato costruito (Docker non disponibile nell'ambiente): il tag `rust:1.99-bookworm` è stato verificato esistente sul registry e allineato al toolchain usato per i test.
-- La migrazione PostgreSQL è coperta da asserzioni sul testo SQL, non da un database live.
-- Alcuni lint clippy preesistenti di tipo stilistico sono stati silenziati a livello di crate (`manual_clamp`, `result_large_err`, `too_many_arguments`, …). I lint di correttezza restano attivi e bloccanti.
+- The relay integration cases are 29: the configuration, token, `client_ip`, rate limiter, signature and migration cases are covered as unit tests inside `main.rs` (35 cases), so the coverage of sections §4.1–§4.10 is complete even if distributed differently.
+- X-01…X-07 are now covered by the real end-to-end test, not only indirectly.
+- The relay Dockerfile was not built (Docker unavailable in the environment): the tag `rust:1.99-bookworm` was verified to exist on the registry and aligned with the toolchain used for the tests.
+- The PostgreSQL migration is covered by assertions on the SQL text, not by a live database.
+- Some pre-existing stylistic clippy lints were silenced at crate level (`manual_clamp`, `result_large_err`, `too_many_arguments`, …). Correctness lints remain active and blocking.
 
-## 12. Interoperabilità reale (manuale)
+## 12. Real interoperability (manual)
 
-I test automatici usano server ActivityPub simulati. Per verificare il comportamento contro
-implementazioni indipendenti esiste un test manuale documentato in `docs/interop.md`, eseguito
-contro **Mastodon 4.7.4** e **Misskey 2026.10.1** reali (PostgreSQL + Redis, build da sorgente,
-reverse proxy TLS con CA locale).
+The automated tests use simulated ActivityPub servers. To verify the behaviour against
+independent implementations there is a manual test documented in `docs/interop.md`, run
+against real **Mastodon 4.7.4** and **Misskey 2026.10.1** (PostgreSQL + Redis, built from source,
+TLS reverse proxy with a local CA).
 
-Copertura verificata:
+Verified coverage:
 
-| Scenario | Mastodon | Misskey | Esito |
+| Scenario | Mastodon | Misskey | Outcome |
 |----------|----------|---------|-------|
-| Risoluzione attore Fedi3 ancorato via WebFinger/HTTPS | sì | sì | pass |
-| Follow dell'identità Fedi3 | sì | sì | pass |
-| `Accept` firmato consegnato e verificato | sì | sì | pass |
-| Nota Fedi3 → istanza terza (firma verificata) | sì | sì | pass |
-| Nota istanza terza → Fedi3 (verifica firma e storage) | sì | sì | pass |
-| Follow Fedi3 → istanza terza | sì (manuale) | sì | pass |
-| Proxy endpoint AP su host di identità, relay su host separato | sì | sì | pass |
-| Media foto `image/png` Fedi3 → istanza | sì | sì | pass |
-| Media video `video/mp4` Fedi3 → istanza | sì | sì | pass |
-| Media audio `audio/mpeg` Fedi3 → istanza | sì | sì | pass |
-| Media foto/video/audio istanza → Fedi3 | sì | sì | pass |
-| Coerenza timeline e thread tra i tre client | sì | sì | pass |
+| Resolution of an anchored Fedi3 actor via WebFinger/HTTPS | yes | yes | pass |
+| Follow of the Fedi3 identity | yes | yes | pass |
+| Signed `Accept` delivered and verified | yes | yes | pass |
+| Fedi3 note → third-party instance (signature verified) | yes | yes | pass |
+| Third-party instance note → Fedi3 (signature verification and storage) | yes | yes | pass |
+| Follow Fedi3 → third-party instance | yes (manual) | yes | pass |
+| AP endpoint proxy on the identity host, relay on a separate host | yes | yes | pass |
+| Fedi3 photo media `image/png` → instance | yes | yes | pass |
+| Fedi3 video media `video/mp4` → instance | yes | yes | pass |
+| Fedi3 audio media `audio/mpeg` → instance | yes | yes | pass |
+| Photo/video/audio media instance → Fedi3 | yes | yes | pass |
+| Timeline and thread consistency across the three clients | yes | yes | pass |
 
-Il test ha trovato un bug reale nella firma HTTP in uscita (header `Content-Type` duplicato),
-corretto in `Delivery::deliver_json`; dopo il fix tutti gli scenari passano. Il test ha inoltre
-verificato che il proxy degli endpoint AP sull'host di identità mantiene la divisione
-dal relay e funziona con le istanze classiche, e che foto, video e audio federano in entrambe
-le direzioni con timeline e thread coerenti.
+The test found a real bug in the outgoing HTTP signature (duplicated `Content-Type` header),
+fixed in `Delivery::deliver_json`; after the fix all scenarios pass. The test also
+verified that the proxy of the AP endpoints on the identity host keeps the separation
+from the relay and works with classic instances, and that photo, video and audio federate in both
+directions with consistent timelines and threads.
 
-Limiti del test: non è in CI (richiede due servizi esterni e un trust store locale); va rieseguito
-manualmente prima di una release che tocchi firma HTTP, delivery o `net_policy`.
+Limits of the test: it is not in CI (it requires two external services and a local trust store); it must be
+re-run manually before a release that touches HTTP signature, delivery or `net_policy`.
 
-### 12.1 Client Flutter contro lo stack reale (manuale)
+### 12.1 Flutter client against the real stack (manual)
 
-Il client desktop è stato avviato contro relay, core, Misskey e Mastodon reali con
-`FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` (necessario solo quando gli host federati risolvono
-su loopback nei test locali) e `FEDI3_DATA_DIR` puntato alla stessa identità del dev client.
+The desktop client was started against real relay, core, Misskey and Mastodon with
+`FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` (needed only when the federated hosts resolve
+to loopback in local tests) and `FEDI3_DATA_DIR` pointed to the same identity as the dev client.
 
-| Verifica UI | Esito |
-| Timeline Home/Locale/Federata con contenuti federati; Sociale vuota con P2P off | pass |
-| Pubblicazione nota dal client visibile su Mastodon e Misskey | pass |
-| Thread con padre e risposta annidata; risposta dal client con `in_reply_to_id` corretto | pass |
-| Like, Announce, EmojiReact dal client persistiti e federati | pass |
-| Follow/unfollow dal profilo e dalle liste follower/seguiti, stato coerente su Mastodon | pass |
-| Liste follower e seguiti raggiungibili dai contatori del profilo | pass |
-| Media immagine e video renderizzati, player audio istanziato | pass |
-| Cerca (post e utenti), Chat, Notifiche, Relay, Configurazioni | pass |
-| Ricerca utenti con fallback su attori visti/rete follow locale | pass |
+| UI check | Outcome |
+| Home/Local/Federated timeline with federated content; Social empty with P2P off | pass |
+| Note published from the client visible on Mastodon and Misskey | pass |
+| Thread with parent and nested reply; reply from the client with correct `in_reply_to_id` | pass |
+| Like, Announce, EmojiReact from the client persisted and federated | pass |
+| Follow/unfollow from the profile and from the follower/following lists, consistent state on Mastodon | pass |
+| Follower and following lists reachable from the profile counters | pass |
+| Image and video media rendered, audio player instantiated | pass |
+| Search (posts and users), Chat, Notifications, Relay, Settings | pass |
+| User search with fallback on seen actors/local follow network | pass |
 
-Bug corretti durante la verifica:
+Bugs fixed during the verification:
 
-- `503 search coverage incomplete` su relay standalone senza relay peer o con indice utenti
-  vuoto: la copertura è ora considerata vacua, con test unitari dedicati;
-- tunnel WebSocket con CA privata: il client ora usa i root CA di sistema;
-- ricerca utenti lato client vuota perché l'indice del core contiene solo oggetti attività:
-  aggiunto fallback su cache attori e rete follow/follower locale;
-- lista follower/seguiti assente nel client: aggiunta schermata con follow/unfollow per attore.
+- `503 search coverage incomplete` on a standalone relay without relay peers or with an empty
+  user index: coverage is now considered vacuous, with dedicated unit tests;
+- WebSocket tunnel with a private CA: the client now uses the system root CAs;
+- client-side user search empty because the core index contains only activity objects:
+  added a fallback on the actor cache and the local follow/follower network;
+- follower/following list missing in the client: added a screen with follow/unfollow per actor.

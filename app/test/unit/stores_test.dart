@@ -104,8 +104,27 @@ void main() {
     });
   });
 
+  test(
+      'PrefsStore serializes concurrent temp-file writes and recovers after failure',
+      () async {
+    await Future.wait(List.generate(
+        25,
+        (i) =>
+            PrefsStore.write(UiPrefs.defaults().copyWith(lastChatSeenMs: i))));
+    expect((await PrefsStore.read()).lastChatSeenMs, 24);
+    final file = File('${tempDir.path}${Platform.pathSeparator}ui_prefs.json');
+    final conflict = Directory('${file.path}.tmp');
+    await conflict.create();
+    await expectLater(PrefsStore.write(UiPrefs.defaults()),
+        throwsA(isA<FileSystemException>()));
+    await conflict.delete();
+    await PrefsStore.write(UiPrefs.defaults().copyWith(lastChatSeenMs: 99));
+    expect((await PrefsStore.read()).lastChatSeenMs, 99);
+  });
+
   group('SavedNotesStore', () {
-    test('round-trips saved activities newest first and removes them', () async {
+    test('round-trips saved activities newest first and removes them',
+        () async {
       Map<String, dynamic> activity(String id) => {
             'type': 'Create',
             'actor': 'https://a.test/users/one',

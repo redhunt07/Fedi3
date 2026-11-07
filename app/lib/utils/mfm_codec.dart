@@ -50,7 +50,8 @@ class MfmCodec {
           buf.add(lines[i].replaceFirst(RegExp(r'^>\s?'), ''));
           i++;
         }
-        out.add('<blockquote><p>${buf.map(_inline).join('<br>')}</p></blockquote>');
+        out.add(
+            '<blockquote><p>${buf.map(_inline).join('<br>')}</p></blockquote>');
         continue;
       }
       if (RegExp(r'^[-*]\s+').hasMatch(line)) {
@@ -59,7 +60,8 @@ class MfmCodec {
           items.add(lines[i].replaceFirst(RegExp(r'^[-*]\s+'), ''));
           i++;
         }
-        out.add('<ul>${items.map((e) => '<li>${_inline(e)}</li>').join()}</ul>');
+        out.add(
+            '<ul>${items.map((e) => '<li>${_inline(e)}</li>').join()}</ul>');
         continue;
       }
       if (RegExp(r'^\d+\.\s+').hasMatch(line)) {
@@ -68,7 +70,8 @@ class MfmCodec {
           items.add(lines[i].replaceFirst(RegExp(r'^\d+\.\s+'), ''));
           i++;
         }
-        out.add('<ol>${items.map((e) => '<li>${_inline(e)}</li>').join()}</ol>');
+        out.add(
+            '<ol>${items.map((e) => '<li>${_inline(e)}</li>').join()}</ol>');
         continue;
       }
       final para = <String>[];
@@ -101,8 +104,7 @@ class MfmCodec {
 
   static String _inline(String input) {
     var out = _escapeHtml(input);
-    out = out.replaceAllMapped(
-        RegExp(r'\[([^\]]+)\]\(([^)]+)\)'),
+    out = out.replaceAllMapped(RegExp(r'\[([^\]]+)\]\(([^)]+)\)'),
         (m) => '<a href="${m[2]}">${m[1]}</a>');
     out = out.replaceAllMapped(
         RegExp(r'`([^`]+)`'), (m) => '<code>${m[1]}</code>');
@@ -110,18 +112,17 @@ class MfmCodec {
         RegExp(r'\*\*([^*]+)\*\*'), (m) => '<strong>${m[1]}</strong>');
     out = out.replaceAllMapped(
         RegExp(r'~~([^~]+)~~'), (m) => '<del>${m[1]}</del>');
+    out =
+        out.replaceAllMapped(RegExp(r'\*([^*]+)\*'), (m) => '<em>${m[1]}</em>');
     out = out.replaceAllMapped(
-        RegExp(r'\*([^*]+)\*'), (m) => '<em>${m[1]}</em>');
-    out = out.replaceAllMapped(RegExp(r'\$\[(x[0-9.]+)\s+([^\]]*)\]'),
-        (m) => '<span style="font-size:${m[1]!.substring(1)}em">${m[2]}</span>');
-    out = out.replaceAllMapped(
-        RegExp(r'\$\[font\.serif\s+([^\]]*)\]'),
+        RegExp(r'\$\[(x[0-9.]+)\s+([^\]]*)\]'),
+        (m) =>
+            '<span style="font-size:${m[1]!.substring(1)}em">${m[2]}</span>');
+    out = out.replaceAllMapped(RegExp(r'\$\[font\.serif\s+([^\]]*)\]'),
         (m) => '<span style="font-family:serif">${m[1]}</span>');
-    out = out.replaceAllMapped(
-        RegExp(r'\$\[font\.monospace\s+([^\]]*)\]'),
+    out = out.replaceAllMapped(RegExp(r'\$\[font\.monospace\s+([^\]]*)\]'),
         (m) => '<span style="font-family:monospace">${m[1]}</span>');
-    out = out.replaceAllMapped(
-        RegExp(r'\$\[font\.sans-serif\s+([^\]]*)\]'),
+    out = out.replaceAllMapped(RegExp(r'\$\[font\.sans-serif\s+([^\]]*)\]'),
         (m) => '<span style="font-family:sans-serif">${m[1]}</span>');
     for (final align in const ['center', 'left', 'right']) {
       out = out.replaceAllMapped(

@@ -177,7 +177,7 @@ Il piano è completo solo quando, sulla stessa macchina:
 1. `cargo fmt --check` pulito.
 2. `cargo clippy --workspace --all-targets -- -D warnings` pulito.
 3. `cargo build --workspace --locked` riesce.
-4. `cargo test --workspace --locked` verde, con la suite descritta in [test_plan.md](test_plan.md).
+4. `cargo test --workspace --locked` verde, con la suite descritta in [test_plan.md](../test_plan.md).
 5. `flutter analyze` senza errori; `flutter test` verde.
 6. `scripts/verify_platform_config.sh` esce 0.
 7. Il diff non introduce regressioni nei test esistenti e non rompe la compatibilità AP (verificata dai contract test sui documenti actor/attività).

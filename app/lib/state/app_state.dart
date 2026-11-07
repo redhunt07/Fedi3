@@ -31,6 +31,7 @@ class AppState extends ChangeNotifier {
     Duration restartBaseDelay = const Duration(seconds: 2),
     int restartMaxAttempts = 5,
     bool configCorrupt = false,
+    bool credentialsUnavailable = false,
     bool prefsCorrupt = false,
   })  : _config = config,
         _prefs = prefs,
@@ -41,11 +42,14 @@ class AppState extends ChangeNotifier {
         _restartBaseDelay = restartBaseDelay,
         _restartMaxAttempts = restartMaxAttempts,
         _configCorrupt = configCorrupt,
+        _credentialsUnavailable = credentialsUnavailable,
         _prefsCorrupt = prefsCorrupt;
 
   CoreConfig? _config;
   UiPrefs _prefs;
   int? _coreHandle;
+  Future<void>? _stopFuture;
+  Future<void> _prefsWrites = Future<void>.value();
   String? _lastError;
   int _unreadNotifications = 0;
   int _unreadChats = 0;
@@ -57,12 +61,14 @@ class AppState extends ChangeNotifier {
   final Duration _restartBaseDelay;
   final int _restartMaxAttempts;
   bool _configCorrupt;
+  bool _credentialsUnavailable;
   bool _prefsCorrupt;
 
   Timer? _watchdog;
   Future<void>? _starting;
   bool _restarting = false;
   int _restartAttempt = 0;
+  DateTime? _restartAfter;
   bool _disposed = false;
 
   CoreConfig? get config => _config;
@@ -71,14 +77,32 @@ class AppState extends ChangeNotifier {
   bool get isRunning => _coreHandle != null;
   String? get lastError => _lastError;
   bool get configCorrupt => _configCorrupt;
+  bool get credentialsUnavailable => _credentialsUnavailable;
   bool get prefsCorrupt => _prefsCorrupt;
   int get unreadNotifications => _unreadNotifications;
   int get unreadChats => _unreadChats;
 
   CoreRuntime get _runtime => _core ?? Fedi3Core.instance;
 
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   void markCoreDead([String? error]) {
+    final handle = _coreHandle;
     _coreHandle = null;
+    if (handle != null) {
+      final operation = _releaseHandle(handle).catchError((Object e) {
+        TelemetryService.record('core_stop_failed', e.toString());
+      });
+      late final Future<void> tracked;
+      tracked = operation.whenComplete(() {
+        if (identical(_stopFuture, tracked)) _stopFuture = null;
+      });
+      _stopFuture = tracked;
+      unawaited(tracked);
+    }
     _lastError = error;
     _unreadNotifications = 0;
     _unreadChats = 0;
@@ -86,6 +110,15 @@ class AppState extends ChangeNotifier {
       TelemetryService.record('core_dead', error);
     }
     notifyListeners();
+  }
+
+  Future<void> _releaseHandle(int handle) async {
+    final runtime = _runtime;
+    if (runtime is AsyncCoreStop) {
+      await (runtime as AsyncCoreStop).stopAsync(handle);
+    } else {
+      runtime.stop(handle);
+    }
   }
 
   void incrementUnreadNotifications([int delta = 1]) {
@@ -123,7 +156,7 @@ class AppState extends ChangeNotifier {
     Duration? watchdogInterval,
     bool watchdogEnabled = true,
   }) async {
-    final configResult = ConfigStore.load();
+    final configResult = await ConfigStore.loadSecure();
     final prefsResult = await PrefsStore.load();
     final cfgData = configResult.data;
     final state = AppState(
@@ -134,32 +167,70 @@ class AppState extends ChangeNotifier {
       watchdogInterval: watchdogInterval,
       watchdogEnabled: watchdogEnabled,
       configCorrupt: configResult.isCorrupt,
+      credentialsUnavailable: configResult.isUnavailable,
       prefsCorrupt: prefsResult.corrupt,
     );
-    if (configResult.isCorrupt) {
+    if (configResult.isCorrupt || configResult.isUnavailable) {
       state._lastError = configResult.error;
     }
     return state;
   }
 
-  Future<void> saveConfig(CoreConfig cfg) async {
-    // Atomic write first: if it fails, the previous config stays authoritative.
-    ConfigStore.writeConfig(cfg.toJson());
-    _config = cfg;
-    _configCorrupt = false;
+  Future<void> reloadConfig() async {
+    final result = await ConfigStore.loadSecure();
+    _configCorrupt = result.isCorrupt;
+    _credentialsUnavailable = result.isUnavailable;
+    _lastError = result.error;
+    if (result.data != null) _config = CoreConfig.fromJson(result.data!);
     notifyListeners();
   }
 
-  Future<void> savePrefs(UiPrefs prefs) async {
-    final prev = _prefs;
-    await PrefsStore.write(prefs);
-    _prefs = prefs;
-    _prefsCorrupt = false;
+  Future<void> saveConfig(CoreConfig cfg) async {
+    // Atomic write first: if it fails, the previous config stays authoritative.
+    await ConfigStore.writeSecure(cfg.toJson());
+    _config = cfg;
+    _configCorrupt = false;
+    _credentialsUnavailable = false;
     notifyListeners();
-    if ((prev.telemetryEnabled || prev.clientMonitoringEnabled) &&
-        !(prefs.telemetryEnabled || prefs.clientMonitoringEnabled)) {
-      await TelemetryService.clear();
-    }
+  }
+
+  /// Whole-snapshot replacement is reserved for explicit backup restore.
+  Future<void> savePrefs(UiPrefs prefs) => _enqueuePrefs((_) => prefs);
+
+  /// Evaluate UI mutations against the latest persisted snapshot, not a stale
+  /// build() capture. Read cursors merge monotonically across concurrent chats.
+  Future<void> updatePrefs(UiPrefs Function(UiPrefs) change) =>
+      _enqueuePrefs((current) {
+        final next = change(current);
+        int latest(int a, int b) => a > b ? a : b;
+        final threads = Map<String, int>.from(current.chatThreadSeenMs);
+        next.chatThreadSeenMs.forEach((id, value) {
+          threads[id] = latest(threads[id] ?? 0, value);
+        });
+        return next.copyWith(
+          lastChatSeenMs: latest(current.lastChatSeenMs, next.lastChatSeenMs),
+          lastNotificationsSeenMs: latest(
+              current.lastNotificationsSeenMs, next.lastNotificationsSeenMs),
+          chatThreadSeenMs: threads,
+        );
+      });
+
+  Future<void> _enqueuePrefs(UiPrefs Function(UiPrefs) change) {
+    final operation = _prefsWrites.then((_) async {
+      final prev = _prefs;
+      final next = change(prev);
+      await PrefsStore.write(next);
+      _prefs = next;
+      _prefsCorrupt = false;
+      notifyListeners();
+      if ((prev.telemetryEnabled || prev.clientMonitoringEnabled) &&
+          !(next.telemetryEnabled || next.clientMonitoringEnabled)) {
+        await TelemetryService.clear();
+      }
+    });
+    _prefsWrites =
+        operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return operation;
   }
 
   Future<void> clearConfig() async {
@@ -176,11 +247,17 @@ class AppState extends ChangeNotifier {
   /// Starts the core. The FFI contract guarantees that a normal return means
   /// the server is listening, so the handle is stored only after that.
   Future<void> startCore() async {
+    final stopping = _stopFuture;
+    if (stopping != null) await stopping;
     final cfg = _config;
     if (cfg == null) return;
     if (_coreHandle != null) return;
     final pending = _starting;
     if (pending != null) return pending; // AP-06: one FFI call at a time
+    if (!_restarting) {
+      _restartAttempt = 0;
+      _restartAfter = null;
+    }
 
     final future = _startCoreInternal(cfg);
     _starting = future;
@@ -253,12 +330,26 @@ class AppState extends ChangeNotifier {
       _lastError = e.toString();
       TelemetryService.record(
           'core_start_failed', _lastError ?? 'unknown error');
+      _startWatchdog();
     }
     notifyListeners();
   }
 
   Future<void> stopCore() async {
+    final current = _stopFuture;
+    if (current != null) return current;
+    final operation = _stopCoreInner();
+    _stopFuture = operation;
+    try {
+      await operation;
+    } finally {
+      _stopFuture = null;
+    }
+  }
+
+  Future<void> _stopCoreInner() async {
     final handle = _coreHandle;
+    _coreHandle = null;
     _stopWatchdog();
     _lastError = null;
     if (handle == null) {
@@ -267,7 +358,7 @@ class AppState extends ChangeNotifier {
       return;
     }
     try {
-      _runtime.stop(handle);
+      await _releaseHandle(handle);
     } catch (e) {
       _lastError = e.toString();
       TelemetryService.record(
@@ -352,7 +443,12 @@ class AppState extends ChangeNotifier {
   Future<void> _attemptRestart() async {
     if (_disposed || !_watchdogEnabled || _restarting) return;
     if (_config == null) return;
-    if (_restartAttempt >= _restartMaxAttempts) return;
+    if (_restartAttempt >= _restartMaxAttempts) {
+      _restartAfter ??= DateTime.now().add(const Duration(minutes: 5));
+      if (DateTime.now().isBefore(_restartAfter!)) return;
+      _restartAttempt = 0;
+      _restartAfter = null;
+    }
 
     _restarting = true;
     try {
@@ -372,6 +468,13 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    final handle = _coreHandle;
+    _coreHandle = null;
+    if (handle != null) {
+      unawaited(_releaseHandle(handle).catchError((Object e) {
+        TelemetryService.record('core_stop_failed', e.toString());
+      }));
+    }
     _disposed = true;
     _stopWatchdog();
     super.dispose();

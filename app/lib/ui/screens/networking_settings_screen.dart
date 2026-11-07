@@ -9,6 +9,8 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
+import '../widgets/fedi3_ui.dart';
 import '../widgets/network_error_card.dart';
 import 'relay_admin_screen.dart';
 import 'edit_config_screen.dart';
@@ -32,18 +34,29 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   String? _anchorError;
   String? _anchorStatus;
   bool _savingAnchor = false;
+  late final TextEditingController _bootstrap;
+  late bool _publicDiscovery;
+  late bool _peerExchange;
+  bool _savingDiscovery = false;
+  String? _discoveryStatus;
 
   @override
   void initState() {
     super.initState();
     _anchorActorUrl = TextEditingController(
         text: widget.appState.config?.anchorActorUrl ?? '');
+    final cfg = widget.appState.config;
+    _bootstrap =
+        TextEditingController(text: cfg?.p2pBootstrap.join('\n') ?? '');
+    _publicDiscovery = cfg?.p2pPublicDiscovery ?? true;
+    _peerExchange = cfg?.p2pPeerExchange ?? true;
     _loadRelays();
   }
 
   @override
   void dispose() {
     _anchorActorUrl.dispose();
+    _bootstrap.dispose();
     super.dispose();
   }
 
@@ -77,6 +90,34 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       setState(() => _anchorStatus = context.l10n.err(e.toString()));
     } finally {
       if (mounted) setState(() => _savingAnchor = false);
+    }
+  }
+
+  Future<void> _saveDiscovery() async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    setState(() {
+      _savingDiscovery = true;
+      _discoveryStatus = null;
+    });
+    try {
+      await widget.appState.replaceConfig(cfg.copyWith(
+        p2pBootstrap: _bootstrap.text
+            .split('\n')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toSet()
+            .toList(),
+        p2pPublicDiscovery: _publicDiscovery,
+        p2pPeerExchange: _peerExchange,
+      ));
+      if (mounted) setState(() => _discoveryStatus = context.l10n.ok);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _discoveryStatus = context.l10n.err(e.toString()));
+      }
+    } finally {
+      if (mounted) setState(() => _savingDiscovery = false);
     }
   }
 
@@ -116,46 +157,154 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     }
   }
 
+  Widget _section(BuildContext context, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+      ),
+    );
+  }
+
+  Widget _infoTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassPanel(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(11),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    scheme.primary.withAlpha(220),
+                    const Color(UiTokens.brandCyan).withAlpha(190),
+                  ],
+                ),
+              ),
+              child: Icon(icon, size: 18, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text(value,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = widget.appState.config!;
     return Scaffold(
       appBar: AppBar(title: Text(context.l10n.networkingTitle)),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.networkingRelay),
-              subtitle: Text(cfg.publicBaseUrl),
-            ),
+          _section(context, context.l10n.networkingRelay),
+          _infoTile(
+            context,
+            icon: Icons.public,
+            title: context.l10n.networkingRelay,
+            value: cfg.publicBaseUrl,
           ),
-          const SizedBox(height: 10),
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.networkingRelayWs),
-              subtitle: Text(cfg.relayWs),
-            ),
+          _infoTile(
+            context,
+            icon: Icons.cable_rounded,
+            title: context.l10n.networkingRelayWs,
+            value: cfg.relayWs,
           ),
-          const SizedBox(height: 10),
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.networkingBind),
-              subtitle: Text(cfg.bind),
-            ),
+          _infoTile(
+            context,
+            icon: Icons.settings_ethernet_rounded,
+            title: context.l10n.networkingBind,
+            value: cfg.bind,
           ),
-          const SizedBox(height: 10),
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.networkingP2p),
-              subtitle: Text(
-                  cfg.p2pEnable ? context.l10n.enabled : context.l10n.disabled),
-            ),
+          _infoTile(
+            context,
+            icon: Icons.hub_rounded,
+            title: context.l10n.networkingP2p,
+            value: cfg.p2pEnable ? context.l10n.enabled : context.l10n.disabled,
           ),
-          const SizedBox(height: 16),
-          Text(context.l10n.networkingRelaysTitle,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
+          _section(context, context.l10n.networkingDiscoveryTitle),
+          GlassPanel(
+            padding: const EdgeInsets.all(16),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(context.l10n.networkingPublicDiscovery),
+                  subtitle: Text(context.l10n.networkingPublicDiscoveryHint),
+                  value: _publicDiscovery,
+                  onChanged: _savingDiscovery
+                      ? null
+                      : (v) => setState(() => _publicDiscovery = v),
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(context.l10n.networkingPeerExchange),
+                  subtitle: Text(context.l10n.networkingPeerExchangeHint),
+                  value: _peerExchange,
+                  onChanged: _savingDiscovery
+                      ? null
+                      : (v) => setState(() => _peerExchange = v),
+                ),
+              ),
+              TextField(
+                key: const Key('p2pBootstrapField'),
+                controller: _bootstrap,
+                enabled: !_savingDiscovery,
+                minLines: 2,
+                maxLines: 5,
+                decoration: InputDecoration(
+                    labelText: context.l10n.networkingBootstrapLabel,
+                    helperText: context.l10n.networkingBootstrapHint,
+                    helperMaxLines: 3),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                  key: const Key('saveDiscoveryButton'),
+                  onPressed: _savingDiscovery ? null : _saveDiscovery,
+                  child: Text(context.l10n.save)),
+              if (_discoveryStatus != null) Text(_discoveryStatus!),
+            ]),
+          ),
+          _section(context, context.l10n.networkingRelaysTitle),
           if (_relayError != null)
             NetworkErrorCard(
               message: _relayError ?? context.l10n.networkingRelaysError,
@@ -179,47 +328,57 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
           ),
           if (_relays.isEmpty && !_loadingRelays)
             Text(context.l10n.networkingRelaysEmpty),
-          Card(
-            child: ListTile(
-              title: Text(context.l10n.relayAdminTitle),
-              subtitle: Text(context.l10n.relayAdminHint),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                      builder: (_) =>
-                          RelayAdminScreen(appState: widget.appState)),
-                );
-              },
+          GlassPanel(
+            padding: EdgeInsets.zero,
+            child: Material(
+              color: Colors.transparent,
+              child: ListTile(
+                title: Text(context.l10n.relayAdminTitle),
+                subtitle: Text(context.l10n.relayAdminHint),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            RelayAdminScreen(appState: widget.appState)),
+                  );
+                },
+              ),
             ),
           ),
           if (_relays.isNotEmpty)
             for (final r in _relays)
-              Card(
-                child: ListTile(
-                  title: Text(
-                      (r['relay_base_url'] ?? r['relay_url'] ?? '').toString()),
-                  subtitle: Text(
-                      (r['relay_ws_url'] ?? r['relay_ws'] ?? '').toString()),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: GlassPanel(
+                  padding: EdgeInsets.zero,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: ListTile(
+                      title: Text((r['relay_base_url'] ?? r['relay_url'] ?? '')
+                          .toString()),
+                      subtitle: Text((r['relay_ws_url'] ?? r['relay_ws'] ?? '')
+                          .toString()),
+                    ),
+                  ),
                 ),
               ),
-          const SizedBox(height: 16),
-          Text(context.l10n.networkingApRelays,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
+          _section(context, context.l10n.networkingApRelays),
           if (cfg.apRelays.isEmpty)
             Text(context.l10n.networkingApRelaysEmpty)
           else
             for (final r in cfg.apRelays)
-              Card(
-                child: ListTile(
-                  title: Text(r),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: GlassPanel(
+                  padding: EdgeInsets.zero,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: ListTile(title: Text(r)),
+                  ),
                 ),
               ),
-          const SizedBox(height: 20),
-          Text(context.l10n.networkingAnchorTitle,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
+          _section(context, context.l10n.networkingAnchorTitle),
           TextField(
             key: const Key('anchorActorUrlField'),
             controller: _anchorActorUrl,

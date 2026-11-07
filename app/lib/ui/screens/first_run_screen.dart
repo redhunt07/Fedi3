@@ -36,7 +36,10 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
   @override
   void initState() {
     super.initState();
-    _loadPreview();
+    if (!widget.appState.configCorrupt &&
+        !widget.appState.credentialsUnavailable) {
+      _loadPreview();
+    }
   }
 
   Future<void> _loadPreview() async {
@@ -114,6 +117,27 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
       animation: widget.appState,
       builder: (context, _) {
         final prefs = widget.appState.prefs;
+        if (widget.appState.configCorrupt ||
+            widget.appState.credentialsUnavailable) {
+          return Scaffold(
+            appBar: AppBar(title: Text(context.l10n.configRecoveryTitle)),
+            body: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.lock_outline, size: 36),
+                      const SizedBox(height: 16),
+                      Text(widget.appState.credentialsUnavailable
+                          ? context.l10n.keyringUnavailableHint
+                          : context.l10n.corruptConfigHint),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                          onPressed: widget.appState.reloadConfig,
+                          child: Text(context.l10n.networkErrorRetry)),
+                    ])),
+          );
+        }
         return Scaffold(
           appBar: AppBar(title: Text(context.l10n.firstRunTitle)),
           body: ListView(
@@ -205,7 +229,8 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
       ),
     );
     if (value == null) return;
-    await widget.appState.savePrefs(prefs.copyWith(localeTag: value));
+    await widget.appState
+        .updatePrefs((current) => current.copyWith(localeTag: value));
   }
 
   Widget _networkPreviewCard(BuildContext context) {

@@ -116,8 +116,7 @@ void main() {
     await tester.enterText(username, 'bob');
     final url = find.widgetWithText(TextField, 'Instance URL (https://...)');
     await tester.enterText(url, 'https://fedi3.test');
-    final token =
-        find.widgetWithText(TextField, 'Recovery code (relay token)');
+    final token = find.widgetWithText(TextField, 'Recovery code (relay token)');
     await tester.enterText(token, 'abcdefghijklmnop1234');
     await tester.pump();
 

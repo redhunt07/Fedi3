@@ -1,45 +1,45 @@
 # FAQ
 
-## Il relay è un server social completo?
+## Is the relay a complete social server?
 
-No. Il relay fornisce compatibilità ActivityPub (actor, inbox/outbox, webfinger, nodeinfo) e routing verso i core degli utenti tramite tunnel. Non tiene le chiavi private e non è un'istanza Mastodon: è un ponte.
+No. The relay provides ActivityPub compatibility (actor, inbox/outbox, webfinger, nodeinfo) and routing to users' cores through the tunnel. It does not hold private keys and is not a Mastodon instance: it is a bridge.
 
-## Posso usare solo P2P senza relay?
+## Can I use only P2P without a relay?
 
-Sì. Il core si avvia anche senza relay: la configurazione accetta un `relay_ws` vuoto e il tunnel viene semplicemente disattivato. In questa modalità hai chat e sincronizzazione P2P, ma **non** sei raggiungibile dalle istanze del fediverso tradizionale, che parlano solo ActivityPub su HTTPS. Per la federazione con Mastodon/Misskey serve un relay (tuo o pubblico).
+Yes. The core also starts without a relay: the configuration accepts an empty `relay_ws` and the tunnel is simply disabled. In this mode you have chat and P2P synchronization, but you are **not** reachable from traditional fediverse instances, which only speak ActivityPub over HTTPS. For federation with Mastodon/Misskey you need a relay (your own or public).
 
-## Chi vede il mio token del relay?
+## Who sees my relay token?
 
-Nessuno tranne il relay. Il client lo invia come bearer token sul tunnel; il relay ne conserva solo l'hash SHA-256. Il token non viene mai scritto nei log.
+Nobody except the relay. The client sends it as a bearer token on the tunnel; the relay keeps only its SHA-256 hash. The token is never written to the logs.
 
-## Dove sono salvate le chiavi private?
+## Where are the private keys stored?
 
-Nella directory dati del core, con permessi `0600` su POSIX. Non vengono mai inviate al relay: la firma avviene in locale. Fai un backup separato di quella directory se vuoi poter migrare l'account.
+In the core data directory, with `0600` permissions on POSIX. They are never sent to the relay: signing happens locally. Make a separate backup of that directory if you want to be able to migrate the account.
 
-## La chat è cifrata?
+## Is the chat encrypted?
 
-Sì: AES-256-GCM con chiavi per messaggio, avvolte con RSA-OAEP per ogni destinatario. Limite noto: non c'è forward secrecy. Se la chiave privata viene compromessa, i messaggi già scambiati diventano leggibili.
+Yes: AES-256-GCM with per-message keys, wrapped with RSA-OAEP for each recipient. Known limit: there is no forward secrecy. If the private key is compromised, already exchanged messages become readable.
 
-## Telemetria?
+## Telemetry?
 
-È opzionale e attivabile dall'utente. Il relay raccoglie solo dati aggregati (numero di utenti, peer, versione) e i log locali si possono cancellare.
+It is optional and can be enabled by the user. The relay collects only aggregated data (number of users, peers, version) and local logs can be deleted.
 
-## Dove sono salvati i media?
+## Where is media stored?
 
-Sul relay: backend locale, S3 o WebDAV, configurabile con `FEDI3_RELAY_MEDIA_BACKEND`. Il core mantiene una cache locale con limiti di spazio e TTL.
+On the relay: local backend, S3 or WebDAV, configurable with `FEDI3_RELAY_MEDIA_BACKEND`. The core keeps a local cache with space limits and TTL.
 
-## Perché alcune richieste federate vengono rifiutate con 401?
+## Why are some federated requests rejected with 401?
 
-Dal 0.1.1 il relay e il core verificano obbligatoriamente la firma HTTP su ogni POST federato, richiedono un `Digest` valido e rifiutano le attività firmate da un attore diverso da quello dichiarato. Se un'istanza remota non firma correttamente, viene rifiutata: è il comportamento corretto, non un bug.
+Since 0.1.1 the relay and the core mandatorily verify the HTTP signature on every federated POST, require a valid `Digest` and reject activities signed by an actor different from the one declared. If a remote instance does not sign correctly, it is rejected: this is the correct behavior, not a bug.
 
-## Infrastruttura P2P/ICE avanzata?
+## Advanced P2P/ICE infrastructure?
 
-Sono disponibili stack opzionali in `deploy/p2p_infra` e `deploy/turn` (coturn per NAT traversal).
+Optional stacks are available in `deploy/p2p_infra` and `deploy/turn` (coturn for NAT traversal).
 
-## Posso esporre la porta del relay direttamente?
+## Can I expose the relay port directly?
 
-Meglio di no. Metti il relay dietro un reverse proxy TLS e lascia `FEDI3_RELAY_BIND=0.0.0.0:8787` raggiungibile solo dalla rete interna di Docker. Se esponi la porta, abilita comunque TLS e imposta `FEDI3_RELAY_TRUST_PROXY_HEADERS` di conseguenza.
+Better not. Put the relay behind a TLS reverse proxy and leave `FEDI3_RELAY_BIND=0.0.0.0:8787` reachable only from the internal Docker network. If you expose the port, enable TLS anyway and set `FEDI3_RELAY_TRUST_PROXY_HEADERS` accordingly.
 
-## Come faccio un backup?
+## How do I make a backup?
 
-Vedi [ops_backup_restore.md](ops_backup_restore.md). Gli script leggono la configurazione da `.env`, verificano l'archivio e applicano una retention. Il backup dell'app esporta solo configurazione e preferenze, non la chiave privata.
+See [ops_backup_restore.md](ops_backup_restore.md). The scripts read the configuration from `.env`, verify the archive and apply a retention. The app backup exports only configuration and preferences, not the private key.

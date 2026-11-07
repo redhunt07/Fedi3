@@ -1,36 +1,43 @@
-# Backup e ripristino
+# Backup and restore
 
-Tutti gli script leggono la configurazione da `.env` (utente e database PostgreSQL inclusi), verificano l'integrità dell'archivio e applicano una retention (`BACKUP_KEEP`, default 7 copie). Non richiedono che l'utente o il database si chiamino `fedi3`.
+All scripts read the configuration from `.env` (including the PostgreSQL user and database), verify archive integrity and apply a retention (`BACKUP_KEEP`, default 7 copies). They do not require the user or the database to be named `fedi3`.
+
+The `.env` file is read as data, without `source` or `eval`: literal
+`KEY=VALUE` assignments are supported, including with outer quotes. Shell
+commands and `$(...)` substitutions are not executed. Variables already defined
+in the environment take precedence. Docker Compose keeps reading and interpolating
+its own `.env`; the scripts' parser does not export literal values that
+could override that interpolation.
 
 ## PostgreSQL (relay)
 
 ```bash
-scripts/backup_relay_pg.sh [dir_destinazione]
+scripts/backup_relay_pg.sh [destination_dir]
 scripts/restore_relay_pg.sh <file.sql.gz> [--yes]
 ```
 
-Il backup usa `pg_dump -U "$FEDI3_RELAY_PG_USER" -d "$FEDI3_RELAY_PG_DB" --no-owner --no-privileges`, controlla che il file non sia vuoto e che l'archivio gzip sia integro.
+The backup uses `pg_dump -U "$FEDI3_RELAY_PG_USER" -d "$FEDI3_RELAY_PG_DB" --no-owner --no-privileges`, checks that the file is not empty and that the gzip archive is intact.
 
-Il restore:
+The restore:
 
-1. verifica l'archivio;
-2. chiede conferma (salvo `--yes`) perché sovrascrive schema e dati;
-3. ferma il relay per evitare scritture concorrenti;
-4. esegue `psql -v ON_ERROR_STOP=1`;
-5. riavvia il relay solo se il restore è andato a buon fine.
+1. verifies the archive;
+2. asks for confirmation (unless `--yes`) because it overwrites schema and data;
+3. stops the relay to avoid concurrent writes;
+4. runs `psql -v ON_ERROR_STOP=1`;
+5. restarts the relay only if the restore succeeded.
 
-Se `psql` fallisce, il relay resta fermo: è intenzionale, così non riparte su un database a metà.
+If `psql` fails, the relay stays stopped: this is intentional, so it does not restart on a half-restored database.
 
-## Media (storage locale)
+## Media (local storage)
 
 ```bash
-scripts/backup_relay_media.sh [dir_destinazione]
+scripts/backup_relay_media.sh [destination_dir]
 scripts/restore_relay_media.sh <file.tar.gz> [--yes]
 ```
 
-L'archivio contiene i percorsi relativi alla directory media (`media/...`), quindi il restore non crea il tipico annidamento `/data/media/data/media/...`. Il restore riconosce anche gli archivi legacy con percorsi assoluti (`/data/media/...`) e li estrae alla radice corretta.
+The archive contains paths relative to the media directory (`media/...`), so the restore does not create the typical nesting `/data/media/data/media/...`. The restore also recognizes legacy archives with absolute paths (`/data/media/...`) and extracts them to the correct root.
 
-## Verifica di un backup
+## Verifying a backup
 
 ```bash
 gzip -t backups/relay_pg_<ts>.sql.gz
@@ -38,21 +45,37 @@ gzip -t backups/relay_media_<ts>.tar.gz
 tar -tzf backups/relay_media_<ts>.tar.gz | head
 ```
 
-Un backup non verificato non è un backup.
+An unverified backup is not a backup.
 
-## Migrazioni dello schema
+## Schema migrations
 
-Lo schema viene applicato automaticamente dal relay all'avvio, con migrazioni numerate e idempotenti. Per applicarlo a mano (di solito non serve):
+The schema is applied automatically by the relay at startup, with numbered and idempotent migrations. To apply it by hand (usually not needed):
 
 ```bash
 cat crates/fedi3_relay/sql/postgres_schema.sql | \
   docker compose exec -T postgres psql -U "$FEDI3_RELAY_PG_USER" -d "$FEDI3_RELAY_PG_DB"
 ```
 
-## Backup dell'app (client)
+## App backup (client)
 
-L'app esporta solo configurazione e preferenze in JSON. **Non** contiene la chiave privata: se vuoi poter migrare l'account, salva anche la directory dati del core (`FEDI3_DATA_DIR`).
+The app exports only configuration and preferences in JSON. It does **not** contain the private key: if you want to be able to migrate the account, also save the core data directory (`FEDI3_DATA_DIR`).
 
-## Se usi S3/WebDAV
+## If you use S3/WebDAV
 
-Con `FEDI3_RELAY_MEDIA_BACKEND=s3` o `webdav`, il backup dei media è a carico del provider: `backup_relay_media.sh` archivia solo la directory locale. Verifica che la retention e la replica del bucket siano configurate.
+With `FEDI3_RELAY_MEDIA_BACKEND=s3` or `webdav`, media backup is the provider's responsibility: `backup_relay_media.sh` archives only the local directory. Verify that bucket retention and replication are configured.
+
+
+## Client settings backup (v2)
+
+The Backup screen now exports settings encrypted with AES-GCM and a
+passphrase of at least 12 characters. The passphrase is not saved in the file:
+keep it separately. A modified file or a wrong password prevent
+import. Old v1 JSON files are still importable and must be treated
+as plaintext secrets.
+
+This export does not contain RSA/libp2p keys, message database or media.
+To migrate the same identity between computers, stop the client and also keep
+an encrypted copy of the core data directory. The config JSON alone is not enough:
+the tokens of the current configuration reside in the system keyring and the
+file contains only a reference. The encrypted export from the app
+includes the necessary settings values for the transfer.

@@ -1,28 +1,28 @@
-# Deploy core (runtime locale)
+# Deploy core (local runtime)
 
-Il core è un server locale usato dall’app, non va esposto pubblicamente.
+The core is a local server used by the app; it must not be exposed publicly.
 
-## Avvio tramite app
+## Starting through the app
 
-L’app avvia il core automaticamente al login.
+The app starts the core automatically at login.
 
-## Avvio manuale (dev)
+## Manual start (dev)
 
 ```
 scripts/build_core.ps1
 scripts/build_core.sh
 ```
 
-Il binario viene caricato dalla app via FFI.
+The binary is loaded by the app via FFI.
 
-## Config importanti
+## Important config
 
-- `internal_token` per proteggere endpoints UI/internal.
-- `public_base_url` e `relay_ws` coerenti con il relay.
+- `internal_token` to protect UI/internal endpoints.
+- `public_base_url` and `relay_ws` consistent with the relay.
 
 ## Health/metrics
 
 - `GET /healthz`
 - `GET /readyz`
-- `GET /_fedi3/health` (richiede `X-Fedi3-Internal`)
-- `GET /_fedi3/net/metrics(.prom)` (richiede `X-Fedi3-Internal`)
+- `GET /_fedi3/health` (requires `X-Fedi3-Internal`)
+- `GET /_fedi3/net/metrics(.prom)` (requires `X-Fedi3-Internal`)

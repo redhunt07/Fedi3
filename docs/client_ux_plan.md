@@ -1,192 +1,192 @@
-# Fedi3 — Piano di rilancio del client (UX/IA)
+# Fedi3 — Client relaunch plan (UX/IA)
 
-Data: 2026-11-01
-Stato: proposta, da validare prima di implementare.
+Date: 2026-11-01
+Status: proposal, to be validated before implementing.
 
-## 1. Valutazione onesta
+## 1. Honest assessment
 
-Il client attuale **non è ancora appetibile** per un utente che arriva da Mastodon,
-Misskey o dai social mainstream. Non per Flutter: per prodotto.
+The current client **is not yet appealing** for a user coming from Mastodon,
+Misskey or mainstream social networks. Not because of Flutter: because of the product.
 
-Difetti osservati nella verifica live:
+Defects observed in the live verification:
 
-- l'onboarding è un pannello da amministratore (bind, internal token, relay WS,
-  dominio) invece di un flusso "scegli un nome e inizia";
-- la timeline desktop apre quattro colonne con etichette fuorvianti: la colonna
-  "Locale" mostra in realtà il feed dei follow, "Sociale" è vuota senza P2P;
-- il profilo mostra attività grezze (`EmojiReact`, `Like`, `Follow`) mescolate alle
-  note, senza tab Post/Risposte/Media;
-- mancavano liste follower/seguiti (aggiunte ora), paginazione, empty state utili;
-- impostazioni presenti ma poco discoverabili, senza ricerca interna né gerarchia
-  chiara;
-- nessuna identità visiva, nessun onboarding guidato, nessun percorso di recupero
-  account spiegato all'utente;
-- la chat è tecnicamente E2E ma povera rispetto a Misskey (allega file, react,
-  thread, stato di lettura).
+- onboarding is an administrator panel (bind, internal token, relay WS,
+  domain) instead of a "choose a name and start" flow;
+- the desktop timeline opens four columns with misleading labels: the "Local" column
+  actually shows the follow feed, "Social" is empty without P2P;
+- the profile shows raw activities (`EmojiReact`, `Like`, `Follow`) mixed with
+  notes, without Post/Replies/Media tabs;
+- follower/following lists were missing (now added), pagination, useful empty states;
+- settings present but hard to discover, without internal search or a clear
+  hierarchy;
+- no visual identity, no guided onboarding, no account recovery path
+  explained to the user;
+- chat is technically E2E but poor compared to Misskey (attach files, react,
+  threads, read status).
 
-Il problema non è "il linguaggio sbagliato": è **architettura dell'informazione,
-flussi e finitura**. Riscrivere in un altro linguaggio senza risolvere questi punti
-produrrebbe lo stesso prodotto con costi maggiori.
+The problem is not "the wrong language": it is **information architecture,
+flows and finish**. Rewriting in another language without solving these points
+would produce the same product at a higher cost.
 
-## 2. Cosa copiare da Misskey e cosa no
+## 2. What to copy from Misskey and what not to
 
-Misskey è un riferimento utile per **struttura**, non per densità.
+Misskey is a useful reference for **structure**, not for density.
 
-Da copiare:
+To copy:
 
-- tassonomia delle impostazioni (Account, Profilo, Privacy, Sicurezza, Moderazione,
-  Rete, Aspetto, Notifiche, Lingua, Backup, Informazioni) con sottopagine e ricerca;
-- profilo con tab (Post, Risposte, Media, Reazioni) e contatori cliccabili;
-- deck/colonne **opzionale**, non layout predefinito;
-- composer sempre raggiungibile, con visibilità, allegati, emoji, sondaggi;
-- ricerca unificata con filtri e cronologia;
-- notifiche raggruppate e filtrabili;
-- chat con allegati, reazioni, thread e stato di lettura.
+- settings taxonomy (Account, Profile, Privacy, Security, Moderation,
+  Network, Appearance, Notifications, Language, Backup, About) with subpages and search;
+- profile with tabs (Posts, Replies, Media, Reactions) and clickable counters;
+- **optional** deck/columns, not the default layout;
+- composer always reachable, with visibility, attachments, emoji, polls;
+- unified search with filters and history;
+- grouped and filterable notifications;
+- chat with attachments, reactions, threads and read status.
 
-Da non copiare acriticamente:
+Not to copy uncritically:
 
-- la densità visiva e la quantità di opzioni in prima vista: Misskey è per power
-  user; un nuovo utente si perde;
-- la dipendenza da un server multi-utente centralizzato: Fedi3 è single-user per
-  core, quindi "login/registrazione" vanno ridefiniti (vedi §4);
-- il modello tutto-web: Fedi3 ha un core locale e un relay; il client desktop è
-  un vantaggio, non un limite.
+- visual density and the number of options at first sight: Misskey is for power
+  users; a new user gets lost;
+- dependence on a centralized multi-user server: Fedi3 is single-user per
+  core, so "login/registration" must be redefined (see §4);
+- the all-web model: Fedi3 has a local core and a relay; the desktop client is
+  an advantage, not a limit.
 
-Posizionamento consigliato: **IA ispirata a Misskey, semplicità iniziale da
-Mastodon, deck mode per chi la vuole**. Il vantaggio competitivo di Fedi3 resta
-P2P/relay: il client deve sembrare normale prima di raccontarlo.
+Recommended positioning: **IA inspired by Misskey, initial simplicity from
+Mastodon, deck mode for those who want it**. Fedi3's competitive advantage remains
+P2P/relay: the client must look normal before telling that story.
 
-## 3. Linguaggio e piattaforma: proposta
+## 3. Language and platform: proposal
 
-Non riscrivere ora. Motivazioni:
+Do not rewrite now. Reasons:
 
-- Flutter copre desktop, mobile e (con limiti) web con un solo codice; il collo di
-  bottiglia è il prodotto, non il runtime;
-- il core Rust e il protocollo sono l'asset: vanno stabilizzati con un'API client
-  documentata, non riscritti;
-- un rewrite completo costerebbe 2–3 mesi e congelerebbe le correzioni UX.
+- Flutter covers desktop, mobile and (with limits) web with a single codebase; the bottleneck
+  is the product, not the runtime;
+- the Rust core and the protocol are the asset: they must be stabilized with a documented client
+  API, not rewritten;
+- a complete rewrite would cost 2–3 months and freeze UX fixes.
 
-Proposta in due binari:
+Two-track proposal:
 
-- **Binario A (ora)**: ridisegno di IA e flussi nel client Flutter esistente, a step
-  (§6). Ogni step è rilasciabile e testabile.
-- **Binario B (dopo)**: se serve la distribuzione web, un client web separato
-  (React/TS o Svelte) che consuma la stessa API, condividendo design token e non
-  codice. Non è un rewrite del desktop: è un secondo client.
+- **Track A (now)**: redesign of IA and flows in the existing Flutter client, step by step
+  (§6). Every step is releasable and testable.
+- **Track B (later)**: if web distribution is needed, a separate web client
+  (React/TS or Svelte) that consumes the same API, sharing design tokens and not
+  code. It is not a rewrite of the desktop: it is a second client.
 
-Se in futuro si scegliesse un altro linguaggio, la condizione è avere prima
-un'API stabile e documentata: senza quella, ogni client resta accoppiato agli
-endpoint interni.
+If another language were chosen in the future, the condition is to have first
+a stable and documented API: without that, every client stays coupled to the internal
+endpoints.
 
-## 4. Autenticazione: il punto architetturale da chiarire
+## 4. Authentication: the architectural point to clarify
 
-Oggi Fedi3 è **single-user per core**: l'identità è una chiave, non un account con
-password. L'app e il core girano sulla stessa macchina e condividono un token
-interno. Questo non è il modello Misskey (multi-utente, sessioni web).
+Today Fedi3 is **single-user per core**: the identity is a key, not an account with
+a password. The app and the core run on the same machine and share an internal
+token. This is not the Misskey model (multi-user, web sessions).
 
-Tre opzioni, in ordine di costo:
+Three options, in order of cost:
 
-1. **Profilo locale (consigliata ora)**: "registrazione" = creazione identità
-   (username + relay, opzioni avanzate nascoste); "login" = import backup oppure
-   connessione a un'istanza esistente (URL + token/backup). Il client gestisce più
-   profili locali con switcher. Nessuna modifica al core.
-2. **Accesso remoto al core**: il core espone un'API client autenticata con bearer
-   token su TLS, così un client web può collegarsi a un'istanza remota. Richiede
-   CORS, token dedicati, OpenAPI e revoca.
-3. **Multi-utente nel core**: il vero modello Misskey, ma è un cambio di backend
-   (identità multiple, sessioni, permessi). Rinviabile.
+1. **Local profile (recommended now)**: "registration" = identity creation
+   (username + relay, advanced options hidden); "login" = import backup or
+   connect to an existing instance (URL + token/backup). The client manages multiple
+   local profiles with a switcher. No changes to the core.
+2. **Remote access to the core**: the core exposes a client API authenticated with a bearer
+   token over TLS, so a web client can connect to a remote instance. It requires
+   CORS, dedicated tokens, OpenAPI and revocation.
+3. **Multi-user in the core**: the real Misskey model, but it is a backend change
+   (multiple identities, sessions, permissions). Deferrable.
 
-Raccomandazione: partire da (1), progettare l'API per rendere possibile (2), non
-promettere (3) finché non c'è domanda reale.
+Recommendation: start from (1), design the API to make (2) possible, do not
+promise (3) until there is real demand.
 
-## 5. Architettura dell'informazione target
+## 5. Target information architecture
 
-Route e schermate, in ordine di implementazione:
+Routes and screens, in implementation order:
 
-- `/welcome` — scelta: crea identità, importa backup, collega istanza.
-- `/signup` — username, relay consigliato, avanzate collassate, recovery code
-  obbligatorio e scaricabile.
+- `/welcome` — choice: create identity, import backup, connect instance.
+- `/signup` — username, recommended relay, collapsed advanced options, mandatory and
+  downloadable recovery code.
 - `/login` — import backup, connect URL+token, recovery code.
-- `/home` — feed unico con tab Home/Locale/Federata, composer persistente,
-  scroll infinito, filtri, media.
-- `/explore` — ricerca unificata (post, utenti, hashtag), filtri, cronologia.
-- `/notifications` — gruppi per tipo, filtri, segna come letto, real-time.
-- `/messages` — lista conversazioni, thread, allegati, reazioni, stato lettura.
-- `/@user` — profilo pubblico con tab Post/Risposte/Media, follow, muta, blocca,
-  segnala.
-- `/me` — profilo personale con tab e modifica, liste follower/seguiti paginate.
-- `/settings` — hub con sottosezioni: Account, Profilo, Privacy, Sicurezza,
-  Moderazione, Rete, Aspetto, Notifiche, Lingua, Backup, Informazioni, Avanzate.
-- `/settings/*` — una pagina per categoria, con salvataggio esplicito e riavvio
-  core dove serve.
+- `/home` — single feed with Home/Local/Federated tabs, persistent composer,
+  infinite scroll, filters, media.
+- `/explore` — unified search (posts, users, hashtags), filters, history.
+- `/notifications` — groups by type, filters, mark as read, real-time.
+- `/messages` — conversation list, threads, attachments, reactions, read status.
+- `/@user` — public profile with Post/Replies/Media tabs, follow, mute, block,
+  report.
+- `/me` — personal profile with tabs and editing, paginated follower/following lists.
+- `/settings` — hub with subsections: Account, Profile, Privacy, Security,
+  Moderation, Network, Appearance, Notifications, Language, Backup, About, Advanced.
+- `/settings/*` — one page per category, with explicit save and core restart
+  where needed.
 
-Regole trasversali: niente token/bind in prima vista; ogni schermata ha empty
-state, errore azionabile e stato di caricamento; nessuna attività grezza mostrata
-all'utente se non in "Mostra raw".
+Cross-cutting rules: no token/bind at first sight; every screen has an empty
+state, an actionable error and a loading state; no raw activity shown
+to the user except in "Show raw".
 
-## 6. Piano a step
+## 6. Step plan
 
-Ogni step è un rilascio verificabile; le stime sono indicative (1 sviluppatore).
+Every step is a verifiable release; estimates are indicative (1 developer).
 
-| Step | Contenuto | Dipendenze | Stima | Criterio di accettazione |
+| Step | Content | Dependencies | Estimate | Acceptance criterion |
 |---|---|---|---|---|
-| 0 | Audit UX, design token, skeleton di navigazione e route, gate di avvio | — | 2 gg | route e stati vuoti presenti; nessuna regressione funzionale |
-| 1 | Registrazione guidata, recovery code, login (backup/connect), switcher profili | API config attuale | 3 gg | nuovo utente pubblica entro 5 minuti senza toccare token |
-| 2 | Home unica con tab, composer persistente, scroll infinito, media | core timeline | 4 gg | feed usabile su desktop e mobile; nessuna colonna fuorviante |
-| 3 | Profilo proprio e altrui con tab, liste paginate, modifica profilo | relazioni | 4 gg | tab e liste corrette; follow/unfollow coerenti |
-| 4 | Impostazioni con tassonomia completa, ricerca interna, salvataggi sicuri | schermate esistenti | 3 gg | tutte le categorie raggiungibili in ≤2 tap |
-| 5 | Ricerca unificata con filtri, cronologia, lookup remoto | API search | 3 gg | risultati post/utenti/hashtag; fallback locale |
-| 6 | Notifiche raggruppate, filtri, mark-read, real-time | event stream | 3 gg | gruppi e filtri corretti; badge coerente |
-| 7 | Chat completa: allegati, reazioni, thread, read state | chat API | 3 gg | conversazione con media e stato lettura |
-| 8 | Finitura: onboarding tour, accessibilità, temi, i18n, scorciatoie | — | 3 gg | audit accessibilità di base superato |
+| 0 | UX audit, design tokens, navigation and route skeleton, startup gate | — | 2 d | routes and empty states present; no functional regression |
+| 1 | Guided registration, recovery code, login (backup/connect), profile switcher | current config API | 3 d | new user publishes within 5 minutes without touching tokens |
+| 2 | Single home with tabs, persistent composer, infinite scroll, media | core timeline | 4 d | usable feed on desktop and mobile; no misleading column |
+| 3 | Own and other users' profiles with tabs, paginated lists, profile editing | relationships | 4 d | correct tabs and lists; consistent follow/unfollow |
+| 4 | Settings with complete taxonomy, internal search, safe saves | existing screens | 3 d | all categories reachable in ≤2 taps |
+| 5 | Unified search with filters, history, remote lookup | search API | 3 d | post/user/hashtag results; local fallback |
+| 6 | Grouped notifications, filters, mark-read, real-time | event stream | 3 d | correct groups and filters; consistent badge |
+| 7 | Complete chat: attachments, reactions, threads, read state | chat API | 3 d | conversation with media and read status |
+| 8 | Finish: onboarding tour, accessibility, themes, i18n, shortcuts | — | 3 d | basic accessibility audit passed |
 
-Totale ≈ 28 giorni; i primi tre step (0–2) danno già un client presentabile.
+Total ≈ 28 days; the first three steps (0–2) already give a presentable client.
 
-## 7. Lavoro backend necessario in parallelo
+## 7. Backend work needed in parallel
 
-- **API client stabile e documentata** (OpenAPI): endpoint, errori tipizzati,
-  paginazione a cursore, versioning. È il prerequisito per qualsiasi client futuro.
-- **Auth per accesso remoto**: bearer token dedicato, CORS, revoca, rotazione.
-- **Paginazione** per follower/seguiti e notifiche (oggi il client carica la prima
-  pagina).
-- **Feed profilo filtrato** lato API o client: solo Note, con tab.
-- **Notifiche raggruppate** e mark-read lato server.
-- **Chat**: allegati e stato di lettura se non già presenti.
-- **Moderazione**: mute/block/report esposti in modo uniforme.
+- **Stable and documented client API** (OpenAPI): endpoints, typed errors,
+  cursor pagination, versioning. It is the prerequisite for any future client.
+- **Auth for remote access**: dedicated bearer token, CORS, revocation, rotation.
+- **Pagination** for followers/following and notifications (today the client loads the first
+  page).
+- **Filtered profile feed** on the API or client side: only Notes, with tabs.
+- **Grouped notifications** and server-side mark-read.
+- **Chat**: attachments and read status if not already present.
+- **Moderation**: mute/block/report exposed uniformly.
 
-## 8. Rischi e metriche
+## 8. Risks and metrics
 
-Rischi: rifare l'IA senza test utente; introdurre multi-utente troppo presto;
-duplicare client (desktop + web) senza API condivisa; regressioni nelle funzioni
-P2P durante il restyling.
+Risks: redoing the IA without user testing; introducing multi-user too early;
+duplicating clients (desktop + web) without a shared API; regressions in P2P
+functions during the restyling.
 
-Metriche da misurare: tempo al primo post, successo dei task principali
-(post, follow, risposta, ricerca), crash-free sessions, retention D1/D7,
-tempo medio per trovare un'impostazione.
+Metrics to measure: time to first post, success of the main tasks
+(post, follow, reply, search), crash-free sessions, D1/D7 retention,
+average time to find a setting.
 
-## 9. Proposta immediata
+## 9. Immediate proposal
 
-Partire dallo **Step 0 + Step 1** (skeleton di navigazione + registrazione/login
-guidati), perché sono il cancello d'ingresso e il difetto più visibile. In
-parallelo, scrivere la specifica OpenAPI minima dell'API client: senza quella,
-lo Step 2 rischia di consolidare endpoint interni.
+Start with **Step 0 + Step 1** (navigation skeleton + guided registration/login),
+because they are the entry gate and the most visible defect. In
+parallel, write the minimal OpenAPI specification of the client API: without it,
+Step 2 risks consolidating internal endpoints.
 
-Se il vincolo è "copiare Misskey", la sequenza resta valida: si copia la
-tassonomia e i flussi, non la densità, e si tiene Flutter finché l'IA non è
-stabile.
+If the constraint is "copy Misskey", the sequence remains valid: copy the
+taxonomy and the flows, not the density, and keep Flutter until the IA is
+stable.
 
-## 10. Stato di avanzamento (2026-11-01)
+## 10. Progress status (2026-11-01)
 
-| Step | Stato | Note |
+| Step | Status | Notes |
 |---|---|---|
-| 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route esistenti, empty state; manca un vero router dichiarativo |
-| 1 — Registrazione/login guidati, recovery | completato | onboarding con identità/relay in primo piano, login rapido da URL+token, avanzate collassate e dialog di recovery con copia dei codici |
-| 2 — Home unica con tab | completato (base) | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer full-screen da sidebar e FAB mobile |
-| 3 — Profilo proprio/altrui | completato (base) | banner, contatori cliccabili, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati |
-| 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
-| 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |
-| 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
-| 7 — Chat | completato (base) | thread, allegati con anteprima, reazioni, read state, badge E2E; chiamate E2E, note audio/video, ricerca completa e globale, inoltro, messaggi fissati e link invito completati |
-| 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato, logo fisso con particelle, annunci dai maintainer con alert periodico, banner profilo mesh, chat a schede e bolle stile Telegram con spunte, notifiche compatte, post salvati offline, composer con drag&drop, presenza online/occupato/AFK/offline; restano audit contrasto e navigazione da tastiera completa |
+| 0 — Audit, design tokens, skeleton, startup gate | completed | Aurora theme, custom rail, existing routes, empty states; a real declarative router is missing |
+| 1 — Guided registration/login, recovery | completed | onboarding with identity/relay in the foreground, quick login from URL+token, collapsed advanced options and recovery dialog with code copying |
+| 2 — Single home with tabs | completed (base) | default tab layout on desktop, Home/Following/Discover/Federated tabs; full-screen composer from the sidebar and mobile FAB |
+| 3 — Own/other profiles | completed (base) | banner, clickable counters, Post/Replies/Media tabs, media grid, outbox pagination; advanced media filters are missing |
+| 4 — Settings | completed (visual) | grouped hub with icons and sections; internal search is missing |
+| 5 — Search | completed (base) | post/user/hashtag search, source filter (all/local/relay), persistent history with chips and clearing; time filters are missing |
+| 6 — Notifications | partial | filters, mark-all-read and grouping by date; grouping by actor/type is missing |
+| 7 — Chat | completed (base) | threads, attachments with preview, reactions, read state, E2E badge; E2E calls, audio/video notes, complete and global search, forwarding, pinned messages and invite links completed |
+| 8 — Finish | partial | Ctrl+1..7/Ctrl+N/Ctrl+F/Esc shortcuts, accessible rail with hints, advanced composer, fixed logo with particles, announcements from maintainers with periodic alert, mesh profile banner, tabbed chat and Telegram-style bubbles with check marks, compact notifications, posts saved offline, composer with drag&drop, online/busy/AFK/offline presence; contrast audit and full keyboard navigation remain |
 
-Prossimo passo consigliato: client web sulla specifica OpenAPI, poi audit di contrasto/accessibilità completo e test end-to-end della chat con due identità reali.
+Recommended next step: web client on the OpenAPI specification, then a full contrast/accessibility audit and end-to-end chat testing with two real identities.

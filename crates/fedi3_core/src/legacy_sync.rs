@@ -146,41 +146,16 @@ async fn poll_actor_outbox(
     // H-03: followed actors and their outbox/page URLs come from remote servers.
     crate::net_policy::check_url_allowed(actor_url).await?;
 
-    // Best-effort: resolve actor and fetch outbox URL.
-    let actor_doc = http
-        .get(actor_url)
-        .header(
-            ACCEPT,
-            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-        )
-        .header(USER_AGENT, format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
-        .send()
-        .await
-        .with_context(|| format!("fetch actor: {actor_url}"))?
-        .error_for_status()
-        .with_context(|| format!("actor not ok: {actor_url}"))?
-        .json::<ActorDoc>()
-        .await
-        .with_context(|| format!("parse actor json: {actor_url}"))?;
+    let actor_doc: ActorDoc =
+        fetch_legacy_json(http, actor_url, crate::net_policy::MAX_ACTOR_DOC_BYTES).await?;
 
     let Some(outbox_url) = actor_doc.outbox else {
         return Ok(());
     };
     crate::net_policy::check_url_allowed(&outbox_url).await?;
 
-    // Step 1: fetch outbox collection to find its first page.
-    let col = http
-        .get(&outbox_url)
-        .header(ACCEPT, "application/activity+json")
-        .header(USER_AGENT, format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
-        .send()
-        .await
-        .with_context(|| format!("fetch outbox: {outbox_url}"))?
-        .error_for_status()
-        .with_context(|| format!("outbox not ok: {outbox_url}"))?
-        .json::<OrderedCollection>()
-        .await
-        .with_context(|| format!("parse outbox json: {outbox_url}"))?;
+    let col: OrderedCollection =
+        fetch_legacy_json(http, &outbox_url, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?;
 
     // Some servers return the items directly on the collection (rare). Prefer first page when present.
     let first_page = col.first.clone().unwrap_or(outbox_url.clone());
@@ -199,20 +174,8 @@ async fn poll_actor_outbox(
             break;
         }
 
-        let page_json = {
-            // H-03/H-04: every `next` URL is remote-controlled and the page is unbounded.
-            crate::net_policy::check_url_allowed(&page_url).await?;
-            let resp = http
-                .get(&page_url)
-                .header(ACCEPT, "application/activity+json")
-                .header(USER_AGENT, format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
-                .send()
-                .await
-                .with_context(|| format!("fetch outbox page: {page_url}"))?
-                .error_for_status()
-                .with_context(|| format!("outbox page not ok: {page_url}"))?;
-            crate::net_policy::read_capped(resp, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?
-        };
+        let page_json =
+            fetch_legacy_bytes(http, &page_url, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?;
 
         let parsed_page = serde_json::from_slice::<OrderedCollectionPage>(&page_json).ok();
         let items = parsed_page
@@ -273,4 +236,64 @@ async fn poll_actor_outbox(
 
     debug!("legacy poll ingested {ingested} items from {actor_url}");
     Ok(())
+}
+
+async fn fetch_legacy_bytes(_http: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>> {
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        http::HeaderValue::from_static("application/activity+json"),
+    );
+    headers.insert(
+        USER_AGENT,
+        http::HeaderValue::from_static(concat!("fedi3/", env!("CARGO_PKG_VERSION"))),
+    );
+    let response = crate::net_policy::get_checked(url, headers)
+        .await?
+        .error_for_status()?;
+    crate::net_policy::read_capped(response, cap).await
+}
+
+async fn fetch_legacy_json<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    cap: usize,
+) -> Result<T> {
+    serde_json::from_slice(&fetch_legacy_bytes(http, url, cap).await?)
+        .context("invalid legacy JSON")
+}
+
+#[cfg(test)]
+mod bounded_fetch_tests {
+    use super::*;
+    #[tokio::test]
+    async fn actor_collection_and_page_fetches_are_capped_before_parsing() {
+        // The escape hatch is process-wide: hold the shared lock so the
+        // net_policy tests cannot flip it while this fetch is in flight.
+        let _guard = crate::net_policy::ENV_LOCK.lock().await;
+        std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/large", listener.local_addr().unwrap());
+        let app =
+            axum::Router::new().route("/large", axum::routing::get(|| async { vec![b' '; 4096] }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        assert!(fetch_legacy_json::<ActorDoc>(&client, &url, 1024)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("too large"));
+        assert!(fetch_legacy_json::<OrderedCollection>(&client, &url, 1024)
+            .await
+            .is_err());
+        assert!(fetch_legacy_bytes(&client, &url, 1024).await.is_err());
+        server.abort();
+        std::env::remove_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH");
+    }
 }

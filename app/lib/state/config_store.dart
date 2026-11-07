@@ -5,11 +5,16 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:flutter/foundation.dart';
 
 /// M-25/AS-01..04: how the configuration file was found on disk.
 enum ConfigLoadStatus {
+  /// JSON is intact but credentials cannot be read from the system vault.
+  credentialsUnavailable,
+
   /// No config file and no backup: genuine first run.
   absent,
 
@@ -33,6 +38,7 @@ class ConfigLoadResult {
   bool get isOk =>
       status == ConfigLoadStatus.ok ||
       status == ConfigLoadStatus.recoveredFromBackup;
+  bool get isUnavailable => status == ConfigLoadStatus.credentialsUnavailable;
   bool get isCorrupt => status == ConfigLoadStatus.corrupt;
   bool get isAbsent => status == ConfigLoadStatus.absent;
 }
@@ -46,6 +52,94 @@ class ConfigStore {
   @visibleForTesting
   static void useDirectoryForTesting(Directory? dir) {
     _dirOverride = dir;
+  }
+
+  static const _vault = FlutterSecureStorage();
+  static const _secretFields = [
+    'relayToken',
+    'internalToken',
+    'previousRelayToken',
+    'webrtcIceCredential',
+    'webrtcIceUsername',
+  ];
+  static final Map<String, String> _testVault = {};
+
+  static Future<String?> _readSecret(String key) async =>
+      _dirOverride != null ? _testVault[key] : await _vault.read(key: key);
+
+  static Future<Map<String, dynamic>> _seal(Map<String, dynamic> cfg) async {
+    final public = Map<String, dynamic>.of(cfg);
+    final secrets = <String, dynamic>{};
+    for (final name in _secretFields) {
+      if (public.containsKey(name)) secrets[name] = public.remove(name);
+    }
+    final key =
+        'fedi3.config.${base64UrlEncode(List<int>.generate(24, (_) => Random.secure().nextInt(256)))}';
+    final value = jsonEncode(secrets);
+    if (_dirOverride != null) {
+      _testVault[key] = value;
+    } else {
+      await _vault.write(key: key, value: value);
+    }
+    if (await _readSecret(key) != value) {
+      throw StateError('Secure storage verification failed');
+    }
+    public['_secretRef'] = key;
+    return public;
+  }
+
+  static Future<Map<String, dynamic>> _open(Map<String, dynamic> cfg) async {
+    final ref = cfg['_secretRef'];
+    if (ref == null) return cfg;
+    final raw = await _readSecret(ref.toString());
+    if (raw == null) {
+      throw StateError('Unlock the system keyring to load Fedi3 credentials');
+    }
+    final public = Map<String, dynamic>.of(cfg)..remove('_secretRef');
+    public.addAll((jsonDecode(raw) as Map).cast<String, dynamic>());
+    return public;
+  }
+
+  /// Migrate only after verified keyring writes. Never fall back to plaintext.
+  static Future<ConfigLoadResult> loadSecure() async {
+    final result = load();
+    if (result.data == null) return result;
+    try {
+      final opened = await _open(result.data!);
+      if (!result.data!.containsKey('_secretRef')) {
+        await writeSecure(opened);
+      } else {
+        await _migrateBackup();
+      }
+      return ConfigLoadResult(status: result.status, data: opened);
+    } catch (_) {
+      return const ConfigLoadResult(
+          status: ConfigLoadStatus.credentialsUnavailable,
+          error:
+              'System credential storage unavailable. Unlock your keyring and restart Fedi3. Existing configuration was preserved.');
+    }
+  }
+
+  static Future<void> _migrateBackup() async {
+    final previous = _readJsonFile(backupFile());
+    if (previous == null || previous.containsKey('_secretRef')) return;
+    final sealed = await _seal(previous);
+    final tmp = File('${backupFile().path}.tmp');
+    tmp.writeAsStringSync(jsonEncode(sealed), flush: true);
+    _restrictFile(tmp);
+    tmp.renameSync(backupFile().path);
+  }
+
+  static Future<void> writeSecure(Map<String, dynamic> cfg) async {
+    final sealed = await _seal(cfg);
+    // Seal legacy backup before the normal atomic write could copy plaintext.
+    final previous = _readJsonFile(configFile());
+    if (previous != null && !previous.containsKey('_secretRef')) {
+      final oldSealed = await _seal(previous);
+      _writeAtomically(oldSealed, keepBackup: false);
+    }
+    await _migrateBackup();
+    _writeAtomically(sealed, keepBackup: true);
   }
 
   static File configFile() {

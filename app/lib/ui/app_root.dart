@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'dart:ui' show AppExitResponse;
+import '../services/app_activity.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../state/app_state.dart';
@@ -13,10 +16,38 @@ import 'shell.dart';
 import 'theme/misskey_theme.dart';
 import 'widgets/auto_start_core.dart';
 
-class AppRoot extends StatelessWidget {
+class AppRoot extends StatefulWidget {
   const AppRoot({super.key, required this.appState});
 
   final AppState appState;
+
+  @override
+  State<AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<AppRoot> {
+  late final AppLifecycleListener _lifecycle;
+  AppState get appState => widget.appState;
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle = AppLifecycleListener(
+        onStateChange: AppActivity.update,
+        onExitRequested: () async {
+          try {
+            await appState.stopCore().timeout(const Duration(seconds: 20));
+          } catch (_) {}
+          return AppExitResponse.exit;
+        });
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    AppActivity.update(AppLifecycleState.resumed);
+    unawaited(appState.stopCore());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

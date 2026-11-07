@@ -54,9 +54,11 @@ impl MailboxStore {
             let conn = Connection::open(db_path)?;
             let now = now_ms();
             let expires_at_ms = now.saturating_add((ttl_secs as i64).saturating_mul(1000));
+            // `id` is chosen by the sender: use IGNORE so a peer cannot silently
+            // overwrite a message another sender already stored under the same id.
             conn.execute(
                 r#"
-                INSERT OR REPLACE INTO mailbox_messages (id, to_peer_id, from_peer_id, created_at_ms, expires_at_ms, size_bytes, req_json)
+                INSERT OR IGNORE INTO mailbox_messages (id, to_peer_id, from_peer_id, created_at_ms, expires_at_ms, size_bytes, req_json)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 "#,
                 params![msg_id, to_peer_id, from_peer_id, now, expires_at_ms, size_bytes as i64, req_json],

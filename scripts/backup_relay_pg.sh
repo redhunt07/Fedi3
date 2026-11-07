@@ -6,15 +6,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT_DIR/backups}"
-KEEP="${BACKUP_KEEP:-7}"
 
 cd "$ROOT_DIR" || exit 1
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
+# shellcheck source=lib/dotenv.sh
+source "$ROOT_DIR/scripts/lib/dotenv.sh"
+load_dotenv "$ROOT_DIR/.env"
+KEEP="${BACKUP_KEEP:-7}"
+if [[ ! "$KEEP" =~ ^[1-9][0-9]{0,3}$ ]]; then
+  echo "BACKUP_KEEP must be an integer between 1 and 9999" >&2
+  exit 1
 fi
 
 PG_USER="${FEDI3_RELAY_PG_USER:-fedi3}"
@@ -56,6 +57,7 @@ fi
 echo "Backup scritto: $out_file ($(du -h "$out_file" | cut -f1))"
 
 # Retention: keep the newest $KEEP dumps.
+# shellcheck disable=SC2012
 mapfile -t old < <(ls -1t "$OUT_DIR"/relay_pg_*.sql.gz 2>/dev/null | tail -n +"$((KEEP + 1))")
 for f in "${old[@]:-}"; do
   [[ -n "$f" ]] || continue

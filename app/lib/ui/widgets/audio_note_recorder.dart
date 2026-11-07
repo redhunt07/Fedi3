@@ -50,7 +50,8 @@ class _AudioNoteRecorderState extends State<AudioNoteRecorder> {
         throw Exception(permissionMessage);
       }
       final dir = await getTemporaryDirectory();
-      _path = '${dir.path}/fedi3_note_${DateTime.now().microsecondsSinceEpoch}.m4a';
+      _path =
+          '${dir.path}/fedi3_note_${DateTime.now().microsecondsSinceEpoch}.m4a';
       await _recorder.start(
         const RecordConfig(encoder: AudioEncoder.aacLc),
         path: _path!,

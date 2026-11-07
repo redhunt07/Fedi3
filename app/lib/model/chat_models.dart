@@ -79,6 +79,8 @@ class ChatSearchHit {
 class ChatCallSignal {
   ChatCallSignal({
     required this.id,
+    this.threadId = '',
+    this.threadTitle = '',
     required this.fromActor,
     required this.toActor,
     required this.callId,
@@ -88,6 +90,8 @@ class ChatCallSignal {
   });
 
   final int id;
+  final String threadId;
+  final String threadTitle;
   final String fromActor;
   final String? toActor;
   final String callId;
@@ -98,6 +102,8 @@ class ChatCallSignal {
   factory ChatCallSignal.fromJson(Map<String, dynamic> json) {
     return ChatCallSignal(
       id: (json['id'] as num?)?.toInt() ?? 0,
+      threadId: json['thread_id']?.toString() ?? '',
+      threadTitle: json['thread_title']?.toString() ?? '',
       fromActor: json['from_actor']?.toString() ?? '',
       toActor: json['to_actor']?.toString(),
       callId: json['call_id']?.toString() ?? '',

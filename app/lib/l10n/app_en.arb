@@ -110,12 +110,24 @@
   "chatNewSortInteractions": "Interactions",
   "chatNewSortAlpha": "A-Z",
   "chatNewInteractions": "Interactions: {count}",
-  "@chatNewInteractions": {"placeholders": {"count": {"type": "int"}}},
+  "@chatNewInteractions": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "chatNewGroupName": "Group name",
   "chatNewGroupNameHint": "e.g. Project team",
   "chatNewCreateGroup": "Create group",
   "chatNewSelectedCount": "{count} selected",
-  "@chatNewSelectedCount": {"placeholders": {"count": {"type": "int"}}},
+  "@chatNewSelectedCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "chatNewGroupDefault": "Group",
   "chatRoleOwner": "Owner",
   "chatRoleAdmin": "Admin",
@@ -1042,5 +1054,22 @@
       }
     }
   },
-  "followRequestsCoreStopped": "Start the core to see follow requests."
+  "followRequestsCoreStopped": "Start the core to see follow requests.",
+  "networkingDiscoveryTitle": "Peer discovery",
+  "networkingPublicDiscovery": "Use the public IPFS network for discovery",
+  "networkingPublicDiscoveryHint": "Additional bootstrap and peer discovery. Fedi3 messages are not stored in IPFS.",
+  "networkingPeerExchange": "Remember peers and exchange signed contacts",
+  "networkingPeerExchangeHint": "Reconnect known peers and help the Fedi3 network grow. Public contact announcements expose network addresses.",
+  "networkingBootstrapLabel": "Independent Fedi3 bootstrap nodes",
+  "networkingBootstrapHint": "One libp2p multiaddress per line. Changes restart the local core.",
+  "profileImagesTitle": "Profile images",
+  "profileImageDropHint": "Drop an image here or click to choose one",
+  "profilePasteImage": "Paste image",
+  "profileRemoveImage": "Remove image",
+  "profileDetailsTitle": "Profile details",
+  "backupScopeWarning": "Encrypted settings backup: does not include cryptographic identity, messages or media. Transferring the same identity also requires a protected copy of the core data folder. Keep the passphrase separately.",
+  "backupPassphrase": "Passphrase (at least 12 characters)",
+  "configRecoveryTitle": "Configuration unavailable",
+  "keyringUnavailableHint": "Unlock your system keyring, then Retry. Linux requires libsecret and an active Secret Service (GNOME Keyring or KWallet). Your existing configuration is preserved.",
+  "corruptConfigHint": "The configuration and its backup could not be read. Restore a valid copy of the file, then Retry. Existing data is preserved."
 }

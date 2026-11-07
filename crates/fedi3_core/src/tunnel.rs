@@ -6,7 +6,7 @@
 use crate::net_metrics::NetMetrics;
 use crate::relay_bridge::handle_relay_http_request;
 use axum::body::Body;
-use fedi3_protocol::RelayHttpRequest;
+use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use futures_util::{SinkExt, StreamExt};
 use http::Request;
 use tokio::sync::watch;
@@ -119,8 +119,9 @@ where
         >,
     C::Future: Send + 'static,
 {
-    let token = urlencoding::encode(relay_token);
-    let url = format!("{relay_ws_url}/tunnel/{user}?token={token}");
+    crate::init_tls_provider();
+    use tungstenite::client::IntoClientRequest;
+    let url = format!("{relay_ws_url}/tunnel/{user}");
 
     let mut attempt: u32 = 0;
     loop {
@@ -129,9 +130,13 @@ where
         }
 
         info!(%url, attempt, "connecting tunnel");
+        let mut request = url.as_str().into_client_request()?;
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {relay_token}").parse()?);
         let connect = tokio::time::timeout(
             options.connect_timeout,
-            tokio_tungstenite::connect_async(&url),
+            tokio_tungstenite::connect_async(request),
         )
         .await;
         let connected_at = std::time::Instant::now();
@@ -249,8 +254,11 @@ where
     let mut last_pong = std::time::Instant::now();
 
     let mut result: anyhow::Result<()> = Ok(());
+    let capacity = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
+    let mut handlers = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
+            _ = handlers.join_next(), if !handlers.is_empty() => {},
             _ = shutdown.changed() => {
                 if *shutdown.borrow() {
                     let _ = out_tx.send(TunnelOut::Close).await;
@@ -321,10 +329,19 @@ where
 
                 // Dispatch concurrently: a request handler may itself perform a federation
                 // fetch that comes back through this tunnel.
+                let permit = match capacity.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        let response = RelayHttpResponse { id: req.id, status: 503, headers: Vec::new(), body_b64: String::new() };
+                        if let Ok(json) = serde_json::to_string(&response) { let _ = out_tx.send(TunnelOut::Text(json)).await; }
+                        continue;
+                    }
+                };
                 let mut h = handler.clone();
                 let out = out_tx.clone();
                 let metrics_task = metrics.clone();
-                tokio::spawn(async move {
+                handlers.spawn(async move {
+                    let _permit = permit;
                     let response = handle_relay_http_request(&mut h, req).await;
                     match serde_json::to_string(&response) {
                         Ok(json) => {
@@ -337,6 +354,8 @@ where
             }
         }
     }
+    handlers.abort_all();
+    while handlers.join_next().await.is_some() {}
     drop(out_tx);
     let _ = writer.await;
     result

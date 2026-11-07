@@ -113,268 +113,279 @@ class _ComposeScreenState extends State<ComposeScreen> {
             child: Stack(
               children: [
                 ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              if (!widget.appState.isRunning)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      context.l10n.composeCoreNotRunning(
-                          context.l10n.navSettings, context.l10n.devCoreStart),
-                      style:
-                          TextStyle(color: Theme.of(context).colorScheme.error),
-                    ),
-                  ),
-                ),
-              RichComposer(
-                controller: _text,
-                hintText: context.l10n.composeWhatsHappening,
-                enabled: widget.appState.isRunning,
-                onEmoji: () => EmojiPicker.show(context,
-                    prefs: widget.appState.prefs),
-                onMedia: widget.appState.isRunning ? _pickFiles : null,
-              ),
-              if (_draftStatus != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  _draftStatus!,
-                  style: TextStyle(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withAlpha(160),
-                      fontSize: 12),
-                ),
-              ],
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed:
-                        widget.appState.isRunning ? _pickFiles : null,
-                    icon: const Icon(Icons.attach_file),
-                    label: Text(context.l10n.composeChooseFiles),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      final picked = await EmojiPicker.show(context,
-                          prefs: widget.appState.prefs);
-                      if (picked == null) return;
-                      _insertEmoji(_text, picked);
-                      await EmojiRecentStore.add(picked);
-                    },
-                    icon: const Icon(Icons.emoji_emotions_outlined),
-                    label: Text(context.l10n.composeEmojiButton),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: () => MfmCheatsheet.show(context),
-                    icon: const Icon(Icons.text_snippet_outlined),
-                    label: Text(context.l10n.composeMfmCheatsheet),
-                  ),
-                  FilterChip(
-                    label: Text(context.l10n.composeContentWarningTitle),
-                    selected: _cwEnabled,
-                    onSelected: (v) {
-                      setState(() => _cwEnabled = v);
-                      _scheduleDraftSave();
-                    },
-                  ),
-                  FilterChip(
-                    label: Text(context.l10n.composeSensitiveMediaTitle),
-                    selected: _sensitive,
-                    onSelected: (v) {
-                      setState(() => _sensitive = v);
-                      _scheduleDraftSave();
-                    },
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: context.l10n.composeVisibilityTitle,
-                    onSelected: (v) {
-                      setState(() => _visibility = v);
-                      _scheduleDraftSave();
-                    },
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                          value: 'public',
-                          child: Text(context.l10n.composeVisibilityPublic)),
-                      PopupMenuItem(
-                          value: 'home',
-                          child: Text(context.l10n.composeVisibilityHome)),
-                      PopupMenuItem(
-                          value: 'followers',
-                          child: Text(context.l10n.composeVisibilityFollowers)),
-                      PopupMenuItem(
-                          value: 'direct',
-                          child: Text(context.l10n.composeVisibilityDirect)),
-                    ],
-                    icon: Icon(
-                      _visibility == 'public'
-                          ? Icons.public
-                          : _visibility == 'home'
-                              ? Icons.home_outlined
-                              : _visibility == 'direct'
-                                  ? Icons.mail_outline
-                                  : Icons.lock_outline,
-                    ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _posting ? null : _clearDraft,
-                    icon: const Icon(Icons.delete_outline),
-                    label: Text(context.l10n.composeClearDraft),
-                  ),
-                  FilledButton.icon(
-                    // AW-06: an empty post cannot be submitted.
-                    onPressed:
-                        widget.appState.isRunning && !_posting && _hasText
-                            ? () => _post(api)
-                            : null,
-                    icon: const Icon(Icons.send),
-                    label: Text(context.l10n.composePost),
-                  ),
-                ],
-              ),
-              if (_cwEnabled) ...[
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _cw,
-                  decoration: InputDecoration(
-                      labelText: context.l10n.composeContentWarningTextLabel),
-                  onChanged: (_) => _scheduleDraftSave(),
-                ),
-              ],
-              if (_visibility == 'direct') ...[
-                const SizedBox(height: 10),
-                _DirectRecipientField(
-                  controller: _directTo,
-                  recent: _directRecent,
-                  label: context.l10n.composeVisibilityDirectLabel,
-                  hint: context.l10n.composeVisibilityDirectHint,
-                  onChanged: _scheduleDraftSave,
-                ),
-              ],
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .surfaceContainerHighest
-                      .withAlpha(120),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _dragging
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).colorScheme.outlineVariant,
-                    width: _dragging ? 1.6 : 1,
-                  ),
-                ),
-                child: Row(
+                  padding: const EdgeInsets.all(16),
                   children: [
+                    if (!widget.appState.isRunning)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            context.l10n.composeCoreNotRunning(
+                                context.l10n.navSettings,
+                                context.l10n.devCoreStart),
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error),
+                          ),
+                        ),
+                      ),
+                    RichComposer(
+                      controller: _text,
+                      hintText: context.l10n.composeWhatsHappening,
+                      enabled: widget.appState.isRunning,
+                      onEmoji: () => EmojiPicker.show(context,
+                          prefs: widget.appState.prefs),
+                      onMedia: widget.appState.isRunning ? _pickFiles : null,
+                    ),
+                    if (_draftStatus != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _draftStatus!,
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(160),
+                            fontSize: 12),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed:
+                              widget.appState.isRunning ? _pickFiles : null,
+                          icon: const Icon(Icons.attach_file),
+                          label: Text(context.l10n.composeChooseFiles),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final picked = await EmojiPicker.show(context,
+                                prefs: widget.appState.prefs);
+                            if (picked == null) return;
+                            _insertEmoji(_text, picked);
+                            await EmojiRecentStore.add(picked);
+                          },
+                          icon: const Icon(Icons.emoji_emotions_outlined),
+                          label: Text(context.l10n.composeEmojiButton),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => MfmCheatsheet.show(context),
+                          icon: const Icon(Icons.text_snippet_outlined),
+                          label: Text(context.l10n.composeMfmCheatsheet),
+                        ),
+                        FilterChip(
+                          label: Text(context.l10n.composeContentWarningTitle),
+                          selected: _cwEnabled,
+                          onSelected: (v) {
+                            setState(() => _cwEnabled = v);
+                            _scheduleDraftSave();
+                          },
+                        ),
+                        FilterChip(
+                          label: Text(context.l10n.composeSensitiveMediaTitle),
+                          selected: _sensitive,
+                          onSelected: (v) {
+                            setState(() => _sensitive = v);
+                            _scheduleDraftSave();
+                          },
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: context.l10n.composeVisibilityTitle,
+                          onSelected: (v) {
+                            setState(() => _visibility = v);
+                            _scheduleDraftSave();
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                                value: 'public',
+                                child:
+                                    Text(context.l10n.composeVisibilityPublic)),
+                            PopupMenuItem(
+                                value: 'home',
+                                child:
+                                    Text(context.l10n.composeVisibilityHome)),
+                            PopupMenuItem(
+                                value: 'followers',
+                                child: Text(
+                                    context.l10n.composeVisibilityFollowers)),
+                            PopupMenuItem(
+                                value: 'direct',
+                                child:
+                                    Text(context.l10n.composeVisibilityDirect)),
+                          ],
+                          icon: Icon(
+                            _visibility == 'public'
+                                ? Icons.public
+                                : _visibility == 'home'
+                                    ? Icons.home_outlined
+                                    : _visibility == 'direct'
+                                        ? Icons.mail_outline
+                                        : Icons.lock_outline,
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _posting ? null : _clearDraft,
+                          icon: const Icon(Icons.delete_outline),
+                          label: Text(context.l10n.composeClearDraft),
+                        ),
+                        FilledButton.icon(
+                          // AW-06: an empty post cannot be submitted.
+                          onPressed:
+                              widget.appState.isRunning && !_posting && _hasText
+                                  ? () => _post(api)
+                                  : null,
+                          icon: const Icon(Icons.send),
+                          label: Text(context.l10n.composePost),
+                        ),
+                      ],
+                    ),
+                    if (_cwEnabled) ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _cw,
+                        decoration: InputDecoration(
+                            labelText:
+                                context.l10n.composeContentWarningTextLabel),
+                        onChanged: (_) => _scheduleDraftSave(),
+                      ),
+                    ],
+                    if (_visibility == 'direct') ...[
+                      const SizedBox(height: 10),
+                      _DirectRecipientField(
+                        controller: _directTo,
+                        recent: _directRecent,
+                        label: context.l10n.composeVisibilityDirectLabel,
+                        hint: context.l10n.composeVisibilityDirectHint,
+                        onChanged: _scheduleDraftSave,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
                     Container(
-                      width: 42,
-                      height: 42,
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        shape: BoxShape.circle,
                         color: Theme.of(context)
                             .colorScheme
-                            .primary
-                            .withAlpha(22),
+                            .surfaceContainerHighest
+                            .withAlpha(120),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _dragging
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.outlineVariant,
+                          width: _dragging ? 1.6 : 1,
+                        ),
                       ),
-                      child: Icon(
-                        _dragging
-                            ? Icons.file_download_rounded
-                            : Icons.cloud_upload_outlined,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
                         children: [
-                          Text(
-                            context.l10n.composeDropMediaTitle,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 13),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            context.l10n.composeDropMediaHint,
-                            style: TextStyle(
-                              fontSize: 11.5,
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
                               color: Theme.of(context)
                                   .colorScheme
-                                  .onSurfaceVariant,
+                                  .primary
+                                  .withAlpha(22),
+                            ),
+                            child: Icon(
+                              _dragging
+                                  ? Icons.file_download_rounded
+                                  : Icons.cloud_upload_outlined,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
                           ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  context.l10n.composeDropMediaTitle,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  context.l10n.composeDropMediaHint,
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton.icon(
+                            onPressed: _posting ? null : _pickFiles,
+                            icon:
+                                const Icon(Icons.attach_file_rounded, size: 16),
+                            label: Text(context.l10n.composeChooseFiles),
+                          ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      onPressed: _posting ? null : _pickFiles,
-                      icon: const Icon(Icons.attach_file_rounded, size: 16),
-                      label: Text(context.l10n.composeChooseFiles),
-                    ),
+                    const SizedBox(height: 12),
+                    if (_status != null)
+                      Text(
+                        _status!,
+                        style: TextStyle(
+                            color: _status!.startsWith('OK')
+                                ? null
+                                : Theme.of(context).colorScheme.error),
+                      ),
+                    if (_media.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(context.l10n.composeAttachments,
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      for (var i = 0; i < _media.length; i++)
+                        Card(
+                          child: ListTile(
+                            title: Text(_media[i].name),
+                            subtitle: Text(
+                              _media[i].coreMediaId == null
+                                  ? context.l10n.composeNotUploaded
+                                  : context.l10n
+                                      .composeMediaId(_media[i].coreMediaId!),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Move up',
+                                  onPressed: _posting || i == 0
+                                      ? null
+                                      : () =>
+                                          setState(() => _swapMedia(i, i - 1)),
+                                  icon: const Icon(Icons.keyboard_arrow_up),
+                                ),
+                                IconButton(
+                                  tooltip: 'Move down',
+                                  onPressed: _posting || i == _media.length - 1
+                                      ? null
+                                      : () =>
+                                          setState(() => _swapMedia(i, i + 1)),
+                                  icon: const Icon(Icons.keyboard_arrow_down),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.close),
+                                  onPressed: _posting
+                                      ? null
+                                      : () =>
+                                          setState(() => _media.removeAt(i)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (_status != null)
-                Text(
-                  _status!,
-                  style: TextStyle(
-                      color: _status!.startsWith('OK')
-                          ? null
-                          : Theme.of(context).colorScheme.error),
-                ),
-              if (_media.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(context.l10n.composeAttachments,
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                for (var i = 0; i < _media.length; i++)
-                  Card(
-                    child: ListTile(
-                      title: Text(_media[i].name),
-                      subtitle: Text(
-                        _media[i].coreMediaId == null
-                            ? context.l10n.composeNotUploaded
-                            : context.l10n
-                                .composeMediaId(_media[i].coreMediaId!),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Move up',
-                            onPressed: _posting || i == 0
-                                ? null
-                                : () => setState(() => _swapMedia(i, i - 1)),
-                            icon: const Icon(Icons.keyboard_arrow_up),
-                          ),
-                          IconButton(
-                            tooltip: 'Move down',
-                            onPressed: _posting || i == _media.length - 1
-                                ? null
-                                : () => setState(() => _swapMedia(i, i + 1)),
-                            icon: const Icon(Icons.keyboard_arrow_down),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: _posting
-                                ? null
-                                : () => setState(() => _media.removeAt(i)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ],
                 ),
                 if (_dragging)
                   Positioned.fill(
@@ -524,8 +535,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
         });
       } catch (e) {
         if (!mounted) return;
-        setState(() => _status =
-            context.l10n.composeErrUnableReadFile(e.toString()));
+        setState(() =>
+            _status = context.l10n.composeErrUnableReadFile(e.toString()));
       }
     }
   }

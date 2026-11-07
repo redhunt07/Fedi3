@@ -138,7 +138,7 @@ async fn sync_with_did_record(
             &uri,
             &mut headers,
             &[],
-            &["(request-target)", "host", "date"],
+            &["(request-target)", "host", "date", "digest"],
         )?;
 
         let req = RelayHttpRequest {
@@ -220,7 +220,7 @@ async fn sync_with_did_record(
             &uri,
             &mut headers,
             &[],
-            &["(request-target)", "host", "date"],
+            &["(request-target)", "host", "date", "digest"],
         )?;
 
         let req = RelayHttpRequest {

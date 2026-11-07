@@ -26,12 +26,9 @@ fi
 
 # Load .env for port and token lookups without exporting secrets to the terminal.
 RELAY_PORT=8787
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
+# shellcheck source=lib/dotenv.sh
+source "$ROOT_DIR/scripts/lib/dotenv.sh"
+load_dotenv "$ROOT_DIR/.env"
 if [[ -n "${FEDI3_RELAY_BIND:-}" ]]; then
   RELAY_PORT="${FEDI3_RELAY_BIND##*:}"
 fi
@@ -75,8 +72,9 @@ echo
 
 echo "-- Env sanity"
 if [[ -f .env ]]; then
-  grep -E 'FEDI3_RELAY_ADMIN_TOKEN|FEDI3_RELAY_MEILI_API_KEY|MEILI_MASTER_KEY|FEDI3_DOMAIN|FEDI3_RELAY_DB_URL|TURN_REALM|TURN_PORT|TURN_USER' .env | sed -E 's/(TOKEN|KEY|PASS[A-Z_]*)=.+/\1=<redacted>/' || true
-  token_len="${#FEDI3_RELAY_ADMIN_TOKEN}"
+  grep -E 'FEDI3_RELAY_ADMIN_TOKEN|FEDI3_RELAY_MEILI_API_KEY|MEILI_MASTER_KEY|FEDI3_DOMAIN|FEDI3_RELAY_DB_URL|TURN_REALM|TURN_PORT|TURN_USER' .env | sed -E 's/^([^=]*(TOKEN|KEY|PASSWORD|DB_URL)[^=]*)=.*/\1=<redacted>/' || true
+  admin_token="${FEDI3_RELAY_ADMIN_TOKEN:-}"
+  token_len="${#admin_token}"
   if [[ "$token_len" -lt 32 ]]; then
     echo "WARNING: FEDI3_RELAY_ADMIN_TOKEN is ${token_len} characters (should be >= 32)"
   fi

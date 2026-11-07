@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -50,9 +51,10 @@ class _RightSidebarState extends State<RightSidebar> {
   @override
   void initState() {
     super.initState();
-    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
-    _trendingTimer =
-        Timer.periodic(const Duration(minutes: 5), (_) => _loadTrending());
+    _poll =
+        AppActivity.periodic(const Duration(seconds: 10), (_) => _refresh());
+    _trendingTimer = AppActivity.periodic(
+        const Duration(minutes: 5), (_) => _loadTrending());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refresh();
       _loadTrending();
