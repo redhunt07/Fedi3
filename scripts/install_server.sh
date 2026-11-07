@@ -129,7 +129,12 @@ while [[ $# -gt 0 ]]; do
     --skip-dns-check) SKIP_DNS_CHECK=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) die "Unknown option: $1 (use --help)" ;;
+    *)
+      case "$1" in
+        full|relay|p2p) MODE="$1"; shift ;;
+        *) die "Unknown option: $1 (use --help)" ;;
+      esac
+      ;;
   esac
 done
 

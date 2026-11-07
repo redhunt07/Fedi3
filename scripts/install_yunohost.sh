@@ -108,7 +108,12 @@ while [[ $# -gt 0 ]]; do
     --skip-firewall) SKIP_FIREWALL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) die "Unknown option: $1 (use --help)" ;;
+    *)
+      case "$1" in
+        full|relay|p2p) MODE="$1"; shift ;;
+        *) die "Unknown option: $1 (use --help)" ;;
+      esac
+      ;;
   esac
 done
 
@@ -205,8 +210,8 @@ else
   DEPLOY_DIR="/opt/fedi3"
 fi
 
-install_args=(--mode "$MODE" --no-caddy --skip-firewall)
-[[ -n "$DOMAIN" ]] && install_args+=(--domain "$DOMAIN")
+install_args=("--mode=$MODE" --no-caddy --skip-firewall)
+[[ -n "$DOMAIN" ]] && install_args+=("--domain=$DOMAIN")
 case "$TURN_CHOICE" in
   yes) install_args+=(--turn) ;;
   no) install_args+=(--no-turn) ;;
