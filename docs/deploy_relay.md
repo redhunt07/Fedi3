@@ -1,3 +1,7 @@
+> For an automated install on Debian/Ubuntu or Arch derivatives, see
+> [server installation](deploy_server.md). This guide describes the manual
+> relay configuration.
+
 # Deploy relay (plug & play)
 
 ## 1) Config
@@ -5,6 +9,10 @@
 ```bash
 cp .env.example .env
 ```
+
+The template sets `COMPOSE_PROFILES=relay,p2p,caddy` (full stack). For a
+relay-only install remove `p2p`; behind YunoHost remove `caddy` as well; add
+`turn` and/or `search` only if you need coturn or Meilisearch. `scripts/install_server.sh` writes this value automatically.
 
 Fill in the essential fields:
 
@@ -17,7 +25,7 @@ Fill in the essential fields:
   `FEDI3_RELAY_PG_DB`, with escaping of special characters. A full URL is an
   advanced override for external databases; do not duplicate the password in the template.
 - Media backend (S3/WebDAV or local).
-- `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (public IP) — mandatory for coturn.
+- `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (public IP) — needed by coturn. TURN starts only when `turn` is added to `COMPOSE_PROFILES`.
   The TURN container receives only its own port parameter in the environment,
   not the DB or relay credentials; the TURN credentials are passed to the service.
   STUN healthcheck and memory limit are also present in the standalone compose.

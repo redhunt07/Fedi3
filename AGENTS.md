@@ -66,6 +66,8 @@ flutter run
 
 ## Docs map
 - `docs/getting_started.md`: quick start (relay + app).
+- `docs/deploy_server.md`: automated server install (Debian/Arch, mode choice).
+- `docs/deploy_yunohost.md`: YunoHost install with external nginx TLS.
 - `docs/deploy_relay.md`: full relay config, TLS, monitoring.
 - `docs/deploy_core.md`: local core runtime and health endpoints.
 - `docs/app_guide.md`: app usage and Linux build steps.
@@ -130,7 +132,9 @@ flutter run
 
 ## Configs
 - `.env.example` -> `.env`: relay configuration template.
-- `docker-compose.yml`: relay + infra orchestration.
+- `docker-compose.yml`: relay + infra orchestration with Compose profiles
+  (`relay`, `p2p`, `caddy`, `turn`, `search`); `COMPOSE_PROFILES` in `.env`
+  selects the installation mode.
 - `app/lib/model/core_config.dart`: app-side core config model.
 - `app/l10n.yaml`: Flutter localization configuration.
 
@@ -173,6 +177,9 @@ flutter run
 
 ## Troubleshooting quick hits
 - Relay not reachable: confirm DNS, ports 80/443, and `FEDI3_DOMAIN`.
+- Compose starts nothing: set `COMPOSE_PROFILES=relay,p2p,caddy` (or
+  `relay,caddy`/`p2p`; behind YunoHost use `relay,p2p`) in `.env` or pass the
+  matching `--profile` flags.
 - ACME/TLS errors: check `docker compose logs --tail=200 caddy`.
 - Core not responding: verify core build ran and check `/healthz`.
 - Media issues: validate media backend config in `.env`.

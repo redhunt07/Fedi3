@@ -10,7 +10,7 @@
 ## Relay does not start
 
 - Verify `.env`: the relay refuses to start if `FEDI3_RELAY_ADMIN_TOKEN` is shorter than 32 characters or if `FEDI3_RELAY_DB_DRIVER` is not `sqlite`/`postgres`.
-- The compose stops if `FEDI3_RELAY_PG_PASSWORD`, `FEDI3_DOMAIN`, `TURN_REALM` or `TURN_PASS` are missing.
+- The compose stops if `FEDI3_RELAY_PG_PASSWORD`, `TURN_REALM` or `TURN_PASS` are missing. Caddy needs `FEDI3_DOMAIN`; the installer validates it for relay modes.
 - `docker compose logs relay`
 - `docker compose logs postgres`
 - If the database is reachable but the schema is newer than the binary, the relay exits with an explicit error: do not downgrade without a migration.

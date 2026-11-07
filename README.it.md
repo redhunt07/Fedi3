@@ -70,10 +70,25 @@ scripts/                 Script di build, installazione, backup e diagnostica
 
 ## Quick start: relay
 
+Installazione automatica del server per Debian/Ubuntu e derivate Arch (relay +
+P2P, solo relay o solo P2P):
+
+```bash
+sudo git clone https://github.com/redhunt07/Fedi3.git /opt/fedi3
+cd /opt/fedi3
+sudo bash scripts/install_server.sh
+```
+
+Vedi [installazione del server](docs/it/deploy_server.md) per la guida passo
+passo, oppure [installazione su YunoHost](docs/it/deploy_yunohost.md) quando
+nginx gestisce già le porte 80/443. La configurazione manuale segue.
+
 ```bash
 cp .env.example .env
-# Modifica .env: almeno FEDI3_DOMAIN, FEDI3_RELAY_ADMIN_TOKEN (>= 32 caratteri),
-# FEDI3_RELAY_PG_PASSWORD, TURN_PASS, TURN_REALM e TURN_EXTERNAL_IP.
+# Modifica .env: almeno FEDI3_DOMAIN, FEDI3_RELAY_ADMIN_TOKEN (>= 32 caratteri)
+# e FEDI3_RELAY_PG_PASSWORD. Il template avvia relay,p2p,caddy; aggiungi turn
+# a COMPOSE_PROFILES (e imposta TURN_*) per le chiamate, search per Meilisearch.
+# Su YunoHost usa COMPOSE_PROFILES=relay,p2p (senza caddy).
 # Lascia FEDI3_RELAY_DB_URL vuoto: le credenziali PostgreSQL sono composte automaticamente.
 docker compose up -d --build
 scripts/relay_smoke_test.sh https://relay.example.com <ADMIN_TOKEN>
@@ -145,6 +160,8 @@ PostgreSQL gira in CI con un database effimero.
 Italiano:
 
 - [Primi passi](docs/it/getting_started.md)
+- [Installazione del server, Debian e Arch](docs/it/deploy_server.md)
+- [Relay Fedi3 su YunoHost](docs/it/deploy_yunohost.md)
 - [Deploy del relay](docs/it/deploy_relay.md)
 - [Directory relay](docs/it/relay_directory.md)
 - [Core locale e modalità P2P](docs/it/deploy_core.md)

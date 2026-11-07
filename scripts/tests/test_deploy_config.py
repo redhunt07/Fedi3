@@ -22,19 +22,31 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / file, target)
         values = (ROOT / '.env.example').read_text()
+        # Contract checks need every service visible regardless of the mode
+        # selected in the template.
+        values = re.sub(r'(?m)^COMPOSE_PROFILES=.*$',
+                        'COMPOSE_PROFILES=relay,p2p,caddy,turn,search', values)
         values += '\nFEDI3_DOMAIN=relay.example.invalid\nTURN_EXTERNAL_IP=198.51.100.1\n'
         (stage / '.env').write_text(values)
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(('FEDI3_', 'TURN_', 'P2P_', 'POSTGRES_', 'MEILI_'))}
 
-        def config(file):
+        def config(file, profiles=None):
             # Explicit test dotenv + isolated project dir: no production secrets.
+            call_env = dict(env)
+            if profiles is not None:
+                call_env['COMPOSE_PROFILES'] = profiles
             result = subprocess.run(['docker', 'compose', '--project-directory', str(stage),
                                      '--env-file', str(stage / '.env'), '-f', str(stage / file),
                                      'config', '--format', 'json'],
-                                    env=env, capture_output=True, text=True, check=True)
+                                    env=call_env, capture_output=True, text=True, check=True)
             return json.loads(result.stdout)['services']
 
+        assert set(config(files[0], 'p2p')) == {'p2p_infra'}
+        assert set(config(files[0], 'relay')) == {'relay', 'postgres', 'dragonfly'}
+        assert set(config(files[0], 'caddy')) == {'caddy'}
+        assert set(config(files[0], 'relay,p2p,caddy')) == {
+            'relay', 'postgres', 'dragonfly', 'p2p_infra', 'caddy'}
         root = config(files[0])
         relay = root['relay']['environment']
         pg = root['postgres']['environment']
