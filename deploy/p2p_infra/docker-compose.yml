@@ -1,5 +1,12 @@
 services:
   fedi3_p2p_infra:
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fedi3_p2p_infra", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     build:
       context: ../..
       dockerfile: deploy/p2p_infra/Dockerfile
@@ -10,9 +17,15 @@ services:
     environment:
       - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
+      - FEDI3_P2P_EXTERNAL_ADDR=${FEDI3_P2P_EXTERNAL_ADDR:-}
       - FEDI3_P2P_ENABLE_KAD_SERVER=true
+      - FEDI3_P2P_RELAY_MAX_CIRCUITS=${FEDI3_P2P_RELAY_MAX_CIRCUITS:-64}
+      - FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER=${FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER:-8}
+      - FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES=${FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES:-16777216}
+      - FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS=${FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS:-900}
       - FEDI3_P2P_KEY=/data/fedi3_p2p_infra_keypair.pb
       - FEDI3_P2P_MAILBOX_DB=/data/fedi3_p2p_mailbox.sqlite
+      - FEDI3_P2P_PEER_ID_FILE=/data/fedi3_p2p_peer_id
       - FEDI3_P2P_MAILBOX_MAX_PER_PEER=1000
       - FEDI3_P2P_MAILBOX_MAX_BYTES_PER_PEER=10485760
       - FEDI3_P2P_MAILBOX_MAX_TTL_SECS=86400
@@ -25,3 +38,4 @@ services:
       - "4001:4001/tcp"
       - "4001:4001/udp"
     restart: unless-stopped
+    mem_limit: 512m

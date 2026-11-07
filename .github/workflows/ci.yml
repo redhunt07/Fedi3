@@ -16,6 +16,20 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  operations:
+    name: Backup scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck python3-yaml
+      - name: Check deployment scripts
+        run: shellcheck -x -P scripts scripts/lib/dotenv.sh scripts/backup_relay_pg.sh scripts/restore_relay_pg.sh scripts/backup_relay_media.sh scripts/restore_relay_media.sh scripts/relay_diagnose.sh
+      - name: Validate deployment and OpenAPI contracts
+        run: python3 scripts/tests/test_deploy_config.py
+      - name: Exercise backup and restore with the default dotenv template
+        run: python3 scripts/tests/test_backup_scripts.py
+
   rust:
     name: Rust (${{ matrix.job }})
     runs-on: ubuntu-latest
@@ -58,6 +72,31 @@ jobs:
         run: |
           cargo install cargo-audit --locked || true
           cargo audit
+
+  postgres:
+    name: PostgreSQL atomic quota
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fedi3
+          POSTGRES_DB: audit_quota
+          POSTGRES_PASSWORD: test-only-ci-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fedi3 -d audit_quota"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-postgres
+      - name: Verify concurrent PostgreSQL reservations and deletion
+        env:
+          FEDI3_TEST_POSTGRES_URL: postgres://fedi3:test-only-ci-password@127.0.0.1:5432/audit_quota
+        run: cargo test -p fedi3_relay postgres_media_quota_reservation_is_atomic --locked -- --ignored
 
   flutter:
     name: Flutter (${{ matrix.job }})
@@ -118,7 +157,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libmpv-dev libasound2-dev libpulse-dev
+            libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2

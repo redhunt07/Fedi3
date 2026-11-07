@@ -40,8 +40,7 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
       _errorDetail = null;
     });
     try {
-      final entries =
-          await AnnouncementsService.load(refresh: refresh);
+      final entries = await AnnouncementsService.load(refresh: refresh);
       final newest = entries.isEmpty ? null : entries.first.id;
       await AnnouncementsStore.markSeen(newest);
       if (!mounted) return;
@@ -51,8 +50,9 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
       });
     } catch (e) {
       final cached = await AnnouncementsStore.cached();
-      final entries =
-          cached == null ? const <AnnouncementEntry>[] : AnnouncementsService.parse(cached);
+      final entries = cached == null
+          ? const <AnnouncementEntry>[]
+          : AnnouncementsService.parse(cached);
       if (!mounted) return;
       setState(() {
         _entries = entries;
@@ -116,14 +116,12 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
                               ? context.l10n.announcementsSource
                               : context.l10n.announcementsLastSync(
                                   '${_lastSync!.hour.toString().padLeft(2, '0')}:${_lastSync!.minute.toString().padLeft(2, '0')}'),
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
                         ),
                       ],
                     ),

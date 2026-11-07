@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
+import '../widgets/fedi3_ui.dart';
 
 class SecuritySettingsScreen extends StatefulWidget {
   const SecuritySettingsScreen({super.key, required this.appState});
@@ -50,7 +52,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
           if (_status != null)
             Padding(
@@ -63,44 +65,51 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                         : Theme.of(context).colorScheme.error),
               ),
             ),
-          Text(context.l10n.securityInternalToken,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _internalToken,
-            decoration: InputDecoration(
-                hintText: context.l10n.securityInternalTokenHint),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              OutlinedButton.icon(
-                onPressed: _saving
-                    ? null
-                    : () {
-                        setState(() =>
-                            _internalToken.text = CoreConfig.randomToken());
-                      },
-                icon: const Icon(Icons.autorenew),
-                label: Text(context.l10n.securityRegenerate),
-              ),
-              OutlinedButton.icon(
-                onPressed: _saving
-                    ? null
-                    : () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        final msg = context.l10n.copied;
-                        final text = _internalToken.text.trim();
-                        await Clipboard.setData(ClipboardData(text: text));
-                        if (!mounted) return;
-                        messenger.showSnackBar(SnackBar(content: Text(msg)));
-                      },
-                icon: const Icon(Icons.copy),
-                label: Text(context.l10n.copy),
-              ),
-            ],
+          _section(context, context.l10n.securityInternalToken),
+          GlassPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _internalToken,
+                  decoration: InputDecoration(
+                      hintText: context.l10n.securityInternalTokenHint),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () {
+                              setState(() => _internalToken.text =
+                                  CoreConfig.randomToken());
+                            },
+                      icon: const Icon(Icons.autorenew),
+                      label: Text(context.l10n.securityRegenerate),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final msg = context.l10n.copied;
+                              final text = _internalToken.text.trim();
+                              await Clipboard.setData(
+                                  ClipboardData(text: text));
+                              if (!mounted) return;
+                              messenger
+                                  .showSnackBar(SnackBar(content: Text(msg)));
+                            },
+                      icon: const Icon(Icons.copy),
+                      label: Text(context.l10n.copy),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
           Text(
@@ -109,6 +118,20 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                 color: Theme.of(context).colorScheme.onSurface.withAlpha(160)),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _section(BuildContext context, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
       ),
     );
   }
@@ -132,6 +155,9 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         internalToken: token,
         p2pEnable: c.p2pEnable,
         p2pRelayReserve: c.p2pRelayReserve,
+        p2pBootstrap: c.p2pBootstrap,
+        p2pPublicDiscovery: c.p2pPublicDiscovery,
+        p2pPeerExchange: c.p2pPeerExchange,
         webrtcEnable: c.webrtcEnable,
         webrtcIceUrls: c.webrtcIceUrls,
         webrtcIceUsername: c.webrtcIceUsername,

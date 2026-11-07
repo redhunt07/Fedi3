@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -48,7 +49,7 @@ class _NerdStatusBarState extends State<NerdStatusBar> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
+    _timer = AppActivity.periodic(const Duration(seconds: 2), (_) => _poll());
     WidgetsBinding.instance.addPostFrameCallback((_) => _poll());
   }
 

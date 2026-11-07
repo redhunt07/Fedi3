@@ -67,3 +67,16 @@ Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se i
 | Media non visibili | backend media del relay non configurato | controlla `FEDI3_RELAY_MEDIA_BACKEND` |
 
 Per il relay vedi [deploy_relay.md](deploy_relay.md) e [troubleshooting.md](troubleshooting.md). Per compilare l'app da sorgente vedi [build_linux.md](build_linux.md).
+
+### Credenziali e portachiavi Linux
+
+Le build Linux richiedono `libsecret` e un Secret Service attivo nella sessione
+utente, per esempio GNOME Keyring oppure KWallet con il servizio Secret Service
+abilitato. Per compilare, installare `libsecret-1-dev` e `libjsoncpp-dev` su
+Debian/Ubuntu, oppure `libsecret` e `jsoncpp` su Arch.
+
+Se il portachiavi è bloccato o non disponibile, Fedi3 mostra una schermata di
+recupero: sbloccare il portachiavi e premere **Riprova**. Il programma conserva
+configurazione e account e non propone la creazione di un nuovo profilo in
+questa condizione. Un JSON danneggiato viene segnalato separatamente. Non
+cancellare `config.json` per risolvere un problema del portachiavi.

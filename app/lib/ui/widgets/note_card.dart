@@ -251,161 +251,175 @@ class _NoteCardState extends State<NoteCard> {
             ? Theme.of(context).colorScheme.surfaceContainerHigh
             : null,
         elevation: widget.elevated ? 2 : 0,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: widget.rawActivity == null
-            ? null
-            : () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                      builder: (_) => NoteDetailScreen(
-                          appState: widget.appState,
-                          activity: widget.rawActivity!)),
-                );
-              },
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_boostActor != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.repeat, size: 16),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          context.l10n.noteBoostedBy(_boostActor!.displayName),
-                          style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withAlpha(179),
-                              fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _Avatar(
-                    url: _noteActor?.iconUrl ?? '',
-                    size: 44,
-                    showStatus: true,
-                    statusKey: _noteActor?.statusKey,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: widget.rawActivity == null
+              ? null
+              : () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => NoteDetailScreen(
+                            appState: widget.appState,
+                            activity: widget.rawActivity!)),
+                  );
+                },
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_boostActor != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ActorHoverCard(
-                                actorUrl: note.attributedTo,
-                                onTap: () =>
-                                    _openProfile(context, note.attributedTo),
-                                child: Text(
-                                  display,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ActorHoverCard(
-                                actorUrl: note.attributedTo,
-                                onTap: () =>
-                                    _openProfile(context, note.attributedTo),
-                                child: Text(
-                                  handle,
-                                  style: TextStyle(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface
-                                          .withAlpha(179),
-                                      fontSize: 12),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _formatPublished(context, note.published),
-                              style: TextStyle(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurface
-                                      .withAlpha(128),
-                                  fontSize: 12),
-                            ),
-                            if (canAct && isOwner && !isDeleted)
-                              PopupMenuButton<String>(
-                                tooltip: context.l10n.noteActions,
-                                onSelected: (value) {
-                                  if (value == 'edit') {
-                                    _editNote(context, api, note);
-                                  } else if (value == 'delete') {
-                                    _deleteNote(context, api, note);
-                                  }
-                                },
-                                itemBuilder: (context) => [
-                                  PopupMenuItem(
-                                      value: 'edit',
-                                      child: Text(context.l10n.noteEdit)),
-                                  PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text(context.l10n.noteDelete)),
-                                ],
-                              ),
-                          ],
+                        const Icon(Icons.repeat, size: 16),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            context.l10n
+                                .noteBoostedBy(_boostActor!.displayName),
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(179),
+                                fontSize: 12),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              if (isDeleted)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    context.l10n.noteDeleted,
-                    style: TextStyle(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withAlpha(160)),
-                  ),
-                )
-              else ...[
-                if (note.inReplyTo.isNotEmpty &&
-                    (widget.item.inReplyToPreview != null ||
-                        widget.item.quotePreview != null))
-                  _QuotedPreview(
-                    appState: widget.appState,
-                    label: context.l10n.noteInReplyTo,
-                    inReplyTo: note.inReplyTo,
-                    replyPreview: widget.item.inReplyToPreview,
-                    quotePreview: widget.item.quotePreview,
-                  ),
-                if (shouldCw)
-                  _ContentWarning(
-                    titleHtml: _injectCustomEmoji(cwTitle, note.emojis),
-                    open: _cwOpen,
-                    onToggle: () => setState(() => _cwOpen = !_cwOpen),
-                    child: _NoteContent(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Avatar(
+                      url: _noteActor?.iconUrl ?? '',
+                      size: 44,
+                      showStatus: true,
+                      statusKey: _noteActor?.statusKey,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ActorHoverCard(
+                                  actorUrl: note.attributedTo,
+                                  onTap: () =>
+                                      _openProfile(context, note.attributedTo),
+                                  child: Text(
+                                    display,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w800),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ActorHoverCard(
+                                  actorUrl: note.attributedTo,
+                                  onTap: () =>
+                                      _openProfile(context, note.attributedTo),
+                                  child: Text(
+                                    handle,
+                                    style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface
+                                            .withAlpha(179),
+                                        fontSize: 12),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _formatPublished(context, note.published),
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withAlpha(128),
+                                    fontSize: 12),
+                              ),
+                              if (canAct && isOwner && !isDeleted)
+                                PopupMenuButton<String>(
+                                  tooltip: context.l10n.noteActions,
+                                  onSelected: (value) {
+                                    if (value == 'edit') {
+                                      _editNote(context, api, note);
+                                    } else if (value == 'delete') {
+                                      _deleteNote(context, api, note);
+                                    }
+                                  },
+                                  itemBuilder: (context) => [
+                                    PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text(context.l10n.noteEdit)),
+                                    PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text(context.l10n.noteDelete)),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (isDeleted)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      context.l10n.noteDeleted,
+                      style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(160)),
+                    ),
+                  )
+                else ...[
+                  if (note.inReplyTo.isNotEmpty &&
+                      (widget.item.inReplyToPreview != null ||
+                          widget.item.quotePreview != null))
+                    _QuotedPreview(
+                      appState: widget.appState,
+                      label: context.l10n.noteInReplyTo,
+                      inReplyTo: note.inReplyTo,
+                      replyPreview: widget.item.inReplyToPreview,
+                      quotePreview: widget.item.quotePreview,
+                    ),
+                  if (shouldCw)
+                    _ContentWarning(
+                      titleHtml: _injectCustomEmoji(cwTitle, note.emojis),
+                      open: _cwOpen,
+                      onToggle: () => setState(() => _cwOpen = !_cwOpen),
+                      child: _NoteContent(
+                        appState: widget.appState,
+                        html: content,
+                        onTapUrl: (url) {
+                          if (_looksLikeActorUrl(url)) {
+                            _openProfile(context, url);
+                            return true;
+                          }
+                          return UrlPolicy.handleTap(url);
+                        },
+                      ),
+                    )
+                  else if (content.isNotEmpty)
+                    _NoteContent(
                       appState: widget.appState,
                       html: content,
                       onTapUrl: (url) {
@@ -415,467 +429,464 @@ class _NoteCardState extends State<NoteCard> {
                         }
                         return UrlPolicy.handleTap(url);
                       },
-                    ),
-                  )
-                else if (content.isNotEmpty)
-                  _NoteContent(
-                    appState: widget.appState,
-                    html: content,
-                    onTapUrl: (url) {
-                      if (_looksLikeActorUrl(url)) {
-                        _openProfile(context, url);
-                        return true;
-                      }
-                      return false;
-                    },
-                  )
-                else if (widget.showRawFallback)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    )
+                  else if (widget.showRawFallback)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(context.l10n.activityUnsupported),
+                        Builder(
+                          builder: (context) {
+                            final summary =
+                                _rawActivitySummary(widget.rawActivity);
+                            if (summary.isEmpty) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                summary,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withAlpha(170),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    )
+                  else
+                    const SizedBox.shrink(),
+                ],
+                if (note.hashtags.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
                     children: [
-                      Text(context.l10n.activityUnsupported),
-                      Builder(
-                        builder: (context) {
-                          final summary =
-                              _rawActivitySummary(widget.rawActivity);
-                          if (summary.isEmpty) return const SizedBox.shrink();
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              summary,
-                              style: TextStyle(
-                                fontSize: 12,
+                      for (final tag in note.hashtags)
+                        ActionChip(
+                          label: Text('#$tag'),
+                          onPressed: () => _openHashtag(context, tag),
+                        ),
+                    ],
+                  ),
+                ],
+                if (_translationVisible && _translatedText != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(140),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withAlpha(120)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_translationSource != null &&
+                            _translationSource!.isNotEmpty)
+                          Text(
+                            context.l10n
+                                .noteTranslatedFrom(_translationSource!),
+                            style: TextStyle(
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onSurface
-                                    .withAlpha(170),
+                                    .withAlpha(160),
+                                fontSize: 12),
+                          ),
+                        if (_translationSource != null &&
+                            _translationSource!.isNotEmpty)
+                          const SizedBox(height: 6),
+                        Text(_translatedText!,
+                            style: const TextStyle(fontSize: 14)),
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: () =>
+                                setState(() => _translationVisible = false),
+                            child: Text(context.l10n.noteShowOriginal),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_translationError != null && !_translationVisible) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    context.l10n.noteTranslateFailed(_translationError!),
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 12),
+                  ),
+                ],
+                if (stats != null) ...[
+                  const SizedBox(height: 10),
+                  _StatsRow(
+                    stats: stats,
+                    noteEmojis: note.emojis,
+                    onTap: canAct
+                        ? () => _showReactionsPopup(context, api, note.id)
+                        : null,
+                  ),
+                ],
+                if (previewUrl != null) ...[
+                  const SizedBox(height: 10),
+                  LinkPreviewCard(url: previewUrl),
+                ],
+                if (note.attachments.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  _AttachmentsGrid(
+                    attachments: note.attachments,
+                    onOpen: (index) {
+                      final safe = index.clamp(0, note.attachments.length - 1);
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => MediaViewerScreen(
+                            appState: widget.appState,
+                            url: note.attachments[safe].url,
+                            mediaType: note.attachments[safe].mediaType,
+                            attachments: note.attachments,
+                            initialIndex: safe,
+                          ),
+                        ),
+                      );
+                    },
+                    autoplay: false,
+                    muted: true,
+                    resolveUrl: _resolveMediaUrl,
+                  ),
+                ],
+                if (_muted) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withAlpha(120),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.volume_off, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: Text(context.l10n.noteThreadMuted,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700))),
+                        TextButton(
+                          onPressed: () =>
+                              _toggleFlag(context, 'mute', note.id),
+                          child: Text(context.l10n.noteUnmute),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  if (note.inReplyTo.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _InlineThread(
+                      appState: widget.appState,
+                      note: note,
+                      show: _showThread,
+                      loading: _threadLoading,
+                      error: _threadError,
+                      parents: _threadParents,
+                      onToggle: () async {
+                        final next = !_showThread;
+                        setState(() => _showThread = next);
+                        if (next && _threadParents.isEmpty && !_threadLoading) {
+                          await _loadThreadParents(api, note.inReplyTo);
+                        }
+                      },
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  _InlineReplies(
+                    appState: widget.appState,
+                    noteId: note.id,
+                    show: _showReplies,
+                    loading: _repliesLoading,
+                    error: _repliesError,
+                    replies: _replies,
+                    onToggle: () async {
+                      final next = !_showReplies;
+                      setState(() => _showReplies = next);
+                      if (next &&
+                          _replies.isEmpty &&
+                          !_repliesLoading &&
+                          canAct) {
+                        await _loadReplies(api, note.id);
+                      }
+                    },
+                    onLoadMore: (_repliesCursor == null ||
+                            _repliesLoading ||
+                            !canAct)
+                        ? null
+                        : () async =>
+                            _loadReplies(api, note.id, cursor: _repliesCursor),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    IconButtonTheme(
+                      data: const IconButtonThemeData(
+                        style: ButtonStyle(
+                          minimumSize: WidgetStatePropertyAll(Size(34, 34)),
+                          padding: WidgetStatePropertyAll(
+                              EdgeInsets.symmetric(horizontal: 4)),
+                          iconSize: WidgetStatePropertyAll(20),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                      child: Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          Tooltip(
+                            message: context.l10n.activityReply,
+                            child: IconButton(
+                              onPressed: canAct
+                                  ? () => setState(() {
+                                        _replying = !_replying;
+                                        if (!_replying) _replyCtrl.clear();
+                                      })
+                                  : null,
+                              icon: const Icon(Icons.reply),
+                            ),
+                          ),
+                          Tooltip(
+                            message: context.l10n.activityBoost,
+                            child: IconButton(
+                              onPressed: canAct
+                                  ? () => _toggleBoost(
+                                      context, api, note.id, note.attributedTo)
+                                  : null,
+                              icon: Icon(
+                                Icons.repeat,
+                                color: _myAnnounceId != null
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
                               ),
                             ),
-                          );
-                        },
+                          ),
+                          Tooltip(
+                            message: context.l10n.activityLike,
+                            child: IconButton(
+                              onPressed: (canAct &&
+                                      note.attributedTo.isNotEmpty)
+                                  ? () => _toggleLike(
+                                      context, api, note.id, note.attributedTo)
+                                  : null,
+                              icon: Icon(
+                                _myLikeId != null
+                                    ? Icons.favorite
+                                    : Icons.favorite_border,
+                                color: _myLikeId != null
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          Tooltip(
+                            message: context.l10n.activityReact,
+                            child: IconButton(
+                              onPressed:
+                                  (canAct && note.attributedTo.isNotEmpty)
+                                      ? () async {
+                                          final next = !_reactionsOpen;
+                                          setState(() => _reactionsOpen = next);
+                                          if (next &&
+                                              _reactionCounts.isEmpty &&
+                                              !_reactionsLoading) {
+                                            await _loadReactions(api, note.id);
+                                          }
+                                        }
+                                      : null,
+                              icon: Icon(
+                                Icons.add_reaction_outlined,
+                                color: _myEmojiIds.isNotEmpty
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          Tooltip(
+                            message: _translatedText == null
+                                ? context.l10n.noteTranslate
+                                : (_translationVisible
+                                    ? context.l10n.noteShowOriginal
+                                    : context.l10n.noteShowTranslation),
+                            child: IconButton(
+                              onPressed: _translationLoading
+                                  ? null
+                                  : () => _toggleTranslate(
+                                      context, note.contentHtml),
+                              icon: _translationLoading
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2))
+                                  : Icon(
+                                      Icons.translate,
+                                      color: _translationVisible
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : null,
+                                    ),
+                            ),
+                          ),
+                          Tooltip(
+                            message: 'Bookmark',
+                            child: IconButton(
+                              onPressed: () =>
+                                  _toggleFlag(context, 'bookmark', note.id),
+                              icon: Icon(_bookmarked
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border),
+                            ),
+                          ),
+                          Tooltip(
+                            message: 'Pin',
+                            child: IconButton(
+                              onPressed: () =>
+                                  _toggleFlag(context, 'pin', note.id),
+                              icon: Icon(_pinned
+                                  ? Icons.push_pin
+                                  : Icons.push_pin_outlined),
+                            ),
+                          ),
+                          Tooltip(
+                            message: _muted ? 'Unmute thread' : 'Mute thread',
+                            child: IconButton(
+                              onPressed: () =>
+                                  _toggleFlag(context, 'mute', note.id),
+                              icon: Icon(
+                                  _muted ? Icons.volume_off : Icons.volume_up),
+                            ),
+                          ),
+                          Tooltip(
+                            message: 'Copy link',
+                            child: IconButton(
+                              onPressed: () async {
+                                await Clipboard.setData(
+                                    ClipboardData(text: note.id));
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content:
+                                            Text(context.l10n.noteLinkCopied)));
+                              },
+                              icon: const Icon(Icons.link),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  )
-                else
-                  const SizedBox.shrink(),
-              ],
-              if (note.hashtags.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final tag in note.hashtags)
-                      ActionChip(
-                        label: Text('#$tag'),
-                        onPressed: () => _openHashtag(context, tag),
-                      ),
-                  ],
-                ),
-              ],
-              if (_translationVisible && _translatedText != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surfaceContainerHighest
-                        .withAlpha(140),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .outlineVariant
-                            .withAlpha(120)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_translationSource != null &&
-                          _translationSource!.isNotEmpty)
-                        Text(
-                          context.l10n.noteTranslatedFrom(_translationSource!),
-                          style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withAlpha(160),
-                              fontSize: 12),
-                        ),
-                      if (_translationSource != null &&
-                          _translationSource!.isNotEmpty)
-                        const SizedBox(height: 6),
-                      Text(_translatedText!,
-                          style: const TextStyle(fontSize: 14)),
-                      const SizedBox(height: 6),
+                    ),
+                    if (widget.showRawFallback && widget.rawActivity != null)
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () =>
-                              setState(() => _translationVisible = false),
-                          child: Text(context.l10n.noteShowOriginal),
+                          onPressed: () => setState(() => _showRaw = !_showRaw),
+                          child: Text(_showRaw
+                              ? context.l10n.activityHideRaw
+                              : context.l10n.activityViewRaw),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ],
-              if (_translationError != null && !_translationVisible) ...[
-                const SizedBox(height: 8),
-                Text(
-                  context.l10n.noteTranslateFailed(_translationError!),
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.error, fontSize: 12),
-                ),
-              ],
-              if (stats != null) ...[
-                const SizedBox(height: 10),
-                _StatsRow(
-                  stats: stats,
-                  noteEmojis: note.emojis,
-                  onTap: canAct
-                      ? () => _showReactionsPopup(context, api, note.id)
-                      : null,
-                ),
-              ],
-              if (previewUrl != null) ...[
-                const SizedBox(height: 10),
-                LinkPreviewCard(url: previewUrl),
-              ],
-              if (note.attachments.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                _AttachmentsGrid(
-                  attachments: note.attachments,
-                  onOpen: (index) {
-                    final safe = index.clamp(0, note.attachments.length - 1);
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => MediaViewerScreen(
-                          appState: widget.appState,
-                          url: note.attachments[safe].url,
-                          mediaType: note.attachments[safe].mediaType,
-                          attachments: note.attachments,
-                          initialIndex: safe,
-                        ),
-                      ),
-                    );
-                  },
-                  autoplay: false,
-                  muted: true,
-                  resolveUrl: _resolveMediaUrl,
-                ),
-              ],
-              if (_muted) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surfaceContainerHighest
-                        .withAlpha(120),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.volume_off, size: 16),
-                      const SizedBox(width: 8),
-                      Expanded(
-                          child: Text(context.l10n.noteThreadMuted,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w700))),
-                      TextButton(
-                        onPressed: () => _toggleFlag(context, 'mute', note.id),
-                        child: Text(context.l10n.noteUnmute),
-                      ),
-                    ],
-                  ),
-                ),
-              ] else ...[
-                if (note.inReplyTo.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _InlineThread(
-                    appState: widget.appState,
-                    note: note,
-                    show: _showThread,
-                    loading: _threadLoading,
-                    error: _threadError,
-                    parents: _threadParents,
-                    onToggle: () async {
-                      final next = !_showThread;
-                      setState(() => _showThread = next);
-                      if (next && _threadParents.isEmpty && !_threadLoading) {
-                        await _loadThreadParents(api, note.inReplyTo);
-                      }
-                    },
-                  ),
-                ],
-                const SizedBox(height: 8),
-                _InlineReplies(
-                  appState: widget.appState,
-                  noteId: note.id,
-                  show: _showReplies,
-                  loading: _repliesLoading,
-                  error: _repliesError,
-                  replies: _replies,
-                  onToggle: () async {
-                    final next = !_showReplies;
-                    setState(() => _showReplies = next);
-                    if (next &&
-                        _replies.isEmpty &&
-                        !_repliesLoading &&
-                        canAct) {
-                      await _loadReplies(api, note.id);
-                    }
-                  },
-                  onLoadMore: (_repliesCursor == null ||
-                          _repliesLoading ||
-                          !canAct)
-                      ? null
-                      : () async =>
-                          _loadReplies(api, note.id, cursor: _repliesCursor),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  IconButtonTheme(
-                    data: const IconButtonThemeData(
-                      style: ButtonStyle(
-                        minimumSize: WidgetStatePropertyAll(Size(34, 34)),
-                        padding: WidgetStatePropertyAll(
-                            EdgeInsets.symmetric(horizontal: 4)),
-                        iconSize: WidgetStatePropertyAll(20),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
-                    child: Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: [
-                      Tooltip(
-                        message: context.l10n.activityReply,
-                        child: IconButton(
-                          onPressed: canAct
-                              ? () => setState(() {
-                                    _replying = !_replying;
-                                    if (!_replying) _replyCtrl.clear();
-                                  })
-                              : null,
-                          icon: const Icon(Icons.reply),
-                        ),
-                      ),
-                      Tooltip(
-                        message: context.l10n.activityBoost,
-                        child: IconButton(
-                          onPressed: canAct
-                              ? () => _toggleBoost(
-                                  context, api, note.id, note.attributedTo)
-                              : null,
-                          icon: Icon(
-                            Icons.repeat,
-                            color: _myAnnounceId != null
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                        ),
-                      ),
-                      Tooltip(
-                        message: context.l10n.activityLike,
-                        child: IconButton(
-                          onPressed: (canAct && note.attributedTo.isNotEmpty)
-                              ? () => _toggleLike(
-                                  context, api, note.id, note.attributedTo)
-                              : null,
-                          icon: Icon(
-                            _myLikeId != null
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                            color: _myLikeId != null
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                        ),
-                      ),
-                      Tooltip(
-                        message: context.l10n.activityReact,
-                        child: IconButton(
-                          onPressed: (canAct && note.attributedTo.isNotEmpty)
-                              ? () async {
-                                  final next = !_reactionsOpen;
-                                  setState(() => _reactionsOpen = next);
-                                  if (next &&
-                                      _reactionCounts.isEmpty &&
-                                      !_reactionsLoading) {
-                                    await _loadReactions(api, note.id);
-                                  }
-                                }
-                              : null,
-                          icon: Icon(
-                            Icons.add_reaction_outlined,
-                            color: _myEmojiIds.isNotEmpty
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                        ),
-                      ),
-                      Tooltip(
-                        message: _translatedText == null
-                            ? context.l10n.noteTranslate
-                            : (_translationVisible
-                                ? context.l10n.noteShowOriginal
-                                : context.l10n.noteShowTranslation),
-                        child: IconButton(
-                          onPressed: _translationLoading
-                              ? null
-                              : () =>
-                                  _toggleTranslate(context, note.contentHtml),
-                          icon: _translationLoading
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2))
-                              : Icon(
-                                  Icons.translate,
-                                  color: _translationVisible
-                                      ? Theme.of(context).colorScheme.primary
-                                      : null,
-                                ),
-                        ),
-                      ),
-                      Tooltip(
-                        message: 'Bookmark',
-                        child: IconButton(
-                          onPressed: () =>
-                              _toggleFlag(context, 'bookmark', note.id),
-                          icon: Icon(_bookmarked
-                              ? Icons.bookmark
-                              : Icons.bookmark_border),
-                        ),
-                      ),
-                      Tooltip(
-                        message: 'Pin',
-                        child: IconButton(
-                          onPressed: () => _toggleFlag(context, 'pin', note.id),
-                          icon: Icon(_pinned
-                              ? Icons.push_pin
-                              : Icons.push_pin_outlined),
-                        ),
-                      ),
-                      Tooltip(
-                        message: _muted ? 'Unmute thread' : 'Mute thread',
-                        child: IconButton(
-                          onPressed: () =>
-                              _toggleFlag(context, 'mute', note.id),
-                          icon:
-                              Icon(_muted ? Icons.volume_off : Icons.volume_up),
-                        ),
-                      ),
-                      Tooltip(
-                        message: 'Copy link',
-                        child: IconButton(
-                          onPressed: () async {
-                            await Clipboard.setData(
-                                ClipboardData(text: note.id));
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(context.l10n.noteLinkCopied)));
-                          },
-                          icon: const Icon(Icons.link),
-                        ),
-                      ),
-                    ],
-                  ),
-                  ),
-                  if (widget.showRawFallback && widget.rawActivity != null)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () => setState(() => _showRaw = !_showRaw),
-                        child: Text(_showRaw
-                            ? context.l10n.activityHideRaw
-                            : context.l10n.activityViewRaw),
-                      ),
-                    ),
-                ],
-              ),
-              if (_reactionsOpen) ...[
-                const SizedBox(height: 8),
-                _ReactionsPanel(
-                  loading: _reactionsLoading,
-                  error: _reactionsError,
-                  counts: _reactionCounts,
-                  myEmojis: _myEmojiIds.keys.toSet(),
-                  onToggle: (canAct && note.attributedTo.isNotEmpty)
-                      ? (emoji) async => _toggleEmoji(
-                          context, api, note.id, note.attributedTo, emoji)
-                      : null,
-                  onAdd: (canAct && note.attributedTo.isNotEmpty)
-                      ? () async {
-                          final picked = await _pickReaction(context);
-                          if (picked == null) return;
-                          if (!context.mounted) return;
-                          await _toggleEmoji(
-                              context, api, note.id, note.attributedTo, picked,
-                              forceAdd: true);
-                        }
-                      : null,
-                ),
-              ],
-              if (_replying) ...[
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _replyCtrl,
-                  minLines: 1,
-                  maxLines: 5,
-                  decoration:
-                      InputDecoration(hintText: context.l10n.activityReplyHint),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => setState(() {
-                        _replying = false;
-                        _replyCtrl.clear();
-                      }),
-                      child: Text(context.l10n.activityCancel),
-                    ),
-                    const Spacer(),
-                    FilledButton(
-                      onPressed: () => _sendInlineReply(
-                          context, api, note.id, note.attributedTo),
-                      child: Text(context.l10n.activitySend),
-                    ),
                   ],
                 ),
-              ],
-              if (_showRaw && widget.rawActivity != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    const JsonEncoder.withIndent('  ')
-                        .convert(widget.rawActivity),
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withAlpha(204),
+                if (_reactionsOpen) ...[
+                  const SizedBox(height: 8),
+                  _ReactionsPanel(
+                    loading: _reactionsLoading,
+                    error: _reactionsError,
+                    counts: _reactionCounts,
+                    myEmojis: _myEmojiIds.keys.toSet(),
+                    onToggle: (canAct && note.attributedTo.isNotEmpty)
+                        ? (emoji) async => _toggleEmoji(
+                            context, api, note.id, note.attributedTo, emoji)
+                        : null,
+                    onAdd: (canAct && note.attributedTo.isNotEmpty)
+                        ? () async {
+                            final picked = await _pickReaction(context);
+                            if (picked == null) return;
+                            if (!context.mounted) return;
+                            await _toggleEmoji(context, api, note.id,
+                                note.attributedTo, picked,
+                                forceAdd: true);
+                          }
+                        : null,
+                  ),
+                ],
+                if (_replying) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _replyCtrl,
+                    minLines: 1,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                        hintText: context.l10n.activityReplyHint),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => setState(() {
+                          _replying = false;
+                          _replyCtrl.clear();
+                        }),
+                        child: Text(context.l10n.activityCancel),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: () => _sendInlineReply(
+                            context, api, note.id, note.attributedTo),
+                        child: Text(context.l10n.activitySend),
+                      ),
+                    ],
+                  ),
+                ],
+                if (_showRaw && widget.rawActivity != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      const JsonEncoder.withIndent('  ')
+                          .convert(widget.rawActivity),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withAlpha(204),
+                      ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 
@@ -1308,8 +1319,7 @@ class _NoteCardState extends State<NoteCard> {
             }
         ],
         'tag': [
-          for (final tag in note.hashtags)
-            {'type': 'Hashtag', 'name': '#$tag'}
+          for (final tag in note.hashtags) {'type': 'Hashtag', 'name': '#$tag'}
         ],
       },
     };

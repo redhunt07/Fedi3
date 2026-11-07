@@ -119,7 +119,6 @@ class _SearchScreenState extends State<SearchScreen>
     });
   }
 
-
   Future<void> _loadHistory() async {
     final items = await SearchHistoryStore.read();
     if (!mounted) return;
@@ -269,8 +268,8 @@ class _SearchScreenState extends State<SearchScreen>
         '${cfg.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/users/${cfg.username.trim()}';
     final needle = _query.toLowerCase();
     for (final kind in const ['followers', 'following']) {
-      final ids = await ActorRepository.instance
-          .fetchCollectionItems('$base/$kind');
+      final ids =
+          await ActorRepository.instance.fetchCollectionItems('$base/$kind');
       for (final id in ids) {
         final profile = await ActorRepository.instance.getActor(id);
         if (profile == null) continue;

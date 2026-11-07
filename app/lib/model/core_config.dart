@@ -21,7 +21,7 @@ class ProfileFieldKV {
 
 class CoreConfig {
   CoreConfig({
-    required this.username,
+    required String username,
     required this.domain,
     required this.publicBaseUrl,
     required this.relayWs,
@@ -42,15 +42,20 @@ class CoreConfig {
     required this.blockedActors,
     this.postDeliveryMode = postDeliveryP2pRelay,
     this.p2pRelayReserve = const [],
+    this.p2pBootstrap = const [],
+    this.p2pPublicDiscovery = true,
+    this.p2pPeerExchange = true,
     this.webrtcEnable = false,
-    this.webrtcIceUrls = const [],
+    List<String> webrtcIceUrls = const [],
     this.webrtcIceUsername,
     this.webrtcIceCredential,
     this.p2pCacheTtlSecs,
     this.previousPublicBaseUrl,
     this.previousRelayToken,
     String? anchorActorUrl,
-  }) : anchorActorUrl = normalizeAnchorActorUrl(anchorActorUrl);
+  })  : username = username.toLowerCase(),
+        webrtcIceUrls = List.unmodifiable(webrtcIceUrls),
+        anchorActorUrl = normalizeAnchorActorUrl(anchorActorUrl);
 
   final String username;
   final String domain;
@@ -61,6 +66,9 @@ class CoreConfig {
   final String internalToken;
   final bool p2pEnable;
   final List<String> p2pRelayReserve;
+  final List<String> p2pBootstrap;
+  final bool p2pPublicDiscovery;
+  final bool p2pPeerExchange;
   final bool webrtcEnable;
   final List<String> webrtcIceUrls;
   final String? webrtcIceUsername;
@@ -100,6 +108,9 @@ class CoreConfig {
     String? internalToken,
     bool? p2pEnable,
     List<String>? p2pRelayReserve,
+    List<String>? p2pBootstrap,
+    bool? p2pPublicDiscovery,
+    bool? p2pPeerExchange,
     bool? webrtcEnable,
     List<String>? webrtcIceUrls,
     Object? webrtcIceUsername = _unset,
@@ -131,6 +142,9 @@ class CoreConfig {
       internalToken: internalToken ?? this.internalToken,
       p2pEnable: p2pEnable ?? this.p2pEnable,
       p2pRelayReserve: p2pRelayReserve ?? this.p2pRelayReserve,
+      p2pBootstrap: p2pBootstrap ?? this.p2pBootstrap,
+      p2pPublicDiscovery: p2pPublicDiscovery ?? this.p2pPublicDiscovery,
+      p2pPeerExchange: p2pPeerExchange ?? this.p2pPeerExchange,
       webrtcEnable: webrtcEnable ?? this.webrtcEnable,
       webrtcIceUrls: webrtcIceUrls ?? this.webrtcIceUrls,
       webrtcIceUsername: webrtcIceUsername == _unset
@@ -227,6 +241,13 @@ class CoreConfig {
       internalToken: _str(json['internalToken']),
       p2pEnable: p2pEnable,
       p2pRelayReserve: _stringList(json['p2pRelayReserve']),
+      p2pBootstrap: _stringList(json['p2pBootstrap']),
+      p2pPublicDiscovery: json['p2pPublicDiscovery'] == null
+          ? true
+          : _bool(json['p2pPublicDiscovery']),
+      p2pPeerExchange: json['p2pPeerExchange'] == null
+          ? true
+          : _bool(json['p2pPeerExchange']),
       webrtcEnable: json['webrtcEnable'] == null
           ? p2pEnable
           : _bool(json['webrtcEnable']),
@@ -268,6 +289,9 @@ class CoreConfig {
         'internalToken': internalToken,
         'p2pEnable': p2pEnable,
         'p2pRelayReserve': p2pRelayReserve,
+        'p2pBootstrap': p2pBootstrap,
+        'p2pPublicDiscovery': p2pPublicDiscovery,
+        'p2pPeerExchange': p2pPeerExchange,
         'webrtcEnable': webrtcEnable,
         'webrtcIceUrls': webrtcIceUrls,
         'webrtcIceUsername': webrtcIceUsername,
@@ -318,9 +342,19 @@ class CoreConfig {
       'post_delivery_mode': postDeliveryMode,
       'p2p': {
         'enable': p2pEnable,
+        'bootstrap': p2pBootstrap,
+        'public_discovery_enable': p2pPublicDiscovery,
+        'peer_exchange_enable': p2pPeerExchange,
         if (p2pRelayReserve.isNotEmpty) 'relay_reserve': p2pRelayReserve,
         'webrtc_enable': webrtcEnable,
-        if (webrtcIceUrls.isNotEmpty) 'webrtc_ice_urls': webrtcIceUrls,
+        // webrtc-rs currently supports UDP TURN only. Preserve TCP/TLS URLs
+        // in app settings for the native audio/video calling implementation.
+        if (webrtcIceUrls.isNotEmpty)
+          'webrtc_ice_urls': webrtcIceUrls.where((url) {
+            final lower = url.toLowerCase();
+            return !lower.contains('transport=tcp') &&
+                !lower.startsWith('turns:');
+          }).toList(growable: false),
         if (webrtcIceUsername != null && webrtcIceUsername!.trim().isNotEmpty)
           'webrtc_ice_username': webrtcIceUsername!.trim(),
         if (webrtcIceCredential != null &&

@@ -271,8 +271,7 @@ void main() {
 
     test('CT-04 setChatPin posts thread/message/pinned', () async {
       client.json('POST', '/_fedi3/chat/thread/pin', {'ok': true});
-      await api()
-          .setChatPin(threadId: 't1', messageId: 'm1', pinned: true);
+      await api().setChatPin(threadId: 't1', messageId: 'm1', pinned: true);
       final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
       expect(body['thread_id'], 't1');
       expect(body['message_id'], 'm1');
@@ -319,8 +318,8 @@ void main() {
           }
         ]
       });
-      final items = await api()
-          .fetchChatCallSignals(threadId: 't1', afterMs: 0);
+      final items =
+          await api().fetchChatCallSignals(threadId: 't1', afterMs: 0);
       expect(items, hasLength(1));
       expect(items.first.action, 'invite');
       expect(items.first.data['media'], 'video');
@@ -340,8 +339,7 @@ void main() {
           }
         ]
       });
-      final hits =
-          await api().searchAllChatMessages(query: 'ciao', limit: 10);
+      final hits = await api().searchAllChatMessages(query: 'ciao', limit: 10);
       expect(hits, hasLength(1));
       expect(hits.first.threadTitle, 'Team');
       expect(hits.first.text, 'ciao');
@@ -351,10 +349,8 @@ void main() {
     });
 
     test('CT-06 joinChatThread posts the thread id', () async {
-      client.json('POST', '/_fedi3/chat/thread/join', {
-        'ok': true,
-        'thread_id': 't1'
-      });
+      client.json(
+          'POST', '/_fedi3/chat/thread/join', {'ok': true, 'thread_id': 't1'});
       final resp = await api().joinChatThread(threadId: 't1');
       expect(resp['thread_id'], 't1');
       final body = jsonDecode(client.lastBody) as Map<String, dynamic>;

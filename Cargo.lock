@@ -152,6 +152,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1_der"
+version = "0.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
+
+[[package]]
 name = "async-io"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1428,9 +1434,11 @@ dependencies = [
  "reqwest",
  "rsa",
  "rusqlite",
+ "rustls 0.23.35",
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "time",
  "tokio",
  "tokio-tungstenite 0.23.1",
@@ -2674,12 +2682,14 @@ version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0c7892c221730ba55f7196e98b0b8ba5e04b4155651736036628e9f73ed6fc3"
 dependencies = [
+ "asn1_der",
  "bs58",
  "ed25519-dalek",
  "hkdf",
  "multihash",
  "quick-protobuf",
  "rand 0.8.5",
+ "ring 0.17.14",
  "sha2",
  "thiserror 2.0.17",
  "tracing",
@@ -5157,6 +5167,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -34,6 +35,7 @@ import '../widgets/audio_note_recorder.dart';
 import '../widgets/media_note_recorder.dart';
 import '../widgets/status_avatar.dart';
 import '../../state/peer_presence_store.dart';
+import '../../state/chat_status_store.dart';
 import 'package:http/http.dart' as http;
 
 class ChatThreadScreen extends StatefulWidget {
@@ -63,6 +65,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   List<ChatMessageItem> _messages = const [];
   late String _title;
   final TextEditingController _composerCtrl = TextEditingController();
+  late final FocusNode _composerFocus;
   final TextEditingController _searchCtrl = TextEditingController();
   bool _searchOpen = false;
   String _searchQuery = '';
@@ -83,6 +86,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   final List<_PickedMedia> _media = [];
   bool _sending = false;
   Map<String, _StatusSummary> _statusMap = const {};
+  final Set<String> _seenMessageIds = <String>{};
   Map<String, List<_ReactionItem>> _reactions = const {};
   ChatMessageItem? _replyTo;
   final Map<String, int> _typingActors = {};
@@ -97,6 +101,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   void initState() {
     super.initState();
     _title = widget.title;
+    _composerFocus = FocusNode(
+      debugLabel: 'chat-composer',
+      onKeyEvent: _handleComposerKey,
+    );
     final initialSearch = widget.initialSearch?.trim() ?? '';
     if (initialSearch.isNotEmpty) {
       _searchOpen = true;
@@ -113,7 +121,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _markSeen();
     _markThreadSeen();
     _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch - 30000;
-    _callPollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _callPollTimer = AppActivity.periodic(const Duration(seconds: 2), (_) {
       _pollCallSignals();
     });
     _lastRunning = widget.appState.isRunning;
@@ -146,6 +154,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.title != oldWidget.title) {
       _title = widget.title;
+      _composerFocus = FocusNode(
+        debugLabel: 'chat-composer',
+        onKeyEvent: _handleComposerKey,
+      );
     }
   }
 
@@ -158,6 +170,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _typingDebounce?.cancel();
     _searchDebounce?.cancel();
     _callPollTimer?.cancel();
+    _composerFocus.dispose();
     _composerCtrl.dispose();
     _searchCtrl.dispose();
     widget.appState.removeListener(_appStateListener);
@@ -167,7 +180,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Future<void> _markSeen() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await widget.appState
-        .savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
+        .updatePrefs((current) => current.copyWith(lastChatSeenMs: now));
     widget.appState.clearUnreadChats();
   }
 
@@ -177,7 +190,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final target = latestMs != null && latestMs >= now ? latestMs + 1 : now;
     final next = Map<String, int>.from(prefs.chatThreadSeenMs);
     next[widget.threadId] = target;
-    await widget.appState.savePrefs(prefs.copyWith(chatThreadSeenMs: next));
+    await widget.appState
+        .updatePrefs((current) => current.copyWith(chatThreadSeenMs: next));
   }
 
   void _startStream() {
@@ -305,16 +319,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       if (!mounted) return;
       setState(() {
         _profiles = profiles;
-        if (!widget.isGroup && members.length == 1 && profiles.isNotEmpty) {
-          final peer = profiles.values.first;
-          final name = peer.displayName.trim().isEmpty
-              ? peer.preferredUsername
-              : peer.displayName.trim();
-          if (_title == context.l10n.chatDirectMessage ||
-              _title == context.l10n.chatThreadTitle ||
-              _title.trim().isEmpty) {
-            _title = name;
-          }
+        if (!widget.isGroup && members.isNotEmpty) {
+          final peerUsername = profiles.isNotEmpty
+              ? profiles.values.first.preferredUsername.trim()
+              : '';
+          final fallback = _usernameFromActor(members.first);
+          final username = peerUsername.isNotEmpty ? peerUsername : fallback;
+          final clean = username.replaceFirst(RegExp(r'^@+'), '');
+          if (clean.isNotEmpty) _title = '@$clean';
         }
       });
     } catch (_) {
@@ -667,11 +679,27 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         }
       }
       if (items.isNotEmpty) {
-        final latest = items.first;
-        await api.markChatSeen(
-            threadId: latest.threadId, messageId: latest.messageId);
+        final selfActor = _selfActor();
+        final pendingSeen = items
+            .where((m) =>
+                m.messageId.isNotEmpty &&
+                m.senderActor != selfActor &&
+                !_seenMessageIds.contains(m.messageId))
+            .toList();
+        if (pendingSeen.isNotEmpty) {
+          await Future.wait(pendingSeen.map((m) async {
+            _seenMessageIds.add(m.messageId);
+            try {
+              await api.markChatSeen(
+                  threadId: m.threadId, messageId: m.messageId);
+            } catch (_) {
+              // Retry on the next load if the receipt could not be sent.
+              _seenMessageIds.remove(m.messageId);
+            }
+          }));
+        }
         await _markSeen();
-        await _markThreadSeen(latestMs: latest.createdAtMs);
+        await _markThreadSeen(latestMs: items.first.createdAtMs);
       }
       final ids =
           items.map((m) => m.messageId).where((id) => id.isNotEmpty).toList();
@@ -713,17 +741,40 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       final resp = await api.fetchChatStatuses(messageIds: messageIds);
       final raw = resp['items'];
       if (raw is! List) return;
-      final map = <String, _StatusSummary>{};
+      final fresh = <String, _StatusSummary>{};
       for (final it in raw) {
         if (it is! Map) continue;
         final msgId = it['message_id']?.toString() ?? '';
         final status = it['status']?.toString() ?? '';
         if (msgId.isEmpty || status.isEmpty) continue;
-        final current = map[msgId] ?? _StatusSummary();
+        final current = fresh[msgId] ?? _StatusSummary();
         current.add(status);
-        map[msgId] = current;
+        fresh[msgId] = current;
       }
-      if (mounted) setState(() => _statusMap = map);
+      final cached = await ChatStatusStore.readAll();
+      if (mounted) {
+        // Keep the last known status for messages that are not returned by a
+        // partial/failed status query, instead of showing them as pending.
+        final merged = Map<String, _StatusSummary>.from(_statusMap);
+        for (final entry in fresh.entries) {
+          merged[entry.key] = entry.value;
+        }
+        for (final entry in cached.entries) {
+          final current = merged[entry.key];
+          final currentRank =
+              current == null ? -1 : ChatStatusStore.rank(current.bestStatus);
+          if (ChatStatusStore.rank(entry.value) > currentRank) {
+            final summary = _StatusSummary()..add(entry.value);
+            merged[entry.key] = summary;
+          }
+        }
+        setState(() => _statusMap = merged);
+      }
+      if (fresh.isNotEmpty) {
+        unawaited(ChatStatusStore.merge({
+          for (final entry in fresh.entries) entry.key: entry.value.bestStatus,
+        }));
+      }
     } catch (_) {
       // best-effort
     }
@@ -793,16 +844,20 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _sendMessage() async {
+    if (_sending) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    final text = _composerCtrl.text.trim();
+    final draft = _composerCtrl.text;
+    final text = draft.trim();
     if (text.isEmpty && _media.isEmpty) return;
-    _composerCtrl.clear();
+    final media = List.of(_media);
+    final reply = _replyTo;
+    _focusComposer();
     setState(() => _sending = true);
     try {
       final api = CoreApi(config: cfg);
       final attachments = <Map<String, dynamic>>[];
-      for (final m in _media) {
+      for (final m in media) {
         if (m.coreMediaId == null || m.url == null || m.mediaType == null) {
           final resp = await api.uploadMedia(bytes: m.bytes, filename: m.name);
           final id = (resp['id'] as String?)?.trim();
@@ -830,10 +885,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         recipients: const [],
         text: text,
         attachments: attachments,
-        replyTo: _replyTo?.messageId,
+        replyTo: reply?.messageId,
       );
-      _replyTo = null;
-      _media.clear();
+      if (!mounted) return;
+      if (_composerCtrl.text == draft) _composerCtrl.clear();
+      if (identical(_replyTo, reply)) _replyTo = null;
+      _media.removeWhere(media.contains);
       await _loadMessages(reset: true);
     } catch (e) {
       if (mounted) {
@@ -922,6 +979,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _openRenameDialog() async {
+    if (!widget.isGroup) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final ctrl = TextEditingController(text: _title);
@@ -2208,9 +2266,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 Expanded(
                   child: TextField(
                     controller: _composerCtrl,
+                    focusNode: _composerFocus,
                     minLines: 1,
                     maxLines: 5,
                     textCapitalization: TextCapitalization.sentences,
+                    textInputAction: TextInputAction.send,
                     decoration: InputDecoration(
                       hintText: context.l10n.chatMessageHint,
                       filled: false,
@@ -2245,6 +2305,42 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _focusComposer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _composerFocus.requestFocus();
+      final length = _composerCtrl.text.length;
+      _composerCtrl.selection = TextSelection.collapsed(offset: length);
+    });
+  }
+
+  KeyEventResult _handleComposerKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.enter &&
+        key != LogicalKeyboardKey.numpadEnter) {
+      return KeyEventResult.ignored;
+    }
+    if (HardwareKeyboard.instance.isAltPressed) {
+      _insertNewline();
+      return KeyEventResult.handled;
+    }
+    unawaited(_sendMessage());
+    return KeyEventResult.handled;
+  }
+
+  void _insertNewline() {
+    final text = _composerCtrl.text;
+    final selection = _composerCtrl.selection;
+    final start = selection.isValid ? selection.start : text.length;
+    final end = selection.isValid ? selection.end : text.length;
+    final next = text.replaceRange(start, end, '\n');
+    _composerCtrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + 1),
     );
   }
 
@@ -2510,6 +2606,14 @@ class _StatusSummary {
     if (sent > 0) return Icons.check;
     if (queued > 0) return Icons.schedule;
     return Icons.schedule;
+  }
+
+  String get bestStatus {
+    if (seen > 0) return 'seen';
+    if (delivered > 0) return 'delivered';
+    if (sent > 0) return 'sent';
+    if (queued > 0) return 'queued';
+    return '';
   }
 
   String tooltip(BuildContext context) {

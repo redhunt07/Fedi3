@@ -1701,16 +1701,16 @@ class AppLocalizationsIt extends AppLocalizations {
   String get editAccountRegenerateInternal => 'Rigenera internal token';
 
   @override
-  String get devCoreTitle => 'Dev core controls';
+  String get devCoreTitle => 'Controlli core (dev)';
 
   @override
   String get devCoreConfigSaved => 'Config (salvata)';
 
   @override
-  String get devCoreStart => 'Start';
+  String get devCoreStart => 'Avvia';
 
   @override
-  String get devCoreStop => 'Stop';
+  String get devCoreStop => 'Ferma';
 
   @override
   String get devCoreFetchMigration => 'Leggi status migrazione';
@@ -2312,4 +2312,64 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get followRequestsCoreStopped =>
       'Avvia il core per vedere le richieste di follow.';
+
+  @override
+  String get networkingDiscoveryTitle => 'Scoperta dei peer';
+
+  @override
+  String get networkingPublicDiscovery =>
+      'Usa la rete pubblica IPFS per trovare peer';
+
+  @override
+  String get networkingPublicDiscoveryHint =>
+      'Bootstrap e ricerca aggiuntivi. I messaggi Fedi3 non vengono salvati in IPFS.';
+
+  @override
+  String get networkingPeerExchange =>
+      'Ricorda i peer e scambia contatti firmati';
+
+  @override
+  String get networkingPeerExchangeHint =>
+      'Ricollega i peer conosciuti e aiuta la rete Fedi3 a crescere. Gli annunci pubblici espongono gli indirizzi di rete.';
+
+  @override
+  String get networkingBootstrapLabel => 'Nodi bootstrap Fedi3 indipendenti';
+
+  @override
+  String get networkingBootstrapHint =>
+      'Un multiindirizzo libp2p per riga. Le modifiche riavviano il core locale.';
+
+  @override
+  String get profileImagesTitle => 'Immagini profilo';
+
+  @override
+  String get profileImageDropHint =>
+      'Trascina qui un\'immagine o clicca per sceglierla';
+
+  @override
+  String get profilePasteImage => 'Incolla immagine';
+
+  @override
+  String get profileRemoveImage => 'Rimuovi immagine';
+
+  @override
+  String get profileDetailsTitle => 'Dettagli profilo';
+
+  @override
+  String get backupScopeWarning =>
+      'Backup cifrato delle impostazioni: non include identità crittografica, messaggi o media. Per trasferire la stessa identità occorre anche una copia protetta della cartella dati del core. Conserva la passphrase separatamente.';
+
+  @override
+  String get backupPassphrase => 'Passphrase (almeno 12 caratteri)';
+
+  @override
+  String get configRecoveryTitle => 'Configurazione non disponibile';
+
+  @override
+  String get keyringUnavailableHint =>
+      'Sblocca il portachiavi di sistema e premi Riprova. Su Linux serve un servizio Secret Service attivo (GNOME Keyring o KWallet) e libsecret. La configurazione esistente è conservata.';
+
+  @override
+  String get corruptConfigHint =>
+      'Impossibile leggere la configurazione e la sua copia di sicurezza. Ripristina una copia valida del file, poi premi Riprova. I dati esistenti sono conservati.';
 }

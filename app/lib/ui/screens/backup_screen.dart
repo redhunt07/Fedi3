@@ -25,6 +25,7 @@ class BackupScreen extends StatefulWidget {
 
 class _BackupScreenState extends State<BackupScreen> {
   final _import = TextEditingController();
+  final _passphrase = TextEditingController();
   bool _busy = false;
   String? _status;
 
@@ -35,14 +36,18 @@ class _BackupScreenState extends State<BackupScreen> {
     uniformTypeIdentifiers: ['public.json'],
   );
 
-  String _buildBackupText() {
+  Future<String> _buildBackupText() async {
     final cfg = widget.appState.config;
     if (cfg == null) throw StateError('missing config');
-    return BackupCodec.encode(config: cfg, prefs: widget.appState.prefs);
+    return BackupCodec.encodeEncrypted(
+        config: cfg,
+        prefs: widget.appState.prefs,
+        passphrase: _passphrase.text);
   }
 
   @override
   void dispose() {
+    _passphrase.dispose();
     _import.dispose();
     super.dispose();
   }
@@ -54,6 +59,16 @@ class _BackupScreenState extends State<BackupScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(context.l10n.backupScopeWarning),
+          const SizedBox(height: 12),
+          TextField(
+              controller: _passphrase,
+              obscureText: true,
+              enableSuggestions: false,
+              autocorrect: false,
+              decoration:
+                  InputDecoration(labelText: context.l10n.backupPassphrase)),
+          const SizedBox(height: 16),
           if (_status != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -126,7 +141,7 @@ class _BackupScreenState extends State<BackupScreen> {
     try {
       // file_selector does not support save dialogs on Android/iOS; fallback to clipboard.
       if (Platform.isAndroid || Platform.isIOS) {
-        final text = _buildBackupText();
+        final text = await _buildBackupText();
         await Clipboard.setData(ClipboardData(text: text));
         if (!mounted) return;
         setState(() => _status = context.l10n.backupExportOk);
@@ -135,7 +150,7 @@ class _BackupScreenState extends State<BackupScreen> {
 
       final cfg = widget.appState.config;
       if (cfg == null) throw StateError('missing config');
-      final text = _buildBackupText();
+      final text = await _buildBackupText();
 
       final result = await getSaveLocation(
         acceptedTypeGroups: [_jsonTypeGroup],
@@ -152,9 +167,11 @@ class _BackupScreenState extends State<BackupScreen> {
       if (!mounted) return;
       setState(() => _status = context.l10n.backupExportSaved);
     } catch (e) {
-      setState(() => _status = context.l10n.backupErr(e.toString()));
+      if (mounted) {
+        setState(() => _status = context.l10n.backupErr(e.toString()));
+      }
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -164,14 +181,16 @@ class _BackupScreenState extends State<BackupScreen> {
       _status = null;
     });
     try {
-      final text = _buildBackupText();
+      final text = await _buildBackupText();
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       setState(() => _status = context.l10n.backupExportOk);
     } catch (e) {
-      setState(() => _status = context.l10n.backupErr(e.toString()));
+      if (mounted) {
+        setState(() => _status = context.l10n.backupErr(e.toString()));
+      }
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -198,7 +217,8 @@ class _BackupScreenState extends State<BackupScreen> {
       _status = null;
     });
     try {
-      final bundle = BackupCodec.decode(_import.text);
+      final bundle = await BackupCodec.decodeEncrypted(_import.text,
+          passphrase: _passphrase.text);
       await _applyBundle(bundle);
 
       if (!mounted) return;
@@ -207,9 +227,11 @@ class _BackupScreenState extends State<BackupScreen> {
         _status = context.l10n.backupImportOk;
       });
     } catch (e) {
-      setState(() => _status = context.l10n.backupErr(e.toString()));
+      if (mounted) {
+        setState(() => _status = context.l10n.backupErr(e.toString()));
+      }
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -222,7 +244,8 @@ class _BackupScreenState extends State<BackupScreen> {
       final file = await openFile(acceptedTypeGroups: [_jsonTypeGroup]);
       if (file == null) return;
       final raw = await file.readAsString();
-      final bundle = BackupCodec.decode(raw);
+      final bundle =
+          await BackupCodec.decodeEncrypted(raw, passphrase: _passphrase.text);
       await _applyBundle(bundle);
 
       if (!mounted) return;
@@ -231,9 +254,11 @@ class _BackupScreenState extends State<BackupScreen> {
         _status = context.l10n.backupImportOk;
       });
     } catch (e) {
-      setState(() => _status = context.l10n.backupErr(e.toString()));
+      if (mounted) {
+        setState(() => _status = context.l10n.backupErr(e.toString()));
+      }
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 }

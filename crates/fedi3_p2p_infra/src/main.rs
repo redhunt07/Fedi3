@@ -24,11 +24,13 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 mod mailbox;
+mod relay_config;
 use mailbox::{MailboxMessage, MailboxStore};
 
 #[derive(Debug, Clone)]
 struct Config {
     listen: Vec<Multiaddr>,
+    external_addrs: Vec<Multiaddr>,
     enable_relay_server: bool,
     enable_kad_server: bool,
     bootstrap: Vec<Multiaddr>,
@@ -41,6 +43,7 @@ struct Config {
     mailbox_max_put_bytes_per_min: u64,
     mailbox_max_body_bytes: usize,
     peer_id_file: PathBuf,
+    relay_limits: relay_config::RelayLimits,
 }
 
 fn load_config() -> Result<Config> {
@@ -52,6 +55,14 @@ fn load_config() -> Result<Config> {
         .filter(|s| !s.is_empty())
         .map(|s| s.parse::<Multiaddr>().context("parse listen addr"))
         .collect::<Result<Vec<_>>>()?;
+
+    let external_addrs = std::env::var("FEDI3_P2P_EXTERNAL_ADDR")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .collect::<Vec<_>>();
 
     let bootstrap = std::env::var("FEDI3_P2P_BOOTSTRAP").unwrap_or_default();
     let bootstrap = bootstrap
@@ -118,6 +129,7 @@ fn load_config() -> Result<Config> {
 
     Ok(Config {
         listen,
+        external_addrs,
         enable_relay_server,
         enable_kad_server,
         bootstrap,
@@ -130,6 +142,7 @@ fn load_config() -> Result<Config> {
         mailbox_max_put_bytes_per_min,
         mailbox_max_body_bytes,
         peer_id_file,
+        relay_limits: relay_config::RelayLimits::from_env()?,
     })
 }
 
@@ -257,6 +270,34 @@ impl request_response::Codec for Fedi3Codec {
     }
 }
 
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    #[tokio::test]
+    async fn rejects_untrusted_lengths_without_allocating_the_body() {
+        for len in [0, MAX_FRAME_BYTES as u32 + 1, u32::MAX] {
+            let mut reader = futures_util::io::Cursor::new(len.to_be_bytes().to_vec());
+            let result: std::io::Result<serde_json::Value> =
+                read_len_prefixed_json(&mut reader).await;
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        }
+    }
+    #[tokio::test]
+    async fn codec_round_trip_and_write_limit() {
+        let mut data = futures_util::io::Cursor::new(Vec::new());
+        write_len_prefixed_json(&mut data, &serde_json::json!({"ok": true}))
+            .await
+            .unwrap();
+        data.set_position(0);
+        let value: serde_json::Value = read_len_prefixed_json(&mut data).await.unwrap();
+        assert_eq!(value["ok"], true);
+        let large = "x".repeat(MAX_FRAME_BYTES);
+        assert!(write_len_prefixed_json(&mut data, &large).await.is_err());
+    }
+}
+
 async fn read_len_prefixed_json<T, V>(io: &mut T) -> std::io::Result<V>
 where
     T: futures_util::AsyncRead + Unpin + Send,
@@ -266,6 +307,12 @@ where
     let mut len_buf = [0u8; 4];
     io.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid P2P frame size",
+        ));
+    }
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
     serde_json::from_slice(&buf)
@@ -280,6 +327,12 @@ where
     use futures_util::AsyncWriteExt as _;
     let bytes = serde_json::to_vec(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "P2P frame too large",
+        ));
+    }
     let len = (bytes.len() as u32).to_be_bytes();
     io.write_all(&len).await?;
     io.write_all(&bytes).await?;
@@ -505,6 +558,28 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = load_config()?;
+    if std::env::args().any(|arg| arg == "--healthcheck") {
+        let id = std::fs::read_to_string(&cfg.peer_id_file)?;
+        let _: PeerId = id.trim().parse()?;
+        let port = cfg
+            .listen
+            .iter()
+            .flat_map(|addr| addr.iter())
+            .find_map(|p| {
+                if let libp2p::multiaddr::Protocol::Tcp(port) = p {
+                    Some(port)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow::anyhow!("no TCP listener configured"))?;
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await??;
+        return Ok(());
+    }
     let keypair = load_or_generate_keypair(&cfg.key_path)?;
     let peer_id = PeerId::from(keypair.public());
 
@@ -531,10 +606,10 @@ async fn main() -> Result<()> {
         cfg.mailbox_max_bytes_per_peer,
         cfg.mailbox_max_ttl_secs,
     )?;
-    let limiter = RateLimiter::new(
+    let limiter = std::sync::Arc::new(RateLimiter::new(
         cfg.mailbox_max_puts_per_min,
         cfg.mailbox_max_put_bytes_per_min,
-    );
+    ));
 
     let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
         .upgrade(upgrade::Version::V1)
@@ -570,7 +645,14 @@ async fn main() -> Result<()> {
 
     let mut kad_behaviour = {
         let store = kad::store::MemoryStore::new(peer_id);
-        let mut k = kad::Behaviour::new(peer_id, store);
+        let mut config = kad::Config::default();
+        // New clients isolate application records from the public IPFS DHT.
+        // Retain the legacy name for rolling upgrades of existing clients.
+        config.set_protocol_names(vec![
+            libp2p::StreamProtocol::new("/fedi3/kad/1"),
+            libp2p::StreamProtocol::new("/ipfs/kad/1.0.0"),
+        ]);
+        let mut k = kad::Behaviour::with_config(peer_id, store, config);
         if cfg.enable_kad_server {
             k.set_mode(Some(kad::Mode::Server));
         }
@@ -592,10 +674,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    let relay_cfg = relay::Config {
-        // Keep defaults; infra nodes can tune via env later.
-        ..Default::default()
-    };
+    let relay_cfg = cfg.relay_limits.to_libp2p();
+    info!(?relay_cfg, "circuit relay limits");
     let relay_behaviour = relay::Behaviour::new(peer_id, relay_cfg);
 
     let rr = request_response::Behaviour::new(
@@ -621,6 +701,10 @@ async fn main() -> Result<()> {
     for addr in cfg.listen {
         swarm.listen_on(addr)?;
     }
+    for addr in &cfg.external_addrs {
+        info!(%peer_id, %addr, "advertising external address");
+        swarm.add_external_address(addr.clone());
+    }
 
     for addr in cfg.bootstrap {
         let _ = swarm.dial(addr);
@@ -628,29 +712,47 @@ async fn main() -> Result<()> {
 
     // Bootstrap the DHT when possible.
     let mut bootstrapped = false;
+    let mut handlers = tokio::task::JoinSet::new();
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
+            _ = &mut shutdown => break,
+            result = handlers.join_next(), if !handlers.is_empty() => {
+                if let Some(Ok((channel, response))) = result {
+                    let _ = swarm.behaviour_mut().rr.send_response(channel, response);
+                }
+            },
             ev = swarm.select_next_some() => {
                 match ev {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!(%peer_id, %address, "listening");
                     }
-                    SwarmEvent::ConnectionEstablished { .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                        info!(peer=%peer_id, "p2p connection established");
                         if !bootstrapped && cfg.enable_kad_server && !bootstrap_peers.is_empty() {
                             let _ = swarm.behaviour_mut().kad.bootstrap();
                             bootstrapped = true;
                         }
                     }
+                    SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                        info!(peer=%peer_id, ?cause, "p2p connection closed");
+                    }
                     SwarmEvent::Behaviour(BehaviourEvent::Relay(ev)) => {
                         if cfg.enable_relay_server {
                             match ev {
-                                relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
-                                    info!(peer=%src_peer_id, "relay reservation accepted");
+                                relay::Event::ReservationReqAccepted { src_peer_id, renewed } => {
+                                    info!(peer=%src_peer_id, renewed, "relay reservation accepted");
+                                }
+                                relay::Event::ReservationReqDenied { src_peer_id } => {
+                                    warn!(peer=%src_peer_id, "relay reservation denied");
                                 }
                                 relay::Event::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
                                     info!(src=%src_peer_id, dst=%dst_peer_id, "relay circuit accepted");
+                                }
+                                relay::Event::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
+                                    warn!(src=%src_peer_id, dst=%dst_peer_id, "relay circuit denied");
                                 }
                                 _ => {}
                             }
@@ -659,15 +761,15 @@ async fn main() -> Result<()> {
                     SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message })) => {
                         match message {
                             request_response::Message::Request { request, channel, .. } => {
-                                let resp = handle_mailbox_request(
-                                    &mailbox,
-                                    &limiter,
-                                    cfg.mailbox_max_body_bytes,
-                                    &peer,
-                                    request,
-                                )
-                                .await;
-                                let _ = swarm.behaviour_mut().rr.send_response(channel, resp);
+                                if handlers.len() >= 64 {
+                                    let _ = swarm.behaviour_mut().rr.send_response(channel, RelayHttpResponse { id: request.id, status: 503, headers: Vec::new(), body_b64: String::new() });
+                                    continue;
+                                }
+                                let mailbox = mailbox.clone(); let limiter = limiter.clone(); let max_body = cfg.mailbox_max_body_bytes;
+                                handlers.spawn(async move {
+                                    let response = handle_mailbox_request(&mailbox, &limiter, max_body, &peer, request).await;
+                                    (channel, response)
+                                });
                             }
                             request_response::Message::Response { .. } => {}
                         }
@@ -678,5 +780,30 @@ async fn main() -> Result<()> {
         }
     }
 
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !handlers.is_empty() {
+        match tokio::time::timeout_at(deadline, handlers.join_next()).await {
+            Ok(Some(Ok((channel, response)))) => {
+                let _ = swarm.behaviour_mut().rr.send_response(channel, response);
+            }
+            _ => break,
+        }
+    }
+    handlers.abort_all();
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    info!("infrastructure shutdown requested; draining mailbox handlers");
 }

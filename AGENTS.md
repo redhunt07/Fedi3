@@ -146,14 +146,14 @@ flutter run
 - Core: local Rust runtime used by the app (AP + P2P + cache).
 - Relay: public service for federation compatibility and routing.
 - P2P: peer-to-peer layer for direct sync.
-- Relay mesh: server-side P2P mesh among relays.
+- Relay mesh: server-side HTTP peering and synchronization among relays.
 - Mailbox: P2P infra component for message routing.
 
 ## Debugging tips
 - Relay logs: `docker compose logs --tail=200 fedi3-relay` (service name in compose).
 - Caddy logs: `docker compose logs --tail=200 caddy`.
 - Core health: use endpoints in "HTTP endpoints" with the internal header.
-- Check relay mesh: `/_fedi3/relay/stats` includes `relay_p2p_peer_id`.
+- Check relay mesh: `/_fedi3/relay/stats` includes `peer_id` from `/_fedi3/relay/p2p_infra`.
 
 ## Quick setup checklist
 ### Windows
@@ -183,10 +183,12 @@ flutter run
 - `FEDI3_RELAY_ADMIN_TOKEN`: admin auth for health/metrics and admin ops.
 - `FEDI3_RELAY_TELEMETRY_TOKEN`: optional token for telemetry endpoints.
 - `FEDI3_RELAY_DB_DRIVER`: database driver (typically `postgres`).
-- `FEDI3_RELAY_DB_URL`: connection string for the relay DB.
+- `FEDI3_RELAY_DB_URL`: optional full connection override. Leave empty in Compose;
+  the relay derives its PostgreSQL URL from `FEDI3_RELAY_PG_USER`,
+  `FEDI3_RELAY_PG_PASSWORD`, and `FEDI3_RELAY_PG_DB`, escaping credentials.
 - Media backend keys: S3/WebDAV/local settings (see `.env.example`).
-- Relay mesh keys: `FEDI3_RELAY_MESH_ENABLE`, `FEDI3_RELAY_MESH_KEY`,
-  `FEDI3_RELAY_MESH_LISTEN`, `FEDI3_RELAY_MESH_BOOTSTRAP`.
+- Relay peering uses HTTP: `FEDI3_RELAY_SEED_RELAYS`, `FEDI3_RELAY_PEER_SYNC_SECS`,
+  `FEDI3_RELAY_PEER_MAX_HOPS` and `/admin/peers`. There is no relay libp2p mesh runtime.
 
 ## Core and app config notes
 - `internal_token`: core internal auth token used for protected endpoints.
@@ -198,8 +200,7 @@ flutter run
   `icon_media_type`, `image_url`, `image_media_type`, `profile_fields`,
   `manually_approves_followers`, `blocked_domains`, `blocked_actors`,
   `ap_relays`, `bootstrap_follow_actors`, `previous_public_base_url`,
-  `previous_relay_token`, `upnp_port_start`, `upnp_port_end`,
-  `upnp_lease_secs`, `upnp_timeout_secs`.
+  `previous_relay_token`.
 - App settings: surfaced in UI and stored via state stores under `app/lib/state/`.
 ### Defaults and constraints
 - If `public_base_url` is empty, core infers it from `relay_ws`.
@@ -258,7 +259,10 @@ flutter run
 FEDI3_DOMAIN=relay.example.com
 FEDI3_RELAY_ADMIN_TOKEN=change_me_admin_token
 FEDI3_RELAY_DB_DRIVER=postgres
-FEDI3_RELAY_DB_URL=postgres://user:pass@db:5432/fedi3
+FEDI3_RELAY_DB_URL=
+FEDI3_RELAY_PG_USER=fedi3
+FEDI3_RELAY_PG_PASSWORD=change_me
+FEDI3_RELAY_PG_DB=fedi3_relay
 ```
 
 ### Core start payload (full example)
@@ -287,10 +291,6 @@ FEDI3_RELAY_DB_URL=postgres://user:pass@db:5432/fedi3
   "blocked_actors": ["https://bad.example/users/evil"],
   "ap_relays": ["https://relay.misskey.io/actor"],
   "bootstrap_follow_actors": ["@announce@relay.example.com"],
-  "upnp_port_start": 40000,
-  "upnp_port_end": 40100,
-  "upnp_lease_secs": 3600,
-  "upnp_timeout_secs": 10,
   "http_timeout_secs": 30,
   "max_body_bytes": 20971520,
   "post_delivery_mode": "p2p_relay",
@@ -313,14 +313,27 @@ FEDI3_RELAY_DB_URL=postgres://user:pass@db:5432/fedi3
 }
 ```
 
-### Relay .env (with media + mesh)
+### Relay .env (with media + HTTP peering)
 ```
 FEDI3_DOMAIN=relay.example.com
 FEDI3_RELAY_ADMIN_TOKEN=change_me_admin_token
 FEDI3_RELAY_TELEMETRY_TOKEN=change_me_telemetry_token
 FEDI3_RELAY_DB_DRIVER=postgres
-FEDI3_RELAY_DB_URL=postgres://user:pass@db:5432/fedi3
+FEDI3_RELAY_DB_URL=
+FEDI3_RELAY_PG_USER=fedi3
+FEDI3_RELAY_PG_PASSWORD=change_me
+FEDI3_RELAY_PG_DB=fedi3_relay
 FEDI3_RELAY_MEDIA_BACKEND=local
-FEDI3_RELAY_MESH_ENABLE=true
-FEDI3_RELAY_MESH_KEY=/data/fedi3_relay_mesh_keypair.pb
 ```
+
+### Current networking and secrets
+- Core P2P is implemented by `p2p.rs`/`p2p/`: identify, private/public DHT,
+  relay reservation, DCUtR, AutoNAT, mDNS, gossip, known-peer persistence and PEX.
+- Relay-to-relay peering and note sync use HTTP. Removed unused libp2p mesh
+  prototypes must not be documented as a running subsystem.
+- Core tokens in Flutter configuration live in the OS keyring. Linux builds
+  require libsecret/jsoncpp development packages and a running Secret Service.
+  Locked credentials show recovery UI; never overwrite the existing profile.
+- `relay_token` is required when using a relay tunnel; a P2P-only core can omit
+  `relay_ws`/`relay_token`. Empty internal tokens generate random authentication.
+- No core `upnp_*` config exists. NAT mapping is handled by the active P2P stack.

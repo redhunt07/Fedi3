@@ -239,3 +239,78 @@ async fn t01_ping_pong_updates_rtt() {
     let _ = tx.send(true);
     let _ = join.await;
 }
+
+#[tokio::test]
+async fn tunnel_bounds_inflight_handlers_and_cancels_them_on_shutdown() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let active = Arc::new(AtomicUsize::new(0));
+    struct Active(Arc<AtomicUsize>);
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let count = active.clone();
+    let service = service_fn(move |_request| {
+        let count = count.clone();
+        async move {
+            count.fetch_add(1, Ordering::SeqCst);
+            let _active = Active(count);
+            std::future::pending::<()>().await;
+            Ok::<_, std::convert::Infallible>(http::Response::new(Body::empty()))
+        }
+    });
+    let (stop, rx) = watch::channel(false);
+    let client = tokio::spawn(async move {
+        run_tunnel_with_options(
+            "alice",
+            &url,
+            "0123456789abcdef",
+            service,
+            rx,
+            Arc::new(NetMetrics::new()),
+            test_options(),
+        )
+        .await
+    });
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+    for n in 0..65 {
+        let request = fedi3_protocol::RelayHttpRequest {
+            id: n.to_string(),
+            method: "GET".into(),
+            path: "/slow".into(),
+            query: "".into(),
+            headers: vec![],
+            body_b64: "".into(),
+        };
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&request).unwrap(),
+        ))
+        .await
+        .unwrap();
+    }
+    let overload = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let frame = ws.next().await.unwrap().unwrap();
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = frame {
+                break serde_json::from_str::<fedi3_protocol::RelayHttpResponse>(&text).unwrap();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(overload.status, 503);
+    assert_eq!(overload.id, "64");
+    assert!(active.load(Ordering::SeqCst) <= 64);
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), client)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+}

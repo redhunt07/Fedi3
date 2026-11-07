@@ -24,6 +24,7 @@ class PrefsLoadResult {
 }
 
 class PrefsStore {
+  static Future<void> _writes = Future<void>.value();
   static Directory? _dirOverride;
 
   /// Tests point the store at a temp directory (path_provider is unavailable).
@@ -79,8 +80,13 @@ class PrefsStore {
 
   /// Writes preferences atomically (temp + flush + rename) with a `.bak` and
   /// 600 permissions on POSIX.
-  static Future<void> write(UiPrefs prefs) async {
-    await _writeAtomically(prefs, keepBackup: true);
+  static Future<void> write(UiPrefs prefs) {
+    final snapshot = UiPrefs.fromJson(prefs.toJson());
+    final operation =
+        _writes.then((_) => _writeAtomically(snapshot, keepBackup: true));
+    _writes =
+        operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return operation;
   }
 
   static Future<void> _writeAtomically(UiPrefs prefs,

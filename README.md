@@ -19,7 +19,8 @@ Pre-1.0, in hardening verso la prima release stabile. La lista dei blocker e il 
 ```bash
 cp .env.example .env
 # Modifica .env: almeno FEDI3_DOMAIN, FEDI3_RELAY_ADMIN_TOKEN (>=32 caratteri),
-# FEDI3_RELAY_PG_PASSWORD, TURN_PASS.
+# FEDI3_RELAY_PG_PASSWORD, TURN_PASS, TURN_REALM e TURN_EXTERNAL_IP (IP pubblico).
+# Lascia FEDI3_RELAY_DB_URL vuoto: le credenziali PG sono composte automaticamente.
 docker compose up -d --build
 scripts/relay_smoke_test.sh
 ```

@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/call_ice_config.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 
@@ -72,6 +74,8 @@ class _CallScreenState extends State<CallScreen> {
   Timer? _signalTimer;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _durationTimer;
+  Timer? _mediaStatsTimer;
+  bool _collectingMediaStats = false;
   DateTime? _startedAt;
   bool _fetching = false;
 
@@ -93,9 +97,11 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    _ended = true;
     _signalTimer?.cancel();
     _streamSub?.cancel();
     _durationTimer?.cancel();
+    _mediaStatsTimer?.cancel();
     for (final r in _remoteRenderers.values) {
       r.dispose();
     }
@@ -110,14 +116,32 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _start() async {
     try {
-      _localRenderer = RTCVideoRenderer();
-      await _localRenderer!.initialize();
-      _localStream = await navigator.mediaDevices.getUserMedia({
+      final renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      if (_ended || !mounted) {
+        await renderer.dispose();
+        return;
+      }
+      _localRenderer = renderer;
+      final stream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
         'video': widget.mediaType == 'video'
-            ? {'facingMode': 'user', 'width': 1280, 'height': 720, 'frameRate': 30}
+            ? {
+                'facingMode': 'user',
+                'width': 1280,
+                'height': 720,
+                'frameRate': 30
+              }
             : false,
       });
+      if (_ended || !mounted) {
+        for (final track in stream.getTracks()) {
+          await track.stop();
+        }
+        await stream.dispose();
+        return;
+      }
+      _localStream = stream;
       _micTrack = _localStream!.getAudioTracks().isNotEmpty
           ? _localStream!.getAudioTracks().first
           : null;
@@ -136,7 +160,7 @@ class _CallScreenState extends State<CallScreen> {
           'title': widget.title,
         });
       }
-      _startedAt = DateTime.now();
+      if (_ended || !mounted) return;
       _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() {});
       });
@@ -172,7 +196,9 @@ class _CallScreenState extends State<CallScreen> {
         to: to,
         data: data,
       );
-    } catch (_) {}
+    } catch (e) {
+      if (mounted && !_ended) setState(() => _error = e.toString());
+    }
   }
 
   Future<void> _fetchSignals() async {
@@ -202,8 +228,11 @@ class _CallScreenState extends State<CallScreen> {
       case 'invite':
         break;
       case 'accept':
-        _participants.add(from);
-        if (!widget.incoming) {
+        final newlyAccepted = _participants.add(from);
+        if (!widget.incoming && newlyAccepted) {
+          // The caller creates the first offer. A two-person roster is empty,
+          // so waiting for roster processing leaves both peers idle forever.
+          await _createOffer(from);
           final roster = _participants.where((a) => a != from).toList();
           await _signal('roster', to: from, data: {
             'participants': roster,
@@ -234,20 +263,19 @@ class _CallScreenState extends State<CallScreen> {
             RTCSessionDescription(sdp, s.data['type']?.toString() ?? 'answer'),
           );
           await _flushIce(from);
-          _connected.add(from);
           if (mounted) setState(() {});
         }
         break;
       case 'ice':
         final pc = _pcs[from];
         final cand = s.data['candidate']?.toString();
-        if (pc == null || cand == null) return;
+        if (cand == null) return;
         final ice = RTCIceCandidate(
           cand,
           s.data['sdp_mid']?.toString(),
           (s.data['sdp_mline_index'] as num?)?.toInt(),
         );
-        if (await pc.getRemoteDescription() == null) {
+        if (pc == null || await pc.getRemoteDescription() == null) {
           _pendingIce.putIfAbsent(from, () => []).add(ice);
         } else {
           await pc.addCandidate(ice);
@@ -278,24 +306,23 @@ class _CallScreenState extends State<CallScreen> {
     if (existing != null) return existing;
     final cfg = widget.appState.config;
     final iceUrls = cfg?.webrtcIceUrls ?? const <String>[];
-    final servers = iceUrls.isEmpty
-        ? [
-            {'urls': 'stun:stun.l.google.com:19302'}
-          ]
-        : [
-            {
-              'urls': iceUrls,
-              if (cfg?.webrtcIceUsername != null)
-                'username': cfg!.webrtcIceUsername,
-              if (cfg?.webrtcIceCredential != null)
-                'credential': cfg!.webrtcIceCredential,
-            }
-          ];
+    final servers = buildCallIceServers(
+      iceUrls,
+      username: cfg?.webrtcIceUsername,
+      credential: cfg?.webrtcIceCredential,
+    );
     final pc = await createPeerConnection({
       'iceServers': servers,
       'sdpSemantics': 'unified-plan',
     });
+    if (_ended || !mounted) {
+      await pc.close();
+      throw StateError('call ended during connection setup');
+    }
     _pcs[actor] = pc;
+    _mediaStatsTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
+      _logMediaStats();
+    });
     pc.onIceCandidate = (candidate) {
       if (candidate.candidate == null) return;
       _signal('ice', to: actor, data: {
@@ -314,9 +341,20 @@ class _CallScreenState extends State<CallScreen> {
     pc.onConnectionState = (state) {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         _connected.add(actor);
+        _connecting = false;
+        _error = null;
+        _startedAt ??= DateTime.now();
+        _mediaStatsTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
+          _logMediaStats();
+        });
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _connected.remove(actor);
+        _connecting = false;
+        if (mounted &&
+            state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          _error = context.l10n.networkErrorTitle;
+        }
       }
       if (mounted) setState(() {});
     };
@@ -330,11 +368,57 @@ class _CallScreenState extends State<CallScreen> {
     return pc;
   }
 
+  Future<void> _logMediaStats() async {
+    if (_collectingMediaStats || _ended) return;
+    _collectingMediaStats = true;
+    try {
+      for (final entry in _pcs.entries.toList()) {
+        final reports = await entry.value.getStats();
+        var sent = 0;
+        var received = 0;
+        for (final report in reports) {
+          if (report.type == 'outbound-rtp') {
+            sent += (report.values['bytesSent'] as num?)?.toInt() ?? 0;
+          } else if (report.type == 'inbound-rtp') {
+            received += (report.values['bytesReceived'] as num?)?.toInt() ?? 0;
+          }
+        }
+        debugPrint('Fedi3 call media: ${jsonEncode({
+              'call_id': _callId,
+              'peer': _actorName(entry.key),
+              'connected': _connected.contains(entry.key),
+              'connection_state': entry.value.connectionState?.name,
+              'ice_state': entry.value.iceConnectionState?.name,
+              'candidate_pairs': reports
+                  .where((r) => r.type == 'candidate-pair')
+                  .take(8)
+                  .map((r) => {
+                        'state': r.values['state'],
+                        'nominated': r.values['nominated'],
+                        'requests_sent': r.values['requestsSent'],
+                        'responses_received': r.values['responsesReceived'],
+                      })
+                  .toList(),
+              'rtp_bytes_sent': sent,
+              'rtp_bytes_received': received,
+            })}');
+      }
+    } catch (_) {
+      // A peer may close while its final statistics are being collected.
+    } finally {
+      _collectingMediaStats = false;
+    }
+  }
+
   Future<void> _ensureRenderer(String actor, MediaStream stream) async {
     var renderer = _remoteRenderers[actor];
     if (renderer == null) {
       renderer = RTCVideoRenderer();
       await renderer.initialize();
+      if (_ended || !mounted) {
+        await renderer.dispose();
+        return;
+      }
       _remoteRenderers[actor] = renderer;
     }
     renderer.srcObject = stream;
@@ -412,6 +496,13 @@ class _CallScreenState extends State<CallScreen> {
         'video': true,
         'audio': true,
       });
+      if (_ended || !mounted) {
+        for (final track in stream.getTracks()) {
+          await track.stop();
+        }
+        await stream.dispose();
+        return;
+      }
       _screenStream = stream;
       final video = stream.getVideoTracks().isNotEmpty
           ? stream.getVideoTracks().first
@@ -497,7 +588,9 @@ class _CallScreenState extends State<CallScreen> {
     _ended = true;
     _signalTimer?.cancel();
     _durationTimer?.cancel();
-    if (notify) await _signal('leave');
+    _mediaStatsTimer?.cancel();
+    // Stop capture immediately, even when signaling is offline or queued.
+    if (notify) unawaited(_signal('leave'));
     for (final actor in _pcs.keys.toList()) {
       await _closePeer(actor);
     }
@@ -537,12 +630,14 @@ class _CallScreenState extends State<CallScreen> {
         fit: StackFit.expand,
         children: [
           if (renderer != null)
-            RTCVideoView(renderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+            RTCVideoView(renderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
           else
             Center(
               child: CircleAvatar(
                 radius: 28,
-                backgroundColor: Theme.of(context).colorScheme.primary.withAlpha(35),
+                backgroundColor:
+                    Theme.of(context).colorScheme.primary.withAlpha(35),
                 child: Text(
                   _actorName(actor).characters.first.toUpperCase(),
                   style: TextStyle(
@@ -586,7 +681,9 @@ class _CallScreenState extends State<CallScreen> {
           ),
           if (widget.mediaType == 'video')
             _controlButton(
-              icon: _cameraOn ? Icons.videocam_rounded : Icons.videocam_off_rounded,
+              icon: _cameraOn
+                  ? Icons.videocam_rounded
+                  : Icons.videocam_off_rounded,
               label: context.l10n.callCamera,
               active: _cameraOn,
               onTap: _toggleCamera,
@@ -638,7 +735,8 @@ class _CallScreenState extends State<CallScreen> {
           ),
         ),
         const SizedBox(height: 4),
-        Text(label, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+        Text(label,
+            style: const TextStyle(fontSize: 10, color: Colors.white70)),
       ],
     );
   }
@@ -655,9 +753,11 @@ class _CallScreenState extends State<CallScreen> {
           children: [
             Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             Text(
-              _connecting && actors.isEmpty
-                  ? context.l10n.callConnecting
-                  : '${actors.length + 1} · ${_durationLabel()}',
+              _connected.isEmpty
+                  ? (_connecting
+                      ? context.l10n.callConnecting
+                      : context.l10n.callNoAnswer)
+                  : '${_connected.length + 1} · ${_durationLabel()}',
               style: const TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
@@ -675,7 +775,8 @@ class _CallScreenState extends State<CallScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              child: Text(_error!,
+                  style: const TextStyle(color: Colors.redAccent)),
             ),
           Expanded(
             child: Padding(
@@ -687,8 +788,10 @@ class _CallScreenState extends State<CallScreen> {
                         children: [
                           CircleAvatar(
                             radius: 46,
-                            backgroundColor:
-                                Theme.of(context).colorScheme.primary.withAlpha(35),
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withAlpha(35),
                             child: Icon(
                               widget.mediaType == 'video'
                                   ? Icons.videocam_rounded
@@ -717,7 +820,7 @@ class _CallScreenState extends State<CallScreen> {
             ),
           ),
           if ((widget.mediaType == 'video' || _screenSharing) &&
-            _localStream != null)
+              _localStream != null)
             Align(
               alignment: Alignment.centerRight,
               child: Padding(
@@ -730,7 +833,8 @@ class _CallScreenState extends State<CallScreen> {
                     child: _localRenderer != null
                         ? RTCVideoView(_localRenderer!,
                             mirror: true,
-                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+                            objectFit: RTCVideoViewObjectFit
+                                .RTCVideoViewObjectFitCover)
                         : const SizedBox.shrink(),
                   ),
                 ),

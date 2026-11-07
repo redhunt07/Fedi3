@@ -148,8 +148,8 @@ class _RelationsScreenState extends State<RelationsScreen> {
                         final profile = _profiles[id];
                         final handle = _handleFor(profile, id);
                         final status = _status[id] ?? 'none';
-                        final following = status == 'accepted' ||
-                            status == 'pending';
+                        final following =
+                            status == 'accepted' || status == 'pending';
                         final label = following
                             ? (status == 'pending'
                                 ? context.l10n.chatStatusPending

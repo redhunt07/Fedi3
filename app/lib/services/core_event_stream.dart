@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import '../model/core_config.dart';
 import '../core/core_http.dart';
+import 'app_activity.dart';
 
 class CoreEvent {
   CoreEvent({
@@ -46,14 +47,37 @@ class CoreEventStream {
   final CoreConfig config;
   final http.Client? _client;
 
-  http.Client get _http => _client ?? CoreHttp.client;
-
   /// Opens the SSE stream.
   ///
   /// H-50/AN-08..10: the connection has a bounded timeout, malformed frames are
   /// dropped without killing the stream, and network errors propagate so the
   /// caller can reconnect with backoff.
   Stream<CoreEvent> stream({String? kind}) async* {
+    while (true) {
+      await AppActivity.waitForForeground();
+      final client = _client ?? CoreHttp.streamClient();
+      final lifecycle = AppActivity.changes.listen((foreground) {
+        if (!foreground &&
+            _client == null &&
+            CoreHttp.ownsStreamClient(client)) {
+          client.close();
+        }
+      });
+      try {
+        yield* _connection(client, kind: kind);
+      } catch (_) {
+        if (AppActivity.foreground) rethrow;
+      } finally {
+        await lifecycle.cancel();
+        if (_client == null && CoreHttp.ownsStreamClient(client)) {
+          client.close();
+        }
+      }
+      if (AppActivity.foreground) return;
+    }
+  }
+
+  Stream<CoreEvent> _connection(http.Client client, {String? kind}) async* {
     final base = config.localBaseUri;
     final uri = base.replace(
       path: '/_fedi3/stream',
@@ -68,7 +92,7 @@ class CoreEventStream {
     }
     req.headers['Accept'] = 'text/event-stream';
 
-    final resp = await _http.send(req).timeout(CoreHttp.totalTimeout);
+    final resp = await client.send(req).timeout(CoreHttp.totalTimeout);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('stream failed: ${resp.statusCode}');
     }

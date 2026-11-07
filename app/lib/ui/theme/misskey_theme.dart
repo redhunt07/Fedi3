@@ -216,8 +216,7 @@ class MisskeyTheme {
           highlightColor: scheme.primary.withAlpha(20),
         ),
       ),
-      progressIndicatorTheme:
-          ProgressIndicatorThemeData(color: scheme.primary),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
       listTileTheme: ListTileThemeData(
         iconColor: scheme.onSurfaceVariant,
         textColor: scheme.onSurface,

@@ -53,8 +53,7 @@ class AnnouncementsStore {
   static Future<void> cache(String raw) async {
     final data = await _read();
     data['cached_md'] = raw;
-    data['cached_at_ms'] =
-        DateTime.now().millisecondsSinceEpoch;
+    data['cached_at_ms'] = DateTime.now().millisecondsSinceEpoch;
     await _write(data);
   }
 }

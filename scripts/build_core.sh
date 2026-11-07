@@ -22,7 +22,11 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="$repo_root/crates/fedi3_core"
 
-(cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --"$profile")
+if [[ "$profile" == "debug" ]]; then
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core)
+else
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --release)
+fi
 
 suffix="$profile"
 so_path="$repo_root/target/$suffix/libfedi3_core.so"

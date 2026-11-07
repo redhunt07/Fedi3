@@ -1,7 +1,7 @@
-FROM rust:1.86 AS builder
+FROM rust:1.99-bookworm AS builder
 WORKDIR /app
 COPY . .
-RUN cargo build -p fedi3_p2p_infra --release
+RUN cargo build -p fedi3_p2p_infra --release --locked
 
 FROM debian:bookworm-slim
 ARG P2P_UID=1000

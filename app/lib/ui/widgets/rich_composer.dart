@@ -54,7 +54,7 @@ class _RichComposerState extends State<RichComposer> {
   void dispose() {
     widget.controller.removeListener(_onText);
     _focus.dispose();
-        super.dispose();
+    super.dispose();
   }
 
   void _onText() {
@@ -75,8 +75,7 @@ class _RichComposerState extends State<RichComposer> {
     _redoStack.add(widget.controller.text);
     _applyingHistory = true;
     widget.controller.text = prev;
-    widget.controller.selection =
-        TextSelection.collapsed(offset: prev.length);
+    widget.controller.selection = TextSelection.collapsed(offset: prev.length);
     _lastText = prev;
     _applyingHistory = false;
     setState(() {});
@@ -88,8 +87,7 @@ class _RichComposerState extends State<RichComposer> {
     _undoStack.add(widget.controller.text);
     _applyingHistory = true;
     widget.controller.text = next;
-    widget.controller.selection =
-        TextSelection.collapsed(offset: next.length);
+    widget.controller.selection = TextSelection.collapsed(offset: next.length);
     _lastText = next;
     _applyingHistory = false;
     setState(() {});
@@ -104,9 +102,8 @@ class _RichComposerState extends State<RichComposer> {
     widget.controller.value = TextEditingValue(
       text: next,
       selection: TextSelection.collapsed(
-        offset: cursorOffset != null
-            ? start + cursorOffset
-            : start + text.length,
+        offset:
+            cursorOffset != null ? start + cursorOffset : start + text.length,
       ),
     );
     _focus.requestFocus();
@@ -338,10 +335,12 @@ class _RichComposerState extends State<RichComposer> {
                 divider(),
                 iconButton(Icons.format_align_left_rounded,
                     context.l10n.composerAlignLeft, () => _applyAlign('left')),
-                iconButton(Icons.format_align_center_rounded,
+                iconButton(
+                    Icons.format_align_center_rounded,
                     context.l10n.composerAlignCenter,
                     () => _applyAlign('center')),
-                iconButton(Icons.format_align_right_rounded,
+                iconButton(
+                    Icons.format_align_right_rounded,
                     context.l10n.composerAlignRight,
                     () => _applyAlign('right')),
                 divider(),
@@ -381,12 +380,13 @@ class _RichComposerState extends State<RichComposer> {
                     context.l10n.composerStrike, () => _wrap('~~', '~~')),
                 iconButton(Icons.code_rounded, context.l10n.composerCode,
                     () => _wrap('`', '`')),
-                iconButton(Icons.link_rounded, context.l10n.composerLink,
-                    _insertLink),
+                iconButton(
+                    Icons.link_rounded, context.l10n.composerLink, _insertLink),
                 divider(),
                 iconButton(Icons.format_list_bulleted_rounded,
                     context.l10n.composerBulletList, () => _prefixLines('- ')),
-                iconButton(Icons.format_list_numbered_rounded,
+                iconButton(
+                    Icons.format_list_numbered_rounded,
                     context.l10n.composerNumberedList,
                     () => _prefixLines('1. ')),
                 iconButton(Icons.format_quote_rounded,
@@ -395,8 +395,9 @@ class _RichComposerState extends State<RichComposer> {
                     context.l10n.composerDivider, () => _block('---')),
                 divider(),
                 if (widget.onEmoji != null)
-                  iconButton(Icons.emoji_emotions_outlined,
-                      context.l10n.composerEmoji, () async {
+                  iconButton(
+                      Icons.emoji_emotions_outlined, context.l10n.composerEmoji,
+                      () async {
                     final emoji = await widget.onEmoji!();
                     if (emoji != null && emoji.isNotEmpty) {
                       _replaceSelection(emoji);
@@ -413,21 +414,21 @@ class _RichComposerState extends State<RichComposer> {
             child: _preview
                 ? _PreviewPane(text: widget.controller.text)
                 : TextField(
-                      controller: widget.controller,
-                      focusNode: _focus,
-                      enabled: widget.enabled,
-                      minLines: null,
-                      maxLines: null,
-                      expands: true,
-                      textAlignVertical: TextAlignVertical.top,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                      decoration: InputDecoration(
-                        hintText: widget.hintText,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.all(16),
-                      ),
-                      inputFormatters: const [],
+                    controller: widget.controller,
+                    focusNode: _focus,
+                    enabled: widget.enabled,
+                    minLines: null,
+                    maxLines: null,
+                    expands: true,
+                    textAlignVertical: TextAlignVertical.top,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                    decoration: InputDecoration(
+                      hintText: widget.hintText,
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.all(16),
                     ),
+                    inputFormatters: const [],
+                  ),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -494,8 +495,8 @@ class _PreviewPane extends StatelessWidget {
       return Center(
         child: Text(
           context.l10n.composerPreviewEmpty,
-          style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant),
+          style:
+              TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
       );
     }

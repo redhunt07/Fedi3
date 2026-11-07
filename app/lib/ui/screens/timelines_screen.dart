@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -149,8 +150,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                 tooltip: context.l10n.searchTitle,
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) =>
-                        SearchScreen(appState: widget.appState),
+                    builder: (_) => SearchScreen(appState: widget.appState),
                   ),
                 ),
                 icon: const Icon(Icons.search_rounded),
@@ -178,9 +178,9 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                       ? context.l10n.timelineLayoutTabs
                       : context.l10n.timelineLayoutColumns,
                   onPressed: () async {
-                    final prefs = widget.appState.prefs;
-                    await widget.appState.savePrefs(prefs.copyWith(
-                        desktopUseColumns: !prefs.desktopUseColumns));
+                    await widget.appState.updatePrefs((current) =>
+                        current.copyWith(
+                            desktopUseColumns: !current.desktopUseColumns));
                   },
                   icon: Icon(useColumns
                       ? Icons.view_agenda_outlined
@@ -455,8 +455,8 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(context.l10n.notificationsFollowBackFailed(
-              e.toString())),
+          content:
+              Text(context.l10n.notificationsFollowBackFailed(e.toString())),
         ),
       );
     }
@@ -498,8 +498,8 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                             color: Theme.of(context).colorScheme.primary),
                         const SizedBox(width: 8),
                         Text(context.l10n.trendingTitle,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -556,8 +556,8 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                             color: Theme.of(context).colorScheme.primary),
                         const SizedBox(width: 8),
                         Text(context.l10n.suggestedTitle,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -574,12 +574,10 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: _suggested.length,
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(width: 10),
+                        separatorBuilder: (_, __) => const SizedBox(width: 10),
                         itemBuilder: (context, index) {
                           final profile = _suggested[index];
-                          final followed =
-                              _followed.contains(profile.id);
+                          final followed = _followed.contains(profile.id);
                           return Container(
                             width: 168,
                             padding: const EdgeInsets.all(10),
@@ -631,8 +629,7 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                                   width: double.infinity,
                                   child: FilledButton.tonal(
                                     style: FilledButton.styleFrom(
-                                      visualDensity:
-                                          VisualDensity.compact,
+                                      visualDensity: VisualDensity.compact,
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 8),
                                     ),
@@ -643,8 +640,7 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                                       followed
                                           ? context.l10n.profileFollowing
                                           : context.l10n.settingsFollow,
-                                      style:
-                                          const TextStyle(fontSize: 11.5),
+                                      style: const TextStyle(fontSize: 11.5),
                                     ),
                                   ),
                                 ),
@@ -732,7 +728,7 @@ class _TimelineListState extends State<_TimelineList>
   void initState() {
     super.initState();
     _refresh();
-    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _pollNew());
+    _poll = AppActivity.periodic(const Duration(seconds: 8), (_) => _pollNew());
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {

@@ -262,6 +262,34 @@ async fn inbox_rejects_non_local_recipients() {
 }
 
 #[tokio::test]
+async fn inbox_rejects_valid_signature_claiming_another_actor() {
+    let relay = TestRelay::start().await;
+    relay.register("alice", &user_token()).await;
+    let mock = spawn_mock_actor(String::new()).await;
+    let signer = Signer::new(&mock.base_url, "bob");
+    mock.set_actor_json(signer.actor_json("bob"));
+    for claimed in [
+        json!("https://innocent.example/users/someone"),
+        json!({"id": "https://innocent.example/users/someone"}),
+    ] {
+        let mut activity = activity_to(
+            &relay,
+            "https://remote.example/activities/forged",
+            &signer.actor_url,
+            &[local_actor_url(&relay, "alice")],
+        );
+        activity["actor"] = claimed;
+        assert_eq!(
+            signed_post(&relay, &signer, "/inbox", &activity, true)
+                .await
+                .status(),
+            401
+        );
+        assert_eq!(spool_count(&relay, "alice"), 0);
+    }
+}
+
+#[tokio::test]
 async fn inbox_rejects_fanout_over_limit() {
     let relay = TestRelay::start().await;
     let users: Vec<String> = (0..30).map(|i| format!("user{i}")).collect();
@@ -338,9 +366,44 @@ async fn media_upload_get_delete_roundtrip() {
 
     let get = relay.get(&format!("/users/alice/media/{id}")).await;
     assert_eq!(get.status(), 200);
+    let etag = get.headers()["etag"].to_str().unwrap().to_string();
+    assert_eq!(get.headers()["accept-ranges"], "bytes");
+    assert!(get.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("sandbox"));
     assert_eq!(
         get.bytes().await.unwrap().as_ref(),
         b"\x89PNG\r\n\x1a\nfake"
+    );
+    let url = format!("/users/alice/media/{id}");
+    let part = relay.get_with(&url, &[("Range", "bytes=1-3")]).await;
+    assert_eq!(part.status(), 206);
+    assert_eq!(part.headers()["content-range"], "bytes 1-3/12");
+    assert_eq!(part.bytes().await.unwrap().as_ref(), b"PNG");
+    let suffix = relay.get_with(&url, &[("Range", "bytes=-4")]).await;
+    assert_eq!(suffix.status(), 206);
+    assert_eq!(suffix.bytes().await.unwrap().as_ref(), b"fake");
+    assert_eq!(
+        relay
+            .get_with(&url, &[("Range", "bytes=100-")])
+            .await
+            .status(),
+        416
+    );
+    assert_eq!(
+        relay
+            .get_with(&url, &[("If-None-Match", &etag)])
+            .await
+            .status(),
+        304
+    );
+    assert_eq!(
+        relay
+            .get_with(&url, &[("Range", "bytes=1-3"), ("If-Range", "\"old\"")])
+            .await
+            .status(),
+        200
     );
 
     let del = relay
@@ -504,12 +567,27 @@ async fn forward_to_offline_user_spools_and_returns_503() {
 
 #[tokio::test]
 async fn slow_tunnel_times_out_and_spools() {
-    let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_TUNNEL_TIMEOUT_SECS", "1")]).await;
+    let relay = TestRelay::start_with_env(&[
+        ("FEDI3_RELAY_TUNNEL_TIMEOUT_SECS", "1"),
+        ("FEDI3_RELAY_MAX_INFLIGHT_PER_USER", "32"),
+    ])
+    .await;
     relay.register("alice", &user_token()).await;
     let url = relay.ws_url(&format!("/tunnel/alice?token={}", user_token()));
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    // Keep the socket alive but never answer requests.
-    let hold = tokio::spawn(async move { while let Some(Ok(_)) = ws.next().await {} });
+    // A 101 response precedes the async tunnel registration. Wait for the first
+    // request from the relay before testing a timeout, rather than racing it.
+    let (registered, ready) = tokio::sync::oneshot::channel();
+    let hold = tokio::spawn(async move {
+        if let Some(Ok(_)) = ws.next().await {
+            let _ = registered.send(());
+        }
+        while let Some(Ok(_)) = ws.next().await {}
+    });
+    tokio::time::timeout(Duration::from_secs(3), ready)
+        .await
+        .unwrap()
+        .unwrap();
     let resp = relay
         .post_json("/users/alice/outbox", &json!({ "type": "Create" }))
         .await;
@@ -727,4 +805,150 @@ async fn loopback_relay_url_is_fetched_with_private_fetch_escape_hatch() {
         "relay did not fetch the loopback URL despite the escape hatch"
     );
     drop(relay);
+}
+
+#[tokio::test]
+async fn infra_identity_file_can_appear_after_relay_start() {
+    let dir = common::temp_dir("late-infra");
+    let path = dir.join("peer_id");
+    let relay =
+        TestRelay::start_with_env(&[("FEDI3_P2P_INFRA_PEER_ID_FILE", path.to_str().unwrap())])
+            .await;
+    let id = "12D3KooWPpcLibPJjBRmyk296HPrNjGdbGSkZqAEV8jEftUHPe9i";
+    std::fs::write(&path, id).unwrap();
+    let response: Value = relay
+        .get("/_fedi3/relay/p2p_infra")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(response["peer_id"], id);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_exits_cleanly_and_preserves_database() {
+    let mut relay = TestRelay::start().await;
+    let response = relay
+        .post_json(
+            "/register",
+            &json!({"username":"shutdown-user", "token":"shutdown-user-token-12345"}),
+        )
+        .await;
+    assert!(response.status().is_success());
+    relay.stop_gracefully().await;
+    let count: i64 = relay
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE username='shutdown-user'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_drains_a_request_already_sent_through_a_tunnel() {
+    let mut relay = TestRelay::start().await;
+    relay.register("alice", &user_token()).await;
+    let url = relay.ws_url(&format!("/tunnel/alice?token={}", user_token()));
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let url = format!("{}/users/alice/drain-probe", relay.base_url());
+    let request = tokio::spawn(async move { reqwest::get(url).await.unwrap() });
+    let original = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let message = ws.next().await.unwrap().unwrap();
+            if let tokio_tungstenite::tungstenite::Message::Text(raw) = message {
+                let req: fedi3_protocol::RelayHttpRequest = serde_json::from_str(&raw).unwrap();
+                if req.path.ends_with("drain-probe") {
+                    break req;
+                }
+                let response = fedi3_protocol::RelayHttpResponse {
+                    id: req.id,
+                    status: 404,
+                    headers: vec![],
+                    body_b64: String::new(),
+                };
+                ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::to_string(&response).unwrap(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    relay.signal_terminate();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let response = fedi3_protocol::RelayHttpResponse {
+        id: original.id,
+        status: 200,
+        headers: vec![],
+        body_b64: String::new(),
+    };
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::to_string(&response).unwrap(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(request.await.unwrap().status(), 200);
+    drop(ws);
+    relay.wait_for_clean_exit().await;
+}
+
+#[tokio::test]
+async fn concurrent_media_uploads_obey_quota_and_account_deletion_removes_blobs() {
+    let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_MEDIA_MAX_BYTES_PER_USER", "32")]).await;
+    relay.register("alice", &user_token()).await;
+    let body = b"\x89PNG\r\n\x1a\n0123456789abcdef".to_vec();
+    let requests = (0..8).map(|_| {
+        relay
+            .client
+            .post(format!("{}/users/alice/media", relay.base_url()))
+            .bearer_auth(user_token())
+            .header("Content-Type", "image/png")
+            .body(body.clone())
+            .send()
+    });
+    let results = futures_util::future::join_all(requests).await;
+    let statuses: Vec<_> = results
+        .into_iter()
+        .map(|r| r.unwrap().status().as_u16())
+        .collect();
+    assert_eq!(statuses.iter().filter(|s| **s == 201).count(), 1);
+    assert_eq!(statuses.iter().filter(|s| **s == 413).count(), 7);
+    let used: i64 = relay
+        .db()
+        .query_row(
+            "SELECT COALESCE(SUM(size),0) FROM media_items WHERE username='alice'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(used, 24);
+    let paths: Vec<String> = relay
+        .db()
+        .prepare("SELECT storage_key FROM media_items WHERE username='alice'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    for key in &paths {
+        assert!(relay.dir.join("media").join(key).exists());
+    }
+    let response = relay
+        .client
+        .delete(format!("{}/admin/users/alice", relay.base_url()))
+        .bearer_auth(&relay.admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    for key in paths {
+        assert!(!relay.dir.join("media").join(key).exists());
+    }
 }

@@ -36,9 +36,8 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setPresence(PresenceStatus status) async {
-    final prefs = widget.appState.prefs;
-    await widget.appState.savePrefs(
-      prefs.copyWith(presenceStatus: presenceStatusName(status)),
+    await widget.appState.updatePrefs(
+      (current) => current.copyWith(presenceStatus: presenceStatusName(status)),
     );
     await PeerPresenceStore.instance.setSelfStatus(status);
   }

@@ -59,12 +59,18 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
       _stream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
         'video': widget.video
-            ? {'facingMode': 'user', 'width': 1280, 'height': 720, 'frameRate': 30}
+            ? {
+                'facingMode': 'user',
+                'width': 1280,
+                'height': 720,
+                'frameRate': 30
+              }
             : false,
       });
       if (_renderer != null) _renderer!.srcObject = _stream;
       final dir = await getTemporaryDirectory();
-      _path = '${dir.path}/fedi3_note_${DateTime.now().microsecondsSinceEpoch}.${widget.video ? 'mp4' : 'm4a'}';
+      _path =
+          '${dir.path}/fedi3_note_${DateTime.now().microsecondsSinceEpoch}.${widget.video ? 'mp4' : 'm4a'}';
       _recorder = MediaRecorder();
       await _recorder!.start(
         _path!,
@@ -127,7 +133,9 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              widget.video ? context.l10n.chatVideoNote : context.l10n.chatAudioNote,
+              widget.video
+                  ? context.l10n.chatVideoNote
+                  : context.l10n.chatAudioNote,
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 12),

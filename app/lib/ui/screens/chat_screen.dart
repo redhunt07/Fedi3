@@ -84,7 +84,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _markSeen() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await widget.appState
-        .savePrefs(widget.appState.prefs.copyWith(lastChatSeenMs: now));
+        .updatePrefs((current) => current.copyWith(lastChatSeenMs: now));
     widget.appState.clearUnreadChats();
   }
 
@@ -368,10 +368,13 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
         final thread = all[index];
-        final name = thread.title?.trim().isNotEmpty == true
-            ? thread.title!.trim()
-            : (thread.kind == 'dm'
-                ? context.l10n.chatDirectMessage
+        final peer = thread.peerUsernames.isNotEmpty
+            ? thread.peerUsernames.first.trim().replaceFirst(RegExp(r'^@+'), '')
+            : '';
+        final name = thread.kind == 'dm'
+            ? (peer.isEmpty ? context.l10n.chatDirectMessage : '@$peer')
+            : (thread.title?.trim().isNotEmpty == true
+                ? thread.title!.trim()
                 : context.l10n.chatGroup);
         final preview = thread.lastMessagePreview?.trim().isNotEmpty == true
             ? thread.lastMessagePreview!.trim()
@@ -545,13 +548,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final next = Map<String, int>.from(prefs.chatThreadSeenMs);
     next[thread.threadId] = ts > now ? ts + 1 : now;
-    await widget.appState.savePrefs(prefs.copyWith(chatThreadSeenMs: next));
+    await widget.appState
+        .updatePrefs((current) => current.copyWith(chatThreadSeenMs: next));
     if (mounted) setState(() {});
   }
 
   Future<void> _showThreadMenu(ChatThreadItem thread, bool pinned) async {
-    final prefs = widget.appState.prefs;
-    final nextPinned = List<String>.from(prefs.pinnedChatThreads);
     final isGroup = thread.kind == 'group';
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -594,15 +596,15 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (action == null) return;
     if (action == 'pin') {
-      if (pinned) {
-        nextPinned.removeWhere((id) => id == thread.threadId);
-      } else {
-        if (!nextPinned.contains(thread.threadId)) {
-          nextPinned.add(thread.threadId);
+      await widget.appState.updatePrefs((current) {
+        final pins = List<String>.from(current.pinnedChatThreads);
+        if (pinned) {
+          pins.removeWhere((id) => id == thread.threadId);
+        } else if (!pins.contains(thread.threadId)) {
+          pins.add(thread.threadId);
         }
-      }
-      await widget.appState
-          .savePrefs(prefs.copyWith(pinnedChatThreads: nextPinned));
+        return current.copyWith(pinnedChatThreads: pins);
+      });
       if (mounted) setState(() {});
       return;
     }

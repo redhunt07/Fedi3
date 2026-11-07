@@ -88,3 +88,56 @@ scripts/relay_diagnose.sh
 ```
 
 Mostra stato dei container, healthcheck, log di tunnel e rifiuti di firma. Non richiede `curl` o `wget` nell'immagine del relay.
+
+## P2P: chat, presenza e chiamate
+
+Per bootstrap indipendenti, memoria dei peer, scambio di contatti firmati e
+discovery IPFS vedere [Rete Fedi3 e infrastrutture pubbliche](p2p_network.md).
+
+- `connected_peers` conta connessioni libp2p, inclusi i nodi infrastrutturali:
+  non è il numero degli utenti online. La presenza dei contatti arriva dalla
+  directory relay e dai messaggi di presenza P2P; le due fonti sono indipendenti.
+- Il profilo ActivityPub deve pubblicare `endpoints.fedi3PeerId` e
+  `endpoints.fedi3PeerAddrs`. Per un peer dietro NAT, gli indirizzi devono
+  includere `<relay>/p2p/<relay-id>/p2p-circuit/p2p/<peer-id>`.
+- Il server circuit relay deve annunciare un indirizzo raggiungibile tramite
+  `FEDI3_P2P_EXTERNAL_ADDR`. Una prenotazione senza indirizzi viene rifiutata
+  dal client anche se il server registra la richiesta come accettata.
+- Il client riprova le prenotazioni chiuse dopo almeno 10 secondi, con controllo
+  ogni 5 secondi. Cercare `relay reservation closed`, `ReservationReqAccepted`
+  e `p2p listening` nei log.
+- `queued` significa conservato nella mailbox, non ricevuto dal destinatario.
+  La conferma `delivered` identifica il messaggio ricevuto; `seen` indica lettura.
+- Il test di signaling verifica inviti/SDP/ICE trasportati e memorizzati; audio,
+  video e attraversamento TURN richiedono anche una prova con dispositivi reali.
+
+Test locali con profili temporanei, senza credenziali di produzione:
+
+```bash
+cargo test -p fedi3_core --lib connectivity_tests
+cargo test -p fedi3_core --test p2p_chat --test semantics
+cd app
+flutter test test/unit/peer_presence_store_test.dart test/widget/incoming_calls_test.dart
+```
+
+Le correzioni richiedono di ricompilare sia il core Rust sia l'app Flutter:
+una vecchia AppImage continua a contenere il codice precedente.
+
+### Circuiti rifiutati o chiusi durante chat e chiamate
+
+`Remote reported resource limit exceeded` indica un rifiuto del circuit relay,
+non necessariamente un client offline. I limiti libp2p predefiniti (128 KiB,
+120 secondi, riaperture limitate) non sono adatti ai frame Fedi3 e alle
+riconnessioni prolungate. Il servizio infrastrutturale usa ora 64 circuiti
+complessivi, 8 per peer, 16 MiB e 900 secondi per circuito. Gli operatori possono
+modificarli con `FEDI3_P2P_RELAY_MAX_CIRCUITS`,
+`FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER`,
+`FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES` e `FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS`.
+I valori non validi impediscono l'avvio; restano attivi limiti per peer e IP.
+
+La chiamata deve mostrare connessione effettiva, non soltanto l'accettazione
+dell'invito. Nei log `Fedi3 call media` riporta i byte RTP inviati e ricevuti:
+i contatori devono aumentare sui due dispositivi. Non viene registrato il
+contenuto audio/video. Il chiamante genera l'offerta SDP dopo l'accettazione;
+i candidati ICE arrivati prima dell'offerta vengono conservati e applicati
+dopo la descrizione remota.
