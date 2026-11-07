@@ -9,10 +9,6 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use http::{HeaderMap, Method, Uri};
-use rsa::{
-    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-    RsaPrivateKey, RsaPublicKey,
-};
 use sha2::Digest as _;
 use std::sync::OnceLock;
 
@@ -143,16 +139,8 @@ impl Drop for TestCore {
 fn shared_keypair() -> &'static (String, String) {
     static KP: OnceLock<(String, String)> = OnceLock::new();
     KP.get_or_init(|| {
-        let mut rng = rand::rngs::OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa keygen");
-        let private_pem = private
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("private pem")
-            .to_string();
-        let public_pem = RsaPublicKey::from(&private)
-            .to_public_key_pem(LineEnding::LF)
-            .expect("public pem")
-            .to_string();
+        let private_pem = fedi3_protocol::crypto::rsa_generate_private_pem().unwrap();
+        let public_pem = fedi3_protocol::crypto::rsa_public_pem(&private_pem).unwrap();
         (private_pem, public_pem)
     })
 }

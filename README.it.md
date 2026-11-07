@@ -10,10 +10,12 @@ FEDI3 è un social federato con componente P2P: privacy-first, interoperabile co
 il fediverso e resiliente senza rinunciare alla compatibilità con le istanze
 ActivityPub classiche.
 
-> **Stato: pre-1.0.** Il progetto è in hardening verso la prima release stabile.
-> I blocker aperti e il piano di rimedio sono in
-> [audit di production readiness](docs/it/audit/production_readiness_audit.md) e
-> [piano di rimedio](docs/it/audit/remediation_plan.md).
+> **Stato: pre-1.0; 0.10.0 in preparazione, non pubblicata.** Le verifiche locali
+> correnti sono nell’[audit client/aggiornamenti](docs/it/audit/client_updates_2026-11-07.md)
+> e nella [correzione compatibile RSA/WebRTC](docs/it/audit/crypto_compatibility_2026-11-08.md).
+> L’[audit di production readiness](docs/it/audit/production_readiness_audit.md) e il
+> [piano di rimedio](docs/it/audit/remediation_plan.md) restano riferimenti storici;
+> runner nativi Windows/Apple e CI remota fanno ancora parte della pubblicazione.
 
 ## Indice
 
@@ -65,7 +67,7 @@ scripts/                 Script di build, installazione, backup e diagnostica
 - Flutter 3.38 o successivo per il client.
 - Dipendenze desktop Linux per l'AppImage: `clang`, `cmake`, `ninja`,
   `pkg-config`, `libgtk-3-dev`, `libsecret-1-dev`, `libjsoncpp-dev`, `libmpv-dev`,
-  `libasound2-dev`, `libpulse-dev`. Vedi [guida di build Linux](docs/it/build_linux.md).
+  `libasound2-dev`, `libpulse-dev`, `libwebkit2gtk-4.1-dev`. Vedi [guida di build Linux](docs/it/build_linux.md).
 - Docker e Docker Compose per lo stack del relay.
 
 ## Quick start: relay
@@ -117,6 +119,11 @@ Le build Android e iOS sono disponibili, ma la pipeline di release e la firma
 mobile non sono ancora definitive; il target di produzione primario è
 relay + desktop Linux.
 
+Previsto in 0.10.0: Configurazioni → Aggiornamenti del client controlla le release
+stabili e verifica i download SHA256. Le AppImage Linux x86_64 possono sostituirsi
+con backup; Windows x64 usa uno ZIP verificato e installazione guidata. I vecchi
+client richiedono un primo aggiornamento manuale. Vedi [aggiornamenti](docs/it/updates.md).
+
 ## Sviluppo e test
 
 ```bash
@@ -154,6 +161,9 @@ Italiano:
 - [Interoperabilità](docs/it/interop.md)
 - [Build Linux](docs/it/build_linux.md)
 - [Guida dell'app](docs/it/app_guide.md)
+- [Aggiornamenti del client](docs/it/updates.md)
+- [Verifica attuale della compatibilità crittografica](docs/it/audit/crypto_compatibility_2026-11-08.md)
+- [Annunci](ANNOUNCEMENTS.it.md) e [changelog](CHANGELOG.md)
 - [Piano UX del client](docs/it/client_ux_plan.md)
 - [Backup e ripristino](docs/it/ops_backup_restore.md)
 - [Diagnostica](docs/it/troubleshooting.md)

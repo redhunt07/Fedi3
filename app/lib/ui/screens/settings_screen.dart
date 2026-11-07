@@ -13,6 +13,7 @@ import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/presence_selector.dart';
 import 'backup_screen.dart';
+import 'client_updates_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
 import 'follow_requests_screen.dart';
@@ -185,6 +186,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: context.l10n.settingsAdvancedDevHint,
                 onTap: () =>
                     _push(context, DevCoreScreen(appState: widget.appState)),
+              ),
+              _tile(
+                context,
+                icon: Icons.system_update_alt,
+                title: context.l10n.clientUpdatesTitle,
+                subtitle: context.l10n.clientUpdatesHint,
+                onTap: () => _push(context, const ClientUpdatesScreen()),
               ),
               const SizedBox(height: 20),
               OutlinedButton(

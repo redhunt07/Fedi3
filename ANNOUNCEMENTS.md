@@ -4,6 +4,30 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-08 — Preparing 0.10.0: client updates and compatible security fixes
+
+Version `0.10.0` is being prepared and has not been published yet. Existing
+clients need a manual first upgrade to receive the new updater.
+
+- The client can check stable releases from Settings, announce newer versions
+  and download packages with SHA256 verification. Linux x86_64 AppImages support
+  atomic replacement with a previous-version backup; Windows x64 uses a verified
+  ZIP with guided installation. Other platforms keep their installation source.
+- RSA operations use AWS-LC and the Rust WebRTC transport uses the current stack.
+  Existing profile keys, public keys, DIDs, signatures and encrypted messages
+  remain compatible; old/new RSA and WebRTC interoperability was tested.
+- Local validation: 307 Rust tests and 184 Flutter tests passed, Linux release
+  builds succeeded and the dependency audit reported zero vulnerabilities with
+  no ignored advisories. Five maintenance notices remain; native Windows/Apple
+  runners and the remote release workflow are still part of publication.
+- Client diagnostics stay on the device, with bounded logs and manual export.
+  There is no automatic telemetry upload or Git push.
+- Relay directory fallback, core authentication diagnostics and submillisecond
+  RTT reporting were corrected.
+
+Details: [updates](docs/updates.md), [compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md),
+[security policy](SECURITY.md) and [changelog](CHANGELOG.md).
+
 ## 2026-11-07 — Relay directory and latency ranking
 
 Relay discovery no longer depends on a single bootstrap relay:
@@ -32,7 +56,7 @@ protocol:
 - Client: no UI freeze when the core fails, keyring recovery screen, encrypted
   settings backup, foreground-aware polling, notification taps and preserved
   chat drafts.
-- Repository: English documentation with Italian counterparts, green CI (Rust,
+- Repository: English documentation with Italian counterparts, CI checks (Rust,
   Flutter, scripts and PostgreSQL), cleaned runtime data.
 
 No protocol-breaking change: interoperability with classic ActivityPub

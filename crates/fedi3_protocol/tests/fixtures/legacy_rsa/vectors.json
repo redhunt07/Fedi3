@@ -1,0 +1,7 @@
+{
+  "did": "did:fedi3:5b6993d4d1fce39c6fe6712855a55cf6",
+  "message_b64": "RmVkaTMgbGVnYWN5IGNvbXBhdGliaWxpdHkgZml4dHVyZTogbm90IGEgcHJvZHVjdGlvbiBzZWNyZXQ=",
+  "oaep_ciphertext_b64": "uerhNbbMBWhEyVi7ifjXFDiK7WMpb8pgbAmdfiL4WQ/rs9ozYyKcmwg7dVEk1jM/uAJ84Ag6jSnEPJ4bGwa8bw+PphUzSwtugpV49BDF8RbLDYDxkcGGF4stz6A/vJ3WfqlDJu20aXbpDZ0fWp9UqHZCqtD12EW/KVF8VkF+x+/P3B1GR5Oc/w6oGbmYxrJWxwAusz9ZJ4S4/NZyC7DmmAyxChjB+u/jUmaHYfpM2ea21KAEAiwf7Fjf/PsJGZs9RPUz8+iEhOk3o/sPWE9Nk9aWoe1ZrgPki8yd4bsmZns7Gv8juoDxcpSepephm+iOXa6fcB5RNMR87axSGO7CEg==",
+  "producer": "rsa 0.9.10 / SHA256 / OAEP MGF1-SHA256 / empty label; public test-only key",
+  "signature_b64": "uj1W/BK9fYJiw3Nqntba+B76xoVo8I/WeYL1+UHlM4L0YCsT/dH4yxbJHm9h/a08Gu6dYO0tol/oRGUvCnVUVqiDKWXRCfqxHDYQ5gOJyZmJBYVOWmzNEpLssSXorIW/MCGh9DbrUFSi7VNmpcGXJg36PSXyNZhvtnTLs4ypgMgkEKkHsPS8xDoBVCAF8p0sKMsIIZEIeObrofjOBy2oYr1Kt6lKsPvz+7M9OSR+x436DUNydKeigTKd7OegQhQmoZPVjUQtDxoMY8NVqGnDjy1MoQzmIXULBTh7ss5jpfeiWgP7ir88akXRYs0tpS5HSBStyIDxht4Wd7l+rwTpGg=="
+}

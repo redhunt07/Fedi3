@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:fedi3/model/relay_directory.dart';
+import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/services/relay_directory_service.dart';
 import 'package:fedi3/state/relay_directory_store.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -132,8 +133,27 @@ void main() {
     });
 
     tearDown(() {
+      CoreHttp.reset();
       RelayDirectoryStore.useDirectoryForTesting(null);
       tempDir.deleteSync(recursive: true);
+    });
+
+    test('discovery still works when all remote sources return 404', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      final client =
+          FakeHttpClient(defaultResponse: FakeHttpResponse(statusCode: 404));
+      CoreHttp.useTestClient(client);
+      final snapshot = await RelayDirectoryService.refreshOrFallback();
+      expect(snapshot.entries, isNotEmpty);
+      expect(
+          snapshot.entries
+              .any((entry) => entry.url == 'https://fedi3.redhunt07.ovh'),
+          isTrue);
+      expect(
+          snapshot.entries
+              .any((entry) => entry.url.contains('relay.fedi3.com')),
+          isFalse);
+      expect(client.requests.length, RelayDirectory.sourceUrls.length);
     });
 
     test('fetches, parses and caches the directory', () async {

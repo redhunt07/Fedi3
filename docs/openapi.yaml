@@ -1378,6 +1378,187 @@ paths:
       responses:
         '200':
           description: Abilitato
+  /_fedi3/relay/directory:
+    get:
+      tags: [relay]
+      summary: Copia pubblica della directory inclusa nel relay
+      security: []
+      responses:
+        '200':
+          description: Directory fedi3-relay-directory/v1
+  /transparency:
+    get:
+      tags: [relay]
+      summary: Pagina pubblica della politica del relay
+      security: []
+      responses:
+        '200':
+          description: HTML senza dati personali
+  /_fedi3/relay/transparency:
+    get:
+      tags: [relay]
+      summary: Politica e testa del registro dei forward firmate Ed25519
+      security: []
+      responses:
+        '200':
+          description: payload_b64, public_key_b64, signature_b64 e algorithm
+        '503':
+          description: Firma non disponibile
+  /_fedi3/relay/push/{username}:
+    parameters:
+      - in: path
+        name: username
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [relay]
+      summary: Dimensione della coda per la sincronizzazione dopo un push
+      security:
+        - relayToken: []
+      responses:
+        '200':
+          description: pending_items, senza token o contenuti
+        '401':
+          description: Account non autorizzato
+        '503':
+          description: Database non disponibile
+    put:
+      tags: [relay]
+      summary: Predisposizione push tramite gateway configurato, una installazione per account
+      security:
+        - relayToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, token]
+              additionalProperties: false
+              properties:
+                provider:
+                  type: string
+                  enum: [unifiedpush, apns]
+                token:
+                  type: string
+                  maxLength: 2048
+                webpush_keys:
+                  type: object
+                  required: [pub_key, auth]
+                  additionalProperties: false
+                  properties:
+                    pub_key:
+                      type: string
+                      minLength: 87
+                      maxLength: 87
+                    auth:
+                      type: string
+                      minLength: 22
+                      maxLength: 22
+      responses:
+        '200':
+          description: Registrazione sostituita, expires_at_ms a 30 giorni
+        '400':
+          description: Registrazione non valida
+        '401':
+          description: Token non valido o account disabilitato
+        '503':
+          description: Gateway non configurato o database non disponibile
+    delete:
+      tags: [relay]
+      summary: Revoca registrazione push
+      security:
+        - relayToken: []
+      responses:
+        '204':
+          description: Registrazione rimossa
+        '401':
+          description: Token non valido o account disabilitato
+        '503':
+          description: Database non disponibile
+  /_fedi3/relay/turn/{username}:
+    parameters:
+      - in: path
+        name: username
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [relay]
+      summary: Pool ICE privato di operatori TURN configurati
+      security:
+        - relayToken: []
+      responses:
+        '200':
+          description: Lista di server con urls, username e credential distinti; no-store
+        '204':
+          description: Pool non configurato
+        '401':
+          description: Token non valido o account disabilitato
+        '503':
+          description: File del pool non valido o non disponibile
+  /_fedi3/relay/push-config:
+    get:
+      tags: [relay]
+      summary: Disponibilità provider e chiave VAPID pubblica
+      security: []
+      responses:
+        '200':
+          description: enabled, providers e vapid_public_key; nessun segreto gateway
+  /_fedi3/relay/forward-log:
+    get:
+      tags: [relay]
+      summary: Pagina di commitment pubblici con checkpoint Ed25519
+      security: []
+      parameters:
+        - in: query
+          name: after
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: head, checkpoint firmato e items con sequence, previous_hash, commitment e hash
+        '503':
+          description: Registro o firma non disponibili
+  /_fedi3/relay/receipts/{username}:
+    parameters:
+      - in: path
+        name: username
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [relay]
+      summary: Ricevute private dei forward per il proprio account
+      security:
+        - relayToken: []
+      parameters:
+        - in: query
+          name: after
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+      responses:
+        '200':
+          description: items con buste firmate, no-store; scope core_acknowledged o core_rejected solo dopo firma core verificata
+        '401':
+          description: Account non autorizzato
+        '503':
+          description: Registro non disponibile
 components:
   securitySchemes:
     telemetryToken:

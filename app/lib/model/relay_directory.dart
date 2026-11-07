@@ -20,6 +20,7 @@ class RelayDirectory {
   /// Raw directory sources, tried in order. The jsDelivr mirror is a fallback
   /// for networks where raw.githubusercontent.com is blocked or slow.
   static const List<String> sourceUrls = [
+    'https://fedi3.redhunt07.ovh/_fedi3/relay/directory',
     'https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json',
     'https://cdn.jsdelivr.net/gh/redhunt07/Fedi3@main/relays/relays.json',
   ];

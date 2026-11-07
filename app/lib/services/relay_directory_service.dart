@@ -108,6 +108,17 @@ class RelayDirectoryService {
         'relay directory unavailable: ${lastError ?? 'unknown error'}');
   }
 
+  /// A remote directory outage must not prevent discovery of bundled relays.
+  static Future<RelayDirectorySnapshot> refreshOrFallback() async {
+    try {
+      return await fetch();
+    } catch (_) {
+      final fallback = await cachedOrBundled();
+      if (fallback != null) return fallback;
+      rethrow;
+    }
+  }
+
   /// Returns the last cached directory, if any.
   static Future<RelayDirectorySnapshot?> cached() async {
     final raw = await RelayDirectoryStore.cachedRaw();

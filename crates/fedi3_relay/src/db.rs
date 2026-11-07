@@ -33,6 +33,12 @@ impl Db {
                 conn.execute_batch(
                     r#"
             PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS forward_receipts (
+ seq BIGINT PRIMARY KEY, username TEXT NOT NULL, created_at_ms BIGINT NOT NULL,
+ previous_hash TEXT NOT NULL, entry_hash TEXT NOT NULL, payload_hash TEXT NOT NULL, envelope_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS forward_receipts_user_seq ON forward_receipts(username,seq);
+CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_at_ms);
             CREATE TABLE IF NOT EXISTS users (
               username TEXT PRIMARY KEY,
               token_sha256 TEXT NOT NULL,
@@ -666,20 +672,94 @@ impl Db {
     }
 
     pub(super) fn load_or_create_signing_keypair_b64(&self) -> Result<(String, String)> {
-        if let (Some(pk), Some(sk)) = (
-            self.relay_meta_get("sign_pk_b64")?,
-            self.relay_meta_get("sign_sk_b64")?,
-        ) {
-            return Ok((pk, sk));
+        let generate = || {
+            let signing = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+            (
+                B64.encode(signing.verifying_key().to_bytes()),
+                B64.encode(signing.to_bytes()),
+            )
+        };
+        let validate = |pk: String, sk: String| -> Result<(String, String)> {
+            let bytes: [u8; 32] = B64
+                .decode(&sk)?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid signing key"))?;
+            anyhow::ensure!(
+                B64.encode(
+                    ed25519_dalek::SigningKey::from_bytes(&bytes)
+                        .verifying_key()
+                        .to_bytes()
+                ) == pk,
+                "signing keypair mismatch"
+            );
+            Ok((pk, sk))
+        };
+        match self.driver {
+            DbDriver::Sqlite => {
+                let mut conn = self.open_sqlite_conn()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let pk: Option<String> = tx
+                    .query_row(
+                        "SELECT value FROM relay_meta WHERE key='sign_pk_b64'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let sk: Option<String> = tx
+                    .query_row(
+                        "SELECT value FROM relay_meta WHERE key='sign_sk_b64'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let pair = match (pk, sk) {
+                    (Some(pk), Some(sk)) => validate(pk, sk)?,
+                    (None, None) => {
+                        let (pk, sk) = generate();
+                        tx.execute("INSERT INTO relay_meta(key,value) VALUES ('sign_pk_b64',?1),('sign_sk_b64',?2)",params![pk,sk])?;
+                        (pk, sk)
+                    }
+                    _ => anyhow::bail!("incomplete signing keypair"),
+                };
+                tx.commit()?;
+                Ok(pair)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let mut tx = conn.transaction()?;
+                tx.execute("INSERT INTO relay_meta(key,value) VALUES ('sign_key_lock','1') ON CONFLICT(key) DO NOTHING",&[])?;
+                tx.query_one(
+                    "SELECT value FROM relay_meta WHERE key='sign_key_lock' FOR UPDATE",
+                    &[],
+                )?;
+                let rows = tx.query(
+                    "SELECT key,value FROM relay_meta WHERE key IN ('sign_pk_b64','sign_sk_b64')",
+                    &[],
+                )?;
+                let mut pk = None;
+                let mut sk = None;
+                for row in rows {
+                    let key: String = row.get(0);
+                    if key == "sign_pk_b64" {
+                        pk = Some(row.get::<_, String>(1));
+                    } else {
+                        sk = Some(row.get::<_, String>(1));
+                    }
+                }
+                let pair = match (pk, sk) {
+                    (Some(pk), Some(sk)) => validate(pk, sk)?,
+                    (None, None) => {
+                        let (pk, sk) = generate();
+                        tx.execute("INSERT INTO relay_meta(key,value) VALUES ('sign_pk_b64',$1),('sign_sk_b64',$2)",&[&pk,&sk])?;
+                        (pk, sk)
+                    }
+                    _ => anyhow::bail!("incomplete signing keypair"),
+                };
+                tx.commit()?;
+                Ok(pair)
+            }
         }
-
-        let signing = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-        let verifying = signing.verifying_key();
-        let pk_b64 = B64.encode(verifying.to_bytes());
-        let sk_b64 = B64.encode(signing.to_bytes());
-        self.relay_meta_set("sign_pk_b64", &pk_b64)?;
-        self.relay_meta_set("sign_sk_b64", &sk_b64)?;
-        Ok((pk_b64, sk_b64))
     }
 
     pub(super) fn upsert_peer_seen(&self, peer_id: &str) -> Result<()> {
@@ -1352,6 +1432,8 @@ impl Db {
         // disabled. Never discard the remaining retry metadata on storage error.
         let actors = "SELECT actor_id FROM user_cache WHERE username=?1 UNION SELECT actor_url FROM user_cache WHERE username=?1 UNION SELECT actor_url FROM peer_directory WHERE username=?1";
         let mut statements = vec![
+            "UPDATE forward_receipts SET username='',envelope_json='' WHERE username=?1".to_string(),
+            "DELETE FROM relay_meta WHERE key='push:' || ?1".to_string(),
             format!("DELETE FROM webrtc_signals WHERE from_actor IN ({actors}) OR to_peer_id IN (SELECT peer_id FROM peer_directory WHERE username=?1)"),
             format!("DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE actor_id IN ({actors}))"),
             format!("DELETE FROM relay_notes WHERE actor_id IN ({actors})"),
@@ -1389,6 +1471,11 @@ impl Db {
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 let mut tx = conn.transaction()?;
+                // Serialize deletion before any late journal append for this account.
+                tx.query(
+                    "SELECT username FROM users WHERE username=$1 FOR UPDATE",
+                    &[&username],
+                )?;
                 let remaining: i64 = tx
                     .query_one(
                         "SELECT COUNT(*) FROM media_items WHERE username=$1",
@@ -1573,13 +1660,27 @@ impl Db {
         body_b64: &str,
         body_len: i64,
     ) -> Result<()> {
+        anyhow::ensure!(body_len >= 0, "invalid spool body length");
+        let cutoff = now_ms().saturating_sub((cfg.spool_ttl_secs.min(30 * 86400) as i64) * 1000);
         let headers_json = serde_json::to_string(headers).unwrap_or_else(|_| "[]".to_string());
         let now = now_ms();
         let cap = cfg.spool_max_rows_per_user as i64;
         let byte_cap = cfg.spool_max_bytes_per_user as i64;
         match self.driver {
             DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
+                let mut db_conn = self.open_sqlite_conn()?;
+                let conn =
+                    db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let enabled: bool = conn.query_row(
+                    "SELECT disabled=0 FROM users WHERE username=?1",
+                    [username],
+                    |r| r.get(0),
+                )?;
+                anyhow::ensure!(enabled, "account disabled");
+                conn.execute(
+                    "DELETE FROM inbox_spool WHERE username=?1 AND created_at_ms < ?2",
+                    params![username, cutoff],
+                )?;
                 if byte_cap > 0 {
                     if body_len > byte_cap {
                         anyhow::bail!("spool body exceeds per-user byte cap");
@@ -1629,10 +1730,22 @@ impl Db {
                         params![username, excess],
                     )?;
                 }
+                conn.commit()?;
                 Ok(())
             }
             DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
+                let mut db_conn = self.open_pg_conn()?;
+                let mut conn = db_conn.transaction()?;
+                let row = conn.query_one(
+                    "SELECT disabled FROM users WHERE username=$1 FOR UPDATE",
+                    &[&username],
+                )?;
+                let disabled: bool = row.get(0);
+                anyhow::ensure!(!disabled, "account disabled");
+                conn.execute(
+                    "DELETE FROM inbox_spool WHERE username=$1 AND created_at_ms < $2",
+                    &[&username, &cutoff],
+                )?;
                 if byte_cap > 0 {
                     if body_len > byte_cap {
                         anyhow::bail!("spool body exceeds per-user byte cap");
@@ -1679,6 +1792,7 @@ impl Db {
                         &[&username, &excess],
                     )?;
                 }
+                conn.commit()?;
                 Ok(())
             }
         }
@@ -1762,7 +1876,7 @@ impl Db {
     }
 
     pub(super) fn cleanup_spool(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
+        let cutoff = now_ms().saturating_sub((ttl_secs.min(30 * 86400) as i64) * 1000);
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -1784,7 +1898,7 @@ impl Db {
     }
 
     pub(super) fn cleanup_move_notices(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
+        let cutoff = now_ms().saturating_sub((ttl_secs.min(30 * 86400) as i64) * 1000);
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;

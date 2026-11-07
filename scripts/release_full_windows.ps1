@@ -34,7 +34,7 @@ function Bump-Version($m, $kind) {
 
 $content = Get-Content $pubspec -Raw
 $m = Get-VersionLine $content
-$newVersion = $m.Value
+$newVersion = $m.Value -replace "^version:\s*", ""
 if (-not $NoBump) {
   $newVersion = Bump-Version $m $Bump
   $content = $content -replace "version:\s*[0-9A-Za-z\.\+\-]+", "version: $newVersion"

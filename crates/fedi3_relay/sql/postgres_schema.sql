@@ -368,3 +368,10 @@ CREATE TABLE IF NOT EXISTS user_blocks (
   updated_at_ms BIGINT NOT NULL,
   PRIMARY KEY (username, kind, value)
 );
+
+CREATE TABLE IF NOT EXISTS forward_receipts (
+ seq BIGINT PRIMARY KEY, username TEXT NOT NULL, created_at_ms BIGINT NOT NULL,
+ previous_hash TEXT NOT NULL, entry_hash TEXT NOT NULL, payload_hash TEXT NOT NULL, envelope_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS forward_receipts_user_seq ON forward_receipts(username,seq);
+CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_at_ms);

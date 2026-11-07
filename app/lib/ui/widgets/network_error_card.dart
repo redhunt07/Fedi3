@@ -11,11 +11,15 @@ class NetworkErrorCard extends StatelessWidget {
   const NetworkErrorCard({
     super.key,
     this.message,
+    this.title,
+    this.hint,
     this.onRetry,
     this.compact = false,
   });
 
   final String? message;
+  final String? title;
+  final String? hint;
   final VoidCallback? onRetry;
   final bool compact;
 
@@ -35,10 +39,10 @@ class NetworkErrorCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(l10n.networkErrorTitle,
+                  Text(title ?? l10n.networkErrorTitle,
                       style: const TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
-                  Text(l10n.networkErrorHint),
+                  Text(hint ?? l10n.networkErrorHint),
                   if (message != null && message!.trim().isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(

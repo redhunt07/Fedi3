@@ -54,7 +54,9 @@ class ConfigStore {
     _dirOverride = dir;
   }
 
-  static const _vault = FlutterSecureStorage();
+  static const _vault = FlutterSecureStorage(
+      iOptions: IOSOptions(
+          accessibility: KeychainAccessibility.first_unlock_this_device));
   static const _secretFields = [
     'relayToken',
     'internalToken',

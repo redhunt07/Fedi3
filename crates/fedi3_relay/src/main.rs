@@ -26,7 +26,6 @@ use http::header;
 use httpdate::parse_http_date;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
-use rsa::pkcs8::DecodePublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::future::Future;
@@ -57,6 +56,9 @@ use subtle::ConstantTimeEq;
 mod db;
 mod db_dispatch;
 mod media_store;
+mod operations;
+mod receipt_db;
+mod receipts;
 use db_dispatch::DbDispatch;
 
 static REQ_ID: AtomicU64 = AtomicU64::new(1);
@@ -247,6 +249,7 @@ struct AppState {
     cfg: RelayConfig,
     db: Arc<DbDispatch>,
     limiter: Arc<RateLimiter>,
+    push_tasks: Arc<Semaphore>,
     http: reqwest::Client,
     search: Option<Arc<MeiliSearch>>,
     meili_indexer: Option<Arc<MeiliIndexer>>,
@@ -579,6 +582,10 @@ impl PgConn {
 }
 
 impl<'a> PgTx<'a> {
+    fn query(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
+        block_on_result(self.tx.query(sql, params))
+    }
+
     fn execute(&mut self, stmt: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
         block_on_result(self.tx.execute(stmt, params))
     }
@@ -983,7 +990,7 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
     let base_url = cfg.meili_url.as_ref()?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(cfg.meili_timeout_secs))
-        .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok()?;
     let search = MeiliSearch {
@@ -1001,6 +1008,7 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
 }
 
 const DEFAULT_RELAY_DIRECTORY_URLS: &[&str] = &[
+    "https://fedi3.redhunt07.ovh/_fedi3/relay/directory",
     "https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json",
     "https://cdn.jsdelivr.net/gh/redhunt07/Fedi3@main/relays/relays.json",
 ];
@@ -1115,14 +1123,17 @@ async fn main() {
     .await
     .expect("DB init task")
     .expect("db init");
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(cfg.http_timeout_secs))
-        .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
-        .pool_idle_timeout(Duration::from_secs(cfg.http_pool_idle_timeout_secs))
-        .pool_max_idle_per_host(cfg.http_pool_max_idle_per_host)
-        .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
-        .build()
-        .expect("http client init");
+    let http = fedi3_protocol::net::guard_client(
+        reqwest::Client::builder(),
+        cfg.allow_private_remote_fetch,
+    )
+    .timeout(Duration::from_secs(cfg.http_timeout_secs))
+    .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
+    .pool_idle_timeout(Duration::from_secs(cfg.http_pool_idle_timeout_secs))
+    .pool_max_idle_per_host(cfg.http_pool_max_idle_per_host)
+    .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
+    .build()
+    .expect("http client init");
     if cfg.seed_relays.is_empty() {
         let seeds = fetch_directory_seeds(&http, cfg.public_url.as_deref()).await;
         if !seeds.is_empty() {
@@ -1144,7 +1155,13 @@ async fn main() {
         s3_secret_key: cfg.media_s3_secret_key.clone(),
         s3_path_style: cfg.media_s3_path_style,
     };
-    let media_backend = media_store::build_media_backend(&media_cfg, http.clone())
+    let storage_http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(cfg.http_timeout_secs))
+        .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("storage HTTP client");
+    let media_backend = media_store::build_media_backend(&media_cfg, storage_http)
         .await
         .expect("media backend init");
     let search = build_meili(&cfg, &http).await;
@@ -1184,6 +1201,7 @@ async fn main() {
         cfg,
         db: Arc::new(DbDispatch::new(db)),
         limiter,
+        push_tasks: Arc::new(Semaphore::new(8)),
         http,
         search,
         meili_indexer,
@@ -1240,6 +1258,7 @@ async fn main() {
         });
     }
 
+    tokio::spawn(operations::retry_push_worker(state.clone()));
     let cleanup_state = state.clone();
     let spool_ttl_secs = cleanup_state.cfg.spool_ttl_secs;
     let webrtc_ttl_secs = cleanup_state.cfg.webrtc_signal_ttl_secs;
@@ -1259,6 +1278,9 @@ async fn main() {
                 error!("pending media cleanup failed: {e:#}");
             }
             let db = cleanup_state.db.clone();
+            if let Err(e) = db.prune_forward_receipts(receipts::ttl()).await {
+                error!("forward receipts cleanup failed: {e}");
+            }
             if let Err(e) = db.cleanup_spool(spool_ttl_secs).await {
                 error!("spool cleanup failed: {e}");
             }
@@ -1361,6 +1383,23 @@ async fn main() {
     let app = Router::new()
         .route("/tunnel/:user", get(tunnel_ws))
         .route("/register", post(register))
+        .route("/_fedi3/relay/push-config", get(operations::push_config))
+        .route("/_fedi3/relay/forward-log", get(receipts::public_log))
+        .route("/_fedi3/relay/receipts/:user", get(receipts::user_receipts))
+        .route("/_fedi3/relay/directory", get(operations::relay_directory))
+        .route("/transparency", get(operations::transparency_page))
+        .route(
+            "/_fedi3/relay/transparency",
+            get(operations::transparency_json),
+        )
+        .route(
+            "/_fedi3/relay/push/:user",
+            put(operations::push_register)
+                .delete(operations::push_unregister)
+                .get(operations::push_status)
+                .layer(axum::extract::DefaultBodyLimit::max(8192)),
+        )
+        .route("/_fedi3/relay/turn/:user", get(operations::turn_pool))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/.well-known/host-meta", get(host_meta))
@@ -1866,7 +1905,8 @@ fn load_config() -> Result<RelayConfig> {
     let spool_ttl_secs = std::env::var("FEDI3_RELAY_SPOOL_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(7 * 24 * 60 * 60);
+        .unwrap_or(7 * 24 * 60 * 60)
+        .clamp(60, 30 * 24 * 60 * 60);
     let move_notice_ttl_secs = std::env::var("FEDI3_RELAY_MOVE_NOTICE_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -2249,9 +2289,24 @@ async fn tunnel_ws(
     // Prefer Authorization: Bearer over the legacy query-string token so the
     // long-lived credential does not end up in proxy access logs (H-16).
     let token = bearer_token(&headers).or(q.token);
-    ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, token, headers, socket))
+    // Order connections before upgrade/authentication can complete out of order.
+    let conn_id = TUNNEL_CONN_ID.fetch_add(1, Ordering::Relaxed);
+    ws.on_upgrade(move |socket| handle_tunnel(state, peer, user, token, headers, socket, conn_id))
 }
 
+async fn install_tunnel(state: &AppState, user: String, tunnel: TunnelHandle) -> bool {
+    let mut tunnels = state.tunnels.write().await;
+    if tunnels
+        .get(&user)
+        .is_some_and(|current| current.conn_id > tunnel.conn_id)
+    {
+        return false;
+    }
+    tunnels.insert(user, tunnel);
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_tunnel(
     state: AppState,
     peer: SocketAddr,
@@ -2259,6 +2314,7 @@ async fn handle_tunnel(
     token: Option<String>,
     headers: HeaderMap,
     socket: WebSocket,
+    conn_id: u64,
 ) {
     if state.shutdown.is_cancelled() {
         return;
@@ -2313,17 +2369,21 @@ async fn handle_tunnel(
 
     // A connection id makes the disconnect cleanup safe under reconnects: the
     // old socket must not remove the new tunnel entry (H-30 / RT-04).
-    let conn_id = TUNNEL_CONN_ID.fetch_add(1, Ordering::Relaxed);
     let inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>> =
         Arc::new(RwLock::new(HashMap::new()));
-    state.tunnels.write().await.insert(
+    if !install_tunnel(
+        &state,
         user.clone(),
         TunnelHandle {
             tx,
             conn_id,
             inflight: inflight.clone(),
         },
-    );
+    )
+    .await
+    {
+        return; // A newer authenticated connection already owns this account.
+    }
 
     // Fetch peer hello (best-effort) and store it for telemetry/online peer id.
     let hello_state = state.clone();
@@ -3499,6 +3559,9 @@ async fn forward_to_peer(
         url.push('?');
         url.push_str(query);
     }
+    ensure_fetch_target_allowed(&url, state.cfg.allow_private_remote_fetch)
+        .await
+        .ok()?;
     let mut req = state
         .http
         .request(method.clone(), &url)
@@ -3578,7 +3641,20 @@ async fn sender_blocked(state: &AppState, user: &str, body: &Bytes) -> bool {
     db.is_blocked(user, &actor).await.unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn forward_to_user(
+    state: AppState,
+    user: String,
+    method: Method,
+    path: &str,
+    query: String,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    receipts::forward(state, user, method, path, query, headers, body).await
+}
+
+async fn forward_to_user_inner(
     state: AppState,
     user: String,
     method: Method,
@@ -3897,17 +3973,13 @@ fn user_public_key_pem(actor_json: &str) -> Option<String> {
 fn encrypt_spool_body(pub_pem: &str, plaintext: &[u8]) -> Option<(Vec<u8>, String, String)> {
     use aes_gcm::aead::Aead;
     use rand::RngCore;
-    let pub_key = rsa::RsaPublicKey::from_public_key_pem(pub_pem).ok()?;
     let mut key = [0u8; 32];
     let mut nonce = [0u8; 12];
     rand::rngs::OsRng.fill_bytes(&mut key);
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
     let ciphertext = cipher.encrypt(Nonce::from_slice(&nonce), plaintext).ok()?;
-    let mut rng = rand::rngs::OsRng;
-    let wrapped = pub_key
-        .encrypt(&mut rng, rsa::Oaep::new::<Sha256>(), &key)
-        .ok()?;
+    let wrapped = fedi3_protocol::crypto::rsa_oaep_encrypt(pub_pem, &key).ok()?;
     Some((ciphertext, B64.encode(wrapped), B64.encode(nonce)))
 }
 
@@ -3942,18 +4014,24 @@ async fn spool_request(
         None => B64.encode(body),
     };
     let db = state.db.clone();
-    db.enqueue_spool(
-        &state.cfg,
-        user,
-        method.as_str(),
-        path,
-        query,
-        &stored_headers,
-        &stored_body,
-        body.len() as i64,
-    )
-    .await
-    .is_ok()
+    let queued = db
+        .enqueue_spool(
+            &state.cfg,
+            user,
+            method.as_str(),
+            path,
+            query,
+            &stored_headers,
+            &stored_body,
+            body.len() as i64,
+        )
+        .await
+        .is_ok();
+    if queued {
+        receipts::spooled(state, user, method, path, query, body, headers).await;
+        operations::notify_user(state, user);
+    }
+    queued
 }
 
 /// Failure path for a forward: spool the request so it is retried after the
@@ -4180,9 +4258,6 @@ async fn shared_inbox(
     let mut delivered = 0u32;
     let mut spooled = 0u32;
     let mut duplicate = 0u32;
-    let headers_vec = headers_to_vec(&headers);
-    let body_b64 = B64.encode(&body);
-
     if let Err(e) = index_activity_bytes_for_search(&state, &body).await {
         error!("relay search index failed: {e}");
     }
@@ -4231,22 +4306,10 @@ async fn shared_inbox(
                 }
             }
         } else {
-            let db = state.db.clone();
-            match db.is_user_enabled(user).await {
+            match state.db.is_user_enabled(user).await {
                 Ok(true) => {
-                    if db
-                        .enqueue_spool(
-                            &state.cfg,
-                            user,
-                            "POST",
-                            "/inbox",
-                            "",
-                            &headers_vec,
-                            &body_b64,
-                            body.len() as i64,
-                        )
+                    if spool_request(&state, user, &Method::POST, "/inbox", "", &headers, &body)
                         .await
-                        .is_ok()
                     {
                         spooled += 1;
                         ok = true;
@@ -4556,6 +4619,12 @@ async fn flush_spool_for_user(state: AppState, user: String) {
 
         let mut delivered_ids: Vec<i64> = Vec::new();
         for item in &items {
+            let cutoff =
+                now_ms().saturating_sub((state.cfg.spool_ttl_secs.min(30 * 86400) as i64) * 1000);
+            if item.created_at_ms < cutoff {
+                delivered_ids.push(item.id); // Expired: remove without delivering.
+                continue;
+            }
             let headers_vec: Vec<(String, String)> =
                 serde_json::from_str(&item.headers_json).unwrap_or_default();
             let encrypted = headers_vec
@@ -8482,16 +8551,7 @@ fn verify_signature_rsa_sha256(
     signing_string: &str,
     signature: &[u8],
 ) -> bool {
-    use rsa::{pkcs1v15::VerifyingKey, pkcs8::DecodePublicKey, signature::Verifier, RsaPublicKey};
-    let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_key_pem) else {
-        return false;
-    };
-    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(signature) else {
-        return false;
-    };
-    verifying_key
-        .verify(signing_string.as_bytes(), &sig)
+    fedi3_protocol::crypto::rsa_verify_sha256(public_key_pem, signing_string.as_bytes(), signature)
         .is_ok()
 }
 
@@ -8611,34 +8671,7 @@ const MAX_PEER_METADATA_BYTES: usize = 256 * 1024;
 /// True only for addresses that are globally routable. Conservative on
 /// purpose: a single non-public resolution result is enough to reject a URL.
 fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            // 100.64.0.0/10 is carrier-grade NAT, not reachable from the
-            // public Internet even though `Ipv4Addr::is_private` says no.
-            let shared = {
-                let o = v4.octets();
-                o[0] == 100 && (64..=127).contains(&o[1])
-            };
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                || shared)
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public_ip(&IpAddr::V4(v4));
-            }
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_multicast())
-        }
-    }
+    fedi3_protocol::net::is_public_ip(ip)
 }
 
 /// Redirect policy shared by every relay-initiated HTTP client: at most three
@@ -9007,7 +9040,7 @@ mod tests {
     static TEST_DIR_ID: AtomicU64 = AtomicU64::new(1);
     static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
-    fn test_cfg() -> RelayConfig {
+    pub(super) fn test_cfg() -> RelayConfig {
         RelayConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             base_domain: None,
@@ -9349,12 +9382,92 @@ mod tests {
             10
         );
         assert_eq!(db.user_media_bytes("quota-test").await.unwrap(), 70);
+        // The same real PostgreSQL fixture covers the offline spool row lock.
+        let mut cfg = test_cfg();
+        cfg.spool_max_bytes_per_user = 10;
+        cfg.spool_max_rows_per_user = 2;
+        let jobs = (0..8).map(|_| {
+            let db = db.clone();
+            let cfg = cfg.clone();
+            async move {
+                db.enqueue_spool(&cfg, "quota-test", "POST", "/inbox", "", &[], "e30=", 8)
+                    .await
+                    .unwrap();
+            }
+        });
+        futures_util::future::join_all(jobs).await;
+        assert_eq!(db.spool_stats("quota-test").await.unwrap(), (1, 8));
+        // Real PostgreSQL serialization and key creation for the receipt journal.
+        let keys = futures_util::future::join_all((0..8).map(|_| {
+            let db = db.clone();
+            async move { db.load_or_create_signing_keypair_b64().await.unwrap() }
+        }))
+        .await;
+        assert!(keys.iter().all(|pair| pair == &keys[0]));
+        let public = keys[0].0.clone();
+        let secret: [u8; 32] = B64.decode(&keys[0].1).unwrap().try_into().unwrap();
+        let jobs = (0..8).map(|_| {
+            let db = db.clone();
+            let public = public.clone();
+            async move {
+                db.append_forward_receipt(
+                    "quota-test".into(),
+                    "https://fixture.invalid".into(),
+                    receipts::ReceiptEvent {
+                        id: receipts::random_nonce(),
+                        timestamp_ms: now_ms(),
+                        outcome: "spooled".into(),
+                        request_digest: "d".repeat(64),
+                        status: 202,
+                        core_ack: None,
+                        core_public_key_pem: None,
+                    },
+                    public,
+                    secret,
+                    86400,
+                    1000,
+                )
+                .await
+                .unwrap()
+            }
+        });
+        futures_util::future::join_all(jobs).await;
+        let public_rows = db.forward_receipt_rows(None, 0, 100).await.unwrap();
+        assert_eq!(public_rows.len(), 8);
+        for window in public_rows.windows(2) {
+            assert_eq!(window[1]["previous_hash"], window[0]["hash"]);
+        }
+
         db.set_disabled("quota-test", true).await.unwrap();
         for item in db.list_user_media("quota-test").await.unwrap() {
             assert!(!db.finish_media_upload(&item).await.unwrap());
             db.delete_media_item("quota-test", &item.id).await.unwrap();
         }
         assert!(db.delete_user("quota-test").await.unwrap());
+        db.append_forward_receipt(
+            "quota-test".into(),
+            "https://fixture.invalid".into(),
+            receipts::ReceiptEvent {
+                id: receipts::random_nonce(),
+                timestamp_ms: now_ms(),
+                outcome: "spooled".into(),
+                request_digest: "d".repeat(64),
+                status: 202,
+                core_ack: None,
+                core_public_key_pem: None,
+            },
+            keys[0].0.clone(),
+            secret,
+            86400,
+            1000,
+        )
+        .await
+        .unwrap();
+        assert!(db
+            .forward_receipt_rows(Some("quota-test".into()), 0, 100)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -9577,7 +9690,7 @@ mod tests {
         (db, dir)
     }
 
-    async fn test_state(cfg: RelayConfig) -> (AppState, PathBuf) {
+    pub(super) async fn test_state(cfg: RelayConfig) -> (AppState, PathBuf) {
         let dir = temp_dir();
         let mut db = test_db().0;
         db.path = dir.join("state.db");
@@ -9609,6 +9722,7 @@ mod tests {
             cfg,
             db: Arc::new(DbDispatch::new(db)),
             limiter,
+            push_tasks: Arc::new(Semaphore::new(8)),
             http,
             search: None,
             meili_indexer: None,
@@ -9973,26 +10087,16 @@ mod tests {
 
     #[test]
     fn rsa_signature_roundtrip() {
-        use rand::rngs::OsRng;
-        use rsa::pkcs1v15::SigningKey;
-        use rsa::pkcs8::{EncodePublicKey, LineEnding};
-        use rsa::signature::{SignatureEncoding, Signer};
-        let private = rsa::RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
-        let public = private.to_public_key();
-        let pem = public.to_public_key_pem(LineEnding::LF).unwrap();
-        let signing = SigningKey::<Sha256>::new(private);
+        let private = fedi3_protocol::crypto::rsa_generate_private_pem().unwrap();
+        let pem = fedi3_protocol::crypto::rsa_public_pem(&private).unwrap();
         let message = "signed-string";
-        let sig = signing.sign(message.as_bytes());
-        assert!(verify_signature_rsa_sha256(&pem, message, &sig.to_bytes()));
-        assert!(!verify_signature_rsa_sha256(
-            &pem,
-            "tampered",
-            &sig.to_bytes()
-        ));
+        let sig = fedi3_protocol::crypto::rsa_sign_sha256(&private, message.as_bytes()).unwrap();
+        assert!(verify_signature_rsa_sha256(&pem, message, &sig));
+        assert!(!verify_signature_rsa_sha256(&pem, "tampered", &sig));
         assert!(verify_signature_with_algorithm(
             &pem,
             message,
-            &sig.to_bytes(),
+            &sig,
             Some("rsa-sha256")
         ));
     }
@@ -10071,9 +10175,85 @@ mod tests {
         assert!(db.insert_inbox_dedupe("act-1", "alice").unwrap());
     }
 
+    #[tokio::test]
+    async fn late_authentication_cannot_replace_a_newer_tunnel() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        let handle = |conn_id| {
+            let (tx, _rx) = mpsc::channel(1);
+            TunnelHandle {
+                tx,
+                conn_id,
+                inflight: Arc::new(RwLock::new(HashMap::new())),
+            }
+        };
+        assert!(install_tunnel(&state, "alice".into(), handle(2)).await);
+        assert!(!install_tunnel(&state, "alice".into(), handle(1)).await);
+        assert_eq!(state.tunnels.read().await["alice"].conn_id, 2);
+    }
+
+    #[tokio::test]
+    async fn expired_spool_is_deleted_without_contacting_the_core() {
+        let (state, dir) = test_state(test_cfg()).await;
+        state
+            .db
+            .create_user("alice", "spool-test-token")
+            .await
+            .unwrap();
+        state
+            .db
+            .enqueue_spool(&state.cfg, "alice", "POST", "/inbox", "", &[], "e30=", 2)
+            .await
+            .unwrap();
+        let conn = Connection::open(dir.join("state.db")).unwrap();
+        conn.execute("UPDATE inbox_spool SET created_at_ms=0", [])
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        state.tunnels.write().await.insert(
+            "alice".into(),
+            TunnelHandle {
+                tx,
+                conn_id: 1,
+                inflight: Arc::new(RwLock::new(HashMap::new())),
+            },
+        );
+        flush_spool_for_user(state.clone(), "alice".into()).await;
+        assert!(rx.try_recv().is_err());
+        assert!(state.db.list_spool("alice", 10).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn concurrent_spool_writers_respect_atomic_quota() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "test-token-for-spool").unwrap();
+        let db = Arc::new(db);
+        let mut cfg = test_cfg();
+        cfg.spool_max_bytes_per_user = 10;
+        cfg.spool_max_rows_per_user = 2;
+        let gate = Arc::new(std::sync::Barrier::new(8));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                let cfg = cfg.clone();
+                let gate = gate.clone();
+                std::thread::spawn(move || {
+                    gate.wait();
+                    db.enqueue_spool(&cfg, "alice", "POST", "/inbox", "", &[], "b64", 8)
+                        .unwrap();
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.join().unwrap();
+        }
+        let (rows, bytes) = db.spool_stats("alice").unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(bytes, 8);
+    }
+
     #[test]
     fn spool_byte_cap_drops_oldest() {
         let (db, _dir) = test_db();
+        db.create_user("alice", "test-token-for-spool").unwrap();
         let mut cfg = test_cfg();
         cfg.spool_max_bytes_per_user = 10;
         cfg.spool_max_rows_per_user = 100;

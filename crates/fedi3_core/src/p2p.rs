@@ -5,7 +5,6 @@
 
 use crate::relay_bridge::handle_relay_http_request;
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use axum::body::Body;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
@@ -283,7 +282,6 @@ impl AsRef<str> for Fedi3Protocol {
 #[derive(Clone, Default)]
 struct Fedi3Codec;
 
-#[async_trait]
 impl request_response::Codec for Fedi3Codec {
     type Protocol = Fedi3Protocol;
     type Request = RelayHttpRequest;
@@ -409,7 +407,7 @@ fn random_id() -> String {
 #[allow(dead_code)]
 enum BehaviourEvent {
     Mdns(mdns::Event),
-    Identify(identify::Event),
+    Identify(Box<identify::Event>),
     Ping(ping::Event),
     Rr(request_response::Event<RelayHttpRequest, RelayHttpResponse>),
     Kad(kad::Event),
@@ -428,7 +426,7 @@ impl From<mdns::Event> for BehaviourEvent {
 }
 impl From<identify::Event> for BehaviourEvent {
     fn from(v: identify::Event) -> Self {
-        Self::Identify(v)
+        Self::Identify(Box::new(v))
     }
 }
 impl From<ping::Event> for BehaviourEvent {
@@ -582,7 +580,7 @@ where
 
     // Circuit relay transport must be combined at the "raw" (pre-upgrade) layer, then upgraded.
     let raw_tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
-    let raw_ws = websocket::WsConfig::new(tcp::tokio::Transport::new(
+    let raw_ws = websocket::Config::new(tcp::tokio::Transport::new(
         tcp::Config::default().nodelay(true),
     ));
     let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws, raw_tcp);
@@ -1209,7 +1207,8 @@ where
                         }
                         metrics.p2p_connected_peers_set(connected_peers.len() as u64);
                     }
-                    SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received { peer_id: remote_peer, info, .. })) => {
+                    SwarmEvent::Behaviour(BehaviourEvent::Identify(event)) => {
+                        let identify::Event::Received { peer_id: remote_peer, info, .. } = *event else { continue; };
                         let is_fedi = info.protocols.iter().any(|p| p.as_ref() == "/fedi3/relay-http/1");
                         if is_fedi && exchange_enabled {
                             fedi_peers.insert(remote_peer);
@@ -1319,7 +1318,7 @@ where
                                 .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing).build());
                         }
                     }
-                    SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message })) => {
+                    SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message, .. })) => {
                         match message {
                             request_response::Message::Request { request, channel, .. } => {
                                 if let Ok(bytes) = serde_json::to_vec(&request) {
@@ -1410,7 +1409,7 @@ where
                         metrics.p2p_rx_add(message.data.len() as u64);
                         metrics.p2p_peer_seen("gossip");
                         // Best-effort: only accept global topic (we subscribe only to it anyway).
-                        let _ = message.topic == gossip_topic_global.hash();
+                        if message.topic != gossip_topic_global.hash() { continue; }
                         // Ingest via internal endpoint to store & apply policy.
                         let req = http::Request::builder()
                             .method(http::Method::POST)
@@ -1914,6 +1913,83 @@ mod connectivity_tests {
         .unwrap()
         .unwrap();
         (handle, dir)
+    }
+
+    #[tokio::test]
+    async fn public_gossip_replicates_to_disk_without_a_relay() {
+        let (stop, shutdown) = watch::channel(false);
+        let db_dir = crate::test_support::TempDir::new("gossip-replica");
+        let replica = Arc::new(SocialDb::open(db_dir.path().join("replica.db")).unwrap());
+        let db = replica.clone();
+        let router = Router::new().route(
+            "/_fedi3/global/ingest",
+            axum::routing::post(move |body: axum::body::Bytes| {
+                let db = db.clone();
+                async move {
+                    db.insert_global_feed_item(
+                        "gossip-test",
+                        Some("https://test.invalid/users/a"),
+                        body.to_vec(),
+                    )
+                    .unwrap();
+                    "ok"
+                }
+            }),
+        );
+        let listen = port();
+        let base = P2pConfig {
+            enable: true,
+            public_discovery_enable: Some(false),
+            mdns_enable: Some(false),
+            discovery_enable: Some(false),
+            gossip_enable: Some(true),
+            ..Default::default()
+        };
+        let (a, _a_dir) = node(
+            P2pConfig {
+                listen: Some(format!("/ip4/127.0.0.1/tcp/{listen}")),
+                ..base.clone()
+            },
+            router,
+            shutdown.clone(),
+        );
+        let (b, _b_dir) = node(
+            P2pConfig {
+                bootstrap: Some(vec![format!(
+                    "/ip4/127.0.0.1/tcp/{listen}/p2p/{}",
+                    a.peer_id
+                )]),
+                ..base
+            },
+            Router::new(),
+            shutdown,
+        );
+        let payload = br#"{"id":"https://test.invalid/notes/gossip-test","type":"Create","to":["https://www.w3.org/ns/activitystreams#Public"]}"#.to_vec();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                b.publish("/fedi3/global/1", payload.clone()).await.unwrap();
+                if replica
+                    .global_feed_actor_stats_since("https://test.invalid/users/a", 0)
+                    .unwrap()
+                    .0
+                    > 0
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("gossip did not reach the other core over its direct TCP connection");
+        let reopened = SocialDb::open(db_dir.path().join("replica.db")).unwrap();
+        assert_eq!(
+            reopened
+                .global_feed_actor_stats_since("https://test.invalid/users/a", 0)
+                .unwrap()
+                .0,
+            1
+        );
+        stop.send(true).unwrap();
     }
 
     // Both nodes have no direct listener. The relay initially does not exist;

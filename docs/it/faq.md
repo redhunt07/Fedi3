@@ -18,11 +18,11 @@ Nella directory dati del core, con permessi `0600` su POSIX. Non vengono mai inv
 
 ## La chat è cifrata?
 
-Sì: AES-256-GCM con chiavi per messaggio, avvolte con RSA-OAEP per ogni destinatario. Limite noto: non c'è forward secrecy. Se la chiave privata viene compromessa, i messaggi già scambiati diventano leggibili.
+Sì. La chat v1 usa AES-256-GCM con chiavi per messaggio derivate tramite HKDF-SHA256 dai segreti condivisi Kyber768 e firme RSA-SHA256. Chiavi della chat e formati dei ciphertext esistenti sono conservati. Non è garantita una forward secrecy completa con ratcheting. RSA-OAEP è usato per envelope HTTP di compatibilità e spool offline, separatamente dal KEM della chat.
 
 ## Telemetria?
 
-È opzionale e attivabile dall'utente. Il relay raccoglie solo dati aggregati (numero di utenti, peer, versione) e i log locali si possono cancellare.
+La diagnostica del client è opzionale e resta sul dispositivo (due file di log, fino a 2 MiB ciascuno). Non esiste invio automatico a GitHub o ad altri server. Puoi cancellare o esportare i log manualmente. Le statistiche e la discovery pubblica dei peer dei relay sono funzionalità server separate e usano HTTP.
 
 ## Dove sono salvati i media?
 

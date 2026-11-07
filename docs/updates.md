@@ -1,137 +1,95 @@
-# Client Updates (Windows + Linux)
+# Client updates
 
-The desktop client checks GitHub Releases (latest).
+Settings → Client updates checks the latest stable GitHub Release of
+`redhunt07/Fedi3`. Release builds also check after startup and every six hours
+while the app is in the foreground. A version is announced once per session.
+Debug builds check only when the update screen is opened. Checks are read-only
+HTTPS requests and do not send profile tokens, log files or telemetry.
 
-- Windows: manual update via PowerShell script (builds locally).
-- Linux: auto-install works only for AppImage builds. Source installs show a
-  manual update command based on the distro (Debian/Ubuntu or Arch).
+The version comes from the installed application metadata. Only a strictly
+newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
+foreign download URLs and incompatible architectures are rejected. The first
+version containing this updater is prepared as `0.10.0+1`, above the historical
+`0.9.19` release. Older clients require a manual first upgrade.
 
-## Release assets
+## Installation
 
-Publish these assets in each release:
+- **Linux x86_64 AppImage:** download, verify, then choose Install AppImage update.
+  The AppImage named by `APPIMAGE` is replaced atomically on the same filesystem.
+  Its previous contents are kept as `<original path>.previous`. Close and reopen
+  Fedi3 to run the new version. If needed, close Fedi3 and restore that previous
+  file to the original name. A failed download or verification leaves the
+  installed application intact. The AppImage directory must be writable.
+- **Windows x64:** download the verified ZIP and open its download folder. Close
+  Fedi3, extract the entire package into the application directory (or a new
+  directory), then reopen it. Replace the bundled core DLL together with the UI.
+  No administrator access, local compilation or remote PowerShell execution is
+  needed for a portable release.
+- **Linux source/package installs, macOS and mobile:** use the release page and
+  the installation source/package manager/store that provided the application.
+  The client does not replace system-managed files or offer an x64 package to
+  another architecture. This workflow does not yet produce mobile or macOS assets.
 
-- Windows: no asset required (manual update script builds locally)
-- Linux: `Fedi3-linux-x86_64.AppImage`
-- Checksums: `checksums.txt` (SHA256 per asset)
+Profile configuration, keyring credentials, private keys and databases stay in
+their existing data directories. Do not delete them during an update.
 
-`checksums.txt` format (one per line):
+## Download verification
 
-```
-<sha256>  Fedi3-linux-x86_64.AppImage
-```
+Packages are streamed to a private temporary directory, with size limits,
+network timeouts and progress indication. The SHA256 must match the release
+asset's `sha256:` digest, or its unique entry in `checksums.txt` for older
+releases. Failed and partial downloads are removed. AppImage installation checks
+the checksum again after staging the file. SHA256 verifies integrity against the
+trusted GitHub release; this is not an independent code-signing system.
 
-## Versioning
+Expected package names:
 
-- Tag releases as `vX.Y.Z`
-- `pubspec.yaml` must match the same `X.Y.Z`
+| Platform | Asset |
+| --- | --- |
+| Linux x86_64 | `Fedi3-linux-x86_64.AppImage` |
+| Windows x64 | `Fedi3-windows-x64.zip` |
+| Checksums | `checksums.txt` |
 
-The client compares the release tag with its local version and installs only newer versions.
+Each checksum line has the format `<64 hex characters>  <exact asset name>`.
 
-## Build + publish (complete guide)
+## Preparing a release
 
-### 1) Update the app version
+1. Set `app/pubspec.yaml` to `X.Y.Z+N`, increasing the version and build number.
+2. Run the Rust/Flutter tests and deployment checks. Commit the reviewed source.
+3. Push a tag `vX.Y.Z` matching the pubspec version. A mismatch fails packaging.
+4. CI builds the core and Flutter client together for Linux and Windows, computes
+   checksums for those exact packages and creates a **draft** GitHub Release.
+5. Download and smoke-test both packages on their target systems, then publish
+   the draft. The client sees the update only once it is published as stable.
 
-`app/pubspec.yaml`
+The CI token is read-only by default. Only the draft-release job receives
+`contents: write`. CI does not commit logs or push telemetry to the repository.
 
-```
-version: X.Y.Z+N
-```
+Local packaging:
 
-Use the same `X.Y.Z` as the release tag. `N` is the build number.
-
-### Complete script (recommended)
-
-Windows (manual update, no asset):
-
-```
-powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
-```
-
-The script also installs the core as a background service:
-
-- Windows: scheduled task `Fedi3 Core`
-- Linux: systemd user service `fedi3-core.service`
-
-Useful commands:
-
-Windows (PowerShell):
-
-```
-Get-ScheduledTask -TaskName "Fedi3 Core"
-Start-ScheduledTask -TaskName "Fedi3 Core"
-```
-
-Linux:
-
-```
-systemctl --user status fedi3-core.service
-systemctl --user restart fedi3-core.service
-```
-
-Linux:
-
-```
-./scripts/release_full_linux.sh patch
+```sh
+NO_BUMP=1 bash scripts/release_full_linux.sh
 ```
 
-The script does:
-1) bump the version in `app/pubspec.yaml`
-2) build the core in release
-3) build the Flutter release
-4) create assets + `checksums.txt` in `dist/` (includes all files present in `dist/`)
-
-If you want to avoid the bump:
-
-Windows: not needed (manual update).
-
-Linux:
-
-```
-NO_BUMP=1 ./scripts/release_full_linux.sh patch
+```powershell
+./scripts/release_full_windows.ps1 -NoBump
 ```
 
-### 2) Windows build (local install)
+Build dependencies are required on the build machine, not on users' machines.
+Both packaging paths include the native core and produce SHA256 checksums.
 
-Example (Windows PowerShell):
+Release tags also require a passing RustSec audit. The RSA/WebRTC dependency
+blockers were removed on 8 November 2026 with compatibility tests against the
+previous implementation. See [SECURITY.md](../SECURITY.md) and the
+[migration verification](audit/crypto_compatibility_2026-11-08.md).
+The audit gate remains enforced; no advisory is ignored.
 
-```
-scripts\build_core.ps1 -Profile release
-cd app
-flutter pub get
-flutter build windows --release
-```
+### Maintainer-requested publication
 
-### 3) Linux build (AppImage)
-
-Example (Linux):
-
-```
-flutter clean
-flutter pub get
-flutter build linux --release
-
-# Create the AppImage with your toolchain (appimagetool or existing script).
-# Final output: Fedi3-linux-x86_64.AppImage
-```
-
-### 4) Compute SHA256
-
-Linux:
-
-```
-sha256sum Fedi3-linux-x86_64.AppImage > checksums.txt
-```
-
-Windows: no checksum needed (manual update).
-
-### 5) Create the GitHub release
-
-- Tag: `vX.Y.Z`
-- Title: `vX.Y.Z`
-- Upload assets:
-  - `Fedi3-linux-x86_64.AppImage`
-  - `checksums.txt`
-
-### 6) Verify
-
-Start the client: the "Update available" banner should appear.
+A push of `codex/release/vX.Y.Z` requests publication through CI. The branch must
+point to the current `main` commit and the version must match pubspec. The same
+Rust, Flutter, operations, compatibility, audit and platform gates run before
+Linux/Windows packaging. The publishing job verifies checksums, uploads the
+packages and publishes the release as latest stable. Existing published releases
+are never overwritten, and an existing draft must target the same commit.
+Ordinary tag builds keep the draft/manual-publication path described above.

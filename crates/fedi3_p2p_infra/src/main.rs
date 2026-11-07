@@ -4,7 +4,6 @@
  */
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::{RelayHttpRequest, RelayHttpResponse};
 use libp2p::futures::{future::Either, StreamExt};
@@ -162,6 +161,7 @@ struct Behaviour {
     identify: identify::Behaviour,
     ping: ping::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
+    legacy_kad: kad::Behaviour<kad::store::MemoryStore>,
     relay: relay::Behaviour,
     rr: request_response::Behaviour<Fedi3Codec>,
 }
@@ -217,7 +217,6 @@ impl AsRef<str> for Fedi3Protocol {
 #[derive(Clone, Default)]
 struct Fedi3Codec;
 
-#[async_trait]
 impl request_response::Codec for Fedi3Codec {
     type Protocol = Fedi3Protocol;
     type Request = RelayHttpRequest;
@@ -617,7 +616,7 @@ async fn main() -> Result<()> {
         .multiplex(yamux::Config::default())
         .timeout(Duration::from_secs(20))
         .boxed();
-    let ws_transport = websocket::WsConfig::new(tcp::tokio::Transport::new(
+    let ws_transport = websocket::Config::new(tcp::tokio::Transport::new(
         tcp::Config::default().nodelay(true),
     ))
     .upgrade(upgrade::Version::V1)
@@ -643,21 +642,19 @@ async fn main() -> Result<()> {
     ));
     let ping = ping::Behaviour::new(ping::Config::new());
 
-    let mut kad_behaviour = {
+    // Keep both wire protocol names available during rolling upgrades.
+    // Separate stores avoid putting private application records in the IPFS DHT.
+    let make_kad = |protocol| {
         let store = kad::store::MemoryStore::new(peer_id);
-        let mut config = kad::Config::default();
-        // New clients isolate application records from the public IPFS DHT.
-        // Retain the legacy name for rolling upgrades of existing clients.
-        config.set_protocol_names(vec![
-            libp2p::StreamProtocol::new("/fedi3/kad/1"),
-            libp2p::StreamProtocol::new("/ipfs/kad/1.0.0"),
-        ]);
+        let config = kad::Config::new(libp2p::StreamProtocol::new(protocol));
         let mut k = kad::Behaviour::with_config(peer_id, store, config);
         if cfg.enable_kad_server {
             k.set_mode(Some(kad::Mode::Server));
         }
         k
     };
+    let mut kad_behaviour = make_kad("/fedi3/kad/1");
+    let mut legacy_kad = make_kad("/ipfs/kad/1.0.0");
 
     // Seed bootstrap nodes if provided.
     let mut bootstrap_peers: HashSet<PeerId> = HashSet::new();
@@ -671,6 +668,7 @@ async fn main() -> Result<()> {
         if let Some(p) = pid {
             bootstrap_peers.insert(p);
             kad_behaviour.add_address(&p, addr.clone());
+            legacy_kad.add_address(&p, addr.clone());
         }
     }
 
@@ -687,6 +685,7 @@ async fn main() -> Result<()> {
         identify,
         ping,
         kad: kad_behaviour,
+        legacy_kad,
         relay: relay_behaviour,
         rr,
     };
@@ -733,6 +732,7 @@ async fn main() -> Result<()> {
                         info!(peer=%peer_id, "p2p connection established");
                         if !bootstrapped && cfg.enable_kad_server && !bootstrap_peers.is_empty() {
                             let _ = swarm.behaviour_mut().kad.bootstrap();
+                            let _ = swarm.behaviour_mut().legacy_kad.bootstrap();
                             bootstrapped = true;
                         }
                     }
@@ -745,7 +745,7 @@ async fn main() -> Result<()> {
                                 relay::Event::ReservationReqAccepted { src_peer_id, renewed } => {
                                     info!(peer=%src_peer_id, renewed, "relay reservation accepted");
                                 }
-                                relay::Event::ReservationReqDenied { src_peer_id } => {
+                                relay::Event::ReservationReqDenied { src_peer_id, .. } => {
                                     warn!(peer=%src_peer_id, "relay reservation denied");
                                 }
                                 relay::Event::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
@@ -758,7 +758,7 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
-                    SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message })) => {
+                    SwarmEvent::Behaviour(BehaviourEvent::Rr(request_response::Event::Message { peer, message, .. })) => {
                         match message {
                             request_response::Message::Request { request, channel, .. } => {
                                 if handlers.len() >= 64 {

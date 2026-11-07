@@ -50,7 +50,19 @@ class TelemetryEvent {
   }
 }
 
+/// Local diagnostics only. There is no network transport or GitHub upload.
 class TelemetryService {
+  static const maxLogBytes = 2 * 1024 * 1024;
+  static Future<void> _writes = Future<void>.value();
+
+  static Future<void> _enqueue(Future<void> Function() action) {
+    final operation = _writes.then((_) => action()).catchError((Object _) {
+      // Diagnostic I/O must never break the operation being diagnosed.
+    });
+    _writes = operation;
+    return operation;
+  }
+
   static ValueGetter<UiPrefs>? _prefsGetter;
   static String? _logPath;
   static final List<TelemetryEvent> _buffer = <TelemetryEvent>[];
@@ -87,46 +99,93 @@ class TelemetryService {
     if (!(enabled || monitoringEnabled)) {
       return;
     }
-    final path = _logPath ?? await _resolveLogPath();
-    if (path == null) return;
-    final file = File(path);
-    final line = jsonEncode(event.toJson());
-    await file.writeAsString('$line\n', mode: FileMode.append, flush: false);
+    await _enqueue(() async {
+      if (!(enabled || monitoringEnabled)) return;
+      final path = _logPath ?? await _resolveLogPath();
+      if (path == null) return;
+      final file = File(path);
+      final line = '${jsonEncode(event.toJson())}\n';
+      // Skip pathological events rather than let one entry exceed the log cap.
+      final bytes = utf8.encode(line);
+      if (bytes.length > maxLogBytes) return;
+      if (await file.exists() &&
+          await file.length() + bytes.length > maxLogBytes) {
+        final previous = File('$path.previous');
+        if (await previous.exists()) await previous.delete();
+        final length = await file.length();
+        if (length > maxLogBytes) {
+          // Bound legacy logs too: old clients did not rotate at all.
+          final input = await file.open();
+          try {
+            await input.setPosition(length - maxLogBytes);
+            await previous.writeAsBytes(await input.read(maxLogBytes));
+          } finally {
+            await input.close();
+          }
+          await file.delete();
+        } else {
+          await file.rename(previous.path);
+        }
+      }
+      await file.writeAsBytes(bytes, mode: FileMode.append, flush: false);
+    });
   }
 
   static Future<List<TelemetryEvent>> loadRecent({int limit = 100}) async {
-    final path = _logPath ?? await _resolveLogPath();
-    if (path == null) return List.unmodifiable(_buffer.reversed);
-    final file = File(path);
-    if (!await file.exists()) {
-      return List.unmodifiable(_buffer.reversed);
-    }
-    final lines = await file.readAsLines();
-    final start = lines.length > limit ? lines.length - limit : 0;
-    final events = <TelemetryEvent>[];
-    for (final line in lines.sublist(start)) {
-      final raw = jsonDecode(line);
-      if (raw is Map<String, dynamic>) {
-        final ev = TelemetryEvent.fromJson(raw);
-        if (ev != null) {
-          events.add(ev);
-        }
+    if (limit <= 0) return const [];
+    await _writes;
+    final fallback = _buffer.reversed.take(limit).toList(growable: false);
+    try {
+      final path = _logPath ?? await _resolveLogPath();
+      if (path == null) return fallback;
+      final file = File(path);
+      if (!await file.exists()) return fallback;
+      final length = await file.length();
+      final start = length > maxLogBytes ? length - maxLogBytes : 0;
+      final input = await file.open();
+      late final List<int> bytes;
+      try {
+        await input.setPosition(start);
+        bytes = await input.read(maxLogBytes);
+      } finally {
+        await input.close();
       }
+      final lines = const LineSplitter()
+          .convert(utf8.decode(bytes, allowMalformed: true));
+      final events = <TelemetryEvent>[];
+      // Skip an incomplete first line when reading the tail of a legacy log.
+      for (final line in lines.skip(start > 0 ? 1 : 0).toList().reversed) {
+        try {
+          final raw = jsonDecode(line);
+          if (raw is Map<String, dynamic>) {
+            final event = TelemetryEvent.fromJson(raw);
+            if (event != null) events.add(event);
+          }
+        } on FormatException {
+          // A crash can truncate the last line; keep the remaining diagnostics.
+        }
+        if (events.length >= limit) break;
+      }
+      return events;
+    } catch (_) {
+      return fallback;
     }
-    return events.reversed.toList(growable: false);
   }
 
   static Future<void> clear() async {
     _buffer.clear();
-    final path = _logPath ?? await _resolveLogPath();
-    if (path == null) return;
-    final file = File(path);
-    if (await file.exists()) {
-      await file.delete();
-    }
+    await _enqueue(() async {
+      final path = _logPath ?? await _resolveLogPath();
+      if (path == null) return;
+      for (final name in [path, '$path.previous']) {
+        final file = File(name);
+        if (await file.exists()) await file.delete();
+      }
+    });
   }
 
   static Future<File?> exportLog() async {
+    await _writes;
     final path = _logPath ?? await _resolveLogPath();
     if (path == null) return null;
     final file = File(path);

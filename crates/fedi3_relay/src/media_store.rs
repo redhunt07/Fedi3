@@ -360,6 +360,68 @@ mod tests {
     use futures_util::StreamExt;
 
     #[tokio::test]
+    async fn s3_current_http_client_sends_signed_uploads_without_legacy_tls() {
+        use axum::{routing::put, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let sender = std::sync::Arc::new(tokio::sync::Mutex::new(Some(sender)));
+        let router = Router::new().route(
+            "/test-bucket/media.bin",
+            put(move |request: axum::http::Request<Body>| {
+                let sender = sender.clone();
+                async move {
+                    let signed = request
+                        .headers()
+                        .get("authorization")
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .starts_with("AWS4-HMAC-SHA256 ");
+                    let body = axum::body::to_bytes(request.into_body(), 4096)
+                        .await
+                        .unwrap();
+                    let _ = sender.lock().await.take().unwrap().send((signed, body));
+                    axum::http::StatusCode::OK
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let config = S3Config::builder()
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new(
+                "test-access",
+                "test-secret",
+                None,
+                None,
+                "test",
+            ))
+            .force_path_style(true)
+            .endpoint_url(endpoint)
+            .build();
+        let backend = S3MediaBackend::new(S3Client::from_conf(config), "test-bucket".into());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            backend.save_upload(
+                "media.bin",
+                "application/octet-stream",
+                &Bytes::from_static(b"media"),
+            ),
+        )
+        .await;
+        server.abort();
+        assert_eq!(result.unwrap().unwrap().size, 5);
+        let (signed, body) = receiver.await.unwrap();
+        assert!(
+            signed,
+            "S3 requests must still be signed after removing legacy TLS"
+        );
+        assert_eq!(body.as_ref(), b"media");
+    }
+
+    #[tokio::test]
     async fn webdav_returns_a_stream_before_the_remote_file_finishes() {
         use axum::{routing::get, Router};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

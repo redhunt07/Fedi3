@@ -5,6 +5,7 @@ import '../services/app_activity.dart';
  */
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,8 @@ import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
 import '../model/chat_models.dart';
 import '../services/core_event_stream.dart';
+import '../services/client_update_service.dart';
+import 'screens/client_updates_screen.dart';
 import '../services/announcements_service.dart';
 import '../services/notification_service.dart';
 import '../services/sound_service.dart';
@@ -55,6 +58,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   CoreConfig? _chatStreamConfig;
   late bool _lastRunning;
   late final VoidCallback _appStateListener;
+  Timer? _updatesTimer;
+  Timer? _updatesInitialCheck;
+  bool _checkingUpdates = false;
+  String? _notifiedUpdate;
   Timer? _announcementsTimer;
   Timer? _announcementsInitialCheck;
   bool _announcementsUnread = false;
@@ -114,10 +121,44 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       _startChatStream();
       _startCallPolling();
     }
+    if (kReleaseMode) {
+      _updatesInitialCheck =
+          Timer(const Duration(seconds: 8), _checkClientUpdates);
+      _updatesTimer = AppActivity.periodic(
+          const Duration(hours: 6), (_) => _checkClientUpdates());
+    }
     _announcementsTimer = AppActivity.periodic(
         const Duration(hours: 6), (_) => _checkAnnouncements());
     _announcementsInitialCheck =
         Timer(const Duration(seconds: 4), _checkAnnouncements);
+  }
+
+  Future<void> _checkClientUpdates() async {
+    if (_checkingUpdates || !AppActivity.foreground) return;
+    _checkingUpdates = true;
+    try {
+      final update = await ClientUpdateService().check(
+          os: Platform.operatingSystem, architecture: clientArchitecture);
+      if (!mounted ||
+          update == null ||
+          !update.available ||
+          _notifiedUpdate == update.version.toString()) {
+        return;
+      }
+      _notifiedUpdate = update.version.toString();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            context.l10n.clientUpdatesAvailable(update.version.toString())),
+        action: SnackBarAction(
+            label: context.l10n.clientUpdatesTitle,
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const ClientUpdatesScreen()))),
+      ));
+    } catch (_) {
+      // An unavailable update server must never interrupt the social client.
+    } finally {
+      _checkingUpdates = false;
+    }
   }
 
   Future<void> _checkAnnouncements() async {
@@ -162,6 +203,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _chatStream?.cancel();
     _chatDebounce?.cancel();
     _chatRetry?.cancel();
+    _updatesTimer?.cancel();
+    _updatesInitialCheck?.cancel();
     _announcementsTimer?.cancel();
     _announcementsInitialCheck?.cancel();
     _callPollTimer?.cancel();

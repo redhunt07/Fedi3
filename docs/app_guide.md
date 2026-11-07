@@ -36,7 +36,7 @@ The configuration is saved atomically in the app data directory, with `600` perm
 ## Chat
 
 - Chats are 1:1 or group, with P2P transport when possible.
-- Messages are encrypted with AES-256-GCM and per-message keys wrapped with RSA-OAEP. The relay does not see the content.
+- Chat messages use AES-256-GCM with per-message keys derived from Kyber768 through HKDF-SHA256 and RSA-SHA256 signatures. The relay does not see the chat content. RSA-OAEP is used separately for compatibility/spool envelopes.
 - It supports reactions, files, GIFs and read status.
 - Known limit: there is no *forward secrecy*. If a private key is compromised, past messages become readable.
 

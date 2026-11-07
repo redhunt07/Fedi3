@@ -24,6 +24,34 @@ Future<void> _scrollToAnchor(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('relay refresh 403 shows core authentication guidance',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(statusCode: 404));
+    client.json('GET', '/_fedi3/relays', {'items': []});
+    client.route('POST', '/_fedi3/relays/refresh',
+        FakeHttpResponse(statusCode: 403, body: 'forbidden'));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = buildTestAppState(config: buildTestConfig());
+    await pumpScreen(tester, NetworkingSettingsScreen(appState: app));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('0 relays known'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final refresh = find.byIcon(Icons.refresh).last;
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(find.text('Core authentication failed'), findsOneWidget);
+    expect(find.text('Network issue'), findsNothing);
+    expect(client.lastHeader('X-Fedi3-Internal'),
+        'internal-token-0123456789abcdef');
+  });
+
   testWidgets(
       'discovery settings persist and restart the core with independent seeds',
       (tester) async {

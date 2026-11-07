@@ -15,12 +15,12 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../services/core_event_stream.dart';
 import '../../services/call_ice_config.dart';
+import '../../services/relay_capabilities.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 
-/// Peer-to-peer audio/video call. Media never passes through the relay: the
-/// relay only carries encrypted call-signalling envelopes in the chat thread.
-/// For groups the clients form a full mesh, so every participant is direct.
+/// WebRTC audio/video: ICE tries direct paths and configured TURN operators.
+/// Chat carries encrypted signaling; group calls use a mesh of peer connections.
 class CallScreen extends StatefulWidget {
   const CallScreen({
     super.key,
@@ -301,16 +301,25 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  Future<List<Map<String, dynamic>>>? _communityIce;
+
   Future<RTCPeerConnection> _peer(String actor) async {
     final existing = _pcs[actor];
     if (existing != null) return existing;
     final cfg = widget.appState.config;
     final iceUrls = cfg?.webrtcIceUrls ?? const <String>[];
-    final servers = buildCallIceServers(
-      iceUrls,
-      username: cfg?.webrtcIceUsername,
-      credential: cfg?.webrtcIceCredential,
-    );
+    final servers = [
+      ...buildCallIceServers(
+        iceUrls,
+        username: cfg?.webrtcIceUsername,
+        credential: cfg?.webrtcIceCredential,
+      )
+    ];
+    if (cfg != null) {
+      _communityIce ??= RelayCapabilities.turnPool(cfg);
+      servers.addAll(await _communityIce!);
+    }
+    if (_ended || !mounted) throw StateError('call ended during ICE setup');
     final pc = await createPeerConnection({
       'iceServers': servers,
       'sdpSemantics': 'unified-plan',

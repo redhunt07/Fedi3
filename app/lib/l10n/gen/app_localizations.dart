@@ -194,6 +194,18 @@ abstract class AppLocalizations {
   /// **'Disabled'**
   String get disabled;
 
+  /// No description provided for @coreAuthErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Core authentication failed'**
+  String get coreAuthErrorTitle;
+
+  /// No description provided for @coreAuthErrorHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Check the internal token in Security settings. If a separate development core is running, use the same token or stop it and start the core from the app.'**
+  String get coreAuthErrorHint;
+
   /// No description provided for @networkErrorTitle.
   ///
   /// In en, this message translates to:
@@ -2393,13 +2405,13 @@ abstract class AppLocalizations {
   /// No description provided for @telemetryEnabled.
   ///
   /// In en, this message translates to:
-  /// **'Anonymous telemetry'**
+  /// **'Local diagnostics'**
   String get telemetryEnabled;
 
   /// No description provided for @telemetryEnabledHint.
   ///
   /// In en, this message translates to:
-  /// **'Share minimal diagnostics (errors and performance) to improve stability. No personal content.'**
+  /// **'Save diagnostic errors and performance information on this device. Nothing is uploaded automatically; you can export the log manually.'**
   String get telemetryEnabledHint;
 
   /// No description provided for @telemetryMonitoringEnabled.
@@ -4543,6 +4555,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The configuration and its backup could not be read. Restore a valid copy of the file, then Retry. Existing data is preserved.'**
   String get corruptConfigHint;
+
+  /// No description provided for @clientUpdatesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Client updates'**
+  String get clientUpdatesTitle;
+
+  /// No description provided for @clientUpdatesHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Check official releases. Downloads are verified before installation.'**
+  String get clientUpdatesHint;
+
+  /// No description provided for @clientUpdatesCheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for updates'**
+  String get clientUpdatesCheck;
+
+  /// No description provided for @clientUpdatesAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {version} is available'**
+  String clientUpdatesAvailable(String version);
+
+  /// No description provided for @clientUpdatesVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed version: {version}'**
+  String clientUpdatesVersion(String version);
+
+  /// No description provided for @clientUpdatesCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'No newer stable release is available.'**
+  String get clientUpdatesCurrent;
+
+  /// No description provided for @clientUpdatesRelease.
+  ///
+  /// In en, this message translates to:
+  /// **'View release'**
+  String get clientUpdatesRelease;
+
+  /// No description provided for @clientUpdatesDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download verified update'**
+  String get clientUpdatesDownload;
+
+  /// No description provided for @clientUpdatesVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'Download complete. SHA256 verified.'**
+  String get clientUpdatesVerified;
+
+  /// No description provided for @clientUpdatesManual.
+  ///
+  /// In en, this message translates to:
+  /// **'Close Fedi3 before replacing the installed application with the new package. Keep your profile data. On mobile, use your installation source or store.'**
+  String get clientUpdatesManual;
+
+  /// No description provided for @clientUpdatesInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install AppImage update'**
+  String get clientUpdatesInstall;
+
+  /// No description provided for @clientUpdatesFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Open download folder'**
+  String get clientUpdatesFolder;
+
+  /// No description provided for @clientUpdatesRestart.
+  ///
+  /// In en, this message translates to:
+  /// **'Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix.'**
+  String get clientUpdatesRestart;
 }
 
 class _AppLocalizationsDelegate

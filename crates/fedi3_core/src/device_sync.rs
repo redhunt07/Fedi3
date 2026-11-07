@@ -179,7 +179,7 @@ async fn sync_with_did_record(
             let _ = state.social.store_outbox_at(&id, it.created_at_ms, bytes);
             // Keep the local object/feed view consistent when another device of
             // the same identity edited or deleted one of our posts.
-            let _ = crate::ap::apply_activity_object_semantics(&state, &it.activity).await;
+            let _ = crate::ap::apply_activity_object_semantics(state, &it.activity).await;
             stored = stored.saturating_add(1);
         }
 
@@ -293,7 +293,7 @@ async fn sync_with_did_record(
                     let _ = state.social.insert_federated_feed_item(&id, actor, bytes);
                 }
             }
-            let _ = crate::ap::apply_activity_object_semantics(&state, &it.activity).await;
+            let _ = crate::ap::apply_activity_object_semantics(state, &it.activity).await;
             stored_inbox = stored_inbox.saturating_add(1);
         }
 

@@ -106,9 +106,9 @@ impl NetMetrics {
     }
 
     pub fn relay_rtt_update(&self, ms: u64) {
-        if ms == 0 {
-            return;
-        }
+        // Zero is the "not measured" sentinel. Loopback and fast LAN round trips
+        // can legitimately take less than one millisecond, so round them up.
+        let ms = ms.max(1);
         let prev = self.relay_rtt_ema_ms.load(Ordering::Relaxed);
         let next = if prev == 0 {
             ms
@@ -291,6 +291,25 @@ impl NetMetrics {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn submillisecond_relay_rtt_is_recorded() {
+        let metrics = super::NetMetrics::new();
+        metrics.relay_rtt_update(0);
+        assert_eq!(
+            metrics
+                .relay_rtt_ema_ms
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        metrics.relay_rtt_update(8);
+        assert!(
+            metrics
+                .relay_rtt_ema_ms
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
+    }
+
     use super::*;
 
     #[test]

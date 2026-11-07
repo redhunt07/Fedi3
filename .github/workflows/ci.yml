@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "codex/release/*"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -27,6 +30,8 @@ jobs:
         run: shellcheck -x -P scripts scripts/lib/dotenv.sh scripts/backup_relay_pg.sh scripts/restore_relay_pg.sh scripts/backup_relay_media.sh scripts/restore_relay_media.sh scripts/relay_diagnose.sh
       - name: Validate deployment and OpenAPI contracts
         run: python3 scripts/tests/test_deploy_config.py
+      - name: Validate release and update contract
+        run: python3 scripts/tests/test_release_contract.py
       - name: Validate shared relay directory
         run: python3 scripts/tests/test_relay_directory.py
       - name: Exercise backup and restore with the default dotenv template
@@ -68,11 +73,15 @@ jobs:
         if: matrix.job == 'test'
         run: cargo test --workspace --locked -- --test-threads=4
 
-      - name: cargo audit (non-blocking)
+      - name: Verify RSA and WebRTC compatibility with previous clients
         if: matrix.job == 'test'
-        continue-on-error: true
+        run: python3 scripts/verify_legacy_webrtc.py
+
+      - name: cargo audit (required for releases)
+        if: matrix.job == 'test'
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/heads/codex/release/') }}
         run: |
-          cargo install cargo-audit --locked || true
+          cargo install cargo-audit --locked
           cargo audit
 
   postgres:
@@ -142,9 +151,9 @@ jobs:
 
   appimage:
     name: AppImage (tags only)
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/codex/release/')
     runs-on: ubuntu-22.04
-    needs: [rust, flutter]
+    needs: [rust, flutter, operations, platform-config, postgres]
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +168,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev
+            libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev \
+            libwebkit2gtk-4.1-dev
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -167,14 +177,87 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Verify release version
+        run: |
+          python3 -m pip install pyyaml
+          FEDI3_RELEASE_TAG="${GITHUB_REF_NAME##*/}" python3 scripts/tests/test_release_contract.py
+
       - name: Build AppImage
         run: |
           chmod +x scripts/build_core.sh scripts/build_appimage.sh
-          scripts/build_appimage.sh release
+          FEDI3_APPIMAGE_OUT="$PWD/dist/Fedi3-linux-x86_64.AppImage" scripts/build_appimage.sh release
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
           name: Fedi3-AppImage
-          path: dist/Fedi3-release-x86_64.AppImage
+          path: dist/Fedi3-linux-x86_64.AppImage
           if-no-files-found: error
+
+  windows-release:
+    name: Windows client (tags only)
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/codex/release/')
+    runs-on: windows-latest
+    needs: [rust, flutter, operations, platform-config, postgres]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build native core and client package
+        shell: pwsh
+        run: |
+          ./scripts/build_core.ps1 -Profile release
+          ./scripts/release_build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fedi3-Windows
+          path: dist/Fedi3-windows-x64.zip
+          if-no-files-found: error
+
+  publish:
+    name: Prepare verified client release
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/codex/release/')
+    needs: [appimage, windows-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Fedi3-AppImage
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: Fedi3-Windows
+          path: release-assets
+      - name: Verify packages and publish the requested client release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="${GITHUB_REF_NAME##*/}"
+          if [[ "$GITHUB_REF" == refs/heads/codex/release/* ]]; then
+            main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            test "$main_sha" = "$GITHUB_SHA" || { echo "Release request is not current main"; exit 1; }
+          fi
+          cd release-assets
+          test -s Fedi3-linux-x86_64.AppImage
+          test -s Fedi3-windows-x64.zip
+          sha256sum Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip > checksums.txt
+          sha256sum --check checksums.txt
+          if gh release view "$release_tag" --json isDraft >/dev/null 2>&1; then
+            test "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = true || { echo "Release is already published"; exit 1; }
+            test "$(gh release view "$release_tag" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA" || { echo "Draft release belongs to another commit"; exit 1; }
+            gh release upload "$release_tag" Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip checksums.txt --clobber
+          else
+            gh release create "$release_tag" --target "$GITHUB_SHA" --draft --generate-notes \
+              --title "Fedi3 $release_tag" \
+              Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip checksums.txt
+          fi
+          if [[ "$GITHUB_REF" == refs/heads/codex/release/* ]]; then
+            gh release edit "$release_tag" --draft=false --latest
+          fi

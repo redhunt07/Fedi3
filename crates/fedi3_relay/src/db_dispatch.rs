@@ -33,6 +33,54 @@ impl DbDispatch {
         })
         .await?
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn append_forward_receipt(
+        &self,
+        user: String,
+        relay: String,
+        event: crate::receipts::ReceiptEvent,
+        public: String,
+        secret: [u8; 32],
+        ttl: u64,
+        max: u64,
+    ) -> Result<String> {
+        self.run(move |db| {
+            db.append_forward_receipt(&user, &relay, event, &public, &secret, ttl, max)
+        })
+        .await
+    }
+    pub(super) async fn forward_receipt_rows(
+        &self,
+        user: Option<String>,
+        after: i64,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        self.run(move |db| db.forward_receipt_rows(user.as_deref(), after, limit))
+            .await
+    }
+    pub(super) async fn prune_forward_receipts(&self, ttl: u64) -> Result<()> {
+        self.run(move |db| db.prune_forward_receipts(ttl)).await
+    }
+    pub(super) async fn pending_push_users(
+        &self,
+        after: String,
+        cutoff: i64,
+    ) -> Result<Vec<String>> {
+        self.run(move |db| {
+            let sql="SELECT DISTINCT s.username FROM inbox_spool s JOIN users u ON u.username=s.username WHERE s.username>?1 AND s.created_at_ms>=?2 AND u.disabled=0 ORDER BY s.username LIMIT 64";
+            match db.driver {
+                DbDriver::Sqlite=>{
+                    let conn=db.open_sqlite_conn()?;let mut stmt=conn.prepare(sql)?;
+                    let rows=stmt.query_map(params![after,cutoff],|r|r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+                    Ok(rows)
+                }
+                DbDriver::Postgres=>{
+                    let mut conn=db.open_pg_conn()?;
+                    Ok(conn.query(&sql.replace("?1","$1").replace("?2","$2").replace("disabled=0","disabled=false"),&[&after,&cutoff])?.iter().map(|r|r.get(0)).collect())
+                }
+            }
+        }).await
+    }
     pub(super) async fn health_check(&self) -> Result<()> {
         let permit = self.probe.clone().acquire_owned().await?;
         let db = self.inner.clone();

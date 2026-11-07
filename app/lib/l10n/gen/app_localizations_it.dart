@@ -59,6 +59,13 @@ class AppLocalizationsIt extends AppLocalizations {
   String get disabled => 'Disattivo';
 
   @override
+  String get coreAuthErrorTitle => 'Autenticazione del core non riuscita';
+
+  @override
+  String get coreAuthErrorHint =>
+      'Verifica il token interno nelle impostazioni di sicurezza. Se hai avviato un core di sviluppo separato, usa lo stesso token oppure arrestalo e avvia il core dall’app.';
+
+  @override
   String get networkErrorTitle => 'Problema di rete';
 
   @override
@@ -1284,11 +1291,11 @@ class AppLocalizationsIt extends AppLocalizations {
   String get telemetrySectionTitle => 'Diagnostica';
 
   @override
-  String get telemetryEnabled => 'Telemetria anonima';
+  String get telemetryEnabled => 'Diagnostica locale';
 
   @override
   String get telemetryEnabledHint =>
-      'Condividi diagnostica minima (errori e prestazioni) per migliorare la stabilità. Nessun contenuto personale.';
+      'Salva errori e informazioni sulle prestazioni su questo dispositivo. Nessun invio automatico: puoi esportare il log manualmente.';
 
   @override
   String get telemetryMonitoringEnabled =>
@@ -2442,4 +2449,51 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get corruptConfigHint =>
       'Impossibile leggere la configurazione e la sua copia di sicurezza. Ripristina una copia valida del file, poi premi Riprova. I dati esistenti sono conservati.';
+
+  @override
+  String get clientUpdatesTitle => 'Aggiornamenti del client';
+
+  @override
+  String get clientUpdatesHint =>
+      'Controlla le release ufficiali. I download vengono verificati prima dell’installazione.';
+
+  @override
+  String get clientUpdatesCheck => 'Controlla aggiornamenti';
+
+  @override
+  String clientUpdatesAvailable(String version) {
+    return 'È disponibile la versione $version';
+  }
+
+  @override
+  String clientUpdatesVersion(String version) {
+    return 'Versione installata: $version';
+  }
+
+  @override
+  String get clientUpdatesCurrent =>
+      'Non sono disponibili release stabili più recenti.';
+
+  @override
+  String get clientUpdatesRelease => 'Apri release';
+
+  @override
+  String get clientUpdatesDownload => 'Scarica aggiornamento verificato';
+
+  @override
+  String get clientUpdatesVerified => 'Download completato. SHA256 verificato.';
+
+  @override
+  String get clientUpdatesManual =>
+      'Chiudi Fedi3 prima di sostituire l’applicazione installata con il nuovo pacchetto. Conserva i dati del profilo. Su mobile, usa la fonte di installazione o lo store.';
+
+  @override
+  String get clientUpdatesInstall => 'Installa aggiornamento AppImage';
+
+  @override
+  String get clientUpdatesFolder => 'Apri cartella download';
+
+  @override
+  String get clientUpdatesRestart =>
+      'Aggiornamento installato. Chiudi e riapri Fedi3 per usarlo. La precedente AppImage è salvata con il suffisso .previous.';
 }

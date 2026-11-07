@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:ui' show AppExitResponse;
 import '../services/app_activity.dart';
+import '../services/mobile_push_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../state/app_state.dart';
@@ -31,14 +32,15 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
-    _lifecycle = AppLifecycleListener(
-        onStateChange: AppActivity.update,
-        onExitRequested: () async {
-          try {
-            await appState.stopCore().timeout(const Duration(seconds: 20));
-          } catch (_) {}
-          return AppExitResponse.exit;
-        });
+    _lifecycle = AppLifecycleListener(onStateChange: (state) {
+      AppActivity.update(state);
+      MobilePushService.instance.setForeground(AppActivity.foreground);
+    }, onExitRequested: () async {
+      try {
+        await appState.stopCore().timeout(const Duration(seconds: 20));
+      } catch (_) {}
+      return AppExitResponse.exit;
+    });
   }
 
   @override

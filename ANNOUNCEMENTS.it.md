@@ -4,6 +4,31 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-08 — Preparazione 0.10.0: aggiornamenti client e sicurezza compatibile
+
+La versione `0.10.0` è in preparazione e non è ancora pubblicata. I client
+precedenti richiedono un primo aggiornamento manuale per ricevere il nuovo updater.
+
+- Il client controlla le release stabili dalle impostazioni, segnala nuove
+  versioni e scarica pacchetti verificati SHA256. Le AppImage Linux x86_64
+  supportano sostituzione atomica e backup della versione precedente; Windows x64
+  usa uno ZIP verificato con installazione guidata. Le altre piattaforme mantengono
+  la propria fonte di installazione.
+- Le operazioni RSA usano AWS-LC e il trasporto Rust WebRTC usa lo stack attuale.
+  Chiavi dei profili, chiavi pubbliche, DID, firme e messaggi cifrati restano
+  compatibili; l’interoperabilità tra vecchie e nuove implementazioni è verificata.
+- Verifiche locali: 307 test Rust e 184 Flutter superati, build release Linux
+  riuscite e audit delle dipendenze con zero vulnerabilità e nessun advisory
+  ignorato. Restano cinque avvisi di manutenzione; runner nativi Windows/Apple
+  e workflow remoto fanno ancora parte della pubblicazione.
+- La diagnostica del client resta sul dispositivo, con log limitati ed
+  esportazione manuale. Nessun invio automatico di telemetria o push Git.
+- Corretti fallback della directory relay, messaggi di autenticazione del core
+  e rilevamento RTT sotto il millisecondo.
+
+Dettagli: [aggiornamenti](docs/it/updates.md), [verifica di compatibilità](docs/it/audit/crypto_compatibility_2026-11-08.md),
+[politica di sicurezza](SECURITY.md) e [changelog](CHANGELOG.md).
+
 ## 2026-11-07 — Directory relay e classifica per latenza
 
 La scoperta dei relay non dipende più da un singolo relay di bootstrap:
@@ -32,7 +57,7 @@ protocollo:
 - Client: nessun blocco della UI quando il core fallisce, schermata di recupero
   del portachiavi, backup impostazioni cifrato, polling consapevole del
   foreground, tap sulle notifiche e bozze chat preservate.
-- Repository: documentazione inglese con controparte italiana, CI verde (Rust,
+- Repository: documentazione inglese con controparte italiana, controlli CI (Rust,
   Flutter, script e PostgreSQL), dati runtime ripuliti.
 
 Nessun cambiamento che rompa il protocollo: l'interoperabilità con le istanze

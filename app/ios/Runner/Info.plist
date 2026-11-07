@@ -24,16 +24,11 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- P0-04: the embedded core speaks plain HTTP on the loopback interface.
-	     NSAllowsLocalNetworking is scoped to local hosts instead of allowing
-	     arbitrary insecure loads. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<!-- M-08: usage descriptions are mandatory when the plugins touch these
-	     resources; without them iOS kills the app on first access. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Fedi3 uses the camera to take photos and videos to attach to your posts.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -61,5 +56,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

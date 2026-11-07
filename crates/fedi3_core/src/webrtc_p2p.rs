@@ -22,14 +22,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use webrtc::api::APIBuilder;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
-use webrtc::ice_transport::ice_server::RTCIceServer;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::peer_connection::RTCPeerConnection;
+use crate::webrtc_transport::{
+    Channel as RTCDataChannel, Connection as RTCPeerConnection,
+    ConnectionState as RTCPeerConnectionState, DataChannelMessage,
+    IceCandidateInit as RTCIceCandidateInit, IceServer as RTCIceServer,
+    SessionDescription as RTCSessionDescription,
+};
 
 #[derive(Clone)]
 pub struct WebrtcHandle {
@@ -272,10 +270,7 @@ impl Assembler {
     }
 }
 
-async fn send_bytes_chunked(
-    dc: &webrtc::data_channel::RTCDataChannel,
-    payload: &[u8],
-) -> Result<()> {
+async fn send_bytes_chunked(dc: &RTCDataChannel, payload: &[u8]) -> Result<()> {
     if payload.len() > MAX_WIRE_BYTES {
         return Err(anyhow!(
             "payload too large for webrtc: {} bytes",
@@ -428,15 +423,9 @@ fn build_ice_servers(cfg: &ManagerCfg) -> Vec<RTCIceServer> {
 }
 
 async fn new_peer_connection(cfg: &ManagerCfg) -> Result<Arc<RTCPeerConnection>> {
-    let api = APIBuilder::new().build();
-    let pc = api
-        .new_peer_connection(RTCConfiguration {
-            ice_servers: build_ice_servers(cfg),
-            ..Default::default()
-        })
+    RTCPeerConnection::new(build_ice_servers(cfg))
         .await
-        .context("new peer connection")?;
-    Ok(Arc::new(pc))
+        .context("new peer connection")
 }
 
 async fn resolve_peer_id_from_actor(
@@ -469,7 +458,7 @@ async fn handle_incoming_wire_message<H>(
     cfg: &ManagerCfg,
     handler: H,
     msg: WireMsg,
-    dc: Arc<webrtc::data_channel::RTCDataChannel>,
+    dc: Arc<RTCDataChannel>,
     metrics: Arc<NetMetrics>,
     remote_peer_id: &str,
 ) where
@@ -1037,10 +1026,11 @@ where
                 }
 
                 // Wait for open, then send the request.
-                let open_ok =
+                let open_ok = matches!(
                     tokio::time::timeout(Duration::from_secs(cfg.connect_timeout_secs), open_rx)
-                        .await
-                        .is_ok();
+                        .await,
+                    Ok(Ok(()))
+                );
                 if !open_ok {
                     let mut guard = sessions.lock().await;
                     if let Some(s) = guard.remove(&session_id) {

@@ -52,3 +52,9 @@ in [`audit/`](audit/).
 
 - [English documentation](../README.md)
 - [English README](../../README.md)
+
+## Aggiornamenti e verifiche correnti
+
+- [Aggiornamenti del client](updates.md): 0.10.0 in preparazione, download verificati e installazione.
+- [Compatibilità e sicurezza RSA/WebRTC — 8 novembre 2026](audit/crypto_compatibility_2026-11-08.md).
+- [Annunci](../../ANNOUNCEMENTS.it.md) e [changelog](../../CHANGELOG.md).

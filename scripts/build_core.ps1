@@ -25,16 +25,21 @@ if (-not $cargo) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $coreDir = Join-Path $repoRoot "crates\\fedi3_core"
 
+$cargoArgs = @("build", "-p", "fedi3_core", "--lib", "--locked")
+if ($Profile -eq "release") { $cargoArgs += "--release" }
+
 $vsDevCmd = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"
 if ($IsWindows -and (Test-Path $vsDevCmd)) {
   $cmd = @"
-cd /d "$coreDir" && "$vsDevCmd" -arch=x64 -host_arch=x64 >nul && "$($cargo.Source)" build -p fedi3_core --$Profile
+cd /d "$coreDir" && "$vsDevCmd" -arch=x64 -host_arch=x64 >nul && "$($cargo.Source)" $(($cargoArgs -join " "))
 "@
   cmd /c $cmd | Write-Output
+  if ($LASTEXITCODE -ne 0) { throw "Core build failed ($LASTEXITCODE)" }
 } else {
   Push-Location $coreDir
   try {
-    & $cargo.Source build -p fedi3_core --$Profile
+    & $cargo.Source @cargoArgs
+    if ($LASTEXITCODE -ne 0) { throw "Core build failed ($LASTEXITCODE)" }
   } finally {
     Pop-Location
   }

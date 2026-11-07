@@ -13,7 +13,6 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
 use http::{HeaderMap, Method, Uri};
-use rsa::pkcs8::DecodePrivateKey;
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -5673,7 +5672,7 @@ async fn spool_envelope_post(state: &ApState, req: Request<Body>) -> Response<Bo
     let key = B64.decode(env.key_b64.as_bytes()).unwrap_or_default();
     let nonce = B64.decode(env.nonce_b64.as_bytes()).unwrap_or_default();
     let ciphertext = B64.decode(env.body_b64.as_bytes()).unwrap_or_default();
-    let private_key = match rsa::RsaPrivateKey::from_pkcs8_pem(&state.private_key_pem) {
+    let _private_key = match fedi3_protocol::crypto::rsa_private_key(&state.private_key_pem) {
         Ok(k) => k,
         Err(e) => {
             return simple(
@@ -5682,7 +5681,7 @@ async fn spool_envelope_post(state: &ApState, req: Request<Body>) -> Response<Bo
             )
         }
     };
-    let aes_key = match private_key.decrypt(rsa::Oaep::new::<sha2::Sha256>(), &key) {
+    let aes_key = match fedi3_protocol::crypto::rsa_oaep_decrypt(&state.private_key_pem, &key) {
         Ok(k) => k,
         Err(e) => {
             // The identity key changed (or the item predates encryption): accept it so the

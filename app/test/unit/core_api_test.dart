@@ -47,6 +47,18 @@ void main() {
     });
   });
 
+  test('relay refresh sends the internal token and preserves auth failures',
+      () async {
+    client.route('POST', '/_fedi3/relays/refresh',
+        FakeHttpResponse(statusCode: 403, body: 'forbidden'));
+    await expectLater(
+        api().refreshRelays(),
+        throwsA(
+            isA<CoreApiException>().having((e) => e.isAuth, 'isAuth', isTrue)));
+    expect(client.lastHeader('X-Fedi3-Internal'),
+        'internal-token-0123456789abcdef');
+  });
+
   group('CoreApi errors (AN-02..05)', () {
     test('AN-02 slow server yields a timeout error', () async {
       client.delay = const Duration(milliseconds: 400);

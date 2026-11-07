@@ -6,8 +6,9 @@ FEDI3 is pre-1.0. Only the latest release receives security fixes.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | ✅ |
-| < 0.1 | ❌ |
+| Latest published release | Receives security fixes |
+| Older releases | No maintained security branch |
+| Unreleased 0.10.0 | Prepared locally; not published |
 
 ## Reporting a vulnerability
 
@@ -55,7 +56,7 @@ Out of scope:
 - The core exposes the user's actor to the fediverse **through the relay tunnel**, authenticated by a per-user bearer token.
 - Federated inbound requests must carry a valid **HTTP Signature**; the signature must be bound to the activity `actor`.
 - Private keys live in the core data directory with restrictive permissions; the relay never sees them.
-- Chat uses per-message AES-256-GCM keys wrapped with RSA-OAEP; this provides confidentiality and integrity but **not forward secrecy** (documented limitation).
+- Chat v1 derives per-message AES-256-GCM keys with HKDF-SHA256 from Kyber768 shared secrets and authenticates envelopes with RSA-SHA256 signatures. There is no full ratcheting/forward-secrecy guarantee. RSA-OAEP wraps keys for compatibility HTTP envelopes and offline relay spool, not the chat KEM.
 - The relay stores tokens as SHA-256 hashes; admin access requires a bearer token of at least 32 characters.
 - **Identity anchor (optional)**: the actor `id`/`url`/key can live on a separate static host (`anchor_actor_url`), while inbox/outbox stay on the relay. The relay redirects `GET /users/<user>` to the canonical actor and its WebFinger points there. The anchor host serves only public documents; the private key never leaves the core.
 - **Blind spool**: activities waiting for an offline core are stored encrypted (AES-256-GCM with a one-time key wrapped by RSA-OAEP-SHA256 under the user's public key). The relay forwards ciphertext envelopes to `POST /_fedi3/spool/envelope`; the core alone decrypts, rebuilds the signed request and verifies it. If the public key is not cached yet, the relay falls back to plaintext spool for that item.
@@ -78,6 +79,43 @@ Out of scope:
 - The relay sees the plaintext body when it first receives an activity (it must route and check the signature); encryption protects the spool at rest and the flush path, not the ingress instant.
 - The extended Date skew for spooled envelopes relies on the unsigned `X-Fedi3-Spooled-Skew-Secs` header, capped at seven days. A sender can always use it, but the signature is still verified against the signed headers.
 
-### Known residual risk (SSRF)
+### Outbound destination enforcement (SSRF)
 
-The address check runs before the request. A redirect to a *hostname* that resolves to a private address is not re-evaluated (reqwest resolves it internally); redirects to literal private IPs are rejected by the redirect policy, and the number of hops is capped. This is an accepted trade-off, comparable to other ActivityPub implementations.
+Federation clients validate DNS answers inside the HTTP connector, including
+redirect destinations, and connect using those exact addresses. Mixed public/private
+answers fail closed. Literal private redirect targets are rejected before connection.
+Automatic redirects remain bounded; explicit GET redirects also drop signatures and
+credentials. Ambient HTTP proxies are disabled for federation so they cannot bypass
+this resolver. Trusted operator-configured storage/search clients are separate;
+Meilisearch redirects are disabled. The explicit LAN escape hatches still disable
+address filtering. This is destination filtering, not a sandbox for a compromised host.
+
+## Dependency audit — 8 November 2026
+
+The two remaining vulnerability findings from the 7 November audit have been
+removed from the release dependency graph, without ignoring either advisory:
+
+- RSA operations now use AWS-LC through `fedi3_protocol::crypto`. The vulnerable
+  RustCrypto `rsa` dependency is absent. Existing PKCS#8/SPKI PEM files, derived
+  DIDs, PKCS#1 v1.5 SHA256 signatures and OAEP SHA256/MGF1-SHA256 envelopes retain
+  their original formats. Existing identity files are validated, never rewritten
+  or regenerated on a parse error.
+- WebRTC uses 0.21.1 with its AWS-LC provider. The previous `webrtc-dtls` and
+  `crypto-bigint` 0.5.5 graph is absent. The remaining `crypto-bigint` version is
+  patched 0.7.10, used by the S3 signing stack.
+
+`cargo audit` reports **zero vulnerabilities**, with an empty ignore list. Five
+unmaintained-dependency notices remain (paste, pqcrypto-internals, pqcrypto-kyber,
+pqcrypto-traits and rustls-pemfile); these do not fail the current audit gate.
+The existing chat KEM is retained to preserve stored messages and peer compatibility.
+
+Compatibility is tested against fixed vectors produced by RSA 0.9.10, an old
+encrypted v1 message, byte-identical profile public keys/DIDs and an isolated old
+RSA/WebRTC peer in both SDP roles. The test oracle's disposable project is outside
+the release graph and uses only public fixture keys and local test sessions.
+CI runs these explicit interoperability tests and still requires a passing audit
+for release tags. No security check or advisory has been suppressed.
+
+See [the migration verification](docs/audit/crypto_compatibility_2026-11-08.md)
+for evidence and platform limits. A clean dependency audit is not a proof of the
+absence of every possible implementation vulnerability.

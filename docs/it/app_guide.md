@@ -36,7 +36,7 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 ## Chat
 
 - Le chat sono 1:1 o di gruppo, con trasporto P2P quando possibile.
-- I messaggi sono cifrati con AES-256-GCM e chiavi per messaggio avvolte con RSA-OAEP. Il relay non vede il contenuto.
+- I messaggi della chat usano AES-256-GCM con chiavi per messaggio derivate da Kyber768 tramite HKDF-SHA256 e firme RSA-SHA256. Il relay non vede il contenuto della chat. RSA-OAEP è usato separatamente per envelope di compatibilità/spool.
 - Supporta reazioni, file, GIF e stato di lettura.
 - Limite noto: non c'è *forward secrecy*. Se una chiave privata viene compromessa, i messaggi passati diventano leggibili.
 

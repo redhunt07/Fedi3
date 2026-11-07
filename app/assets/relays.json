@@ -10,6 +10,15 @@
       "contact": "https://github.com/redhunt07/Fedi3/issues",
       "region": "eu",
       "added": "2026-11-07"
+    },
+    {
+      "url": "https://fedi3.palermo.nohost.me",
+      "ws": "wss://fedi3.palermo.nohost.me",
+      "name": "Fedi3 relay (panormus)",
+      "operator": "Panormus",
+      "contact": "https://github.com/redhunt07/Fedi3/issues",
+      "region": "eu",
+      "added": "2026-11-07"
     }
   ]
 }

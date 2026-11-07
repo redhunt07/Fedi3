@@ -93,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
         media_backend: Arc::from(media_backend),
         net: net.clone(),
         ui_events,
-        internal_token: random_token(),
+        internal_token: std::env::var("FEDI3_INTERNAL_TOKEN")
+            .ok()
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty())
+            .unwrap_or_else(random_token),
         global_ingest: GlobalIngestPolicy {
             max_items_per_actor_per_min: 20,
             max_bytes_per_actor_per_min: 256 * 1024,
@@ -110,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
         max_body_bytes: 20 * 1024 * 1024,
     };
 
-    // The token is random per run; log it so curl can drive the internal API.
+    // Log the effective development token so curl can drive the internal API.
     info!("internal token: {}", state.internal_token);
 
     // Start queue worker (dev). Shutdown isn't wired here; stop the process to stop.

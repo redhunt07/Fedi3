@@ -37,6 +37,7 @@ struct PeerRelayListResponse {
 /// core read the same file, so relay discovery does not depend on a single
 /// relay being reachable.
 pub const DEFAULT_RELAY_DIRECTORY_URLS: &[&str] = &[
+    "https://fedi3.redhunt07.ovh/_fedi3/relay/directory",
     "https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json",
     "https://cdn.jsdelivr.net/gh/redhunt07/Fedi3@main/relays/relays.json",
 ];

@@ -18,8 +18,11 @@ if ($Version -ne "") {
 
 Push-Location $appDir
 flutter clean
+if ($LASTEXITCODE -ne 0) { throw "flutter clean failed" }
 flutter pub get
+if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed" }
 flutter build windows --release
+if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
 Pop-Location
 
 if (!(Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
@@ -39,11 +42,9 @@ Compress-Archive -Path (Join-Path $releaseDir "*") -DestinationPath (Join-Path $
 $zipPath = Join-Path $distDir "Fedi3-windows-x64.zip"
 function Write-Checksums($dir) {
   $lines = @()
-  Get-ChildItem $dir -File | ForEach-Object {
-    if ($_.Name -eq "checksums.txt") { return }
-    $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower()
-    $lines += "$hash  $($_.Name)"
-  }
+  $package = Join-Path $dir "Fedi3-windows-x64.zip"
+  $hash = (Get-FileHash -Algorithm SHA256 $package).Hash.ToLower()
+  $lines += "$hash  Fedi3-windows-x64.zip"
   $lines = $lines | Sort-Object
   Set-Content -Path (Join-Path $dir "checksums.txt") -Value $lines -Encoding ASCII
 }

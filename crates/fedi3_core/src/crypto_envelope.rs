@@ -21,9 +21,6 @@ pub fn decrypt_relay_http_request_body(
     }
 
     use aes_gcm::{aead::Aead, aead::KeyInit, Aes256Gcm, Nonce};
-    use rsa::pkcs8::DecodePrivateKey;
-    use rsa::{Oaep, RsaPrivateKey};
-    use sha2::Sha256;
 
     let Ok(env_bytes) = B64.decode(req.body_b64.as_bytes()) else {
         return req;
@@ -54,10 +51,7 @@ pub fn decrypt_relay_http_request_body(
         return req;
     }
 
-    let Ok(privkey) = RsaPrivateKey::from_pkcs8_pem(private_key_pem) else {
-        return req;
-    };
-    let Ok(key) = privkey.decrypt(Oaep::new::<Sha256>(), &ek) else {
+    let Ok(key) = fedi3_protocol::crypto::rsa_oaep_decrypt(private_key_pem, &ek) else {
         return req;
     };
     if key.len() != 32 {
@@ -86,16 +80,11 @@ pub fn encrypt_relay_http_request_body(
     // Envelope: {v, alg, ek_b64, nonce_b64, ct_b64}
     use aes_gcm::{aead::Aead, aead::KeyInit, Aes256Gcm, Nonce};
     use rand::RngCore as _;
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::{Oaep, RsaPublicKey};
-    use sha2::Sha256;
 
     let plaintext = B64.decode(req.body_b64.as_bytes()).unwrap_or_default();
     if plaintext.is_empty() {
         return Ok(req);
     }
-
-    let pubkey = RsaPublicKey::from_public_key_pem(public_key_pem)?;
 
     let mut key_bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut key_bytes);
@@ -107,9 +96,7 @@ pub fn encrypt_relay_http_request_body(
         .encrypt(nonce, plaintext.as_ref())
         .map_err(|e| anyhow::anyhow!("aes-gcm encrypt: {e}"))?;
 
-    let ek = pubkey
-        .encrypt(&mut rand::rngs::OsRng, Oaep::new::<Sha256>(), &key_bytes)
-        .map_err(|e| anyhow::anyhow!("rsa encrypt: {e}"))?;
+    let ek = fedi3_protocol::crypto::rsa_oaep_encrypt(public_key_pem, &key_bytes)?;
 
     let env = serde_json::json!({
       "v": 1,
@@ -125,4 +112,42 @@ pub fn encrypt_relay_http_request_body(
         .push(("content-type".to_string(), "application/json".to_string()));
     req.body_b64 = B64.encode(env_bytes);
     Ok(req)
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    #[test]
+    fn existing_encrypted_message_decrypts_with_unchanged_profile_key() {
+        let private = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/private.pem");
+        // Complete v1 envelope produced by the old rsa 0.9.10 implementation.
+        let encrypted: RelayHttpRequest = serde_json::from_str(include_str!(
+            "../../fedi3_protocol/tests/fixtures/legacy_rsa/encrypted_message.json"
+        ))
+        .unwrap();
+        let decrypted = decrypt_relay_http_request_body(private, encrypted.clone());
+        assert_eq!(decrypted.id, encrypted.id);
+        assert_eq!(decrypted.path, encrypted.path);
+        assert_eq!(decrypted.method, encrypted.method);
+        let body = B64.decode(&decrypted.body_b64).unwrap();
+        assert_eq!(
+            body,
+            br#"{"type":"Create","object":{"type":"Note","content":"messaggio precedente"}}"#
+        );
+        assert!(!decrypted
+            .headers
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("x-fedi3-encrypted")));
+        let mut invalid = encrypted;
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&B64.decode(&invalid.body_b64).unwrap()).unwrap();
+        envelope["ct_b64"] = serde_json::json!(B64.encode(b"tampered ciphertext"));
+        invalid.body_b64 = B64.encode(serde_json::to_vec(&envelope).unwrap());
+        let rejected = decrypt_relay_http_request_body(private, invalid.clone());
+        assert_eq!(rejected.body_b64, invalid.body_b64);
+        assert!(rejected
+            .headers
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("x-fedi3-encrypted")));
+    }
 }

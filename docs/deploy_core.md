@@ -26,3 +26,16 @@ The binary is loaded by the app via FFI.
 - `GET /readyz`
 - `GET /_fedi3/health` (requires `X-Fedi3-Internal`)
 - `GET /_fedi3/net/metrics(.prom)` (requires `X-Fedi3-Internal`)
+
+### Development core authentication
+
+The standalone `dev_client` uses `127.0.0.1:8788` by default, the same port as
+an app-managed core. Run only one core on that address. If relay discovery
+returns `403 forbidden`, check that the app is contacting the intended core
+and that its internal token matches; this is an authentication failure.
+
+For a standalone development core, set `FEDI3_INTERNAL_TOKEN` to the same value
+as the app's internal token in Security settings before starting `dev_client`.
+When this variable is absent or blank, the development core generates a new
+random token at each startup. Alternatively, stop the standalone process and
+start the app-managed core. Keep existing profile credentials intact.

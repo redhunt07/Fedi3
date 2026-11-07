@@ -50,5 +50,4 @@ fi
 
 echo "Version: ${version}"
 
-"${ROOT_DIR}/scripts/build_core.sh" release
-"${ROOT_DIR}/scripts/release_build_linux.sh" "${version}"
+bash "${ROOT_DIR}/scripts/release_build_linux.sh" "${version}"

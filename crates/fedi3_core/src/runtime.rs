@@ -342,7 +342,7 @@ fn run_core(
         let http_timeout_secs = cfg.http_timeout_secs.unwrap_or(30).clamp(5, 120);
         // Federation fetches share one policy: bounded redirects and an explicit user agent
         // (the per-request body caps live in net_policy).
-        let http = reqwest::Client::builder()
+        let http = fedi3_protocol::net::guard_client(reqwest::Client::builder(), crate::net_policy::allow_private_fetch())
             .timeout(Duration::from_secs(http_timeout_secs))
             .connect_timeout(Duration::from_secs(10))
             .redirect(crate::net_policy::redirect_policy())
@@ -903,7 +903,7 @@ fn run_core(
         let router2 = Router::new().fallback(any(move |mut req: http::Request<axum::body::Body>| {
             let st = state_for_tunnel.clone();
             req.extensions_mut().insert(crate::ap::AuthenticatedRelayForward);
-            async move { handle_request(&st, req).await }
+            async move { crate::forward_receipt::handle(&st, req).await }
         }))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .layer(TraceLayer::new_for_http());

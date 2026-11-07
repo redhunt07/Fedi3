@@ -1,1 +1,7 @@
 #include "Generated.xcconfig"
+
+// Override with the environment matching your APNs provisioning profile.
+FEDI3_APNS_ENVIRONMENT=development
+
+// Keep native FFI symbols available to DynamicLibrary.process().
+OTHER_LDFLAGS=$(inherited) -force_load "$(BUILT_PRODUCTS_DIR)/libfedi3_core.a" -Wl,-u,_fedi3_core_version -Wl,-u,_fedi3_core_string_free -Wl,-u,_fedi3_core_free_cstring -Wl,-u,_fedi3_core_start -Wl,-u,_fedi3_core_stop -framework Security -framework SystemConfiguration -framework CoreFoundation -lc++ -liconv -lresolv

@@ -10,10 +10,12 @@ FEDI3 is a federated social platform with a peer-to-peer layer: privacy-first,
 interoperable with the fediverse and resilient without giving up compatibility
 with classic ActivityPub instances.
 
-> **Status: pre-1.0.** The project is in hardening toward its first stable
-> release. Open blockers and the remediation plan are tracked in
-> [production readiness audit](docs/audit/production_readiness_audit.md) and
-> [remediation plan](docs/audit/remediation_plan.md).
+> **Status: pre-1.0; 0.10.0 is in preparation, not published.** Current local
+> verification is in the [client/update audit](docs/audit/client_updates_2026-11-07.md)
+> and [compatible RSA/WebRTC remediation](docs/audit/crypto_compatibility_2026-11-08.md).
+> The [production readiness audit](docs/audit/production_readiness_audit.md) and
+> [remediation plan](docs/audit/remediation_plan.md) are historical background;
+> native Windows/Apple runners and remote release CI remain part of publication.
 
 ## Contents
 
@@ -65,7 +67,7 @@ scripts/                 Build, install, backup and diagnostic scripts
 - Flutter 3.38 or newer for the client.
 - Linux desktop dependencies for the AppImage: `clang`, `cmake`, `ninja`,
   `pkg-config`, `libgtk-3-dev`, `libsecret-1-dev`, `libjsoncpp-dev`, `libmpv-dev`,
-  `libasound2-dev`, `libpulse-dev`. See [Linux build guide](docs/build_linux.md).
+  `libasound2-dev`, `libpulse-dev`, `libwebkit2gtk-4.1-dev`. See [Linux build guide](docs/build_linux.md).
 - Docker and Docker Compose for the relay stack.
 
 ## Quick start: relay
@@ -117,6 +119,11 @@ Android and iOS builds are available, but the mobile release pipeline and
 signing are not final yet; the primary production target is relay + Linux
 desktop.
 
+Prepared in 0.10.0: Settings → Client updates checks stable releases and verifies
+SHA256 downloads. Linux x86_64 AppImages can replace themselves with a backup;
+Windows x64 uses a verified ZIP and guided installation. Earlier clients need a
+manual first upgrade. See [client updates](docs/updates.md).
+
 ## Development and testing
 
 ```bash
@@ -154,6 +161,9 @@ English (default):
 - [Interoperability](docs/interop.md)
 - [Linux build](docs/build_linux.md)
 - [App guide](docs/app_guide.md)
+- [Client updates](docs/updates.md)
+- [Current crypto compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md)
+- [Announcements](ANNOUNCEMENTS.md) and [changelog](CHANGELOG.md)
 - [Client UX plan](docs/client_ux_plan.md)
 - [Backup and restore](docs/ops_backup_restore.md)
 - [Troubleshooting](docs/troubleshooting.md)

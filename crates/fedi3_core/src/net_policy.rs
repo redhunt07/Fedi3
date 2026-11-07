@@ -15,13 +15,12 @@
 //! * bounded redirects;
 //! * bounded response bodies, streamed instead of buffered blindly.
 //!
-//! The IP check is DNS-based, so it cannot be applied inside the redirect policy (which is
-//! synchronous). Redirect targets are limited in number and scheme, and the final URL is
-//! re-checked by callers that need it; the residual risk is documented in SECURITY.md.
+//! The connector validates the exact DNS answers it uses on every connection,
+//! including automatic redirects. Literal redirect targets are checked by the policy.
 
 use anyhow::{anyhow, bail, Result};
 use http::Uri;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::time::Duration;
 
 /// Actor documents and key metadata are small; anything bigger is treated as hostile.
@@ -42,42 +41,9 @@ pub fn allow_private_fetch() -> bool {
     )
 }
 
-fn v4_is_public(ip: Ipv4Addr) -> bool {
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        // Carrier-grade NAT (RFC 6598) is not reachable from the public internet either.
-        || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
-        // Benchmarking range (RFC 2544).
-        || (ip.octets()[0] == 198 && (18..=19).contains(&ip.octets()[1])))
-}
-
-/// `2001:db8::/32` is reserved for documentation and never routable on the public internet.
-fn v6_is_documentation(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] == 0x2001 && ip.segments()[1] == 0x0db8
-}
-
-fn v6_is_public(ip: Ipv6Addr) -> bool {
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return v4_is_public(mapped);
-    }
-    !(ip.is_loopback()
-        || ip.is_unspecified()
-        || ip.is_unique_local()
-        || ip.is_unicast_link_local()
-        || ip.is_multicast()
-        || v6_is_documentation(ip))
-}
-
-/// Whether `ip` may be contacted by federation code.
+/// Whether the connector may contact this address.
 pub fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4_is_public(*v4),
-        IpAddr::V6(v6) => v6_is_public(*v6),
-    }
+    fedi3_protocol::net::is_public_ip(ip)
 }
 
 fn parse_ip_literal(host: &str) -> Option<IpAddr> {
@@ -148,7 +114,19 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
             attempt.stop()
         } else {
             match attempt.url().scheme() {
-                "http" | "https" => attempt.follow(),
+                "http" | "https" => {
+                    if !allow_private_fetch()
+                        && attempt
+                            .url()
+                            .host_str()
+                            .and_then(parse_ip_literal)
+                            .is_some_and(|ip| !is_public_ip(&ip))
+                    {
+                        attempt.error("redirect to non-public address")
+                    } else {
+                        attempt.follow()
+                    }
+                }
                 _ => attempt.stop(),
             }
         }
@@ -157,13 +135,13 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
 
 /// Client used for federation fetches: bounded timeouts, bounded redirects, explicit UA.
 pub fn federation_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    fedi3_protocol::net::guard_client(reqwest::Client::builder(), allow_private_fetch())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
         .redirect(redirect_policy())
         .user_agent(format!("fedi3/{}", env!("CARGO_PKG_VERSION")))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("valid federation HTTP configuration")
 }
 
 /// Read a response body, refusing to buffer more than `max` bytes.
@@ -189,9 +167,16 @@ pub async fn get_checked(
     raw_url: &str,
     mut headers: reqwest::header::HeaderMap,
 ) -> Result<reqwest::Response> {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+    static PUBLIC_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    static LAN_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let allow_private = allow_private_fetch();
+    let slot = if allow_private {
+        &LAN_CLIENT
+    } else {
+        &PUBLIC_CLIENT
+    };
+    let client = slot.get_or_init(|| {
+        fedi3_protocol::net::guard_client(reqwest::Client::builder(), allow_private)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))

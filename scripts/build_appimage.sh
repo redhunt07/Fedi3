@@ -14,7 +14,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dir="$repo_root/app"
 bundle_dir="$app_dir/build/linux/x64/$profile/bundle"
 appdir="$repo_root/dist/AppDir"
-appimage_out="$repo_root/dist/Fedi3-${profile}-x86_64.AppImage"
+appimage_out="${FEDI3_APPIMAGE_OUT:-$repo_root/dist/Fedi3-${profile}-x86_64.AppImage}"
 icon_src="$app_dir/web/icons/Icon-512.png"
 desktop_src="$repo_root/deploy/appimage/fedi3.desktop"
 
@@ -23,8 +23,8 @@ if ! command -v flutter >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -x "$repo_root/scripts/build_core.sh" ]]; then
-  echo "Missing scripts/build_core.sh (run chmod +x scripts/build_core.sh)"
+if [[ ! -f "$repo_root/scripts/build_core.sh" ]]; then
+  echo "Missing scripts/build_core.sh"
   exit 1
 fi
 
@@ -33,7 +33,7 @@ if [[ -n "$prebuilt_core" ]]; then
   [[ -f "$prebuilt_core" ]] || { echo "Missing prebuilt core: $prebuilt_core"; exit 1; }
   cp -f "$prebuilt_core" "$app_dir/libfedi3_core.so"
 else
-  "$repo_root/scripts/build_core.sh" "$profile"
+  bash "$repo_root/scripts/build_core.sh" "$profile"
 fi
 
 (cd "$app_dir" && flutter build linux --"$profile")

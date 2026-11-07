@@ -5,14 +5,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use fedi3_protocol::crypto;
 use http::{HeaderMap, Method, Uri};
 use httpdate::parse_http_date;
-use rsa::{
-    pkcs1v15::{SigningKey, VerifyingKey},
-    pkcs8::{DecodePrivateKey, DecodePublicKey},
-    signature::{RandomizedSigner, SignatureEncoding, Verifier},
-    RsaPrivateKey, RsaPublicKey,
-};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -442,27 +437,11 @@ pub fn verify_signature_rsa_sha256(
     signing_string: &str,
     signature: &[u8],
 ) -> Result<()> {
-    let public_key =
-        RsaPublicKey::from_public_key_pem(public_key_pem).context("parse public key pem")?;
-    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let sig =
-        rsa::pkcs1v15::Signature::try_from(signature).context("invalid rsa signature bytes")?;
-    verifying_key
-        .verify(signing_string.as_bytes(), &sig)
-        .context("signature verify failed")?;
-    Ok(())
+    crypto::rsa_verify_sha256(public_key_pem, signing_string.as_bytes(), signature)
 }
 
 pub fn verify_bytes_rsa_sha256(public_key_pem: &str, bytes: &[u8], signature: &[u8]) -> Result<()> {
-    let public_key =
-        RsaPublicKey::from_public_key_pem(public_key_pem).context("parse public key pem")?;
-    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-    let sig =
-        rsa::pkcs1v15::Signature::try_from(signature).context("invalid rsa signature bytes")?;
-    verifying_key
-        .verify(bytes, &sig)
-        .context("signature verify failed")?;
-    Ok(())
+    crypto::rsa_verify_sha256(public_key_pem, bytes, signature)
 }
 
 pub fn sign_request_rsa_sha256(
@@ -505,12 +484,8 @@ pub fn sign_request_rsa_sha256(
 
     let signing_string = build_signing_string(method, uri, headers, &signed_headers_lower)?;
 
-    let private_key =
-        RsaPrivateKey::from_pkcs8_pem(private_key_pem).context("parse private key pem")?;
-    let signing_key = SigningKey::<Sha256>::new(private_key);
-    let mut rng = rand::rngs::OsRng;
-    let signature = signing_key.sign_with_rng(&mut rng, signing_string.as_bytes());
-    let sig_b64 = B64.encode(signature.to_bytes());
+    let signature = crypto::rsa_sign_sha256(private_key_pem, signing_string.as_bytes())?;
+    let sig_b64 = B64.encode(signature);
 
     let headers_list = signed_headers_lower.join(" ");
     let sig_header = format!(
@@ -521,12 +496,7 @@ pub fn sign_request_rsa_sha256(
 }
 
 pub fn sign_bytes_rsa_sha256(private_key_pem: &str, bytes: &[u8]) -> Result<Vec<u8>> {
-    let private_key =
-        RsaPrivateKey::from_pkcs8_pem(private_key_pem).context("parse private key pem")?;
-    let signing_key = SigningKey::<Sha256>::new(private_key);
-    let mut rng = rand::rngs::OsRng;
-    let signature = signing_key.sign_with_rng(&mut rng, bytes);
-    Ok(signature.to_bytes().to_vec())
+    crypto::rsa_sign_sha256(private_key_pem, bytes)
 }
 
 #[derive(Debug, Deserialize)]
@@ -555,19 +525,10 @@ struct ActorEndpoints {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
     fn test_keypair() -> (String, String) {
-        let mut rng = rand::rngs::OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-        let private_pem = private
-            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-            .unwrap()
-            .to_string();
-        let public_pem = RsaPublicKey::from(&private)
-            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
-            .unwrap()
-            .to_string();
+        let private_pem = crypto::rsa_generate_private_pem().unwrap();
+        let public_pem = crypto::rsa_public_pem(&private_pem).unwrap();
         (private_pem, public_pem)
     }
 

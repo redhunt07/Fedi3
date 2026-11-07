@@ -32,6 +32,8 @@ preflight_linux_deps() {
   if [[ -z "${FLUTTER_BIN}" ]]; then
     if command -v flutter >/dev/null 2>&1; then
       FLUTTER_BIN="$(command -v flutter)"
+    elif [[ -x "${HOME}/flutter/bin/flutter" ]]; then
+      FLUTTER_BIN="${HOME}/flutter/bin/flutter"
     elif [[ -x "${HOME}/.local/flutter/bin/flutter" ]]; then
       FLUTTER_BIN="${HOME}/.local/flutter/bin/flutter"
     else
@@ -42,9 +44,7 @@ preflight_linux_deps() {
 
   # Flutter Linux desktop + plugins used by this app.
   require_pkgconf gtk+-3.0
-  if ! pkg-config --exists webkit2gtk-4.1; then
-    require_pkgconf webkit2gtk-4.0
-  fi
+  require_pkgconf webkit2gtk-4.1
   require_pkgconf libsecret-1
   require_pkgconf mpv
 
@@ -73,34 +73,12 @@ if [[ "${FEDI3_PREFLIGHT_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-pushd "${APP_DIR}" >/dev/null
-"${FLUTTER_BIN}" clean
-"${FLUTTER_BIN}" pub get
-"${FLUTTER_BIN}" build linux --release
-popd >/dev/null
-
 mkdir -p "${DIST_DIR}"
-
 APPIMAGE_OUT="${DIST_DIR}/Fedi3-linux-x86_64.AppImage"
+PATH="$(dirname "${FLUTTER_BIN}"):$PATH" \
+  FEDI3_APPIMAGE_OUT="${APPIMAGE_OUT}" \
+  bash "${ROOT_DIR}/scripts/build_appimage.sh" release
 
-if [[ -z "${FEDI3_APPIMAGE_TOOL:-}" ]]; then
-  echo "FEDI3_APPIMAGE_TOOL not set. Build your AppImage and place it at ${APPIMAGE_OUT}"
-  echo "Then re-run to generate checksums.txt"
-else
-  "${FEDI3_APPIMAGE_TOOL}" "${APP_DIR}" "${APPIMAGE_OUT}"
-fi
-
-if [[ ! -f "${APPIMAGE_OUT}" ]]; then
-  echo "AppImage missing: ${APPIMAGE_OUT}"
-  exit 1
-fi
-
-(
-  cd "${DIST_DIR}"
-  find . -maxdepth 1 -type f ! -name "checksums.txt" -print0 \
-    | xargs -0 sha256sum \
-    | sed 's|^\([a-f0-9]\+\)  \./|\1  |' \
-    | sort > checksums.txt
-)
-
+# Hash exactly this build, never unrelated or stale files in dist/.
+(cd "${DIST_DIR}" && sha256sum Fedi3-linux-x86_64.AppImage > checksums.txt)
 echo "Linux update ready in ${DIST_DIR}"

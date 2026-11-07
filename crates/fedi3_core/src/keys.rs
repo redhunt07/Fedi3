@@ -5,11 +5,7 @@
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use rand::rngs::OsRng;
-use rsa::{
-    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding},
-    RsaPrivateKey, RsaPublicKey,
-};
+use fedi3_protocol::crypto::{self, PrivateDecryptingKey, PublicEncryptingKey};
 use sha2::Digest as _;
 use std::{
     fs,
@@ -18,8 +14,8 @@ use std::{
 
 #[derive(Clone)]
 pub struct Identity {
-    pub private_key: RsaPrivateKey,
-    pub public_key: RsaPublicKey,
+    pub private_key: PrivateDecryptingKey,
+    pub public_key: PublicEncryptingKey,
     pub public_key_pem: String,
     pub private_key_pem: String,
 }
@@ -88,21 +84,18 @@ pub fn load_or_generate_identity(dir: impl AsRef<Path>) -> Result<Identity> {
             .with_context(|| format!("read {}", priv_path.display()))?;
         // A corrupted file must fail loudly instead of silently regenerating a new identity
         // (which would change the actor DID and break federation).
-        RsaPrivateKey::from_pkcs8_pem(&pem)
-            .with_context(|| format!("parse {}", priv_path.display()))?;
+        crypto::rsa_private_key(&pem).with_context(|| format!("parse {}", priv_path.display()))?;
         secure_file(&priv_path)?;
         pem
     } else {
-        let mut rng = OsRng;
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
-        let priv_pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
+        let priv_pem = crypto::rsa_generate_private_pem()?;
         write_secret_atomic(&priv_path, priv_pem.as_bytes())?;
         priv_pem
     };
 
-    let private_key = RsaPrivateKey::from_pkcs8_pem(&priv_pem).context("parse private key pem")?;
-    let public_key = RsaPublicKey::from(&private_key);
-    let public_key_pem = public_key.to_public_key_pem(LineEnding::LF)?.to_string();
+    let private_key = crypto::rsa_private_key(&priv_pem).context("parse private key pem")?;
+    let public_key = private_key.public_key();
+    let public_key_pem = crypto::rsa_public_pem(&priv_pem)?;
 
     Ok(Identity {
         private_key,
@@ -173,5 +166,73 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("identity_private_key.pem"), "not a pem").unwrap();
         assert!(load_or_generate_identity(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod legacy_compatibility {
+    #[test]
+    fn loading_old_profile_keeps_private_file_public_key_and_did_identical() {
+        let private = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/private.pem");
+        let public = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/public.pem");
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fedi3_protocol/tests/fixtures/legacy_rsa/vectors.json"
+        ))
+        .unwrap();
+        let dir = crate::test_support::TempDir::new("legacy-profile-crypto");
+        let path = dir.path().join("identity_private_key.pem");
+        super::write_secret_atomic(&path, private.as_bytes()).unwrap();
+        for _ in 0..2 {
+            let identity = super::load_or_generate_identity(dir.path()).unwrap();
+            assert_eq!(identity.private_key_pem, private);
+            assert_eq!(identity.public_key_pem, public);
+            assert_eq!(
+                super::did_from_public_key_pem(public),
+                vectors["did"].as_str().unwrap()
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), private.as_bytes());
+        }
+        super::write_secret_atomic(&path, b"corrupt old identity").unwrap();
+        assert!(super::load_or_generate_identity(dir.path()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"corrupt old identity");
+    }
+}
+
+#[cfg(test)]
+mod old_provider_interoperability {
+    #[test]
+    #[ignore = "requires the isolated legacy oracle built by scripts/verify_legacy_webrtc.py"]
+    fn legacy_rsa_09_reads_new_envelopes_and_signatures() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        use fedi3_protocol::crypto;
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+        let private = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/private.pem");
+        let public = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/public.pem");
+        let message = b"new client to existing profile: UTF-8 e contenuto precedente";
+        let mut child = Command::new(std::env::var("FEDI3_LEGACY_WEBRTC_PEER").unwrap())
+            .arg("rsa")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let payload = serde_json::json!({"private": private, "public": public,
+            "message": B64.encode(message),
+            "encrypted": B64.encode(crypto::rsa_oaep_encrypt(public, message).unwrap()),
+            "signature": B64.encode(crypto::rsa_sign_sha256(private, message).unwrap())});
+        writeln!(child.stdin.take().unwrap(), "{payload}").unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "old RSA rejected new envelope/signature"
+        );
+        let result: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(result["signature_valid"], true);
+        assert_eq!(
+            B64.decode(result["decrypted"].as_str().unwrap()).unwrap(),
+            message
+        );
     }
 }

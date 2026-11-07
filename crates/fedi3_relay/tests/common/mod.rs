@@ -61,6 +61,7 @@ impl TestRelay {
             .env("FEDI3_RELAY_DB_DRIVER", "sqlite")
             .env("FEDI3_RELAY_DB", &db_path)
             .env("FEDI3_RELAY_SEARCH_BACKEND", "db")
+            .env("FEDI3_RELAY_DIRECTORY_URLS", "")
             .env("FEDI3_RELAY_ALLOW_SELF_REGISTER", "true")
             .env("FEDI3_RELAY_PUBLIC_URL", &base_url)
             .env("FEDI3_RELAY_ALLOW_PRIVATE_ACTOR_FETCH", "true")
@@ -328,7 +329,7 @@ pub async fn spawn_mock_actor(initial: String) -> MockActor {
 
 /// RSA signer producing ActivityPub-compatible `Signature`/`Digest` headers.
 pub struct Signer {
-    signing: rsa::pkcs1v15::SigningKey<sha2::Sha256>,
+    signing: String,
     pub actor_url: String,
     pub key_id: String,
     pub public_pem: String,
@@ -336,15 +337,11 @@ pub struct Signer {
 
 impl Signer {
     pub fn new(actor_base: &str, user: &str) -> Self {
-        use rand::rngs::OsRng;
-        use rsa::pkcs8::{EncodePublicKey, LineEnding};
-
-        let private = rsa::RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
-        let public = private.to_public_key();
-        let public_pem = public.to_public_key_pem(LineEnding::LF).unwrap();
+        let private = fedi3_protocol::crypto::rsa_generate_private_pem().unwrap();
+        let public_pem = fedi3_protocol::crypto::rsa_public_pem(&private).unwrap();
         let actor_url = format!("{actor_base}/users/{user}");
         let key_id = format!("{actor_url}#main-key");
-        let signing = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(private);
+        let signing = private;
         Self {
             signing,
             actor_url,
@@ -382,7 +379,6 @@ impl Signer {
     ) -> Vec<(String, String)> {
         use base64::engine::general_purpose::STANDARD as B64;
         use base64::Engine as _;
-        use rsa::signature::{SignatureEncoding, Signer as _};
         use sha2::{Digest, Sha256};
 
         let date = httpdate::fmt_http_date(std::time::SystemTime::now());
@@ -402,12 +398,13 @@ impl Signer {
         if include_digest {
             signing.push_str(&format!("\ndigest: {digest}"));
         }
-        let sig = self.signing.sign(signing.as_bytes());
+        let sig =
+            fedi3_protocol::crypto::rsa_sign_sha256(&self.signing, signing.as_bytes()).unwrap();
         let signature_header = format!(
             "keyId=\"{}\",algorithm=\"rsa-sha256\",headers=\"{}\",signature=\"{}\"",
             self.key_id,
             signed_headers,
-            B64.encode(sig.to_bytes())
+            B64.encode(sig)
         );
         let mut headers = vec![
             ("Signature".to_string(), signature_header),

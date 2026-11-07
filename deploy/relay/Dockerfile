@@ -11,7 +11,8 @@ COPY crates/fedi3_relay/Cargo.toml crates/fedi3_relay/Cargo.toml
 COPY crates/fedi3_core/Cargo.toml crates/fedi3_core/Cargo.toml
 COPY crates/fedi3_p2p_infra/Cargo.toml crates/fedi3_p2p_infra/Cargo.toml
 
-# Copy sources
+# Copy sources and the public directory embedded by include_str!.
+COPY relays relays
 COPY crates/fedi3_protocol crates/fedi3_protocol
 COPY crates/fedi3_relay crates/fedi3_relay
 COPY crates/fedi3_core crates/fedi3_core

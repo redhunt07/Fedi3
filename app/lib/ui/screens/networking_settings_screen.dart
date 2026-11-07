@@ -31,7 +31,7 @@ class NetworkingSettingsScreen extends StatefulWidget {
 
 class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   bool _loadingRelays = false;
-  String? _relayError;
+  Object? _relayError;
   List<Map<String, dynamic>> _relays = const [];
 
   bool _loadingDirectory = false;
@@ -150,7 +150,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       }
       if (mounted) setState(() => _relays = items);
     } catch (e) {
-      if (mounted) setState(() => _relayError = e.toString());
+      if (mounted) setState(() => _relayError = e);
     } finally {
       if (mounted) setState(() => _loadingRelays = false);
     }
@@ -163,7 +163,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       await CoreApi(config: cfg).refreshRelays();
       await _loadRelays();
     } catch (e) {
-      if (mounted) setState(() => _relayError = e.toString());
+      if (mounted) setState(() => _relayError = e);
     }
   }
 
@@ -173,17 +173,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       _directoryError = null;
     });
     try {
-      RelayDirectorySnapshot? snapshot;
-      Object? fetchError;
-      try {
-        snapshot = await RelayDirectoryService.fetch();
-      } catch (e) {
-        fetchError = e;
-        snapshot = await RelayDirectoryService.cachedOrBundled();
-      }
-      if (snapshot == null) {
-        throw fetchError ?? StateError('relay directory unavailable');
-      }
+      final snapshot = await RelayDirectoryService.refreshOrFallback();
       final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
       if (!mounted) return;
       setState(() {
@@ -434,7 +424,16 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
           _section(context, context.l10n.networkingRelaysTitle),
           if (_relayError != null)
             NetworkErrorCard(
-              message: _relayError ?? context.l10n.networkingRelaysError,
+              title: _relayError is CoreApiException &&
+                      (_relayError as CoreApiException).isAuth
+                  ? context.l10n.coreAuthErrorTitle
+                  : null,
+              hint: _relayError is CoreApiException &&
+                      (_relayError as CoreApiException).isAuth
+                  ? context.l10n.coreAuthErrorHint
+                  : null,
+              message:
+                  _relayError?.toString() ?? context.l10n.networkingRelaysError,
               onRetry: _refreshRelays,
               compact: true,
             ),

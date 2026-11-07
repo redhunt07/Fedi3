@@ -5,6 +5,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Preparing 0.10.0 — 2026-11-08
+
+This version is prepared locally; no 0.10.0 tag or release has been published.
+
+- Added stable-release checks, update notifications, verified SHA256 downloads,
+  atomic Linux x86_64 AppImage replacement with a previous-image backup, and a
+  guided Windows x64 ZIP update path. Existing clients need a manual first upgrade.
+- Added Linux/Windows draft-release packaging, exact-package checksums and a tag
+  version contract; the RustSec audit remains mandatory on release tags.
+- Replaced RustCrypto RSA with AWS-LC and upgraded the Rust WebRTC transport to
+  0.21.1 with AWS-LC. Existing PKCS#8/SPKI keys, DIDs, RSA signatures, OAEP/AES-GCM
+  envelopes, chat keys, signaling JSON and v1 data-channel frames stay compatible.
+- Added old/new RSA interoperability, complete legacy encrypted-message fixtures,
+  unchanged-profile/DID checks and WebRTC 0.12 interoperability in both SDP roles.
+  The old test oracle is isolated from the release dependency graph.
+- Removed the two remaining dependency vulnerabilities: the prepared workspace
+  audit reports zero findings, no ignored advisories and five maintenance notices.
+- Fixed corrupt/truncated diagnostic log reads, serialized writes and bounded log
+  rotation. Clarified that client diagnostics are local and exported manually;
+  no automatic GitHub telemetry transport was present.
+- Fixed relay directory fallback, authentication error guidance, submillisecond
+  RTT reporting and release-script failures; synchronized the Palermo relay entry.
+- Local verification: 307 Rust tests, 184 Flutter tests, strict Clippy/analyzer,
+  Linux core/relay/client release builds and Android ARM64 core compilation check.
+  Native Windows/Apple build and remote tag-workflow validation remain outstanding.
+- Updated English/Italian update guides, security documentation and verification
+  reports. See [compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md).
+
 ### Hardening — 2026-11-07
 
 Security:

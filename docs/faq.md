@@ -18,11 +18,11 @@ In the core data directory, with `0600` permissions on POSIX. They are never sen
 
 ## Is the chat encrypted?
 
-Yes: AES-256-GCM with per-message keys, wrapped with RSA-OAEP for each recipient. Known limit: there is no forward secrecy. If the private key is compromised, already exchanged messages become readable.
+Yes. Chat v1 uses AES-256-GCM with per-message keys derived through HKDF-SHA256 from Kyber768 shared secrets, and RSA-SHA256 signatures. Existing chat keys and ciphertext formats are preserved. There is no full ratcheting/forward-secrecy guarantee. RSA-OAEP is used for compatibility HTTP envelopes and offline spool, separately from the chat KEM.
 
 ## Telemetry?
 
-It is optional and can be enabled by the user. The relay collects only aggregated data (number of users, peers, version) and local logs can be deleted.
+Client diagnostics are optional and stay on the device (two log files, up to 2 MiB each). There is no automatic upload to GitHub or another server. Users can clear or export logs manually. Relay statistics and public peer discovery are separate server features exchanged via HTTP.
 
 ## Where is media stored?
 

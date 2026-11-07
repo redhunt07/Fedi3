@@ -9,7 +9,7 @@ async-trait = "0.1"
 base64 = "0.22"
 fedi3_protocol = { path = "../fedi3_protocol" }
 futures-util = "0.3"
-libp2p = { version = "0.53", features = ["macros", "tokio", "tcp", "dns", "noise", "yamux", "identify", "ping", "quic", "kad", "relay", "request-response", "websocket"] }
+libp2p = { version = "0.57", features = ["macros", "tokio", "tcp", "dns", "noise", "yamux", "identify", "ping", "quic", "kad", "relay", "request-response", "websocket"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

@@ -2,8 +2,9 @@
 
 Fedi3 relay discovery starts from a shared, public list of relays:
 [`relays/relays.json`](../relays/relays.json). The file lives in this repository
-and is maintained through pull requests. There is no directory server, no
-database and no account to create.
+and is maintained through pull requests. The relay serves a packaged mirror at `/_fedi3/relay/directory` alongside the
+GitHub/jsDelivr sources. The app also bundles the file for offline fallback.
+No directory account is required.
 
 The client reads the list, probes every relay from the user's device and shows
 the results ranked by measured latency in milliseconds. The Rust core reads the

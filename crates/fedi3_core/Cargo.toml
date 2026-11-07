@@ -12,13 +12,12 @@ axum = "0.7"
 base64 = "0.22"
 bytes = "1"
 directories = "5"
-fedi3_protocol = { path = "../fedi3_protocol" }
+fedi3_protocol = { path = "../fedi3_protocol", features = ["net", "crypto"] }
 futures-util = "0.3"
 http = "1"
 httpdate = "1"
 mime_guess = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
-rsa = "0.9"
 rand = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = { version = "0.10", features = ["oid"] }
@@ -32,15 +31,21 @@ tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"
-libp2p = { version = "0.53", features = ["macros", "tokio", "tcp", "dns", "rsa", "noise", "yamux", "mdns", "identify", "ping", "request-response", "quic", "kad", "relay", "dcutr", "gossipsub", "autonat", "websocket"] }
+libp2p = { version = "0.57", features = ["macros", "tokio", "tcp", "dns", "rsa", "noise", "yamux", "mdns", "identify", "ping", "request-response", "quic", "kad", "relay", "dcutr", "gossipsub", "autonat", "websocket"] }
 async-trait = "0.1"
 time = { version = "0.3", features = ["formatting"] }
 blurhash = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-aes-gcm = "0.10"
-webrtc = "0.12.0"
+aes-gcm = { version = "0.10", features = ["std"] }
+webrtc = { version = "0.21.1", default-features = false, features = ["runtime-tokio", "crypto-aws-lc-rs"] }
 hkdf = "0.12"
 pqcrypto-kyber = "0.7"
 pqcrypto-traits = "0.3"
 subtle = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+# Mobile sandboxes do not expose the desktop OpenSSL CA directories.
+# Add Mozilla trust roots for verified HTTPS/WSS; never bypass certificates.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }

@@ -391,7 +391,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _relayDiscoveryError = null;
     });
     try {
-      final snapshot = await RelayDirectoryService.fetch();
+      final snapshot = await RelayDirectoryService.refreshOrFallback();
       final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
       final found = <_RelayOption>[];
       for (var i = 0; i < latencies.length; i++) {

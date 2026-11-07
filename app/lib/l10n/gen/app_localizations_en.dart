@@ -59,6 +59,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get disabled => 'Disabled';
 
   @override
+  String get coreAuthErrorTitle => 'Core authentication failed';
+
+  @override
+  String get coreAuthErrorHint =>
+      'Check the internal token in Security settings. If a separate development core is running, use the same token or stop it and start the core from the app.';
+
+  @override
   String get networkErrorTitle => 'Network issue';
 
   @override
@@ -1281,11 +1288,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get telemetrySectionTitle => 'Diagnostics';
 
   @override
-  String get telemetryEnabled => 'Anonymous telemetry';
+  String get telemetryEnabled => 'Local diagnostics';
 
   @override
   String get telemetryEnabledHint =>
-      'Share minimal diagnostics (errors and performance) to improve stability. No personal content.';
+      'Save diagnostic errors and performance information on this device. Nothing is uploaded automatically; you can export the log manually.';
 
   @override
   String get telemetryMonitoringEnabled => 'Client monitoring (debug/staging)';
@@ -2430,4 +2437,50 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get corruptConfigHint =>
       'The configuration and its backup could not be read. Restore a valid copy of the file, then Retry. Existing data is preserved.';
+
+  @override
+  String get clientUpdatesTitle => 'Client updates';
+
+  @override
+  String get clientUpdatesHint =>
+      'Check official releases. Downloads are verified before installation.';
+
+  @override
+  String get clientUpdatesCheck => 'Check for updates';
+
+  @override
+  String clientUpdatesAvailable(String version) {
+    return 'Version $version is available';
+  }
+
+  @override
+  String clientUpdatesVersion(String version) {
+    return 'Installed version: $version';
+  }
+
+  @override
+  String get clientUpdatesCurrent => 'No newer stable release is available.';
+
+  @override
+  String get clientUpdatesRelease => 'View release';
+
+  @override
+  String get clientUpdatesDownload => 'Download verified update';
+
+  @override
+  String get clientUpdatesVerified => 'Download complete. SHA256 verified.';
+
+  @override
+  String get clientUpdatesManual =>
+      'Close Fedi3 before replacing the installed application with the new package. Keep your profile data. On mobile, use your installation source or store.';
+
+  @override
+  String get clientUpdatesInstall => 'Install AppImage update';
+
+  @override
+  String get clientUpdatesFolder => 'Open download folder';
+
+  @override
+  String get clientUpdatesRestart =>
+      'Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix.';
 }

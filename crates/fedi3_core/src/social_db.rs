@@ -1606,8 +1606,7 @@ impl SocialDb {
             return Ok(std::collections::HashSet::new());
         }
         let conn = self.connect()?;
-        let placeholders = std::iter::repeat("?")
-            .take(object_ids.len())
+        let placeholders = std::iter::repeat_n("?", object_ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

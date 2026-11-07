@@ -51,6 +51,15 @@ class NotificationService {
     }
   }
 
+  static Future<void> requestPermission() async {
+    if (Platform.isAndroid) {
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    }
+  }
+
   static Future<void> showChatNotification(
       {required String title, required String body, String? threadId}) async {
     if (!_ready) return;
@@ -71,7 +80,7 @@ class NotificationService {
         final allowed = await _plugin
             .resolvePlatformSpecificImplementation<
                 AndroidFlutterLocalNotificationsPlugin>()
-            ?.requestNotificationsPermission();
+            ?.areNotificationsEnabled();
         if (allowed == false) return;
       }
       await _plugin.show(1001, title, body, details, payload: threadId);

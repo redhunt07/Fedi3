@@ -377,7 +377,6 @@ pub(super) fn save_snapshot((path, bytes): (PathBuf, Vec<u8>)) -> Result<()> {
 #[derive(Clone, Default)]
 pub(super) struct ExchangeCodec;
 
-#[async_trait]
 impl request_response::Codec for ExchangeCodec {
     type Protocol = libp2p::StreamProtocol;
     type Request = Vec<SignedContact>;
@@ -453,8 +452,7 @@ async fn write_contacts<T: futures_util::AsyncWrite + Unpin + Send>(
 }
 
 pub(super) fn private_kad(peer: PeerId) -> kad::Behaviour<kad::store::MemoryStore> {
-    let mut cfg = kad::Config::default();
-    cfg.set_protocol_names(vec![libp2p::StreamProtocol::new(PRIVATE_DHT)]);
+    let cfg = kad::Config::new(libp2p::StreamProtocol::new(PRIVATE_DHT));
     kad::Behaviour::with_config(peer, kad::store::MemoryStore::new(peer), cfg)
 }
 
