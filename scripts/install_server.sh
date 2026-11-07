@@ -318,7 +318,7 @@ resolve_deploy_dir() {
 }
 
 # --------------------------------------------------------------------------- docker
-install_docker_debian() {
+setup_docker_repo_debian() {
   local repo codename arch
   if [[ "$OS_ID" == "ubuntu" || " $OS_LIKE " == *" ubuntu "* ]]; then
     repo="ubuntu"
@@ -343,8 +343,33 @@ install_docker_debian() {
   printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
     "$arch" "$repo" "$codename" | as_root tee /etc/apt/sources.list.d/docker.list >/dev/null
   as_root apt-get update -qq
+}
+
+install_docker_debian() {
+  setup_docker_repo_debian
   as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
+install_compose_binary() {
+  local arch version tmp target
+  case "$(uname -m)" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+    armv7l|armhf) arch="armv7" ;;
+    ppc64le) arch="ppc64le" ;;
+    s390x) arch="s390x" ;;
+    *) die "Unsupported architecture for the Docker Compose binary: $(uname -m)" ;;
+  esac
+  version="${COMPOSE_FALLBACK_VERSION:-v2.29.7}"
+  target="/usr/local/lib/docker/cli-plugins/docker-compose"
+  info "Installing standalone Docker Compose $version ($arch)"
+  as_root install -d "$(dirname "$target")"
+  tmp="$(mktemp)"
+  curl -fsSL "https://github.com/docker/compose/releases/download/${version}/docker-compose-linux-${arch}" -o "$tmp" \
+    || die "Could not download Docker Compose $version"
+  as_root install -m 0755 "$tmp" "$target"
+  rm -f "$tmp"
 }
 
 install_docker_arch() {
@@ -382,10 +407,14 @@ ensure_docker() {
     warn "Docker Compose plugin not found; installing it"
     case "$FAMILY" in
       debian)
+        setup_docker_repo_debian
         if ! as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
           docker-compose-plugin docker-buildx-plugin; then
-          warn "docker-compose-plugin not available; trying docker-compose-v2"
-          as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2
+          warn "Docker Compose plugin not available from apt; using the standalone binary"
+          install_compose_binary
+        elif ! docker compose version >/dev/null 2>&1; then
+          warn "Docker Compose plugin installed but not usable; using the standalone binary"
+          install_compose_binary
         fi
         ;;
       arch)
