@@ -27,6 +27,10 @@ The deployment uses `docker-compose.yml` in the directory
 - `p2p_infra`: libp2p node with relay server, Kademlia and mailbox.
 - `turn`: coturn with credentials, external IP and UDP range.
 
+Compose services are gated by profiles. This deployment sets
+`COMPOSE_PROFILES=relay,caddy,p2p,turn,search` in `.env`; without that value a
+plain `docker compose up -d` starts no service.
+
 Ports open in `firewalld`: `22`, `80`, `443`, `4001/tcp`, `4001/udp`,
 `3478/tcp`, `3478/udp`, `49152-65535/udp`.
 

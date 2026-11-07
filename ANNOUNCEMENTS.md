@@ -28,6 +28,25 @@ clients need a manual first upgrade to receive the new updater.
 Details: [updates](docs/updates.md), [compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md),
 [security policy](SECURITY.md) and [changelog](CHANGELOG.md).
 
+## 2026-11-07 — YunoHost relay installation
+
+`scripts/install_yunohost.sh` installs a full Fedi3 node on YunoHost without
+conflicting with the existing nginx on ports 80/443. It runs the server
+installer with an external TLS proxy, writes a YunoHost nginx location with
+WebSocket support and SSO bypass, opens 4001/tcp and 4001/udp in the YunoHost
+firewall, and verifies the public HTTPS endpoint. A full node contributes the
+relay to the HTTP relay mesh and runs the libp2p mailbox/circuit-relay
+infrastructure. See `docs/deploy_yunohost.md`.
+
+## 2026-11-07 — One-command server installer
+
+A new installer sets up a Fedi3 server on Debian/Ubuntu derivatives and Arch
+derivatives. It offers three modes: relay + P2P infrastructure, relay only, or
+P2P only, with optional TURN and Meilisearch. The script installs Docker,
+checks DNS/ports, writes `.env` and `relay-secrets.txt` with random secrets,
+selects the Compose profile, starts the stack and verifies the health checks.
+See `docs/deploy_server.md`.
+
 ## 2026-11-07 — Relay directory and latency ranking
 
 Relay discovery no longer depends on a single bootstrap relay:

@@ -1,3 +1,24 @@
+# Fedi3 server stack.
+#
+# Components are grouped into Compose profiles so one checkout can serve three
+# installation modes:
+#   relay   relay + PostgreSQL + Dragonfly (ActivityPub federation)
+#   caddy   TLS termination and reverse proxy (not used behind YunoHost)
+#   p2p     libp2p infrastructure node (circuit relay, Kademlia, mailbox)
+#   turn    coturn for WebRTC audio/video calls
+#   search  Meilisearch (optional; the default search backend is PostgreSQL)
+#
+# scripts/install_server.sh writes COMPOSE_PROFILES into .env, so a plain
+# `docker compose up -d --build` starts exactly the selected mode. Every
+# service belongs to a profile, so an empty or unset COMPOSE_PROFILES starts
+# no service; pass --profile relay / --profile p2p / --profile turn / --profile
+# search explicitly when running Compose by hand.
+#
+# P2P-only example:  COMPOSE_PROFILES=p2p
+# Relay-only example: COMPOSE_PROFILES=relay,caddy
+# Full stack:         COMPOSE_PROFILES=relay,p2p,caddy (add turn/search if wanted)
+# External TLS proxy: COMPOSE_PROFILES=relay,p2p (YunoHost/nginx terminates TLS)
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -6,6 +27,7 @@ x-logging: &default-logging
 
 services:
   relay:
+    profiles: ["relay"]
     build:
       context: .
       dockerfile: deploy/relay/Dockerfile
@@ -96,14 +118,18 @@ services:
     mem_limit: 2g
     logging: *default-logging
     depends_on:
+      # Optional: a relay-only installation does not start the p2p profile.
+      # Compose skips this dependency when the p2p profile is disabled.
       p2p_infra:
         condition: service_started
+        required: false
       dragonfly:
         condition: service_healthy
       postgres:
         condition: service_healthy
 
   dragonfly:
+    profiles: ["relay"]
     image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
     restart: unless-stopped
     command:
@@ -122,6 +148,7 @@ services:
     logging: *default-logging
 
   postgres:
+    profiles: ["relay"]
     image: postgres:16
     restart: unless-stopped
     environment:
@@ -142,6 +169,7 @@ services:
     logging: *default-logging
 
   meilisearch:
+    profiles: ["search"]
     image: getmeili/meilisearch:v1.10
     restart: unless-stopped
     environment:
@@ -160,10 +188,14 @@ services:
     logging: *default-logging
 
   caddy:
+    profiles: ["caddy"]
     image: caddy:2
     restart: unless-stopped
     environment:
-      - FEDI3_DOMAIN=${FEDI3_DOMAIN:?set FEDI3_DOMAIN in .env}
+      # The installer validates the domain for relay modes. Keeping this
+      # optional lets a P2P-only .env leave it empty; Caddy still fails
+      # clearly if it is started without a domain.
+      - FEDI3_DOMAIN=${FEDI3_DOMAIN:-}
     ports:
       - "80:80"
       - "443:443"
@@ -177,8 +209,12 @@ services:
     depends_on:
       relay:
         condition: service_healthy
+        # Allows validating the caddy profile on its own; the installer always
+        # enables relay together with caddy.
+        required: false
 
   p2p_infra:
+    profiles: ["p2p"]
     stop_grace_period: 15s
     healthcheck:
       test: ["CMD", "/usr/local/bin/fedi3_p2p_infra", "--healthcheck"]
@@ -197,6 +233,7 @@ services:
       - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
       - FEDI3_P2P_EXTERNAL_ADDR=${FEDI3_P2P_EXTERNAL_ADDR:-}
+      - FEDI3_P2P_BOOTSTRAP=${FEDI3_P2P_BOOTSTRAP:-}
       - FEDI3_P2P_ENABLE_KAD_SERVER=true
       - FEDI3_P2P_RELAY_MAX_CIRCUITS=${FEDI3_P2P_RELAY_MAX_CIRCUITS:-64}
       - FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER=${FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER:-8}
@@ -221,6 +258,7 @@ services:
     logging: *default-logging
 
   turn:
+    profiles: ["turn"]
     image: instrumentisto/coturn:4.5.2
     restart: unless-stopped
     network_mode: host
@@ -240,7 +278,9 @@ services:
       - "--no-cli"
       - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
-      - "--external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP in .env}"
+      # Empty is accepted by coturn, but a public IP is required for clients
+      # behind NAT. scripts/install_server.sh detects and validates it.
+      - "--external-ip=${TURN_EXTERNAL_IP:-}"
       - "--min-port=${TURN_MIN_PORT:-49152}"
       - "--max-port=${TURN_MAX_PORT:-65535}"
       - "--lt-cred-mech"

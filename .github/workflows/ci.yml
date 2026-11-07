@@ -27,7 +27,7 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck python3-yaml
       - name: Check deployment scripts
-        run: shellcheck -x -P scripts scripts/lib/dotenv.sh scripts/backup_relay_pg.sh scripts/restore_relay_pg.sh scripts/backup_relay_media.sh scripts/restore_relay_media.sh scripts/relay_diagnose.sh
+        run: shellcheck -x -P scripts scripts/lib/dotenv.sh scripts/backup_relay_pg.sh scripts/restore_relay_pg.sh scripts/backup_relay_media.sh scripts/restore_relay_media.sh scripts/relay_diagnose.sh scripts/install_server.sh scripts/install_yunohost.sh
       - name: Validate deployment and OpenAPI contracts
         run: python3 scripts/tests/test_deploy_config.py
       - name: Validate release and update contract

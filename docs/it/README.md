@@ -13,6 +13,8 @@ in [`audit/`](audit/).
 
 ## Deploy e operazioni
 
+- [Installazione del server, Debian e Arch](deploy_server.md)
+- [Relay Fedi3 su YunoHost](deploy_yunohost.md)
 - [Deploy del relay](deploy_relay.md)
 - [Deploy su VPS](deploy_vps.md)
 - [Core locale e modalità P2P](deploy_core.md)

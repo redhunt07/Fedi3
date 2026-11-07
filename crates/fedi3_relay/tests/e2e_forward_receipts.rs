@@ -29,6 +29,7 @@ async fn live_forward_receipt_has_valid_relay_and_core_signatures() {
         runtime::start(CoreStartConfig {
             username: "alice".into(),
             domain: "127.0.0.1".into(),
+            public_base_url: relay.base_url(),
             relay_ws: relay.ws_url(""),
             relay_token: Some(token.into()),
             bind: format!("127.0.0.1:{port}"),
@@ -54,6 +55,15 @@ async fn live_forward_receipt_has_valid_relay_and_core_signatures() {
         assert!(Instant::now() < deadline, "core did not connect");
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
+    let disk_public = fedi3_protocol::crypto::rsa_public_pem(
+        &std::fs::read_to_string(dir.path().join("identity_private_key.pem")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        actor["publicKey"]["publicKeyPem"].as_str().unwrap(),
+        disk_public,
+        "actor key differs from core identity"
+    );
     // A rejected HTTP operation is still a verifiable handler acknowledgment;
     // it must never be presented as successful delivery or as a human read receipt.
     let response = client
