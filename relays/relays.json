@@ -1,6 +1,6 @@
 {
   "schema": "fedi3-relay-directory/v1",
-  "updated_at": "2026-11-07T12:00:00Z",
+  "updated_at": "2026-11-07T14:10:00Z",
   "relays": [
     {
       "url": "https://relay.fedi3.com",
@@ -9,6 +9,15 @@
       "operator": "Fedi3 project",
       "contact": "https://github.com/redhunt07/Fedi3/issues",
       "region": "global",
+      "added": "2026-11-07"
+    },
+    {
+      "url": "https://fedi3.redhunt07.ovh",
+      "ws": "wss://fedi3.redhunt07.ovh",
+      "name": "Fedi3 relay (redhunt07)",
+      "operator": "RedHunt07",
+      "contact": "https://github.com/redhunt07/Fedi3/issues",
+      "region": "eu",
       "added": "2026-11-07"
     }
   ]
