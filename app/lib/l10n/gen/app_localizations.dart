@@ -3263,13 +3263,13 @@ abstract class AppLocalizations {
   /// No description provided for @editAccountRelayPublicUrl.
   ///
   /// In en, this message translates to:
-  /// **'Relay public URL (https://relay.fedi3.com)'**
+  /// **'Relay public URL (https://relay.example.com)'**
   String get editAccountRelayPublicUrl;
 
   /// No description provided for @editAccountRelayWs.
   ///
   /// In en, this message translates to:
-  /// **'Relay WS (wss://relay.fedi3.com)'**
+  /// **'Relay WS (wss://relay.example.com)'**
   String get editAccountRelayWs;
 
   /// No description provided for @editAccountRegenerateInternal.

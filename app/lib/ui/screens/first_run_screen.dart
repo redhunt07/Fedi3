@@ -51,8 +51,7 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
     try {
       // Show the local copy immediately (cache or bundled asset), then refresh
       // from the network so a slow or offline GitHub does not block the screen.
-      var snapshot = await RelayDirectoryService.cached() ??
-          await RelayDirectoryService.bundled();
+      var snapshot = await RelayDirectoryService.cachedOrBundled();
       Object? fetchError;
       if (snapshot != null) {
         await _applySnapshot(snapshot);

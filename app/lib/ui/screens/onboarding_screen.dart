@@ -56,10 +56,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _customRelay = false;
   String? _formError;
   bool _importing = false;
-  static const List<String> _bootstrapRelays = [
-    'https://relay.fedi3.com',
-  ];
-
   bool _discovering = false;
   String? _relayDiscoveryError;
   final List<_RelayOption> _relayOptions = [];
@@ -181,7 +177,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         child: Text(context.l10n.onboardingRelayCustom),
                       ),
                     ),
-                  if (_customRelay || _relayOptions.isEmpty) ...[
+                  if (_customRelay ||
+                      _selectedRelay == null ||
+                      _relayOptions.isEmpty) ...[
                     _field(context.l10n.onboardingDomain, _domain),
                     _field(
                         context.l10n.onboardingRelayPublicUrl, _publicBaseUrl),
@@ -373,36 +371,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _applyRelayOption(opt);
       }
     }
-    // Built-in bootstrap keeps create mode usable before the directory loads.
-    for (final url in _bootstrapRelays) {
-      final opt = _relayOptionFromParts(url, null);
-      if (opt != null && set.add(opt.publicUrl)) {
-        _relayOptions.add(opt);
-      }
-    }
-    if (_selectedRelay == null && _relayOptions.isNotEmpty) {
-      _selectedRelay = _relayOptions.first;
-      _applyRelayOption(_selectedRelay!);
-    }
     _loadCachedDirectory(set);
   }
 
   Future<void> _loadCachedDirectory(Set<String> seen) async {
-    final snapshot = await RelayDirectoryService.cached() ??
-        await RelayDirectoryService.bundled();
+    final snapshot = await RelayDirectoryService.cachedOrBundled();
     if (snapshot == null || !mounted) return;
     final cached = snapshot.entries
         .map(_relayOptionFromEntry)
         .where((opt) => seen.add(opt.publicUrl))
         .toList(growable: false);
     if (cached.isEmpty) return;
-    setState(() {
-      _relayOptions.addAll(cached);
-      if (_selectedRelay == null) {
-        _selectedRelay = _relayOptions.first;
-        _applyRelayOption(_selectedRelay!);
-      }
-    });
+    setState(() => _relayOptions.addAll(cached));
   }
 
   Future<void> _discoverRelays() async {
@@ -449,28 +429,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _domain.text = relay.domain;
     _customRelay = false;
     _autofillNetworkingDefaults(force: true);
-  }
-
-  _RelayOption? _relayOptionFromParts(String base, String? ws) {
-    final uri = Uri.tryParse(base);
-    if (uri == null || uri.host.isEmpty) return null;
-    final scheme = uri.scheme.isEmpty ? 'https' : uri.scheme;
-    final publicUrl = uri
-        .replace(scheme: scheme)
-        .toString()
-        .trim()
-        .replaceAll(RegExp(r'/$'), '');
-    final wsUrl = (ws != null && ws.trim().isNotEmpty)
-        ? ws.trim().replaceAll(RegExp(r'/$'), '')
-        : (scheme == 'https'
-            ? publicUrl.replaceFirst('https://', 'wss://')
-            : publicUrl.replaceFirst('http://', 'ws://'));
-    return _RelayOption(
-      publicUrl: publicUrl,
-      wsUrl: wsUrl,
-      domain: uri.host,
-      label: uri.host,
-    );
   }
 
   _RelayOption _relayOptionFromEntry(RelayDirectoryEntry entry) {

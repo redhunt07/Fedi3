@@ -146,6 +146,20 @@ class RelayDirectoryService {
     }
   }
 
+  /// Returns the freshest locally available directory: the cached copy when
+  /// it is newer than the bundled asset, otherwise the bundled copy.
+  static Future<RelayDirectorySnapshot?> cachedOrBundled() async {
+    final bundled = await RelayDirectoryService.bundled();
+    final cached = await RelayDirectoryService.cached();
+    if (cached == null) return bundled;
+    if (bundled == null) return cached;
+    final cachedAt = DateTime.tryParse(cached.updatedAt ?? '');
+    final bundledAt = DateTime.tryParse(bundled.updatedAt ?? '');
+    if (cachedAt == null) return bundled;
+    if (bundledAt == null) return cached;
+    return cachedAt.isAfter(bundledAt) ? cached : bundled;
+  }
+
   /// Probes every relay and returns them ranked from fastest to slowest.
   /// Unreachable relays are kept at the end so users still see them.
   static Future<List<RelayLatency>> probeAll(

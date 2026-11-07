@@ -179,8 +179,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
         snapshot = await RelayDirectoryService.fetch();
       } catch (e) {
         fetchError = e;
-        snapshot = await RelayDirectoryService.cached() ??
-            await RelayDirectoryService.bundled();
+        snapshot = await RelayDirectoryService.cachedOrBundled();
       }
       if (snapshot == null) {
         throw fetchError ?? StateError('relay directory unavailable');
