@@ -113,6 +113,31 @@ async fn readyz_reports_media_failure() {
 }
 
 #[tokio::test]
+async fn self_move_is_cleared_instead_of_causing_a_redirect_loop() {
+    let relay = TestRelay::start().await;
+    insert_users(&relay, &["alice".to_string()]);
+    let self_actor = local_actor_url(&relay, "alice");
+    let resp = relay
+        .client
+        .post(format!("{}/_fedi3/relay/move", relay.base_url()))
+        .header("Authorization", relay.admin_bearer())
+        .json(&json!({"username": "alice", "moved_to_actor": self_actor}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let count: i64 = relay
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM user_moves WHERE username='alice'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "self move must be stored as no move");
+}
+
+#[tokio::test]
 async fn admin_token_authentication() {
     let relay = TestRelay::start().await;
     let ok = relay

@@ -6732,6 +6732,16 @@ async fn relay_move_post(
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
 
+    // A move to the same actor would make every collection fetch redirect to
+    // itself forever; treat it as clearing the move.
+    let self_actor = format!("{}/users/{}", relay_self_base(&state.cfg), user);
+    if moved_to.trim_end_matches('/') == self_actor.trim_end_matches('/') {
+        if let Err(e) = db.clear_user_move(&user).await {
+            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+        }
+        return (StatusCode::OK, "ok").into_response();
+    }
+
     if let Err(e) = db.set_user_move(&user, &moved_to).await {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
