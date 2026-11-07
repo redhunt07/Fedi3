@@ -826,6 +826,69 @@ class AppLocalizationsIt extends AppLocalizations {
       'Impossibile caricare l\'anteprima relay.';
 
   @override
+  String get relayDirectoryTitle => 'Directory relay';
+
+  @override
+  String get relayDirectoryHint =>
+      'Relay pubblicati in relays/relays.json, ordinati per la latenza misurata da questo dispositivo.';
+
+  @override
+  String get relayDirectoryRefresh => 'Aggiorna';
+
+  @override
+  String get relayDirectoryMeasuring => 'Misura della latenza…';
+
+  @override
+  String get relayDirectoryEmpty => 'Nessun relay disponibile';
+
+  @override
+  String relayDirectoryError(String error) {
+    return 'Directory non disponibile: $error';
+  }
+
+  @override
+  String get relayDirectoryAddYours => 'Aggiungi il tuo relay';
+
+  @override
+  String get relayDirectoryUse => 'Usa';
+
+  @override
+  String relayDirectoryRank(int rank) {
+    return '#$rank';
+  }
+
+  @override
+  String get relayDirectoryTapHint => 'Tocca un relay per usarlo.';
+
+  @override
+  String relayLatencyMs(int ms) {
+    return '$ms ms';
+  }
+
+  @override
+  String get relayLatencyOffline => 'non raggiungibile';
+
+  @override
+  String get relayLatencyTlsMismatch => 'host TLS non corrispondente';
+
+  @override
+  String get relayLatencyTlsCertificate => 'certificato TLS non valido';
+
+  @override
+  String get relayLatencyTimeout => 'timeout';
+
+  @override
+  String get relayLatencyHttpError => 'errore HTTP';
+
+  @override
+  String get relayLatencyNetworkError => 'errore di rete';
+
+  @override
+  String relayLatencyMeasuredAt(String time) {
+    return 'Misurata alle $time';
+  }
+
+  @override
   String get onboardingCreateTitle => 'Crea account';
 
   @override
@@ -1327,6 +1390,13 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get networkingRelaysEmpty => 'Nessun relay';
+
+  @override
+  String get networkingRelayDirectoryTitle => 'Directory relay condivisa';
+
+  @override
+  String get networkingRelayDirectoryHint =>
+      'Ordinati per latenza misurata da questo dispositivo. Aggiorna per riprovare.';
 
   @override
   String get relayAdminTitle => 'Relay admin';

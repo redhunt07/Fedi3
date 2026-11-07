@@ -345,6 +345,52 @@
   "firstRunRelayPreviewPeers": "Peer",
   "firstRunRelayPreviewEmpty": "Nessun dato disponibile",
   "firstRunRelayPreviewError": "Impossibile caricare l'anteprima relay.",
+  "relayDirectoryTitle": "Directory relay",
+  "relayDirectoryHint": "Relay pubblicati in relays/relays.json, ordinati per la latenza misurata da questo dispositivo.",
+  "relayDirectoryRefresh": "Aggiorna",
+  "relayDirectoryMeasuring": "Misura della latenza…",
+  "relayDirectoryEmpty": "Nessun relay disponibile",
+  "relayDirectoryError": "Directory non disponibile: {error}",
+  "@relayDirectoryError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "relayDirectoryAddYours": "Aggiungi il tuo relay",
+  "relayDirectoryUse": "Usa",
+  "relayDirectoryRank": "#{rank}",
+  "@relayDirectoryRank": {
+    "placeholders": {
+      "rank": {
+        "type": "int"
+      }
+    }
+  },
+  "relayDirectoryTapHint": "Tocca un relay per usarlo.",
+  "relayLatencyMs": "{ms} ms",
+  "@relayLatencyMs": {
+    "placeholders": {
+      "ms": {
+        "type": "int"
+      }
+    }
+  },
+  "relayLatencyOffline": "non raggiungibile",
+  "relayLatencyTlsMismatch": "host TLS non corrispondente",
+  "relayLatencyTlsCertificate": "certificato TLS non valido",
+  "relayLatencyTimeout": "timeout",
+  "relayLatencyHttpError": "errore HTTP",
+  "relayLatencyNetworkError": "errore di rete",
+  "relayLatencyMeasuredAt": "Misurata alle {time}",
+  "@relayLatencyMeasuredAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
   "onboardingCreateTitle": "Crea account",
   "onboardingCreateIntro": "Compila i campi necessari. Il core verrà avviato automaticamente dopo il salvataggio.",
   "onboardingLoginTitle": "Login",
@@ -606,6 +652,8 @@
     }
   },
   "networkingRelaysEmpty": "Nessun relay",
+  "networkingRelayDirectoryTitle": "Directory relay condivisa",
+  "networkingRelayDirectoryHint": "Ordinati per latenza misurata da questo dispositivo. Aggiorna per riprovare.",
   "relayAdminTitle": "Relay admin",
   "relayAdminHint": "Gestisci utenti relay e audit",
   "relayAdminRelayWsLabel": "Relay WS",

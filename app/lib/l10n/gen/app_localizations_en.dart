@@ -825,6 +825,69 @@ class AppLocalizationsEn extends AppLocalizations {
   String get firstRunRelayPreviewError => 'Failed to load relay preview.';
 
   @override
+  String get relayDirectoryTitle => 'Relay directory';
+
+  @override
+  String get relayDirectoryHint =>
+      'Relays published in relays/relays.json, ranked by the latency measured from this device.';
+
+  @override
+  String get relayDirectoryRefresh => 'Refresh';
+
+  @override
+  String get relayDirectoryMeasuring => 'Measuring relay latency…';
+
+  @override
+  String get relayDirectoryEmpty => 'No relays available';
+
+  @override
+  String relayDirectoryError(String error) {
+    return 'Directory unavailable: $error';
+  }
+
+  @override
+  String get relayDirectoryAddYours => 'Add your relay';
+
+  @override
+  String get relayDirectoryUse => 'Use';
+
+  @override
+  String relayDirectoryRank(int rank) {
+    return '#$rank';
+  }
+
+  @override
+  String get relayDirectoryTapHint => 'Tap a relay to use it.';
+
+  @override
+  String relayLatencyMs(int ms) {
+    return '$ms ms';
+  }
+
+  @override
+  String get relayLatencyOffline => 'unreachable';
+
+  @override
+  String get relayLatencyTlsMismatch => 'TLS host mismatch';
+
+  @override
+  String get relayLatencyTlsCertificate => 'invalid TLS certificate';
+
+  @override
+  String get relayLatencyTimeout => 'timeout';
+
+  @override
+  String get relayLatencyHttpError => 'HTTP error';
+
+  @override
+  String get relayLatencyNetworkError => 'network error';
+
+  @override
+  String relayLatencyMeasuredAt(String time) {
+    return 'Measured at $time';
+  }
+
+  @override
   String get onboardingCreateTitle => 'Create account';
 
   @override
@@ -1323,6 +1386,13 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get networkingRelaysEmpty => 'No relays yet';
+
+  @override
+  String get networkingRelayDirectoryTitle => 'Shared relay directory';
+
+  @override
+  String get networkingRelayDirectoryHint =>
+      'Ranked by latency measured from this device. Refresh to probe again.';
 
   @override
   String get relayAdminTitle => 'Relay admin';

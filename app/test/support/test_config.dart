@@ -10,6 +10,7 @@ import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/state/config_store.dart';
 import 'package:fedi3/state/prefs_store.dart';
+import 'package:fedi3/state/relay_directory_store.dart';
 
 import 'fake_core.dart';
 
@@ -72,10 +73,12 @@ AppState buildTestAppState({
 void useTempStores(Directory dir) {
   ConfigStore.useDirectoryForTesting(dir);
   PrefsStore.useDirectoryForTesting(dir);
+  RelayDirectoryStore.useDirectoryForTesting(dir);
 }
 
 /// Clears the test overrides.
 void resetStoreOverrides() {
   ConfigStore.useDirectoryForTesting(null);
   PrefsStore.useDirectoryForTesting(null);
+  RelayDirectoryStore.useDirectoryForTesting(null);
 }

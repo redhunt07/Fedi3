@@ -1000,6 +1000,84 @@ async fn build_meili(cfg: &RelayConfig, _http: &reqwest::Client) -> Option<Arc<M
     Some(Arc::new(search))
 }
 
+const DEFAULT_RELAY_DIRECTORY_URLS: &[&str] = &[
+    "https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json",
+    "https://cdn.jsdelivr.net/gh/redhunt07/Fedi3@main/relays/relays.json",
+];
+
+/// Directory sources: `FEDI3_RELAY_DIRECTORY_URLS` overrides the defaults; an
+/// explicitly empty value disables directory discovery.
+fn relay_directory_urls() -> Vec<String> {
+    match std::env::var("FEDI3_RELAY_DIRECTORY_URLS") {
+        Ok(value) => value
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => DEFAULT_RELAY_DIRECTORY_URLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+/// Extracts relay base URLs from a relay directory document, skipping the
+/// relay itself and malformed entries.
+fn parse_directory_seeds(value: &serde_json::Value, self_url: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Some(relays) = value.get("relays").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for item in relays {
+        let Some(base) = item.get("url").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let base = base.trim().trim_end_matches('/');
+        if base.is_empty() || !(base.starts_with("https://") || base.starts_with("http://")) {
+            continue;
+        }
+        if let Some(self_url) = self_url {
+            if self_url.trim().trim_end_matches('/') == base {
+                continue;
+            }
+        }
+        if !out.iter().any(|u| u == base) {
+            out.push(base.to_string());
+        }
+    }
+    out
+}
+
+/// Best-effort: seed the relay mesh from the shared directory when no manual
+/// seed relays are configured.
+async fn fetch_directory_seeds(http: &reqwest::Client, self_url: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for url in relay_directory_urls() {
+        let resp = match http.get(&url).timeout(Duration::from_secs(8)).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!(url = %url, "relay directory fetch failed: {e}");
+                continue;
+            }
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(value) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        for seed in parse_directory_seeds(&value, self_url) {
+            if !out.contains(&seed) {
+                out.push(seed);
+            }
+        }
+        if !out.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -1009,7 +1087,7 @@ async fn main() {
         )
         .init();
 
-    let cfg = load_config().unwrap_or_else(|e| {
+    let mut cfg = load_config().unwrap_or_else(|e| {
         eprintln!("fedi3_relay config error: {e:#}");
         std::process::exit(2);
     });
@@ -1045,6 +1123,13 @@ async fn main() {
         .redirect(peer_fetch_redirect_policy(cfg.allow_private_remote_fetch))
         .build()
         .expect("http client init");
+    if cfg.seed_relays.is_empty() {
+        let seeds = fetch_directory_seeds(&http, cfg.public_url.as_deref()).await;
+        if !seeds.is_empty() {
+            info!("relay directory: discovered {} seed relays", seeds.len());
+            cfg.seed_relays = seeds;
+        }
+    }
     let media_cfg = media_store::MediaConfig {
         backend: cfg.media_backend.clone(),
         local_dir: cfg.media_dir.clone(),
@@ -10228,5 +10313,35 @@ mod tests {
         assert!(schema.contains("relay_note_tags_tag_tsv_sync"));
         assert!(schema.contains("CREATE TRIGGER relay_notes_search_tsv_tr"));
         assert!(schema.contains("CREATE TRIGGER relay_note_tags_tag_tsv_tr"));
+    }
+
+    #[test]
+    fn parses_directory_seeds_and_skips_self_and_invalid_entries() {
+        let value = serde_json::json!({
+            "schema": "fedi3-relay-directory/v1",
+            "relays": [
+                {"url": "https://self.example.test/"},
+                {"url": "https://relay-a.example.test"},
+                {"url": "ftp://ignored.example.test"},
+                {"url": "https://relay-a.example.test"},
+                {"url": "https://relay-b.example.test"}
+            ]
+        });
+        let seeds = parse_directory_seeds(&value, Some("https://self.example.test"));
+        assert_eq!(
+            seeds,
+            vec![
+                "https://relay-a.example.test".to_string(),
+                "https://relay-b.example.test".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_directory_sources_are_https() {
+        assert!(!DEFAULT_RELAY_DIRECTORY_URLS.is_empty());
+        for url in DEFAULT_RELAY_DIRECTORY_URLS {
+            assert!(url.starts_with("https://"));
+        }
     }
 }

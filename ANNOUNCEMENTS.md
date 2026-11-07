@@ -4,6 +4,20 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-07 — Relay directory and latency ranking
+
+Relay discovery no longer depends on a single bootstrap relay:
+
+- `relays/relays.json` is a public, Git-hosted list of relays that anyone can
+  extend with a pull request; CI validates every entry.
+- The client reads the list, probes each relay from the device and ranks them
+  by measured latency in milliseconds, with explicit TLS, timeout and network
+  failures.
+- The Rust core reads the same list during relay sync, and the relay service can
+  seed its HTTP mesh from it when no manual seeds are configured.
+- Cached directory copies keep the first-run screen usable when GitHub is
+  unreachable.
+
 ## 2026-11-07 — Security, reliability and repository update
 
 This update hardens federation, the relay and the client without changing the

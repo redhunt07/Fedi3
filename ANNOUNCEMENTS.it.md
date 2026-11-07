@@ -4,6 +4,19 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-07 — Directory relay e classifica per latenza
+
+La scoperta dei relay non dipende più da un singolo relay di bootstrap:
+
+- `relays/relays.json` è una lista pubblica su Git che chiunque può estendere con
+  una pull request; la CI valida ogni voce.
+- Il client legge la lista, misura ogni relay dal dispositivo e li ordina per
+  latenza in millisecondi, con errori TLS, timeout e rete espliciti.
+- Il core Rust legge la stessa lista durante il sync relay, e il servizio relay
+  può inizializzare la mesh HTTP da essa quando non ci sono seed manuali.
+- Le copie in cache della directory mantengono utilizzabile la schermata
+  iniziale quando GitHub non è raggiungibile.
+
 ## 2026-11-07 — Aggiornamento di sicurezza, affidabilità e repository
 
 Questo aggiornamento rafforza federazione, relay e client senza cambiare il

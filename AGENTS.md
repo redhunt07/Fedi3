@@ -32,6 +32,7 @@ workspace plus a Flutter app and deployment assets.
 - `crates/fedi3_protocol/`: shared protocol types.
 - `crates/fedi3_p2p_infra/`: P2P infra mailbox/peer services.
 - `deploy/`: Dockerfiles, compose, entrypoints, infra assets.
+- `relays/`: shared relay directory (`relays.json`) and contribution guide.
 - `scripts/`: build and ops scripts (core build, relay smoke test, backups).
 - `dist/`, `target/`: build outputs. Avoid editing.
 - `.env.example`: relay config template (used by docker compose).
@@ -73,6 +74,7 @@ flutter run
 - `docs/it/`: Italian counterparts of every document.
 - `docs/audit/`: historical audit reports and remediation plans.
 - `docs/openapi.yaml`: OpenAPI 3.1 specification for core and relay.
+- `docs/relay_directory.md`: shared relay directory, latency ranking and discovery.
 
 ## Testing
 - Flutter: `app/test/` (run via `flutter test` in `app/`).

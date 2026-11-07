@@ -1580,6 +1580,114 @@ abstract class AppLocalizations {
   /// **'Failed to load relay preview.'**
   String get firstRunRelayPreviewError;
 
+  /// No description provided for @relayDirectoryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay directory'**
+  String get relayDirectoryTitle;
+
+  /// No description provided for @relayDirectoryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Relays published in relays/relays.json, ranked by the latency measured from this device.'**
+  String get relayDirectoryHint;
+
+  /// No description provided for @relayDirectoryRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get relayDirectoryRefresh;
+
+  /// No description provided for @relayDirectoryMeasuring.
+  ///
+  /// In en, this message translates to:
+  /// **'Measuring relay latency…'**
+  String get relayDirectoryMeasuring;
+
+  /// No description provided for @relayDirectoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No relays available'**
+  String get relayDirectoryEmpty;
+
+  /// No description provided for @relayDirectoryError.
+  ///
+  /// In en, this message translates to:
+  /// **'Directory unavailable: {error}'**
+  String relayDirectoryError(String error);
+
+  /// No description provided for @relayDirectoryAddYours.
+  ///
+  /// In en, this message translates to:
+  /// **'Add your relay'**
+  String get relayDirectoryAddYours;
+
+  /// No description provided for @relayDirectoryUse.
+  ///
+  /// In en, this message translates to:
+  /// **'Use'**
+  String get relayDirectoryUse;
+
+  /// No description provided for @relayDirectoryRank.
+  ///
+  /// In en, this message translates to:
+  /// **'#{rank}'**
+  String relayDirectoryRank(int rank);
+
+  /// No description provided for @relayDirectoryTapHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap a relay to use it.'**
+  String get relayDirectoryTapHint;
+
+  /// No description provided for @relayLatencyMs.
+  ///
+  /// In en, this message translates to:
+  /// **'{ms} ms'**
+  String relayLatencyMs(int ms);
+
+  /// No description provided for @relayLatencyOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'unreachable'**
+  String get relayLatencyOffline;
+
+  /// No description provided for @relayLatencyTlsMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'TLS host mismatch'**
+  String get relayLatencyTlsMismatch;
+
+  /// No description provided for @relayLatencyTlsCertificate.
+  ///
+  /// In en, this message translates to:
+  /// **'invalid TLS certificate'**
+  String get relayLatencyTlsCertificate;
+
+  /// No description provided for @relayLatencyTimeout.
+  ///
+  /// In en, this message translates to:
+  /// **'timeout'**
+  String get relayLatencyTimeout;
+
+  /// No description provided for @relayLatencyHttpError.
+  ///
+  /// In en, this message translates to:
+  /// **'HTTP error'**
+  String get relayLatencyHttpError;
+
+  /// No description provided for @relayLatencyNetworkError.
+  ///
+  /// In en, this message translates to:
+  /// **'network error'**
+  String get relayLatencyNetworkError;
+
+  /// No description provided for @relayLatencyMeasuredAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Measured at {time}'**
+  String relayLatencyMeasuredAt(String time);
+
   /// No description provided for @onboardingCreateTitle.
   ///
   /// In en, this message translates to:
@@ -2479,6 +2587,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No relays yet'**
   String get networkingRelaysEmpty;
+
+  /// No description provided for @networkingRelayDirectoryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Shared relay directory'**
+  String get networkingRelayDirectoryTitle;
+
+  /// No description provided for @networkingRelayDirectoryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Ranked by latency measured from this device. Refresh to probe again.'**
+  String get networkingRelayDirectoryHint;
 
   /// No description provided for @relayAdminTitle.
   ///

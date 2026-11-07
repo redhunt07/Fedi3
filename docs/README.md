@@ -18,6 +18,7 @@ counterpart under [`it/`](it/README.md). Historical audit reports are kept under
 - [Local core and P2P mode](deploy_core.md)
 - [Backup and restore](ops_backup_restore.md)
 - [Relay sync API](relay_sync_api.md)
+- [Relay directory](relay_directory.md)
 - [OpenAPI specification](openapi.yaml)
 
 ## Architecture and protocol

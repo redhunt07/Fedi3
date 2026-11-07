@@ -55,6 +55,20 @@ a matching check in `scripts/tests/`.
 - Keep the FFI boundary panic-safe (`panic = "unwind"` is required by
   `catch_unwind`).
 
+## Adding your relay
+
+Relays are discovered through the shared directory in
+[`relays/relays.json`](relays/relays.json). If you run a public Fedi3 relay:
+
+1. Verify HTTPS with a valid certificate and `GET /healthz` returning `200 ok`.
+2. Add one entry to `relays/relays.json` and update `updated_at`.
+3. Run `python3 scripts/tests/test_relay_directory.py`.
+4. Open a pull request titled `relay: add <hostname>`.
+
+The relay token is not stored in the directory: each relay issues tokens to its
+users. See [`relays/README.md`](relays/README.md) and
+[`docs/relay_directory.md`](docs/relay_directory.md) for the full rules.
+
 ## Network responsibility
 
 Any change affecting protocol, federation or P2P behavior must be documented
