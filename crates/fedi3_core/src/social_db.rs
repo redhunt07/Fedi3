@@ -4094,6 +4094,20 @@ impl SocialDb {
             .map_err(Into::into)
     }
 
+    /// Drops `self` entries left behind when the configured relay changes.
+    pub fn remove_stale_self_relays(&self, current_base: &str) -> Result<()> {
+        let base = current_base.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Ok(());
+        }
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM relay_registry WHERE source='self' AND relay_base_url<>?1",
+            params![base],
+        )?;
+        Ok(())
+    }
+
     pub fn remove_relay_entry(&self, base_url: &str) -> Result<()> {
         let base = base_url.trim().trim_end_matches('/');
         if base.is_empty() {
@@ -4863,6 +4877,41 @@ mod hashtag_tests {
             .list_suggested_actor_ids(&["https://a.test/users/a".to_string()], 10)
             .expect("suggested");
         assert_eq!(suggested, vec!["https://a.test/users/b".to_string()]);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod relay_registry_tests {
+    use super::*;
+
+    #[test]
+    fn switching_relay_prunes_stale_self_entries() {
+        let path = std::env::temp_dir().join(format!(
+            "fedi3_relay_registry_test_{}_{}.db",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = SocialDb::open(&path).expect("open db");
+        db.upsert_relay_entry("https://old.example", Some("wss://old.example"), "self")
+            .expect("old self");
+        db.upsert_relay_entry("https://peer.example", None, "peer")
+            .expect("peer");
+        db.upsert_relay_entry("https://new.example", None, "self")
+            .expect("new self");
+        db.remove_stale_self_relays("https://new.example")
+            .expect("prune");
+        let entries = db.list_relay_entries(10).expect("entries");
+        assert!(entries
+            .iter()
+            .any(|e| e.relay_base_url == "https://new.example"));
+        assert!(entries
+            .iter()
+            .any(|e| e.relay_base_url == "https://peer.example"));
+        assert!(!entries
+            .iter()
+            .any(|e| e.relay_base_url == "https://old.example"));
         let _ = std::fs::remove_file(&path);
     }
 }

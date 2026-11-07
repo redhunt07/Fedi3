@@ -81,6 +81,7 @@ pub async fn sync_once(state: &ApState) -> anyhow::Result<()> {
     // Always store current relay.
     if let Some(base) = state.cfg.relay_base_url.as_ref() {
         state.social.upsert_relay_entry(base, None, "self").ok();
+        state.social.remove_stale_self_relays(base).ok();
     }
 
     // Shared directory: bootstrap discovery even when the current relay is down.
