@@ -25,6 +25,9 @@ pub struct NetMetrics {
 
     pub p2p_enabled: AtomicBool,
     pub p2p_connected_peers: AtomicU64,
+    pub p2p_public_discovery_ready: AtomicBool,
+    pub p2p_known_peers: AtomicU64,
+    pub p2p_peer_exchange_contacts: AtomicU64,
     pub p2p_active_peers: AtomicU64,
     pub p2p_rx_bytes: AtomicU64,
     pub p2p_tx_bytes: AtomicU64,
@@ -256,6 +259,9 @@ impl NetMetrics {
             "p2p": {
                 "enabled": self.p2p_enabled.load(Ordering::Relaxed),
                 "connected_peers": self.p2p_connected_peers.load(Ordering::Relaxed),
+                "public_discovery_ready": self.p2p_public_discovery_ready.load(Ordering::Relaxed),
+                "known_peers": self.p2p_known_peers.load(Ordering::Relaxed),
+                "peer_exchange_contacts": self.p2p_peer_exchange_contacts.load(Ordering::Relaxed),
                 "active_peers": self.p2p_active_peers.load(Ordering::Relaxed),
                 "rx_bytes": self.p2p_rx_bytes.load(Ordering::Relaxed),
                 "tx_bytes": self.p2p_tx_bytes.load(Ordering::Relaxed),

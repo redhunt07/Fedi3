@@ -1,14 +1,23 @@
-# FEDI3 App (Flutter)
+# FEDI3 Flutter client
 
-UI client per FEDI3. Avvia il core locale via FFI e gestisce timeline, chat e impostazioni.
+Flutter UI for FEDI3. It starts the local Rust core through `dart:ffi` and
+handles timelines, chat, media and settings.
 
 ## Run
 
-```
+```bash
 flutter pub get
 flutter run
 ```
 
-## Docs
+## Checks
 
-Vedi `docs/app_guide.md`.
+```bash
+flutter analyze --fatal-infos
+dart format --output=none --set-exit-if-changed lib test
+flutter test
+```
+
+## Documentation
+
+See [the app guide](../docs/app_guide.md) (Italian: [guida dell'app](../docs/it/app_guide.md)).

@@ -1,95 +1,95 @@
-# Decentralizzazione: identità, trasporto e fiducia
+# Decentralization: identity, transport and trust
 
-Questo documento descrive i meccanismi introdotti per rendere Fedi3 **sostituibile** nelle sue parti centrali: l'identità non appartiene più al relay, il relay non legge più lo spool, i relay possono essere più di uno e la moderazione è applicabile prima che il traffico raggiunga il core.
+This document describes the mechanisms introduced to make Fedi3 **replaceable** in its central parts: identity no longer belongs to the relay, the relay no longer reads the spool, relays can be more than one and moderation can be applied before traffic reaches the core.
 
-L'obiettivo realistico non è "zero server": un dispositivo spento ha bisogno di qualcuno che conservi i messaggi. L'obiettivo è **nessun server obbligatorio e nessun server insostituibile**.
+The realistic goal is not "zero servers": a switched-off device needs someone to keep the messages. The goal is **no mandatory server and no irreplaceable server**.
 
-## 1. Identità separata dal trasporto (anchor)
+## 1. Identity separated from transport (anchor)
 
-Con `anchor_actor_url` il core pubblica un'identità canonica su un dominio statico:
+With `anchor_actor_url` the core publishes a canonical identity on a static domain:
 
-- l'actor `id`, `url` e la chiave (`#main-key`) vivono sull'anchor;
-- `inbox`, `outbox`, `followers`, `following` restano sul relay (sono risorse dinamiche);
-- il relay reindirizza `GET /users/<user>` all'anchor e il WebFinger del relay punta all'actor canonico;
-- il core scrive i documenti statici in `<data_dir>/anchor/actor.json` e `<data_dir>/anchor/webfinger` e li espone su `GET /_fedi3/anchor`.
+- the actor `id`, `url` and the key (`#main-key`) live on the anchor;
+- `inbox`, `outbox`, `followers`, `following` stay on the relay (they are dynamic resources);
+- the relay redirects `GET /users/<user>` to the anchor and the relay WebFinger points to the canonical actor;
+- the core writes the static documents to `<data_dir>/anchor/actor.json` and `<data_dir>/anchor/webfinger` and exposes them on `GET /_fedi3/anchor`.
 
-### Perché funziona con Mastodon
+### Why it works with Mastodon
 
-ActivityPub non richiede che `inbox` stia sullo stesso host dell'`id`. Un server remoto:
+ActivityPub does not require `inbox` to be on the same host as the `id`. A remote server:
 
-1. risolve `@alice@anchor.example` sul WebFinger statico dell'anchor;
-2. scarica l'actor dall'anchor (documento statico, con la chiave pubblica);
-3. consegna all'`inbox` indicato nell'actor, che è sul relay;
-4. verifica la firma con la chiave dell'anchor.
+1. resolves `@alice@anchor.example` on the anchor's static WebFinger;
+2. downloads the actor from the anchor (static document, with the public key);
+3. delivers to the `inbox` indicated in the actor, which is on the relay;
+4. verifies the signature with the anchor's key.
 
-Il relay resta un **provider di trasporto scelto**: cambiarlo significa aggiornare l'`inbox` nel documento statico, senza `Move` e senza cambiare l'identità.
+The relay remains a **chosen transport provider**: changing it means updating the `inbox` in the static document, without `Move` and without changing the identity.
 
-### Pubblicazione dell'anchor
+### Publishing the anchor
 
-1. Avvia il core con `anchor_actor_url` impostato (es. `https://alice.example`).
-2. Copia `<data_dir>/anchor/actor.json` su `https://alice.example/users/alice`.
-3. Copia `<data_dir>/anchor/webfinger` su `https://alice.example/.well-known/webfinger`.
-4. Assicurati che il TLS sia valido e che i file siano serviti con `Content-Type: application/activity+json` (actor) e `application/jrd+json` (webfinger).
+1. Start the core with `anchor_actor_url` set (e.g. `https://alice.example`).
+2. Copy `<data_dir>/anchor/actor.json` to `https://alice.example/users/alice`.
+3. Copy `<data_dir>/anchor/webfinger` to `https://alice.example/.well-known/webfinger`.
+4. Make sure TLS is valid and the files are served with `Content-Type: application/activity+json` (actor) and `application/jrd+json` (webfinger).
 
-Qualsiasi host statico va bene (GitHub Pages, Netlify, Cloudflare Pages, un bucket S3). Se la chiave ruota, rigenera i due file.
+Any static host is fine (GitHub Pages, Netlify, Cloudflare Pages, an S3 bucket). If the key rotates, regenerate the two files.
 
-> Nota: gli `id` di oggetti e attività restano sul relay, così ogni oggetto è dereferenziabile anche se l'anchor è un host puramente statico.
+> Note: object and activity `id`s remain on the relay, so every object is dereferenceable even if the anchor is a purely static host.
 
-## 2. Spool cieco (il relay non legge i messaggi in attesa)
+## 2. Blind spool (the relay does not read pending messages)
 
-Quando un core è offline il relay conserva le richieste in arrivo. Prima di questa modifica lo faceva in chiaro; ora:
+When a core is offline the relay keeps incoming requests. Before this change it did so in plaintext; now:
 
-1. il relay legge la chiave pubblica dell'utente dall'actor cache;
-2. genera una chiave AES-256-GCM usa-e-getta, cifra il corpo e la chiave con RSA-OAEP-SHA256;
-3. salva nel database solo il ciphertext e i metadati (header firmati originali, marca di cifratura, lunghezza);
-4. alla riconnessione invia al core un **envelope** su `POST /_fedi3/spool/envelope` con il ciphertext;
-5. il core decifra con la chiave privata (che non lascia mai il dispositivo), ricostruisce la richiesta originale con gli header firmati e la processa.
+1. the relay reads the user's public key from the actor cache;
+2. it generates a one-time AES-256-GCM key, encrypts the body and the key with RSA-OAEP-SHA256;
+3. it stores only the ciphertext and metadata in the database (original signed headers, encryption mark, length);
+4. on reconnection it sends the core an **envelope** on `POST /_fedi3/spool/envelope` with the ciphertext;
+5. the core decrypts with the private key (which never leaves the device), rebuilds the original request with the signed headers and processes it.
 
-Conseguenze:
+Consequences:
 
-- il database del relay (e i suoi backup) non contengono il testo dei messaggi in attesa;
-- il relay non deve più decifrare al flush: inoltra solo ciphertext;
-- la finestra di validità della `Date` viene estesa al tempo trascorso nello spool (massimo 7 giorni), tramite l'header non firmato `X-Fedi3-Spooled-Skew-Secs`;
-- se la chiave pubblica non è ancora in cache (primo contatto), il relay ripiega sullo spool in chiaro.
+- the relay database (and its backups) do not contain the text of pending messages;
+- the relay no longer has to decrypt at flush: it forwards only ciphertext;
+- the `Date` validity window is extended by the time spent in the spool (maximum 7 days), through the unsigned header `X-Fedi3-Spooled-Skew-Secs`;
+- if the public key is not yet in cache (first contact), the relay falls back to the plaintext spool.
 
-Limite dichiarato: il relay vede il corpo **al momento della ricezione** (deve instradarlo e verificare la firma). La cifratura protegge i dati a riposo e il percorso di flush, non l'istante di ingresso.
+Declared limit: the relay sees the body **at the moment of receipt** (it must route it and verify the signature). Encryption protects data at rest and the flush path, not the entry instant.
 
-## 3. Mesh di relay
+## 3. Relay mesh
 
-Ogni relay può essere collegato a relay pari:
+Every relay can be connected to peer relays:
 
-- `POST /admin/peers {"url": "https://relay-b.example"}` aggiunge un peer;
-- ogni relay espone la propria directory su `GET /_fedi3/relay/users`;
-- un task periodico (`FEDI3_RELAY_PEER_SYNC_SECS`, default 60) sincronizza la directory dei peer in `remote_users`;
-- una richiesta per un utente non locale viene inoltrata al relay di casa, con un budget di hop (`FEDI3_RELAY_PEER_MAX_HOPS`, default 3) e l'header `X-Fedi3-Hops` per evitare loop.
+- `POST /admin/peers {"url": "https://relay-b.example"}` adds a peer;
+- every relay exposes its directory on `GET /_fedi3/relay/users`;
+- a periodic task (`FEDI3_RELAY_PEER_SYNC_SECS`, default 60) synchronizes the peer directory into `remote_users`;
+- a request for a non-local user is forwarded to the home relay, with a hop budget (`FEDI3_RELAY_PEER_MAX_HOPS`, default 3) and the `X-Fedi3-Hops` header to avoid loops.
 
-Questo permette di ospitare utenti su relay diversi e di avere più relay intercambiabili: la caduta di un relay non elimina la rete, e un utente può migrare senza cambiare identità (grazie all'anchor).
+This allows hosting users on different relays and having multiple interchangeable relays: the fall of one relay does not eliminate the network, and a user can migrate without changing identity (thanks to the anchor).
 
-## 4. Moderazione
+## 4. Moderation
 
-La moderazione è applicata **sul relay, prima del core**:
+Moderation is applied **on the relay, before the core**:
 
-- blocklist relay-wide gestite dall'admin (`/admin/blocks`, tipi `actor` e `domain`, con scadenza opzionale);
-- blocklist per-utente inviate dal core con il token del relay (`PUT /_fedi3/relay/user_blocks/<user>`, header `X-Fedi3-Relay-Token`);
-- applicazione su `/inbox` condiviso e su `/users/<user>/inbox`: un mittente bloccato riceve `202` e non viene né inoltrato né messo in spool;
-- il core sincronizza la propria blocklist al relay all'avvio e a ogni modifica (`/_fedi3/blocks`).
+- relay-wide blocklist managed by the admin (`/admin/blocks`, types `actor` and `domain`, with optional expiry);
+- per-user blocklist sent by the core with the relay token (`PUT /_fedi3/relay/user_blocks/<user>`, header `X-Fedi3-Relay-Token`);
+- application on the shared `/inbox` and on `/users/<user>/inbox`: a blocked sender receives `202` and is neither forwarded nor put in spool;
+- the core synchronizes its blocklist to the relay at startup and on every change (`/_fedi3/blocks`).
 
-Perché è importante: per il fediverse il relay è **una sola istanza** con molti utenti. Bloccare un relay intero è costoso; con blocklist per-utente e relay piccoli e plurali, un blocco colpisce un gruppo ristretto.
+Why it matters: for the fediverse the relay is **a single instance** with many users. Blocking an entire relay is costly; with per-user blocklists and small, plural relays, a block hits a narrow group.
 
-## 5. Modello di fiducia
+## 5. Trust model
 
-| Attore | Cosa vede | Cosa non vede |
+| Actor | What it sees | What it does not see |
 |---|---|---|
-| Relay | metadati di routing, corpo al momento della ricezione, media ospitati, ciphertext dello spool | chiave privata, plaintext dello spool a riposo, contenuto delle chat E2E |
-| Anchor (host statico) | solo i documenti pubblici | tutto il resto |
-| Core | tutto ciò che riguarda l'utente | — |
+| Relay | routing metadata, body at the moment of receipt, hosted media, spool ciphertext | private key, spool plaintext at rest, E2E chat content |
+| Anchor (static host) | only the public documents | everything else |
+| Core | everything concerning the user | — |
 
-Il relay resta un punto di fiducia per: disponibilità, media, moderazione relay-wide e metadati. La mitigazione non è eliminarlo, ma renderlo **sostituibile e trasparente**.
+The relay remains a trust point for: availability, media, relay-wide moderation and metadata. The mitigation is not to eliminate it, but to make it **replaceable and transparent**.
 
-## 6. Rischi residui e prossimi passi
+## 6. Residual risks and next steps
 
-- **Mobile**: il core vive nel processo dell'app; su Android/iOS il tunnel muore quando il sistema sospende l'app. Servono push via relay e una politica di retention dello spool esplicita.
-- **Redirect e SSRF**: la guardia di rete controlla l'URL iniziale; un redirect verso un hostname che risolve a un IP privato non viene rivalutato (documentato in `SECURITY.md`).
-- **Replicazione dei contenuti pubblici**: le note pubbliche vivono ancora sull'outbox del relay; il passo successivo è la replica gossip tra core, con il relay solo come bootstrap.
-- **TURN comunitario**: per l'NAT simmetrico servono pool di relay TURN gestiti dalla comunità, non un unico servizio centralizzato.
-- **Accountability**: log di trasparenza dei forward e ricevute verificabili sono già possibili; manca una pagina pubblica di trasparenza per ogni relay.
+- **Mobile**: the core lives in the app process; on Android/iOS the tunnel dies when the system suspends the app. Push via relay and an explicit spool retention policy are needed.
+- **Redirects and SSRF**: the network guard checks the initial URL; a redirect to a hostname that resolves to a private IP is not re-evaluated (documented in `SECURITY.md`).
+- **Replication of public content**: public notes still live on the relay outbox; the next step is gossip replication between cores, with the relay only as bootstrap.
+- **Community TURN**: symmetric NAT needs pools of TURN relays managed by the community, not a single centralized service.
+- **Accountability**: transparency logs of forwards and verifiable receipts are already possible; a public transparency page for each relay is missing.

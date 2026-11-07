@@ -4,6 +4,7 @@
  */
 
 import 'dart:ffi' as ffi;
+import 'dart:isolate';
 import 'dart:io' show Directory, File, Platform;
 
 import 'package:ffi/ffi.dart';
@@ -115,7 +116,12 @@ abstract class CoreRuntime {
   void stop(int handle);
 }
 
-class Fedi3Core implements CoreRuntime {
+/// Optional asynchronous shutdown seam, including for deterministic tests.
+abstract interface class AsyncCoreStop {
+  Future<void> stopAsync(int handle);
+}
+
+class Fedi3Core implements CoreRuntime, AsyncCoreStop {
   Fedi3Core._(this._lib)
       : _version = _lib
             .lookupFunction<_VersionNative, _VersionDart>('fedi3_core_version'),
@@ -135,6 +141,13 @@ class Fedi3Core implements CoreRuntime {
           'fedi3_core_free_cstring');
 
   static final Fedi3Core instance = Fedi3Core._(_openCoreLibrary());
+
+  /// Waiting for native workers/checkpoint must not block Flutter's UI isolate.
+  static Future<void> stopInBackground(int handle) =>
+      Isolate.run(() => Fedi3Core.instance.stop(handle));
+
+  @override
+  Future<void> stopAsync(int handle) => stopInBackground(handle);
 
   String version() {
     final ptr = _version();

@@ -145,14 +145,12 @@ class _NewChatScreenState extends State<NewChatScreen>
     }).toList();
     if (_sort == 'alpha') {
       list.sort((a, b) {
-        final an = (a.displayName.trim().isEmpty
-                ? a.preferredUsername
-                : a.displayName)
-            .toLowerCase();
-        final bn = (b.displayName.trim().isEmpty
-                ? b.preferredUsername
-                : b.displayName)
-            .toLowerCase();
+        final an =
+            (a.displayName.trim().isEmpty ? a.preferredUsername : a.displayName)
+                .toLowerCase();
+        final bn =
+            (b.displayName.trim().isEmpty ? b.preferredUsername : b.displayName)
+                .toLowerCase();
         return an.compareTo(bn);
       });
     } else {
@@ -188,9 +186,9 @@ class _NewChatScreenState extends State<NewChatScreen>
           builder: (_) => ChatThreadScreen(
             appState: widget.appState,
             threadId: threadId,
-            title: profile.displayName.trim().isEmpty
-                ? profile.preferredUsername
-                : profile.displayName,
+            title: profile.preferredUsername.trim().isEmpty
+                ? profile.displayName
+                : '@${profile.preferredUsername.trim().replaceFirst(RegExp(r'^@+'), '')}',
             isGroup: false,
           ),
         ),
@@ -364,8 +362,9 @@ class _NewChatScreenState extends State<NewChatScreen>
 
   String _handleLabel(ActorProfile profile, int score) {
     final host = Uri.tryParse(profile.id)?.host ?? '';
-    final handle =
-        host.isEmpty ? '@${profile.preferredUsername}' : '@${profile.preferredUsername}@$host';
+    final handle = host.isEmpty
+        ? '@${profile.preferredUsername}'
+        : '@${profile.preferredUsername}@$host';
     if (score <= 0) return handle;
     return '$handle · ${context.l10n.chatNewInteractions(score)}';
   }
@@ -472,10 +471,10 @@ class _NewChatScreenState extends State<NewChatScreen>
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                    _handleLabel(profile, 0),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  _handleLabel(profile, 0),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               );
             },
           ),
@@ -495,9 +494,8 @@ class _NewChatScreenState extends State<NewChatScreen>
                   ),
                 ),
                 FilledButton.icon(
-                  onPressed: _creating || _selected.isEmpty
-                      ? null
-                      : _createGroup,
+                  onPressed:
+                      _creating || _selected.isEmpty ? null : _createGroup,
                   icon: _creating
                       ? const SizedBox(
                           width: 16,

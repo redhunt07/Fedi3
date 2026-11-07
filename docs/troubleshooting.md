@@ -2,89 +2,142 @@
 
 ## Caddy: ACME error
 
-- Dominio non valido o DNS non propagato.
-- Porte 80/443 chiuse.
-- `FEDI3_DOMAIN` errato.
-- Il servizio `relay` non è healthy: Caddy non parte finché `/healthz` non risponde. Controlla `docker compose ps` e `docker compose logs relay`.
+- Invalid domain or DNS not propagated.
+- Ports 80/443 closed.
+- Wrong `FEDI3_DOMAIN`.
+- The `relay` service is not healthy: Caddy does not start until `/healthz` responds. Check `docker compose ps` and `docker compose logs relay`.
 
-## Relay non parte
+## Relay does not start
 
-- Verifica `.env`: il relay rifiuta di partire se `FEDI3_RELAY_ADMIN_TOKEN` è più corto di 32 caratteri o se `FEDI3_RELAY_DB_DRIVER` non è `sqlite`/`postgres`.
-- Il compose si ferma se mancano `FEDI3_RELAY_PG_PASSWORD`, `FEDI3_DOMAIN`, `TURN_REALM` o `TURN_PASS`.
+- Verify `.env`: the relay refuses to start if `FEDI3_RELAY_ADMIN_TOKEN` is shorter than 32 characters or if `FEDI3_RELAY_DB_DRIVER` is not `sqlite`/`postgres`.
+- The compose stops if `FEDI3_RELAY_PG_PASSWORD`, `FEDI3_DOMAIN`, `TURN_REALM` or `TURN_PASS` are missing.
 - `docker compose logs relay`
 - `docker compose logs postgres`
-- Se il database è raggiungibile ma lo schema è più nuovo del binario, il relay esce con un errore esplicito: non fare downgrade senza migrazione.
+- If the database is reachable but the schema is newer than the binary, the relay exits with an explicit error: do not downgrade without a migration.
 
-## Richieste federate rifiutate (401)
+## Federated requests rejected (401)
 
-Dal 0.1.1 la verifica è obbligatoria. Cause tipiche:
+Since 0.1.1 verification is mandatory. Typical causes:
 
-- l'istanza remota non firma la richiesta, oppure firma solo `(request-target)` e `host` senza `date`/`digest`;
-- il `Digest` non corrisponde al body (proxy che riscrive il body, compressione non dichiarata);
-- `Date` fuori dalla finestra consentita (±300 s): controlla l'orologio del server;
-- l'attività è firmata da un attore diverso da quello dichiarato in `actor`;
-- la chiave pubblica non è raggiungibile o `keyId` punta a un IP privato (SSRF guard).
+- the remote instance does not sign the request, or signs only `(request-target)` and `host` without `date`/`digest`;
+- the `Digest` does not match the body (proxy rewriting the body, undeclared compression);
+- `Date` outside the allowed window (±300 s): check the server clock;
+- the activity is signed by an actor different from the one declared in `actor`;
+- the public key is unreachable or `keyId` points to a private IP (SSRF guard).
 
-Diagnosi:
+Diagnostics:
 
 ```bash
 docker compose logs relay | grep -iE 'signature|digest'
 ```
 
-## Tunnel: disconnessioni ripetute
+## Tunnel: repeated disconnections
 
-Il core riconnette da solo con backoff esponenziale. Se vedi riconnessioni continue:
+The core reconnects on its own with exponential backoff. If you see continuous reconnections:
 
-- token del relay revocato o errato (il relay chiude con 401);
-- il relay non risponde entro il timeout di connessione;
-- nessun `pong` entro 30 s: rete instabile o proxy che interrompe le connessioni idle.
+- relay token revoked or wrong (the relay closes with 401);
+- the relay does not respond within the connection timeout;
+- no `pong` within 30 s: unstable network or a proxy that drops idle connections.
 
-Controlla `docker compose logs relay | grep -E 'tunnel (connected|disconnected)'`.
+Check `docker compose logs relay | grep -E 'tunnel (connected|disconnected)'`.
 
-## Utente offline: attività in spool
+## Offline user: activities in spool
 
-Se un utente non è connesso, le attività vengono messe in spool e consegnate alla riconnessione. Se lo spool supera il limite per utente (`FEDI3_RELAY_SPOOL_MAX_ROWS_PER_USER`) le più vecchie vengono scartate. Se il mittente riceve 503, significa che nessun destinatario è stato consegnato né accodato: riprova più tardi.
+If a user is not connected, activities are put in spool and delivered on reconnection. If the spool exceeds the per-user limit (`FEDI3_RELAY_SPOOL_MAX_ROWS_PER_USER`) the oldest ones are discarded. If the sender receives 503, it means that no recipient was delivered or queued: retry later.
 
-## Dragonfly crash (memoria)
+## Dragonfly crash (memory)
 
-Riduci thread o memory:
+Reduce threads or memory:
 
 - `--proactor_threads=2`
 - `--maxmemory=512mb`
 
-## Meilisearch non healthy
+## Meilisearch not healthy
 
-- Controlla `MEILI_MASTER_KEY`.
-- Controlla salute: `http://meilisearch:7700/health`.
-- Con `FEDI3_RELAY_SEARCH_BACKEND=db` Meilisearch non è necessario: il relay usa il database.
+- Check `MEILI_MASTER_KEY`.
+- Check health: `http://meilisearch:7700/health`.
+- With `FEDI3_RELAY_SEARCH_BACKEND=db` Meilisearch is not needed: the relay uses the database.
 
-## Media non serviti
+## Media not served
 
-- Verifica `FEDI3_RELAY_MEDIA_BACKEND` e, per S3/WebDAV, credenziali e endpoint.
+- Verify `FEDI3_RELAY_MEDIA_BACKEND` and, for S3/WebDAV, credentials and endpoint.
 - `docker compose exec relay du -sh /data/media`
-- Un 415 su upload significa MIME non in allowlist; un 413 quota superata.
+- A 415 on upload means MIME not in the allowlist; a 413 means quota exceeded.
 
 ## App: network error
 
-- Verifica relay e token.
-- Controlla `GET /_fedi3/health` sul core locale: se non risponde, il core è morto e il watchdog lo riavvia.
-- Se la timeline resta vuota dopo un cambio di configurazione, verifica che il riavvio del core sia andato a buon fine: la schermata di configurazione riporta l'errore e ripristina i valori precedenti.
+- Verify relay and token.
+- Check `GET /_fedi3/health` on the local core: if it does not respond, the core is dead and the watchdog restarts it.
+- If the timeline stays empty after a configuration change, verify that the core restart succeeded: the configuration screen reports the error and restores the previous values.
 
-## App: il core non parte
+## App: the core does not start
 
-- Porta già in uso: cambia il bind o chiudi l'altra istanza.
-- Username non valido: solo `[A-Za-z0-9_]`, 1–64 caratteri.
-- Directory dati non scrivibile: controlla i permessi (la directory deve essere `0700` e le chiavi `0600`).
-- Senza relay il core parte comunque: se non parte, il problema non è il relay.
+- Port already in use: change the bind or close the other instance.
+- Invalid username: only `[A-Za-z0-9_]`, 1–64 characters.
+- Data directory not writable: check permissions (the directory must be `0700` and the keys `0600`).
+- Without a relay the core starts anyway: if it does not start, the problem is not the relay.
 
-## App: configurazione corrotta
+## App: corrupted configuration
 
-L'app scrive la configurazione in modo atomico e conserva un `.bak`. Se il file principale è corrotto, l'app recupera il backup; se anche quello è corrotto, mostra un avviso invece di sovrascrivere. In quel caso reimposta la configurazione dalla schermata di setup.
+The app writes the configuration atomically and keeps a `.bak`. If the main file is corrupted, the app recovers the backup; if that is corrupted too, it shows a warning instead of overwriting. In that case reset the configuration from the setup screen.
 
-## Diagnosi rapida del relay
+## Quick relay diagnostics
 
 ```bash
 scripts/relay_diagnose.sh
 ```
 
-Mostra stato dei container, healthcheck, log di tunnel e rifiuti di firma. Non richiede `curl` o `wget` nell'immagine del relay.
+It shows container status, healthcheck, tunnel logs and signature rejections. It does not require `curl` or `wget` in the relay image.
+
+## P2P: chat, presence and calls
+
+For independent bootstraps, peer memory, exchange of signed contacts and
+IPFS discovery see [Fedi3 network and public infrastructures](p2p_network.md).
+
+- `connected_peers` counts libp2p connections, including infrastructure nodes:
+  it is not the number of online users. Contact presence comes from the
+  relay directory and from P2P presence messages; the two sources are independent.
+- The ActivityPub profile must publish `endpoints.fedi3PeerId` and
+  `endpoints.fedi3PeerAddrs`. For a peer behind NAT, the addresses must
+  include `<relay>/p2p/<relay-id>/p2p-circuit/p2p/<peer-id>`.
+- The circuit relay server must announce a reachable address through
+  `FEDI3_P2P_EXTERNAL_ADDR`. A reservation without addresses is rejected
+  by the client even if the server records the request as accepted.
+- The client retries closed reservations after at least 10 seconds, with a check
+  every 5 seconds. Look for `relay reservation closed`, `ReservationReqAccepted`
+  and `p2p listening` in the logs.
+- `queued` means kept in the mailbox, not received by the recipient.
+  The `delivered` confirmation identifies the received message; `seen` indicates read.
+- The signaling test verifies invites/SDP/ICE carried and stored; audio,
+  video and TURN traversal also require a test with real devices.
+
+Local tests with temporary profiles, without production credentials:
+
+```bash
+cargo test -p fedi3_core --lib connectivity_tests
+cargo test -p fedi3_core --test p2p_chat --test semantics
+cd app
+flutter test test/unit/peer_presence_store_test.dart test/widget/incoming_calls_test.dart
+```
+
+The fixes require rebuilding both the Rust core and the Flutter app:
+an old AppImage still contains the previous code.
+
+### Circuits rejected or closed during chat and calls
+
+`Remote reported resource limit exceeded` indicates a rejection by the circuit relay,
+not necessarily an offline client. The libp2p default limits (128 KiB,
+120 seconds, limited reopenings) are not suitable for Fedi3 frames and prolonged
+reconnections. The infrastructure service now uses 64 circuits overall, 8 per peer,
+16 MiB and 900 seconds per circuit. Operators can
+change them with `FEDI3_P2P_RELAY_MAX_CIRCUITS`,
+`FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER`,
+`FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES` and `FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS`.
+Invalid values prevent startup; per-peer and per-IP limits remain active.
+
+The call must show an actual connection, not only acceptance
+of the invite. In the logs `Fedi3 call media` reports the RTP bytes sent and received:
+the counters must increase on both devices. The audio/video content is not recorded.
+The caller generates the SDP offer after acceptance;
+ICE candidates that arrived before the offer are kept and applied
+after the remote description.

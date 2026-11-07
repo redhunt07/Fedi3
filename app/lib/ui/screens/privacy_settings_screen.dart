@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
+import '../widgets/fedi3_ui.dart';
 import 'telemetry_screen.dart';
 
 class PrivacySettingsScreen extends StatefulWidget {
@@ -47,7 +49,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
           if (_status != null)
             Padding(
@@ -60,42 +62,74 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
                         : Theme.of(context).colorScheme.error),
               ),
             ),
-          SwitchListTile(
-            title: Text(context.l10n.privacyLockedAccount),
-            subtitle: Text(context.l10n.privacyLockedAccountHint),
-            value: _locked,
-            onChanged: (v) => setState(() => _locked = v),
-          ),
-          const SizedBox(height: 12),
-          Text(context.l10n.telemetrySectionTitle,
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            title: Text(context.l10n.telemetryEnabled),
-            subtitle: Text(context.l10n.telemetryEnabledHint),
-            value: prefs.telemetryEnabled,
-            onChanged: (v) =>
-                widget.appState.savePrefs(prefs.copyWith(telemetryEnabled: v)),
-          ),
-          SwitchListTile(
-            title: Text(context.l10n.telemetryMonitoringEnabled),
-            subtitle: Text(context.l10n.telemetryMonitoringHint),
-            value: prefs.clientMonitoringEnabled,
-            onChanged: (v) => widget.appState
-                .savePrefs(prefs.copyWith(clientMonitoringEnabled: v)),
-          ),
-          if (kDebugMode || prefs.clientMonitoringEnabled)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: OutlinedButton(
-                onPressed: () {
-                  Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const TelemetryScreen()));
-                },
-                child: Text(context.l10n.telemetryOpen),
+          _section(context, context.l10n.privacyTitle),
+          GlassPanel(
+            child: Material(
+              color: Colors.transparent,
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(context.l10n.privacyLockedAccount),
+                subtitle: Text(context.l10n.privacyLockedAccountHint),
+                value: _locked,
+                onChanged: (v) => setState(() => _locked = v),
               ),
             ),
+          ),
+          _section(context, context.l10n.telemetrySectionTitle),
+          GlassPanel(
+            child: Column(
+              children: [
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(context.l10n.telemetryEnabled),
+                    subtitle: Text(context.l10n.telemetryEnabledHint),
+                    value: prefs.telemetryEnabled,
+                    onChanged: (v) => widget.appState.updatePrefs(
+                        (current) => current.copyWith(telemetryEnabled: v)),
+                  ),
+                ),
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(context.l10n.telemetryMonitoringEnabled),
+                    subtitle: Text(context.l10n.telemetryMonitoringHint),
+                    value: prefs.clientMonitoringEnabled,
+                    onChanged: (v) => widget.appState.updatePrefs((current) =>
+                        current.copyWith(clientMonitoringEnabled: v)),
+                  ),
+                ),
+                if (kDebugMode || prefs.clientMonitoringEnabled)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const TelemetryScreen()));
+                      },
+                      child: Text(context.l10n.telemetryOpen),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _section(BuildContext context, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
       ),
     );
   }
@@ -117,6 +151,9 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
         internalToken: c.internalToken,
         p2pEnable: c.p2pEnable,
         p2pRelayReserve: c.p2pRelayReserve,
+        p2pBootstrap: c.p2pBootstrap,
+        p2pPublicDiscovery: c.p2pPublicDiscovery,
+        p2pPeerExchange: c.p2pPeerExchange,
         webrtcEnable: c.webrtcEnable,
         webrtcIceUrls: c.webrtcIceUrls,
         webrtcIceUsername: c.webrtcIceUsername,

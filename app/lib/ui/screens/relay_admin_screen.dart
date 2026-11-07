@@ -74,8 +74,8 @@ class _RelayAdminScreenState extends State<RelayAdminScreen>
   }
 
   Future<void> _saveToken() async {
-    await widget.appState.savePrefs(
-      widget.appState.prefs.copyWith(relayAdminToken: _adminToken.text.trim()),
+    await widget.appState.updatePrefs(
+      (current) => current.copyWith(relayAdminToken: _adminToken.text.trim()),
     );
     _reloadApi();
     if (mounted) setState(() {});

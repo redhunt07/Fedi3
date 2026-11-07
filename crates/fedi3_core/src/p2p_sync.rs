@@ -6,7 +6,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use fedi3_protocol::RelayHttpRequest;
 use tokio::sync::watch;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::ap::ApState;
 use crate::delivery::is_public_activity;
@@ -97,32 +97,33 @@ pub fn start_p2p_sync_worker(
                 };
 
                 let mut stored: u32 = 0;
+                let mut complete = true;
                 for activity in sync.items {
-                    if !is_public_activity(&activity) {
+                    if !is_public_activity(&activity)
+                        || !crate::ap::p2p_activity_allowed(&state, &activity, &actor_url)
+                    {
                         continue;
                     }
                     let ty = activity.get("type").and_then(|v| v.as_str());
-                    let actor = activity.get("actor").and_then(|v| v.as_str());
-
                     let activity_id = activity_dedup_id(&activity);
-                    if !state.social.mark_inbox_seen(&activity_id).unwrap_or(false) {
-                        continue;
-                    }
                     let bytes = canonical_json_bytes(&activity);
-                    let _ =
-                        state
-                            .social
-                            .store_inbox_activity(&activity_id, actor, ty, bytes.clone());
-                    let _ = state
+                    match state
                         .social
-                        .insert_federated_feed_item(&activity_id, actor, bytes);
-                    if let Some(a) = actor {
-                        let _ = state.social.upsert_actor_meta(a, true);
+                        .store_synced_activity(&activity_id, &actor_url, ty, &bytes)
+                    {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(error) => {
+                            warn!(%error, "P2P sync storage failed; retaining cursor");
+                            complete = false;
+                            break;
+                        }
                     }
+                    let _ = state.social.upsert_actor_meta(&actor_url, true);
                     stored = stored.saturating_add(1);
                 }
 
-                if sync.latest_ms > since {
+                if complete && sync.latest_ms > since {
                     let _ = state.social.set_p2p_sync_since(&actor_url, sync.latest_ms);
                 }
                 if stored > 0 {

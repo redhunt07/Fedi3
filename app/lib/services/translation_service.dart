@@ -18,6 +18,15 @@ class TranslationResult {
 
 class TranslationService {
   static final Map<String, TranslationResult> _cache = {};
+  static const int _maxCacheEntries = 200;
+
+  /// Keeps the cache bounded by evicting the oldest entry first.
+  static void _remember(String key, TranslationResult result) {
+    if (!_cache.containsKey(key) && _cache.length >= _maxCacheEntries) {
+      _cache.remove(_cache.keys.first);
+    }
+    _cache[key] = result;
+  }
 
   static Future<TranslationResult> translate({
     required String text,
@@ -35,7 +44,7 @@ class TranslationService {
     if (prefs.translationProvider == TranslationProvider.deeplx) {
       final res = await _translateDeepLx(
           trimmed, targetLang, prefs.translationDeepLxUrl, timeout);
-      _cache[cacheKey] = res;
+      _remember(cacheKey, res);
       return res;
     }
     final key = prefs.translationAuthKey.trim();
@@ -68,7 +77,7 @@ class TranslationService {
       final src = (first['detected_source_language'] as String?)?.trim() ?? '';
       if (text.isEmpty) throw const FormatException('empty translation');
       final res = TranslationResult(text: text, detectedSource: src);
-      _cache[cacheKey] = res;
+      _remember(cacheKey, res);
       return res;
     }
     throw const FormatException('missing translations');

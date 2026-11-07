@@ -241,21 +241,27 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /users/{username}/media:
     post:
-      tags: [core]
-      summary: Carica un media
+      tags: [core, relay]
+      summary: Carica byte media (non multipart)
+      description: |
+        Core: token interno. Relay: Bearer dell'utente; quota prenotata
+        atomicamente prima dello storage. Content-Type deve corrispondere
+        al contenuto; SVG non è accettato. X-Filename fornisce l'estensione.
+      security:
+        - internalToken: []
+        - relayToken: []
       parameters:
         - $ref: '#/components/parameters/Username'
+        - name: X-Filename
+          in: header
+          schema: {type: string, default: upload.bin}
       requestBody:
         required: true
         content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file:
-                  type: string
-                  format: binary
+          application/octet-stream:
+            schema: {type: string, format: binary}
+          image/png:
+            schema: {type: string, format: binary}
       responses:
         '201':
           description: Media caricato
@@ -263,27 +269,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Media'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: Limite del corpo o quota utente superati
+        '415':
+          description: MIME non supportato o firma del file non corrispondente
+        '502':
+          description: Storage non disponibile; prenotazione conservata se la pulizia non riesce
   /users/{username}/media/{mediaId}:
     get:
-      tags: [core]
+      tags: [core, relay]
       summary: Scarica un media
+      security: []
       parameters:
         - $ref: '#/components/parameters/Username'
         - name: mediaId
           in: path
           required: true
-          schema:
-            type: string
+          schema: {type: string}
+        - name: Range
+          in: header
+          description: "Relay: un singolo intervallo bytes, anche suffisso"
+          schema: {type: string}
+        - name: If-None-Match
+          in: header
+          schema: {type: string}
+        - name: If-Range
+          in: header
+          schema: {type: string}
       responses:
         '200':
-          description: Contenuto binario
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
+          description: Contenuto binario; relay trasmette in streaming
+        '206':
+          description: Intervallo parziale (relay)
+        '304':
+          description: ETag invariato (relay)
         '404':
           $ref: '#/components/responses/NotFound'
+        '416':
+          description: Intervallo non soddisfacibile (relay)
+    delete:
+      tags: [relay]
+      summary: Elimina blob e metadati del media dal relay
+      servers:
+        - url: https://relay.example.org
+      security:
+        - relayToken: []
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - name: mediaId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Eliminato
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /_fedi3/timeline/home:
     get:
       tags: [core]
@@ -619,9 +662,20 @@ paths:
   /_fedi3/chat/call/signals:
     get:
       tags: [chat]
-      summary: Segnali di chiamata ricevuti per un thread
+      summary: Segnali di chiamata del thread oppure globali
+      description: |
+        Omettendo thread_id, restituisce segnali globali dei thread di cui
+        l'utente locale è membro, filtrati per destinatario e ordinati per ID.
+        Usare after_id come cursore: due eventi nello stesso millisecondo
+        non vengono persi. Con thread_id resta disponibile il polling per data.
       parameters:
-        - $ref: '#/components/parameters/ThreadId'
+        - name: thread_id
+          in: query
+          required: false
+          schema: {type: string}
+        - name: after_id
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
         - name: after_ms
           in: query
           schema: {type: integer, default: 0}
@@ -1021,7 +1075,11 @@ paths:
     get:
       tags: [relay]
       summary: Tunnel WebSocket per il core
-      security: []
+      description: |
+        Authorization: Bearer è il metodo preferito. Il token nella query è
+        compatibilità per vecchi client, da non inserire in log o link condivisi.
+      security:
+        - relayToken: []
       parameters:
         - name: user
           in: path
@@ -1030,7 +1088,8 @@ paths:
             type: string
         - name: token
           in: query
-          required: true
+          required: false
+          deprecated: true
           schema:
             type: string
       responses:
@@ -1040,6 +1099,7 @@ paths:
     get:
       tags: [relay]
       summary: Directory utenti del relay
+      security: []
       parameters:
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -1078,6 +1138,7 @@ paths:
     get:
       tags: [relay]
       summary: Peer della mesh
+      security: []
       responses:
         '200':
           description: Peer
@@ -1090,6 +1151,7 @@ paths:
     get:
       tags: [relay]
       summary: Statistiche del relay
+      security: []
       responses:
         '200':
           description: Statistiche
@@ -1102,6 +1164,7 @@ paths:
     get:
       tags: [relay]
       summary: Ricerca note sul relay
+      security: [{relayToken: []}]
       parameters:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/Limit'
@@ -1115,6 +1178,7 @@ paths:
     get:
       tags: [relay]
       summary: Ricerca utenti sul relay
+      security: [{relayToken: []}]
       parameters:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/Limit'
@@ -1125,6 +1189,7 @@ paths:
     get:
       tags: [relay]
       summary: Ricerca hashtag sul relay
+      security: [{relayToken: []}]
       parameters:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/Limit'
@@ -1135,6 +1200,7 @@ paths:
     get:
       tags: [relay]
       summary: Copertura dell'indice di ricerca
+      security: [{relayToken: []}, {adminBearer: []}]
       responses:
         '200':
           description: Copertura
@@ -1147,6 +1213,7 @@ paths:
     get:
       tags: [relay]
       summary: Sincronizzazione note per peer
+      security: []
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -1174,7 +1241,12 @@ paths:
   /_fedi3/relay/telemetry:
     post:
       tags: [relay]
-      summary: Telemetria dei peer
+      summary: Telemetria firmata dei peer
+      description: |
+        Richiede una firma Ed25519 valida e una prova recuperata dall'origine
+        dichiarata via stats; una firma autogenerata da sola non autorizza il pin.
+        X-Fedi3-Telemetry-Token richiesto se configurato sul server.
+      security: [{telemetryToken: []}, {}]
       requestBody:
         required: true
         content:
@@ -1183,12 +1255,15 @@ paths:
               type: object
               additionalProperties: true
       responses:
-        '202':
-          description: Accettata
+        '200':
+          description: Telemetria accettata; risposta firmata del relay
+        '401':
+          description: Firma, pin o prova dell'origine non validi
   /_fedi3/relay/metrics:
     get:
       tags: [relay]
       summary: Metriche relay JSON (admin)
+      security: [{adminBearer: []}]
       responses:
         '200':
           description: Metriche
@@ -1203,6 +1278,7 @@ paths:
     post:
       tags: [relay]
       summary: Invia un segnale WebRTC
+      security: [{httpSignature: []}]
       requestBody:
         required: true
         content:
@@ -1217,6 +1293,7 @@ paths:
     get:
       tags: [relay]
       summary: Ricevi segnali WebRTC
+      security: [{httpSignature: []}]
       parameters:
         - name: peer
           in: query
@@ -1251,6 +1328,26 @@ paths:
                       $ref: '#/components/schemas/RelayUser'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /admin/users/{user}:
+    delete:
+      tags: [admin]
+      summary: Elimina account, blob media e metadati associati
+      description: |
+        L'account viene prima disabilitato. I blob vengono eliminati prima dei
+        metadati; se lo storage fallisce, account e riferimenti restano per
+        consentire di ripetere DELETE. Gli upload concorrenti non possono
+        ricreare metadati dopo la cancellazione.
+      security: [{adminBearer: []}]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Eliminazione completata}
+        '404': {description: Account non presente}
+        '409': {description: Ripristinare il backend originale dei media prima di ritentare}
+        '502': {description: Pulizia incompleta; account disabilitato e metadati conservati per retry}
   /admin/users/{user}/disable:
     post:
       tags: [admin]
@@ -1281,45 +1378,26 @@ paths:
       responses:
         '200':
           description: Abilitato
-  /users/{user}/media:
-    post:
-      tags: [relay]
-      summary: Upload media sul relay
-      parameters:
-        - name: user
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file:
-                  type: string
-                  format: binary
-      responses:
-        '201':
-          description: Media caricato
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Media'
 components:
   securitySchemes:
+    telemetryToken:
+      type: apiKey
+      in: header
+      name: X-Fedi3-Telemetry-Token
+      description: Richiesto soltanto se configurato dal relay; firma e prova origine restano obbligatorie.
+    httpSignature:
+      type: apiKey
+      in: header
+      name: Signature
+      description: Firma HTTP associata all'attore verificato; comprende target, host, date e digest quando previsto.
     internalToken:
       type: apiKey
       in: header
       name: X-Fedi3-Internal
       description: Token interno UI ↔ core.
     relayToken:
-      type: apiKey
-      in: header
-      name: X-Fedi3-Relay-Token
+      type: http
+      scheme: bearer
       description: Token dell'identità verso il relay.
     adminBearer:
       type: http

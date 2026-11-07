@@ -28,6 +28,7 @@ use std::time::Duration;
 pub const MAX_ACTOR_DOC_BYTES: usize = 256 * 1024;
 /// ActivityStreams objects can be larger, but still bounded.
 pub const MAX_OBJECT_DOC_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_MEDIA_BYTES: usize = 32 * 1024 * 1024;
 /// Outbox pages fetched by the legacy sync worker.
 pub const MAX_OUTBOX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 /// Hard cap on followed redirects for federation fetches.
@@ -182,6 +183,62 @@ pub async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<
     Ok(out)
 }
 
+/// GET with policy validation before *every* hop. Checking response.url() after
+/// an automatic redirect is too late to prevent a request into a private LAN.
+pub async fn get_checked(
+    raw_url: &str,
+    mut headers: reqwest::header::HeaderMap,
+) -> Result<reqwest::Response> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("fedi3/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("valid HTTP client configuration")
+    });
+    let mut url = reqwest::Url::parse(raw_url)?;
+    for hop in 0..=MAX_REDIRECTS {
+        check_url_allowed(url.as_str()).await?;
+        let response = client
+            .get(url.clone())
+            .headers(headers.clone())
+            .send()
+            .await?;
+        if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            return Ok(response);
+        }
+        anyhow::ensure!(hop < MAX_REDIRECTS, "too many redirects");
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .ok_or_else(|| anyhow!("redirect without Location"))?
+            .to_str()?;
+        url = url.join(location)?;
+        // Original HTTP signatures are bound to the old request target; never
+        // leak authentication or cookies to the redirect destination.
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "cookie",
+            "signature",
+            "host",
+            "digest",
+            "date",
+        ] {
+            headers.remove(name);
+        }
+    }
+    unreachable!("redirect loop is bounded")
+}
+
+/// Process-wide escape hatch: tests that toggle `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH`
+/// must hold this lock so they cannot race each other.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,8 +300,72 @@ mod tests {
         assert!(is_public_ip(&ip));
     }
 
-    /// The escape hatch is process-wide, so tests that toggle it must not run concurrently.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[tokio::test]
+    async fn checked_redirect_is_rejected_before_private_target_is_contacted() {
+        use axum::{response::IntoResponse, routing::get, Router};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let _guard = ENV_LOCK.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let target = format!("{base}/secret");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let secret_hits = hits.clone();
+        let router = Router::new()
+            .route(
+                "/start",
+                get(move || {
+                    let target = target.clone();
+                    async move {
+                        std::env::remove_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH");
+                        (axum::http::StatusCode::FOUND, [("Location", target)]).into_response()
+                    }
+                }),
+            )
+            .route(
+                "/secret",
+                get(move || {
+                    let hits = secret_hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::Relaxed);
+                        "secret"
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
+        let response = get_checked(&format!("{base}/start"), Default::default()).await;
+        std::env::remove_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH");
+        server.abort();
+        assert!(response.is_err());
+        assert_eq!(hits.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn checked_fetch_refuses_an_oversized_response() {
+        use axum::{routing::get, Router};
+        let _guard = ENV_LOCK.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/large", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/large", get(|| async { vec![0u8; 4096] })),
+            )
+            .await
+            .unwrap();
+        });
+        std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
+        let response = get_checked(&url, Default::default()).await.unwrap();
+        let result = read_capped(response, 1024).await;
+        std::env::remove_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH");
+        server.abort();
+        assert!(result.is_err());
+    }
 
     #[tokio::test]
     async fn loopback_literal_is_rejected_without_dns() {

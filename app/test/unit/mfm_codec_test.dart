@@ -40,7 +40,6 @@ void main() {
       expect(html, contains('<code>code</code>'));
     });
 
-
     test('AF-06 headings, lists, quotes and code blocks produce HTML blocks',
         () {
       final html = MfmCodec.toHtml(

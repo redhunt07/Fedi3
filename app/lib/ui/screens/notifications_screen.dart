@@ -11,6 +11,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/sound_service.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
@@ -106,6 +107,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         if (!mounted) return;
         if (widget.appState.isRunning) _refreshIncremental();
         widget.appState.incrementUnreadNotifications();
+        unawaited(SoundService.playActivity());
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
   }
@@ -172,6 +174,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           _cursor = next;
         }
       });
+      if (_items.isEmpty) {
+        widget.appState.clearUnreadNotifications();
+      }
     } catch (_) {
       // Best-effort: keep showing the current list on transient failures.
     }
@@ -179,9 +184,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Future<void> _markSeenNow() async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final prefs = widget.appState.prefs;
-    await widget.appState
-        .savePrefs(prefs.copyWith(lastNotificationsSeenMs: now));
+    await widget.appState.updatePrefs(
+        (current) => current.copyWith(lastNotificationsSeenMs: now));
   }
 
   Future<void> _loadMore() async {
@@ -250,7 +254,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
-
   List<Widget> _groupedNotifications(
       BuildContext context, List<Map<String, dynamic>> items) {
     final out = <Widget>[];
@@ -262,8 +265,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     void flush() {
       if (cluster.isEmpty) return;
       if (cluster.length == 1) {
-        out.add(_NotificationItem(
-            appState: widget.appState, item: cluster.first));
+        out.add(
+            _NotificationItem(appState: widget.appState, item: cluster.first));
       } else {
         out.add(_NotificationCluster(
           appState: widget.appState,
@@ -300,9 +303,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           : const <String, dynamic>{};
       final type = _normalizeNotificationType(activity);
       final actor = (activity['actor'] as String?)?.trim() ?? '';
-      final groupable = type == 'Like' ||
-          type == 'Announce' ||
-          type == 'EmojiReact';
+      final groupable =
+          type == 'Like' || type == 'Announce' || type == 'EmojiReact';
       if (groupable &&
           actor.isNotEmpty &&
           actor == clusterActor &&
@@ -688,12 +690,12 @@ class _NotificationItemState extends State<_NotificationItem> {
                             TextButton(
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
                               ),
                               onPressed: () async {
-                                final api = CoreApi(
-                                    config: widget.appState.config!);
+                                final api =
+                                    CoreApi(config: widget.appState.config!);
                                 try {
                                   await api.follow(_actorUrl);
                                   if (!context.mounted) return;
@@ -710,15 +712,14 @@ class _NotificationItemState extends State<_NotificationItem> {
                                                   e.toString()))));
                                 }
                               },
-                              child:
-                                  Text(context.l10n.notificationsFollowBack),
+                              child: Text(context.l10n.notificationsFollowBack),
                             ),
                           if (type == 'Create')
                             TextButton(
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
                               ),
                               onPressed: () {
                                 Navigator.of(context).push(
@@ -892,8 +893,7 @@ class _NotificationClusterState extends State<_NotificationCluster> {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,
-                                  color:
-                                      Theme.of(context).colorScheme.primary,
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
                               ),
                             ),
@@ -952,8 +952,7 @@ class _NotificationClusterState extends State<_NotificationCluster> {
                           children: [
                             Icon(Icons.subdirectory_arrow_right_rounded,
                                 size: 15,
-                                color:
-                                    Theme.of(context).colorScheme.primary),
+                                color: Theme.of(context).colorScheme.primary),
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(

@@ -114,8 +114,8 @@ class UiSettingsScreen extends StatelessWidget {
                         max: 1.6,
                         divisions: 9,
                         label: prefs.emojiPickerScale.toStringAsFixed(2),
-                        onChanged: (v) => appState
-                            .savePrefs(prefs.copyWith(emojiPickerScale: v)),
+                        onChanged: (v) => appState.updatePrefs(
+                            (current) => current.copyWith(emojiPickerScale: v)),
                       ),
                       const SizedBox(height: 6),
                       Text(context.l10n.uiEmojiPickerColumnsLabel,
@@ -131,8 +131,8 @@ class UiSettingsScreen extends StatelessWidget {
                         max: 12,
                         divisions: 7,
                         label: prefs.emojiPickerColumns.toString(),
-                        onChanged: (v) => appState.savePrefs(
-                            prefs.copyWith(emojiPickerColumns: v.round())),
+                        onChanged: (v) => appState.updatePrefs((current) =>
+                            current.copyWith(emojiPickerColumns: v.round())),
                       ),
                       const SizedBox(height: 6),
                       Text(context.l10n.uiEmojiPickerStyleLabel,
@@ -154,8 +154,9 @@ class UiSettingsScreen extends StatelessWidget {
                               label: Text(context.l10n.uiEmojiPickerStyleText)),
                         ],
                         selected: {prefs.emojiPickerStyle},
-                        onSelectionChanged: (v) => appState.savePrefs(
-                            prefs.copyWith(emojiPickerStyle: v.first)),
+                        onSelectionChanged: (v) => appState.updatePrefs(
+                            (current) =>
+                                current.copyWith(emojiPickerStyle: v.first)),
                       ),
                       const SizedBox(height: 10),
                       Text(context.l10n.uiEmojiPickerPresetLabel,
@@ -171,21 +172,26 @@ class UiSettingsScreen extends StatelessWidget {
                         runSpacing: 6,
                         children: [
                           OutlinedButton(
-                            onPressed: () => appState.savePrefs(prefs.copyWith(
-                                emojiPickerScale: 0.85,
-                                emojiPickerColumns: 10)),
+                            onPressed: () => appState.updatePrefs((current) =>
+                                current.copyWith(
+                                    emojiPickerScale: 0.85,
+                                    emojiPickerColumns: 10)),
                             child:
                                 Text(context.l10n.uiEmojiPickerPresetCompact),
                           ),
                           OutlinedButton(
-                            onPressed: () => appState.savePrefs(prefs.copyWith(
-                                emojiPickerScale: 1.0, emojiPickerColumns: 8)),
+                            onPressed: () => appState.updatePrefs((current) =>
+                                current.copyWith(
+                                    emojiPickerScale: 1.0,
+                                    emojiPickerColumns: 8)),
                             child:
                                 Text(context.l10n.uiEmojiPickerPresetComfort),
                           ),
                           OutlinedButton(
-                            onPressed: () => appState.savePrefs(prefs.copyWith(
-                                emojiPickerScale: 1.3, emojiPickerColumns: 6)),
+                            onPressed: () => appState.updatePrefs((current) =>
+                                current.copyWith(
+                                    emojiPickerScale: 1.3,
+                                    emojiPickerColumns: 6)),
                             child: Text(context.l10n.uiEmojiPickerPresetLarge),
                           ),
                         ],
@@ -265,8 +271,8 @@ class UiSettingsScreen extends StatelessWidget {
                         max: 1.25,
                         divisions: 8,
                         label: prefs.textScale.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            appState.savePrefs(prefs.copyWith(textScale: v)),
+                        onChanged: (v) => appState.updatePrefs(
+                            (current) => current.copyWith(textScale: v)),
                       ),
                       Text(
                         context.l10n.uiFontSizeHint,
@@ -336,7 +342,7 @@ class UiSettingsScreen extends StatelessWidget {
       ),
     );
     if (value == null) return;
-    await appState.savePrefs(prefs.copyWith(localeTag: value));
+    await appState.updatePrefs((current) => current.copyWith(localeTag: value));
   }
 
   Future<void> _pickTheme(BuildContext context, UiPrefs prefs) async {
@@ -360,7 +366,7 @@ class UiSettingsScreen extends StatelessWidget {
       ),
     );
     if (value == null) return;
-    await appState.savePrefs(prefs.copyWith(themeMode: value));
+    await appState.updatePrefs((current) => current.copyWith(themeMode: value));
   }
 
   Future<void> _pickDensity(BuildContext context, UiPrefs prefs) async {
@@ -381,7 +387,7 @@ class UiSettingsScreen extends StatelessWidget {
       ),
     );
     if (value == null) return;
-    await appState.savePrefs(prefs.copyWith(density: value));
+    await appState.updatePrefs((current) => current.copyWith(density: value));
   }
 
   Future<void> _pickAccent(BuildContext context, UiPrefs prefs) async {
@@ -428,6 +434,6 @@ class UiSettingsScreen extends StatelessWidget {
       ),
     );
     if (value == null) return;
-    await appState.savePrefs(prefs.copyWith(accent: value));
+    await appState.updatePrefs((current) => current.copyWith(accent: value));
   }
 }

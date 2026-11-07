@@ -54,6 +54,7 @@ pub mod p2p_sync;
 pub mod relay_bridge;
 pub mod relay_sync;
 pub mod runtime;
+mod schema;
 pub mod social_db;
 pub mod storage_gc;
 pub mod tunnel;
@@ -111,5 +112,19 @@ pub extern "C" fn fedi3_core_string_free(ptr: *mut c_char) {
     }
     unsafe {
         drop(CString::from_raw(ptr));
+    }
+}
+
+/// Select one process provider even when the workspace enables both Rustls backends.
+pub(crate) fn init_tls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(test)]
+mod tls_provider_tests {
+    #[test]
+    fn websocket_tls_builder_has_an_explicit_crypto_provider() {
+        super::init_tls_provider();
+        let _ = rustls::ClientConfig::builder();
     }
 }

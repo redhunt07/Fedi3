@@ -27,12 +27,9 @@ fi
 
 cd "$ROOT_DIR" || exit 1
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
+# shellcheck source=lib/dotenv.sh
+source "$ROOT_DIR/scripts/lib/dotenv.sh"
+load_dotenv "$ROOT_DIR/.env"
 
 PG_USER="${FEDI3_RELAY_PG_USER:-fedi3}"
 PG_DB="${FEDI3_RELAY_PG_DB:-fedi3_relay}"

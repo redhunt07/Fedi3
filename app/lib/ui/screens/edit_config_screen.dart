@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
+import '../../services/call_ice_config.dart';
 import '../../state/app_state.dart';
 
 class EditConfigScreen extends StatefulWidget {
@@ -346,49 +347,11 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
   }
 
   void _autofillNetworkingDefaults({required bool force}) {
-    final domain = _domain.text.trim().isNotEmpty
-        ? _domain.text.trim()
-        : (Uri.tryParse(_publicBaseUrl.text.trim())?.host ?? '');
-    if (domain.isEmpty) return;
     if (_webrtcEnable == false && _p2pEnable) {
       _webrtcEnable = true;
     }
     if (force || _webrtcIceUrls.text.trim().isEmpty) {
-      _webrtcIceUrls.text = [
-        'stun:$domain:3478',
-        'turn:$domain:3478?transport=udp',
-        'turn:$domain:3478?transport=tcp',
-      ].join('\n');
-    }
-    _autofillP2pRelayReserve(force: force, domain: domain);
-  }
-
-  Future<void> _autofillP2pRelayReserve(
-      {required bool force, required String domain}) async {
-    if (!force && _p2pRelayReserve.text.trim().isNotEmpty) {
-      return;
-    }
-    final base = _publicBaseUrl.text.trim().isNotEmpty
-        ? _publicBaseUrl.text.trim()
-        : 'https://$domain';
-    final uri = Uri.tryParse('$base/_fedi3/relay/p2p_infra');
-    if (uri == null) return;
-    try {
-      final resp = await http.get(uri).timeout(const Duration(seconds: 5));
-      if (resp.statusCode != 200) return;
-      final data = jsonDecode(resp.body);
-      if (data is! Map) return;
-      final items = data['multiaddrs'];
-      if (items is! List) return;
-      final multiaddrs = items
-          .whereType<String>()
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      if (multiaddrs.isEmpty) return;
-      _p2pRelayReserve.text = multiaddrs.join('\n');
-    } catch (_) {
-      // Silent fallback; user can still enter multiaddrs manually.
+      _webrtcIceUrls.text = defaultCallIceUrls.join('\n');
     }
   }
 
@@ -410,6 +373,9 @@ class _EditConfigScreenState extends State<EditConfigScreen> {
       bind: _bind.text.trim(),
       internalToken: _internalToken.text.trim(),
       p2pEnable: _p2pEnable,
+      p2pBootstrap: widget.appState.config!.p2pBootstrap,
+      p2pPublicDiscovery: widget.appState.config!.p2pPublicDiscovery,
+      p2pPeerExchange: widget.appState.config!.p2pPeerExchange,
       p2pRelayReserve: _p2pRelayReserve.text
           .split('\n')
           .map((s) => s.trim())

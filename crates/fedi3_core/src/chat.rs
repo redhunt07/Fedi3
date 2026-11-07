@@ -276,6 +276,25 @@ pub async fn store_incoming_payload(
 /// The only exception is the legitimate first DM: an unknown thread is created only when its id
 /// is the deterministic hash of the sender and the local actor (i.e. the envelope recipient is
 /// the local user). Everything else is logged and skipped, so no ghost threads are created.
+fn message_operation_allowed(
+    social: &SocialDb,
+    message_id: &str,
+    thread_id: &str,
+    sender: &str,
+    author_only: bool,
+) -> Result<bool> {
+    if social.get_chat_message_thread_id(message_id)?.as_deref() != Some(thread_id) {
+        return Ok(false);
+    }
+    if author_only {
+        return Ok(social
+            .get_chat_message_meta(message_id)?
+            .map(|(author, _)| author == sender)
+            .unwrap_or(false));
+    }
+    Ok(true)
+}
+
 pub fn store_incoming_payload_db(
     social: &SocialDb,
     local_actor: &str,
@@ -314,37 +333,7 @@ pub fn store_incoming_payload_db(
             social.create_chat_thread(thread_id, "dm", None)?;
             social.upsert_chat_member(thread_id, sender, "member")?;
             social.upsert_chat_member(thread_id, local_actor, "owner")?;
-        } else if payload.op == "pin" {
-        if let Some(message_id) = payload.message_id.as_deref() {
-            let belongs = social
-                .get_chat_message_thread_id(message_id)
-                .ok()
-                .flatten()
-                .map(|tid| tid == thread_id)
-                .unwrap_or(false);
-            if belongs {
-                let action = payload.action.as_deref().unwrap_or("pin");
-                if action == "unpin" {
-                    let _ = social.clear_chat_pin(thread_id);
-                } else {
-                    let _ = social.set_chat_pin(thread_id, message_id, sender);
-                }
-            }
-        }
-    } else if payload.op == "call" {
-        let call_id = payload.message_id.as_deref().unwrap_or_default();
-        let action = payload.action.as_deref().unwrap_or("signal");
-        let to = payload.targets.as_ref().and_then(|t| t.first()).cloned();
-        let data = payload.text.clone().unwrap_or_else(|| "{}".to_string());
-        let _ = social.insert_chat_call_signal(
-            thread_id,
-            sender,
-            to.as_deref(),
-            call_id,
-            action,
-            &data,
-        );
-    } else if payload.op == "system" {
+        } else if payload.op == "system" {
             // A group can be introduced by its creator: accept the first system message only if
             // the sender is in the announced member list and the local actor is a member too.
             let members = payload.members.clone().unwrap_or_default();
@@ -381,7 +370,37 @@ pub fn store_incoming_payload_db(
         return Ok(());
     }
 
-    if payload.op == "message" {
+    if payload.op == "pin" {
+        if let Some(message_id) = payload.message_id.as_deref() {
+            if social.get_chat_message_thread_id(message_id)?.as_deref() == Some(thread_id) {
+                if payload.action.as_deref() == Some("unpin") {
+                    social.clear_chat_pin(thread_id)?;
+                } else {
+                    social.set_chat_pin(thread_id, message_id, sender)?;
+                }
+            }
+        }
+    } else if payload.op == "call" {
+        let call_id = payload.message_id.as_deref().unwrap_or_default();
+        let action = payload.action.as_deref().unwrap_or("signal");
+        let to = payload.targets.as_ref().and_then(|t| t.first());
+        // Calls, like messages, require an existing thread and a member sender.
+        if to.is_some_and(|to| to.trim_end_matches('/') != local_actor.trim_end_matches('/')) {
+            return Ok(());
+        }
+        let raw: serde_json::Value = serde_json::from_str(payload.text.as_deref().unwrap_or("{}"))?;
+        // The wire payload wraps signaling data alongside call metadata. The UI
+        // consumes the inner SDP/ICE/media object from the signals endpoint.
+        let data = raw.get("data").unwrap_or(&raw);
+        social.insert_chat_call_signal(
+            thread_id,
+            sender,
+            to.map(String::as_str),
+            call_id,
+            action,
+            &serde_json::to_string(data)?,
+        )?;
+    } else if payload.op == "message" {
         social.create_chat_thread(thread_id, "dm", None)?;
         social.upsert_chat_member(thread_id, sender, "member")?;
         let msg = ChatMessage {
@@ -398,10 +417,16 @@ pub fn store_incoming_payload_db(
         social.touch_chat_thread(thread_id)?;
     } else if payload.op == "edit" {
         if let Some(message_id) = payload.message_id.as_deref() {
+            if !message_operation_allowed(social, message_id, thread_id, sender, true)? {
+                return Ok(());
+            }
             social.update_chat_message_edit(message_id, &serde_json::to_string(payload)?)?;
         }
     } else if payload.op == "delete" {
         if let Some(message_id) = payload.message_id.as_deref() {
+            if !message_operation_allowed(social, message_id, thread_id, sender, true)? {
+                return Ok(());
+            }
             social.mark_chat_message_deleted(message_id)?;
         }
     } else if payload.op == "system" {
@@ -429,12 +454,12 @@ pub fn store_incoming_payload_db(
                 }
             } else if action == "leave" {
                 let was_owner = social
-                    .get_chat_member_role(thread_id, &sender)
+                    .get_chat_member_role(thread_id, sender)
                     .ok()
                     .flatten()
                     .as_deref()
                     == Some("owner");
-                let _ = social.remove_chat_member(thread_id, &sender);
+                let _ = social.remove_chat_member(thread_id, sender);
                 if was_owner {
                     if let Ok(members) = social.list_chat_members(thread_id) {
                         if let Some((next, _)) = members.first() {
@@ -463,12 +488,18 @@ pub fn store_incoming_payload_db(
         if let (Some(message_id), Some(status)) =
             (payload.message_id.as_deref(), payload.status.as_deref())
         {
+            if !message_operation_allowed(social, message_id, thread_id, sender, false)? {
+                return Ok(());
+            }
             social.upsert_chat_message_status(message_id, &env.sender_actor, status)?;
         }
     } else if payload.op == "react" {
         if let (Some(message_id), Some(reaction)) =
             (payload.message_id.as_deref(), payload.reaction.as_deref())
         {
+            if !message_operation_allowed(social, message_id, thread_id, sender, false)? {
+                return Ok(());
+            }
             let action = payload.action.as_deref().unwrap_or("add");
             if action == "remove" {
                 let _ = social.remove_chat_reaction(message_id, &env.sender_actor, reaction);

@@ -4321,6 +4321,108 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Start the core to see follow requests.'**
   String get followRequestsCoreStopped;
+
+  /// No description provided for @networkingDiscoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Peer discovery'**
+  String get networkingDiscoveryTitle;
+
+  /// No description provided for @networkingPublicDiscovery.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the public IPFS network for discovery'**
+  String get networkingPublicDiscovery;
+
+  /// No description provided for @networkingPublicDiscoveryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Additional bootstrap and peer discovery. Fedi3 messages are not stored in IPFS.'**
+  String get networkingPublicDiscoveryHint;
+
+  /// No description provided for @networkingPeerExchange.
+  ///
+  /// In en, this message translates to:
+  /// **'Remember peers and exchange signed contacts'**
+  String get networkingPeerExchange;
+
+  /// No description provided for @networkingPeerExchangeHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnect known peers and help the Fedi3 network grow. Public contact announcements expose network addresses.'**
+  String get networkingPeerExchangeHint;
+
+  /// No description provided for @networkingBootstrapLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Independent Fedi3 bootstrap nodes'**
+  String get networkingBootstrapLabel;
+
+  /// No description provided for @networkingBootstrapHint.
+  ///
+  /// In en, this message translates to:
+  /// **'One libp2p multiaddress per line. Changes restart the local core.'**
+  String get networkingBootstrapHint;
+
+  /// No description provided for @profileImagesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile images'**
+  String get profileImagesTitle;
+
+  /// No description provided for @profileImageDropHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Drop an image here or click to choose one'**
+  String get profileImageDropHint;
+
+  /// No description provided for @profilePasteImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Paste image'**
+  String get profilePasteImage;
+
+  /// No description provided for @profileRemoveImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove image'**
+  String get profileRemoveImage;
+
+  /// No description provided for @profileDetailsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile details'**
+  String get profileDetailsTitle;
+
+  /// No description provided for @backupScopeWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted settings backup: does not include cryptographic identity, messages or media. Transferring the same identity also requires a protected copy of the core data folder. Keep the passphrase separately.'**
+  String get backupScopeWarning;
+
+  /// No description provided for @backupPassphrase.
+  ///
+  /// In en, this message translates to:
+  /// **'Passphrase (at least 12 characters)'**
+  String get backupPassphrase;
+
+  /// No description provided for @configRecoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Configuration unavailable'**
+  String get configRecoveryTitle;
+
+  /// No description provided for @keyringUnavailableHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock your system keyring, then Retry. Linux requires libsecret and an active Secret Service (GNOME Keyring or KWallet). Your existing configuration is preserved.'**
+  String get keyringUnavailableHint;
+
+  /// No description provided for @corruptConfigHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The configuration and its backup could not be read. Restore a valid copy of the file, then Retry. Existing data is preserved.'**
+  String get corruptConfigHint;
 }
 
 class _AppLocalizationsDelegate

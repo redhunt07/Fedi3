@@ -36,14 +36,32 @@ class AnnouncementsUpdate {
 }
 
 class AnnouncementsService {
-  /// Raw Markdown maintained in the Fedi3 repository.
+  /// Raw Markdown maintained in the Fedi3 repository (English default).
   static const String sourceUrl =
       'https://raw.githubusercontent.com/redhunt07/Fedi3/main/ANNOUNCEMENTS.md';
 
-  static Future<AnnouncementsUpdate> checkForUpdates() async {
-    final raw = await _fetchRaw();
+  /// Raw announcement file for the requested UI language.
+  static String sourceUrlFor(String languageCode) {
+    final lang = languageCode.trim().toLowerCase();
+    if (lang.startsWith('it')) {
+      return 'https://raw.githubusercontent.com/redhunt07/Fedi3/main/ANNOUNCEMENTS.it.md';
+    }
+    return sourceUrl;
+  }
+
+  /// Human-readable announcement page for the requested UI language.
+  static String sourcePageFor(String languageCode) {
+    final lang = languageCode.trim().toLowerCase();
+    final name =
+        lang.startsWith('it') ? 'ANNOUNCEMENTS.it.md' : 'ANNOUNCEMENTS.md';
+    return 'https://github.com/redhunt07/Fedi3/blob/main/$name';
+  }
+
+  static Future<AnnouncementsUpdate> checkForUpdates(
+      {String languageCode = 'en'}) async {
+    final raw = await _fetchRaw(languageCode);
     final entries = parse(raw);
-    await AnnouncementsStore.cache(raw);
+    await AnnouncementsStore.cache(raw, languageCode: languageCode);
     final lastSeen = await AnnouncementsStore.lastSeenId();
     final newest = entries.isEmpty ? null : entries.first.id;
     final hasNew = newest != null && newest != lastSeen;
@@ -54,22 +72,24 @@ class AnnouncementsService {
     );
   }
 
-  static Future<List<AnnouncementEntry>> load({bool refresh = false}) async {
+  static Future<List<AnnouncementEntry>> load(
+      {bool refresh = false, String languageCode = 'en'}) async {
     if (!refresh) {
-      final cached = await AnnouncementsStore.cached();
+      final cached =
+          await AnnouncementsStore.cached(languageCode: languageCode);
       if (cached != null && cached.trim().isNotEmpty) {
         final entries = parse(cached);
         if (entries.isNotEmpty) return entries;
       }
     }
-    final raw = await _fetchRaw();
-    await AnnouncementsStore.cache(raw);
+    final raw = await _fetchRaw(languageCode);
+    await AnnouncementsStore.cache(raw, languageCode: languageCode);
     return parse(raw);
   }
 
-  static Future<String> _fetchRaw() async {
+  static Future<String> _fetchRaw(String languageCode) async {
     final resp = await http
-        .get(Uri.parse(sourceUrl))
+        .get(Uri.parse(sourceUrlFor(languageCode)))
         .timeout(const Duration(seconds: 12));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('announcements fetch failed: ${resp.statusCode}');

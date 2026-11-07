@@ -6,33 +6,39 @@
 cp .env.example .env
 ```
 
-Compila i campi essenziali:
+Fill in the essential fields:
 
-- `FEDI3_DOMAIN=relay.example.org` — il dominio reale del relay.
-- `FEDI3_RELAY_ADMIN_TOKEN=<token>` — almeno 32 caratteri (`openssl rand -hex 32`). Il relay rifiuta di partire se è più corto.
-- `FEDI3_RELAY_TELEMETRY_TOKEN=<token>` — opzionale ma consigliato, separa le metriche dal token admin.
-- `FEDI3_RELAY_PG_PASSWORD=<password>` — obbligatoria, il compose si ferma se manca.
-- `FEDI3_RELAY_DB_DRIVER=postgres` e `FEDI3_RELAY_DB_URL=postgres://...`.
-- Media backend (S3/WebDAV o local).
-- `TURN_REALM`, `TURN_PASS` — obbligatorie per il servizio coturn.
+- `FEDI3_DOMAIN=relay.example.org` — the real domain of the relay.
+- `FEDI3_RELAY_ADMIN_TOKEN=<token>` — at least 32 characters (`openssl rand -hex 32`). The relay refuses to start if it is shorter.
+- `FEDI3_RELAY_TELEMETRY_TOKEN=<token>` — optional but recommended; it separates metrics from the admin token.
+- `FEDI3_RELAY_PG_PASSWORD=<password>` — mandatory, the compose stops if it is missing.
+- `FEDI3_RELAY_DB_DRIVER=postgres`; leave `FEDI3_RELAY_DB_URL` empty for the Compose service.
+  The URL is composed from `FEDI3_RELAY_PG_USER`, `FEDI3_RELAY_PG_PASSWORD` and
+  `FEDI3_RELAY_PG_DB`, with escaping of special characters. A full URL is an
+  advanced override for external databases; do not duplicate the password in the template.
+- Media backend (S3/WebDAV or local).
+- `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (public IP) — mandatory for coturn.
+  The TURN container receives only its own port parameter in the environment,
+  not the DB or relay credentials; the TURN credentials are passed to the service.
+  STUN healthcheck and memory limit are also present in the standalone compose.
 
-## 2) Avvio
+## 2) Start
 
 ```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-Il servizio `relay` ha un healthcheck: Caddy parte solo quando il relay risponde su `/healthz`. Se il relay non diventa healthy, `docker compose ps` mostra lo stato e `docker compose logs relay` la causa.
+The `relay` service has a healthcheck: Caddy starts only when the relay responds on `/healthz`. If the relay does not become healthy, `docker compose ps` shows the status and `docker compose logs relay` the cause.
 
 ## 3) TLS / ACME
 
-Caddy richiede un dominio reale (no `relay.example.com`).
-Se ACME fallisce, controlla:
+Caddy requires a real domain (not `relay.example.com`).
+If ACME fails, check:
 
 - DNS A/AAAA
-- porte 80/443
-- `FEDI3_DOMAIN` corretto
+- ports 80/443
+- correct `FEDI3_DOMAIN`
 
 Logs: `docker compose logs --tail=200 caddy`
 
@@ -44,26 +50,26 @@ scripts/relay_smoke_test.sh https://relay.example.org <ADMIN_TOKEN>
 
 ## 5) Monitoring
 
-- `GET /healthz` — pubblico, nessuna autenticazione, nessun accesso al DB. Usalo per il probe di liveness.
-- `GET /readyz` — pubblico; risponde 503 se il database non è raggiungibile. Usalo per il probe di readiness.
-- `GET /_fedi3/relay/metrics.prom` — richiede `Authorization: Bearer <FEDI3_RELAY_TELEMETRY_TOKEN>` (o il token admin se il token telemetria non è impostato).
+- `GET /healthz` — public, no authentication, no DB access. Use it for the liveness probe.
+- `GET /readyz` — public; responds 503 if the database is unreachable. Use it for the readiness probe.
+- `GET /_fedi3/relay/metrics.prom` — requires `Authorization: Bearer <FEDI3_RELAY_TELEMETRY_TOKEN>` (or the admin token if the telemetry token is not set).
 
-Gli endpoint di salute non scrivono righe di audit: sono pensati per essere interrogati ogni pochi secondi.
+The health endpoints do not write audit rows: they are meant to be queried every few seconds.
 
-## 6) Diagnosi
+## 6) Diagnostics
 
 ```bash
 scripts/relay_diagnose.sh
 ```
 
-Lo script non assume che l'immagine del relay abbia `curl` o `wget`: usa lo stato di healthcheck del container e, se sul host è disponibile un client HTTP, interroga `127.0.0.1:8787` (la porta è pubblicata solo su loopback).
+The script does not assume that the relay image has `curl` or `wget`: it uses the container healthcheck status and, if an HTTP client is available on the host, queries `127.0.0.1:8787` (the port is published only on loopback).
 
-## 7) Note
+## 7) Notes
 
-In produzione:
+In production:
 
 - `FEDI3_RELAY_ALLOW_SELF_REGISTER=false`
-- `FEDI3_RELAY_HSTS_MAX_AGE_SECS` maggiore di zero (il default del compose è un anno)
-- token admin conservato in un vault, mai in git
-- non pubblicare la porta 8787 su `0.0.0.0`: il compose la espone solo su `127.0.0.1` per la diagnosi locale
-- fai girare il relay dietro Caddy e lascia `FEDI3_RELAY_TRUST_PROXY_HEADERS=true` solo perché il proxy sovrascrive `X-Forwarded-For`
+- `FEDI3_RELAY_HSTS_MAX_AGE_SECS` greater than zero (the compose default is one year)
+- admin token stored in a vault, never in git
+- do not publish port 8787 on `0.0.0.0`: the compose exposes it only on `127.0.0.1` for local diagnostics
+- run the relay behind Caddy and leave `FEDI3_RELAY_TRUST_PROXY_HEADERS=true` only because the proxy overwrites `X-Forwarded-For`

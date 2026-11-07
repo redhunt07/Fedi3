@@ -872,3 +872,57 @@ async fn global_ingest_accepts_activity_with_matching_origin() {
         &[&activity["id"].as_str().unwrap()]
     ));
 }
+
+#[tokio::test]
+async fn empty_internal_token_is_generated_and_does_not_allow_anonymous_access() {
+    let core = TestCore::with_config(|cfg| {
+        cfg.internal_token = Some("   ".to_string());
+    })
+    .unwrap();
+    let response = TestCore::client()
+        .get(core.url("/_fedi3/chat/threads"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn device_sync_requires_digest_and_all_signed_request_headers() {
+    let core = TestCore::new().unwrap();
+    let private =
+        std::fs::read_to_string(core.data_dir.path().join("identity_private_key.pem")).unwrap();
+    let uri: http::Uri = core.url("/.fedi3/device/outbox").parse().unwrap();
+    for signed in [
+        vec!["date"],
+        vec!["(request-target)", "host", "date"],
+        vec!["(request-target)", "host", "date", "digest"],
+    ] {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("Host", format!("127.0.0.1:{}", core.port).parse().unwrap());
+        fedi3_core::http_sig::sign_request_rsa_sha256(
+            &private,
+            &format!("{}#main-key", core.actor_url()),
+            &http::Method::GET,
+            &uri,
+            &mut headers,
+            &[],
+            &signed,
+        )
+        .unwrap();
+        let response = TestCore::client()
+            .get(uri.to_string())
+            .headers(headers)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if signed.len() == 4 {
+                StatusCode::OK
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        );
+    }
+}

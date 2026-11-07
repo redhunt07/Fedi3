@@ -47,9 +47,8 @@ class SavedNotesStore {
     final id = (activity['object'] is Map)
         ? ((activity['object'] as Map)['id']?.toString().trim() ?? '')
         : '';
-    final noteId = id.isNotEmpty
-        ? id
-        : (activity['id']?.toString().trim() ?? '');
+    final noteId =
+        id.isNotEmpty ? id : (activity['id']?.toString().trim() ?? '');
     if (noteId.isEmpty) return;
     final raw = await _readRaw();
     raw[noteId] = <String, dynamic>{
@@ -81,17 +80,16 @@ class SavedNotesStore {
       if (value is! Map) continue;
       final activity = value['activity'];
       if (activity is! Map) continue;
-      final savedAt = (value['savedAtMs'] is num)
-          ? (value['savedAtMs'] as num).toInt()
-          : 0;
+      final savedAt =
+          (value['savedAtMs'] is num) ? (value['savedAtMs'] as num).toInt() : 0;
       items.add(<String, dynamic>{
         'id': entry.key,
         'savedAtMs': savedAt,
         'activity': activity.cast<String, dynamic>(),
       });
     }
-    items.sort((a, b) =>
-        (b['savedAtMs'] as int).compareTo(a['savedAtMs'] as int));
+    items.sort(
+        (a, b) => (b['savedAtMs'] as int).compareTo(a['savedAtMs'] as int));
     return items;
   }
 }

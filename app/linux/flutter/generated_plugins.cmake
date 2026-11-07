@@ -3,9 +3,11 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  audioplayers_linux
   desktop_drop
   desktop_webview_window
   file_selector_linux
+  flutter_secure_storage_linux
   flutter_webrtc
   media_kit_libs_linux
   media_kit_video

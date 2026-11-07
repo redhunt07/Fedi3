@@ -25,8 +25,7 @@ use crate::delivery_queue::{DeliveryQueue, PostDeliveryMode};
 use crate::http_retry::send_with_retry_metrics;
 use crate::http_sig::{
     build_signing_string, parse_signature_header, require_min_signed_headers,
-    sign_request_rsa_sha256, verify_date, verify_digest, verify_digest_if_present,
-    verify_signature_rsa_sha256, KeyResolver,
+    sign_request_rsa_sha256, verify_date, verify_digest, verify_signature_rsa_sha256, KeyResolver,
 };
 use crate::media_backend as media_store;
 use crate::net_metrics::NetMetrics;
@@ -158,6 +157,8 @@ struct ActorEndpoints {
     fedi3_peer_id: Option<String>,
     #[serde(rename = "fedi3PeerAddrs", skip_serializing_if = "Vec::is_empty")]
     fedi3_peer_addrs: Vec<String>,
+    #[serde(rename = "fedi3ChatBundle", skip_serializing_if = "Option::is_none")]
+    fedi3_chat_bundle: Option<chat::ChatBundle>,
 }
 
 #[derive(Serialize)]
@@ -204,6 +205,8 @@ struct Actor {
     featured: Option<String>,
     #[serde(rename = "featuredTags", skip_serializing_if = "Option::is_none")]
     featured_tags: Option<String>,
+    #[serde(rename = "fedi3ChatBundle", skip_serializing_if = "Option::is_none")]
+    fedi3_chat_bundle: Option<chat::ChatBundle>,
 }
 
 #[derive(Serialize)]
@@ -715,7 +718,7 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
     if bytes.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "empty body");
     }
-    if let Some(ip) = client_ip_from_headers(&parts.headers) {
+    if let Some(ip) = client_ip_from_request(&parts) {
         if let Err(resp) = inbox_rate_limit(state, &format!("ip:{ip}"), bytes.len() as u64).await {
             state.net.rate_limit_hit();
             let _ = state.social.insert_audit_event(
@@ -988,6 +991,12 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
         if state.post_delivery_mode == PostDeliveryMode::P2pOnly {
             return simple(StatusCode::NOT_FOUND, "not found");
         }
+        if crate::net_policy::check_url_allowed(&item.url)
+            .await
+            .is_err()
+        {
+            return simple(StatusCode::BAD_GATEWAY, "media URL is not allowed");
+        }
         return (
             StatusCode::FOUND,
             [("Location", item.url)],
@@ -1028,11 +1037,12 @@ async fn fetch_and_cache_media(
         if p2p_attempted && state.p2p_relay_fallback.as_secs() > 0 {
             sleep(state.p2p_relay_fallback).await;
         }
-        if let Ok(resp) = send_with_retry_metrics(|| state.http.get(url), 3, &state.net).await {
+        if let Ok(resp) = crate::net_policy::get_checked(url, HeaderMap::new()).await {
             let status = resp.status();
             let headers = resp.headers().clone();
             if status.is_success() {
-                bytes = resp.bytes().await?.to_vec();
+                bytes = crate::net_policy::read_capped(resp, crate::net_policy::MAX_MEDIA_BYTES)
+                    .await?;
                 if !bytes.is_empty() {
                     mime = headers
                         .get(header::CONTENT_TYPE)
@@ -1048,6 +1058,10 @@ async fn fetch_and_cache_media(
     if !ok || bytes.is_empty() {
         return Ok(None);
     }
+    anyhow::ensure!(
+        bytes.len() <= crate::net_policy::MAX_MEDIA_BYTES,
+        "media too large"
+    );
     let dir = media_store::media_dir(&state.data_dir);
     std::fs::create_dir_all(&dir).ok();
     let stored_name = item.id.clone();
@@ -1275,7 +1289,9 @@ async fn profile_refresh_post(state: &ApState, req: Request<Body>) -> Response<B
 async fn send_profile_update(state: &ApState) -> anyhow::Result<u64> {
     let base = state.cfg.public_base_url.trim_end_matches('/');
     let actor_id = format!("{base}/users/{}", state.cfg.username);
-    let actor = build_local_actor(&state.cfg);
+    let mut actor = build_local_actor(&state.cfg);
+    actor.fedi3_chat_bundle = chat::build_chat_bundle(state).ok();
+    actor.endpoints.fedi3_chat_bundle = actor.fedi3_chat_bundle.clone();
     let activity_id = state.social.new_activity_id(&actor_id);
     let update = serde_json::json!({
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -1327,7 +1343,7 @@ async fn global_ingest(state: &ApState, req: Request<Body>) -> Response<Body> {
     if bytes.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "empty body");
     }
-    if let Some(ip) = client_ip_from_headers(&parts.headers) {
+    if let Some(ip) = client_ip_from_request(&parts) {
         if let Err(resp) =
             inbox_rate_limit(state, &format!("ingest:{ip}"), bytes.len() as u64).await
         {
@@ -1420,12 +1436,15 @@ async fn global_ingest(state: &ApState, req: Request<Body>) -> Response<Body> {
 
 fn is_internal(state: &ApState, headers: &HeaderMap) -> bool {
     if state.internal_token.is_empty() {
-        return true;
+        return false;
     }
     headers
         .get("X-Fedi3-Internal")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v == state.internal_token)
+        .map(|v| {
+            use subtle::ConstantTimeEq;
+            bool::from(v.as_bytes().ct_eq(state.internal_token.as_bytes()))
+        })
         .unwrap_or(false)
 }
 
@@ -2058,14 +2077,7 @@ fn require_internal(
     state: &ApState,
     headers: &http::HeaderMap,
 ) -> std::result::Result<(), Response<Body>> {
-    if state.internal_token.is_empty() {
-        return Ok(());
-    }
-    let token = headers
-        .get("X-Fedi3-Internal")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if token != state.internal_token {
+    if !is_internal(state, headers) {
         state.net.auth_failure();
         let _ = state.social.insert_audit_event(
             "internal_auth",
@@ -2338,7 +2350,7 @@ fn verify_device_signature(
         return Err(simple(StatusCode::UNAUTHORIZED, "missing Signature header"));
     }
 
-    if let Err(e) = verify_digest_if_present(&parts.headers, body) {
+    if let Err(e) = verify_digest(&parts.headers, body, true) {
         return Err(simple(
             StatusCode::UNAUTHORIZED,
             &format!("bad Digest: {e}"),
@@ -2357,6 +2369,9 @@ fn verify_device_signature(
             ))
         }
     };
+    if let Err(error) = require_min_signed_headers(&params.headers) {
+        return Err(simple(StatusCode::UNAUTHORIZED, &error.to_string()));
+    }
     let signing =
         match build_signing_string(&parts.method, &parts.uri, &parts.headers, &params.headers) {
             Ok(v) => v,
@@ -3017,7 +3032,10 @@ async fn suggested_actors(state: &ApState, req: Request<Body>) -> Response<Body>
         .and_then(|(_, v)| v.parse::<u32>().ok())
         .unwrap_or(6)
         .min(20);
-    let mut exclude = state.social.list_following_accepted_ids(500).unwrap_or_default();
+    let mut exclude = state
+        .social
+        .list_following_accepted_ids(500)
+        .unwrap_or_default();
     exclude.push(canonical_actor_url(&state.cfg));
     match state.social.list_suggested_actor_ids(&exclude, limit) {
         Ok(ids) => axum::Json(serde_json::json!({"items": ids})).into_response(),
@@ -3325,17 +3343,39 @@ async fn chat_inbox_post(state: &ApState, req: Request<Body>) -> Response<Body> 
             Some("message".to_string()),
             Some(env.thread_id.clone()),
         ));
-        let _ = send_chat_receipt(state, &env, "delivered").await;
+        // Storage succeeded: acknowledge it now. Receipt delivery must not
+        // delay the response or depend on the sender finishing its request.
+        let state = state.clone();
+        let env = env.clone();
+        tokio::spawn(async move {
+            if let Err(e) = send_chat_receipt(&state, &env, "delivered").await {
+                warn!(error=%e, "chat delivery receipt failed");
+            }
+        });
     } else if payload.op == "react" {
         let _ = state.ui_events.send(UiEvent::new(
             "chat",
             Some("react".to_string()),
             Some(env.thread_id.clone()),
         ));
+    } else if payload.op == "call" {
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("call".to_string()),
+            Some(env.thread_id.clone()),
+        ));
     } else if payload.op == "system" {
         let _ = state.ui_events.send(UiEvent::new(
             "chat",
             Some("system".to_string()),
+            Some(env.thread_id.clone()),
+        ));
+    } else if payload.op == "receipt" {
+        // A receipt only changes message status. Wake the sender's open thread
+        // so its ticks refresh immediately instead of waiting for a reload.
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some("receipt".to_string()),
             Some(env.thread_id.clone()),
         ));
     }
@@ -3390,10 +3430,7 @@ async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body>
                     .collect();
                 let mut value = serde_json::to_value(&thread).unwrap_or_default();
                 if let Some(obj) = value.as_object_mut() {
-                    obj.insert(
-                        "peer_usernames".to_string(),
-                        serde_json::json!(peers),
-                    );
+                    obj.insert("peer_usernames".to_string(), serde_json::json!(peers));
                 }
                 items.push(value);
             }
@@ -3562,7 +3599,7 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
         if let Ok(peers) = resolve_actor_peers(state, &actor).await {
             for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
+                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
                     }
@@ -3608,12 +3645,29 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     .into_response()
 }
 
+#[derive(Default)]
+struct ChatDispatch {
+    sent: u32,
+    queued: u32,
+}
+
 async fn send_chat_payload_to_members(
     state: &ApState,
     thread_id: &str,
     payload: &chat::ChatPayload,
     envelope_message_id: &str,
 ) -> u32 {
+    let outcome =
+        dispatch_chat_payload_to_members(state, thread_id, payload, envelope_message_id).await;
+    outcome.sent.saturating_add(outcome.queued)
+}
+
+async fn dispatch_chat_payload_to_members(
+    state: &ApState,
+    thread_id: &str,
+    payload: &chat::ChatPayload,
+    envelope_message_id: &str,
+) -> ChatDispatch {
     let self_actor = format!(
         "{}/users/{}",
         state.cfg.public_base_url.trim_end_matches('/'),
@@ -3623,14 +3677,22 @@ async fn send_chat_payload_to_members(
         .social
         .list_chat_members(thread_id)
         .unwrap_or_default();
-    let mut sent = 0u32;
+    let mut outcome = ChatDispatch::default();
     for (actor, _role) in members {
         if actor == self_actor {
             continue;
         }
+        if payload.op == "call"
+            && payload
+                .targets
+                .as_ref()
+                .is_some_and(|targets| !targets.contains(&actor))
+        {
+            continue;
+        }
         if let Ok(peers) = resolve_actor_peers(state, &actor).await {
             for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
+                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
                     }
@@ -3648,7 +3710,7 @@ async fn send_chat_payload_to_members(
                                     &actor,
                                     "sent",
                                 );
-                                sent = sent.saturating_add(1);
+                                outcome.sent = outcome.sent.saturating_add(1);
                             }
                             Ok(chat::ChatSendOutcome::Queued) => {
                                 let _ = state.social.upsert_chat_message_status(
@@ -3656,22 +3718,16 @@ async fn send_chat_payload_to_members(
                                     &actor,
                                     "queued",
                                 );
-                                sent = sent.saturating_add(1);
+                                outcome.queued = outcome.queued.saturating_add(1);
                             }
-                            Err(_) => {
-                                // Ignore errors when sending to members who may have deleted their accounts
-                            }
+                            Err(e) => warn!(peer=%peer_id, error=%e, "chat member delivery failed"),
                         }
                     }
-                } else {
-                    // Peer not reachable - account may have been deleted from relay
                 }
             }
-        } else {
-            // Cannot resolve peers - account may have been deleted from relay
         }
     }
-    sent
+    outcome
 }
 
 async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -3744,7 +3800,7 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
         }
         if let Ok(peers) = resolve_actor_peers(state, &actor).await {
             for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
+                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
                     }
@@ -4010,7 +4066,7 @@ async fn chat_seen_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     title: None,
                     reaction: None,
                 };
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
+                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
                     }
@@ -4129,11 +4185,7 @@ async fn presence_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     .into_response()
 }
 
-async fn broadcast_presence(
-    state: &ApState,
-    self_actor: &str,
-    status: &str,
-) -> anyhow::Result<()> {
+async fn broadcast_presence(state: &ApState, self_actor: &str, status: &str) -> anyhow::Result<()> {
     let threads = state.social.list_chat_threads(200, None)?;
     let mut peers: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
@@ -4155,7 +4207,7 @@ async fn broadcast_presence(
     }
     for (actor, actor_peers) in peers {
         for peer_id in actor_peers {
-            let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await else {
+            let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await else {
                 continue;
             };
             if chat::verify_bundle(state, &bundle).await.is_err() {
@@ -4250,7 +4302,11 @@ async fn chat_thread_create_post(state: &ApState, req: Request<Body>) -> Respons
         return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
     }
     for actor in &members {
-        let role = if actor == &self_actor { "owner" } else { "member" };
+        let role = if actor == &self_actor {
+            "owner"
+        } else {
+            "member"
+        };
         let _ = state.social.upsert_chat_member(&thread_id, actor, role);
     }
     let _ = state.ui_events.send(UiEvent::new(
@@ -4316,7 +4372,10 @@ async fn chat_call_signal_post(state: &ApState, req: Request<Body>) -> Response<
         .social
         .list_chat_members(&input.thread_id)
         .unwrap_or_default();
-    if !members.iter().any(|(a, _)| a.trim_end_matches('/') == self_actor) {
+    if !members
+        .iter()
+        .any(|(a, _)| a.trim_end_matches('/') == self_actor)
+    {
         return simple(StatusCode::FORBIDDEN, "not a member");
     }
     let data = serde_json::json!({
@@ -4340,14 +4399,16 @@ async fn chat_call_signal_post(state: &ApState, req: Request<Body>) -> Response<
         reaction: None,
     };
     let envelope_id = format!("urn:fedi3:chat:msg:{}", chat::random_id());
-    let sent = send_chat_payload_to_members(
-        state,
-        &input.thread_id,
-        &payload,
-        &envelope_id,
-    )
-    .await;
-    axum::Json(serde_json::json!({"ok": true, "sent": sent})).into_response()
+    let outcome =
+        dispatch_chat_payload_to_members(state, &input.thread_id, &payload, &envelope_id).await;
+    if outcome.sent == 0 && outcome.queued == 0 {
+        return simple(
+            StatusCode::BAD_GATEWAY,
+            "call signal could not be delivered",
+        );
+    }
+    axum::Json(serde_json::json!({"ok": true, "sent": outcome.sent, "queued": outcome.queued}))
+        .into_response()
 }
 
 async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -4364,14 +4425,29 @@ async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<
         .parse::<u32>()
         .unwrap_or(100);
     if thread_id.trim().is_empty() {
-        return simple(StatusCode::BAD_REQUEST, "missing thread_id");
+        let after_id = chat_query_value(query, "after_id")
+            .parse::<i64>()
+            .unwrap_or(0)
+            .max(0);
+        return match state.social.list_global_chat_call_signals(
+            &local_actor(state),
+            after_id,
+            after_ms,
+            limit,
+        ) {
+            Ok(items) => axum::Json(serde_json::json!({"items": items})).into_response(),
+            Err(_) => simple(StatusCode::BAD_GATEWAY, "call signal database unavailable"),
+        };
     }
     let self_actor = local_actor(state);
     let members = state
         .social
         .list_chat_members(&thread_id)
         .unwrap_or_default();
-    if !members.iter().any(|(a, _)| a.trim_end_matches('/') == self_actor) {
+    if !members
+        .iter()
+        .any(|(a, _)| a.trim_end_matches('/') == self_actor)
+    {
         return simple(StatusCode::FORBIDDEN, "not a member");
     }
     match state
@@ -4381,19 +4457,21 @@ async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<
         Ok(rows) => {
             let items = rows
                 .into_iter()
-                .map(|(id, from_actor, to_actor, call_id, action, data_json, created_at_ms)| {
-                    let data = serde_json::from_str::<serde_json::Value>(&data_json)
-                        .unwrap_or_else(|_| serde_json::json!({}));
-                    serde_json::json!({
-                        "id": id,
-                        "from_actor": from_actor,
-                        "to_actor": to_actor,
-                        "call_id": call_id,
-                        "action": action,
-                        "data": data,
-                        "created_at_ms": created_at_ms,
-                    })
-                })
+                .map(
+                    |(id, from_actor, to_actor, call_id, action, data_json, created_at_ms)| {
+                        let data = serde_json::from_str::<serde_json::Value>(&data_json)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        serde_json::json!({
+                            "id": id,
+                            "from_actor": from_actor,
+                            "to_actor": to_actor,
+                            "call_id": call_id,
+                            "action": action,
+                            "data": data,
+                            "created_at_ms": created_at_ms,
+                        })
+                    },
+                )
                 .collect::<Vec<_>>();
             axum::Json(serde_json::json!({"items": items})).into_response()
         }
@@ -4463,10 +4541,16 @@ async fn chat_thread_search_get(state: &ApState, req: Request<Body>) -> Response
         .social
         .list_chat_members(&thread_id)
         .unwrap_or_default();
-    if !members.iter().any(|(a, _)| a.trim_end_matches('/') == self_actor) {
+    if !members
+        .iter()
+        .any(|(a, _)| a.trim_end_matches('/') == self_actor)
+    {
         return simple(StatusCode::FORBIDDEN, "not a member");
     }
-    match state.social.search_chat_messages(&thread_id, q.trim(), limit) {
+    match state
+        .social
+        .search_chat_messages(&thread_id, q.trim(), limit)
+    {
         Ok(items) => {
             let items = items
                 .into_iter()
@@ -4563,11 +4647,10 @@ async fn chat_thread_pin_post(state: &ApState, req: Request<Body>) -> Response<B
     }
     let pinned = input.pinned.unwrap_or(true);
     if pinned {
-        if let Err(e) = state.social.set_chat_pin(
-            &input.thread_id,
-            &input.message_id,
-            &self_actor,
-        ) {
+        if let Err(e) = state
+            .social
+            .set_chat_pin(&input.thread_id, &input.message_id, &self_actor)
+        {
             return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
         }
     } else if let Err(e) = state.social.clear_chat_pin(&input.thread_id) {
@@ -4611,7 +4694,9 @@ async fn chat_thread_join_post(state: &ApState, req: Request<Body>) -> Response<
         let already = ids.iter().any(|a| a.trim_end_matches('/') == self_actor);
         if !already {
             ids.push(self_actor.clone());
-            let _ = state.social.upsert_chat_member(&thread_id, &self_actor, "member");
+            let _ = state
+                .social
+                .upsert_chat_member(&thread_id, &self_actor, "member");
             let _ = send_chat_system(
                 state,
                 &thread_id,
@@ -4637,10 +4722,15 @@ async fn chat_thread_join_post(state: &ApState, req: Request<Body>) -> Response<
         .into_response()
     } else {
         let title = input.title.unwrap_or_else(|| "Gruppo".to_string());
-        if let Err(e) = state.social.create_chat_thread(&thread_id, "group", Some(&title)) {
+        if let Err(e) = state
+            .social
+            .create_chat_thread(&thread_id, "group", Some(&title))
+        {
             return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
         }
-        let _ = state.social.upsert_chat_member(&thread_id, &self_actor, "owner");
+        let _ = state
+            .social
+            .upsert_chat_member(&thread_id, &self_actor, "owner");
         let _ = state.ui_events.send(UiEvent::new(
             "chat",
             Some("thread".to_string()),
@@ -4679,12 +4769,7 @@ fn local_actor(state: &ApState) -> String {
     .to_string()
 }
 
-async fn send_chat_pin(
-    state: &ApState,
-    thread_id: &str,
-    message_id: &str,
-    action: &str,
-) -> u32 {
+async fn send_chat_pin(state: &ApState, thread_id: &str, message_id: &str, action: &str) -> u32 {
     let members = state
         .social
         .list_chat_members(thread_id)
@@ -4977,7 +5062,9 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
             if actor.is_empty() || role.is_empty() {
                 continue;
             }
-            let _ = state.social.upsert_chat_member(&input.thread_id, actor, role);
+            let _ = state
+                .social
+                .upsert_chat_member(&input.thread_id, actor, role);
         }
     }
     simple(StatusCode::OK, "ok")
@@ -5006,7 +5093,7 @@ async fn send_chat_receipt(
     if peer_id.is_empty() {
         return Ok(());
     }
-    let Some(bundle) = fetch_chat_bundle(state, peer_id).await? else {
+    let Some(bundle) = fetch_chat_bundle(state, peer_id, &env.sender_actor).await? else {
         return Ok(());
     };
     if chat::verify_bundle(state, &bundle).await.is_err() {
@@ -5086,7 +5173,7 @@ async fn send_chat_system(
         }
         if let Ok(peers) = resolve_actor_peers(state, &actor).await {
             for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id).await {
+                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
                     }
@@ -5127,6 +5214,7 @@ async fn send_chat_system(
 async fn fetch_chat_bundle(
     state: &ApState,
     peer_id: &str,
+    actor_url: &str,
 ) -> anyhow::Result<Option<chat::ChatBundle>> {
     let req = RelayHttpRequest {
         id: format!("chat-bundle-{}", chat::random_id()),
@@ -5136,67 +5224,143 @@ async fn fetch_chat_bundle(
         headers: vec![("accept".to_string(), "application/json".to_string())],
         body_b64: "".to_string(),
     };
-    let resp = match state.delivery.p2p_request(peer_id, req).await {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    if !(200..300).contains(&resp.status) {
-        return Ok(None);
-    }
-    let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
-    let bundle = serde_json::from_slice::<chat::ChatBundle>(&body).ok();
-    Ok(bundle)
-}
-
-async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<Vec<String>> {
-    let resp = state
-        .http
-        .get(actor_id)
-        .header(
-            "Accept",
-            "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-        )
-        .send()
-        .await?;
-    let text = resp.text().await?;
-    let actor_json: serde_json::Value = serde_json::from_str(&text)?;
-    let peer_id = actor_json
-        .get("endpoints")
-        .and_then(|e| e.get("fedi3PeerId"))
-        .and_then(|v| v.as_str())
-        .or_else(|| actor_json.get("fedi3PeerId").and_then(|v| v.as_str()))
-        .map(|s| s.to_string());
-    let did = actor_json
-        .get("alsoKnownAs")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .find(|s| s.starts_with("did:fedi3:"))
-                .map(|s| s.to_string())
-        });
-
-    if let Some(did) = did {
-        if let Ok(Some(rec)) = state.delivery.p2p_resolve_did(&did).await {
-            let mut out = Vec::new();
-            for p in rec.peers {
-                if !p.addrs.is_empty() {
-                    let _ = state
-                        .delivery
-                        .p2p_add_peer_addrs(&p.peer_id, p.addrs.clone())
-                        .await;
+    let resp = state.delivery.p2p_request(peer_id, req).await.ok();
+    if let Some(resp) = resp {
+        if (200..300).contains(&resp.status) {
+            let body = B64.decode(resp.body_b64.as_bytes()).unwrap_or_default();
+            if let Ok(bundle) = serde_json::from_slice::<chat::ChatBundle>(&body) {
+                if bundle.peer_id == peer_id && bundle.actor == actor_url {
+                    return Ok(Some(bundle));
                 }
-                out.push(p.peer_id);
-            }
-            if !out.is_empty() {
-                return Ok(out);
             }
         }
     }
-    if let Some(peer_id) = peer_id {
-        return Ok(vec![peer_id]);
+    // HTTP fallback: the actor document carries the public chat bundle, so a
+    // peer whose P2P circuit is temporarily unavailable can still be reached
+    // through the relay.
+    // The intended actor is already known. Requiring a DHT lookup here makes
+    // the fallback fail precisely when discovery is unavailable.
+    let doc = fetch_chat_actor(state, actor_url).await?;
+    Ok(doc
+        .get("fedi3ChatBundle")
+        .or_else(|| doc.get("endpoints").and_then(|e| e.get("fedi3ChatBundle")))
+        .and_then(|v| serde_json::from_value::<chat::ChatBundle>(v.clone()).ok())
+        .filter(|bundle| bundle.peer_id == peer_id && bundle.actor == actor_url))
+}
+
+async fn fetch_chat_actor(state: &ApState, actor_url: &str) -> anyhow::Result<Value> {
+    // Remember the actor-to-peer binding obtained from the actor's HTTP origin.
+    // PEX alone never grants authority to claim somebody else's actor URL.
+    let cached = state
+        .social
+        .cached_chat_actor(actor_url)
+        .ok()
+        .flatten()
+        .and_then(|(bytes, fetched)| {
+            serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .map(|doc| (doc, fetched))
+        })
+        .filter(|(doc, _)| doc.get("id").and_then(Value::as_str) == Some(actor_url));
+    if let Some((doc, fetched)) = &cached {
+        if now_ms() - fetched < 3600 * 1000 {
+            return Ok(doc.clone());
+        }
     }
-    Ok(Vec::new())
+    crate::net_policy::check_url_allowed(actor_url).await?;
+    let response = state
+        .http
+        .get(actor_url)
+        .timeout(Duration::from_secs(10))
+        .header("Accept", "application/activity+json")
+        .send()
+        .await;
+    let resp = match response {
+        Ok(resp) if resp.status().is_success() => resp,
+        // A known peer can still be reached while its HTTP relay is down.
+        Ok(resp) if resp.status().is_server_error() => {
+            if let Some((doc, _)) = cached {
+                return Ok(doc);
+            }
+            resp.error_for_status()?
+        }
+        // 4xx is a real answer from the origin, not an outage: do not mask it
+        // with a cached document, which could belong to a deleted/moved actor.
+        Ok(resp) => resp.error_for_status()?,
+        Err(error) => {
+            if let Some((doc, _)) = cached {
+                return Ok(doc);
+            }
+            return Err(error.into());
+        }
+    };
+    crate::net_policy::check_url_allowed(resp.url().as_str()).await?;
+    let bytes =
+        crate::net_policy::read_capped(resp, crate::net_policy::MAX_ACTOR_DOC_BYTES).await?;
+    let doc: Value = serde_json::from_slice(&bytes)?;
+    anyhow::ensure!(
+        doc.get("id").and_then(Value::as_str) == Some(actor_url),
+        "chat actor identity mismatch"
+    );
+    let _ = state.social.cache_chat_actor(actor_url, &bytes);
+    Ok(doc)
+}
+
+async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<Vec<String>> {
+    let actor_json = fetch_chat_actor(state, actor_id).await?;
+    let endpoints = actor_json.get("endpoints");
+    let peer_id = endpoints
+        .and_then(|e| e.get("fedi3PeerId"))
+        .or_else(|| actor_json.get("fedi3PeerId"))
+        .and_then(Value::as_str);
+    let mut out = Vec::new();
+    if let Some(peer_id) = peer_id {
+        if peer_id.parse::<libp2p::PeerId>().is_ok() {
+            // Actor documents advertise usable circuit addresses even when the
+            // DHT is empty. Register them before any request or bundle fetch.
+            let addrs = endpoints
+                .and_then(|e| e.get("fedi3PeerAddrs"))
+                .or_else(|| actor_json.get("fedi3PeerAddrs"))
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            state.delivery.p2p_add_peer_addrs(peer_id, addrs).await?;
+            out.push(peer_id.to_string());
+        }
+    }
+    let did = actor_json
+        .get("alsoKnownAs")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .find(|s| s.starts_with("did:fedi3:"))
+        });
+    if let Some(did) = did {
+        if let Ok(Some(rec)) = state.delivery.p2p_resolve_did(did).await {
+            if rec.did == did && rec.actor == actor_id {
+                for p in rec.peers {
+                    if p.peer_id.parse::<libp2p::PeerId>().is_err() {
+                        continue;
+                    }
+                    state
+                        .delivery
+                        .p2p_add_peer_addrs(&p.peer_id, p.addrs)
+                        .await?;
+                    if !out.contains(&p.peer_id) {
+                        out.push(p.peer_id);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 async fn social_unfollow(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -5649,6 +5813,7 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
             shared_inbox,
             fedi3_peer_id: cfg.p2p_peer_id.clone(),
             fedi3_peer_addrs: cfg.p2p_peer_addrs.clone(),
+            fedi3_chat_bundle: None,
         },
         publicKey: PublicKey {
             id: key_id,
@@ -5661,6 +5826,7 @@ fn build_local_actor(cfg: &ApConfig) -> Actor {
         indexable: Some(true),
         featured: Some(format!("{transport}/collections/featured")),
         featured_tags: Some(format!("{transport}/collections/featuredTags")),
+        fedi3_chat_bundle: None,
     }
 }
 
@@ -5674,7 +5840,9 @@ async fn actor_get(
         return resp;
     }
 
-    let actor = build_local_actor(&state.cfg);
+    let mut actor = build_local_actor(&state.cfg);
+    actor.fedi3_chat_bundle = chat::build_chat_bundle(state).ok();
+    actor.endpoints.fedi3_chat_bundle = actor.fedi3_chat_bundle.clone();
 
     json_activity(StatusCode::OK, accept, &actor)
 }
@@ -6775,7 +6943,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         Ok(b) => b,
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
     };
-    if let Some(ip) = client_ip_from_headers(&parts.headers) {
+    if let Some(ip) = client_ip_from_request(&parts) {
         if let Err(resp) =
             inbox_rate_limit(state, &format!("ip:{ip}"), body_bytes.len() as u64).await
         {
@@ -7479,7 +7647,7 @@ fn activity_actor(activity: &serde_json::Value) -> Option<&str> {
     }
 }
 
-fn same_origin(a: &str, b: &str) -> bool {
+pub(crate) fn same_origin(a: &str, b: &str) -> bool {
     match (Uri::try_from(a), Uri::try_from(b)) {
         (Ok(ua), Ok(ub)) => {
             ua.scheme_str() == ub.scheme_str()
@@ -7509,6 +7677,61 @@ fn actor_binding_matches(activity: &serde_json::Value, signed_actor: &str) -> bo
         }
     }
     true
+}
+
+pub(crate) fn p2p_activity_allowed(
+    state: &ApState,
+    activity: &serde_json::Value,
+    actor: &str,
+) -> bool {
+    !is_blocked_actor(state, actor) && p2p_activity_identity_allowed(activity, actor)
+}
+
+fn p2p_activity_identity_allowed(activity: &serde_json::Value, actor: &str) -> bool {
+    if !actor_binding_matches(activity, actor) {
+        return false;
+    }
+    if let Some(id) = activity.get("id").and_then(|v| v.as_str()) {
+        if !object_origin_matches(actor, id) {
+            return false;
+        }
+    }
+    if matches!(
+        activity.get("type").and_then(|v| v.as_str()),
+        Some("Create" | "Update" | "Delete")
+    ) {
+        if let Some(id) = activity_object_id(activity) {
+            if !object_owned_by(
+                actor,
+                &id,
+                activity_object_attributed_to(activity).as_deref(),
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod p2p_sync_identity_tests {
+    use super::*;
+    #[test]
+    fn sync_rejects_forged_authors_and_objects_but_allows_federated_reactions() {
+        let actor = "https://remote.test/users/alice";
+        let mut activity = serde_json::json!({"id": "https://remote.test/activities/one", "actor": actor, "type": "Announce", "object": "https://elsewhere.test/notes/one"});
+        assert!(p2p_activity_identity_allowed(&activity, actor));
+        activity["type"] = serde_json::json!("Like");
+        assert!(p2p_activity_identity_allowed(&activity, actor));
+        activity["type"] = serde_json::json!("Create");
+        assert!(!p2p_activity_identity_allowed(&activity, actor));
+        activity["object"] = serde_json::json!({"id": "https://remote.test/notes/one", "attributedTo": "https://remote.test/users/bob"});
+        assert!(!p2p_activity_identity_allowed(&activity, actor));
+        activity["object"]["attributedTo"] = serde_json::json!(actor);
+        assert!(p2p_activity_identity_allowed(&activity, actor));
+        activity["actor"] = serde_json::json!("https://remote.test/users/bob");
+        assert!(!p2p_activity_identity_allowed(&activity, actor));
+    }
 }
 
 /// Origin check used for P2P/gossip/legacy ingest: the object id must belong to the actor's origin.
@@ -7560,23 +7783,28 @@ fn host_from_url(url: &str) -> Option<String> {
     uri.host().map(|h| h.to_ascii_lowercase())
 }
 
-fn client_ip_from_headers(headers: &HeaderMap) -> Option<String> {
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(ip) = v
-            .split(',')
-            .next()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            return Some(ip.to_string());
-        }
+/// Inserted only by the authenticated outbound relay tunnel, never from HTTP headers.
+#[derive(Clone)]
+pub(crate) struct AuthenticatedRelayForward;
+
+fn client_ip_from_request(parts: &http::request::Parts) -> Option<String> {
+    if let Some(axum::extract::ConnectInfo(peer)) = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    {
+        return Some(peer.ip().to_string());
     }
-    headers
-        .get("x-real-ip")
+    parts.extensions.get::<AuthenticatedRelayForward>()?;
+    // The relay/Caddy appends the observed sender; an attacker-controlled prefix
+    // must not select the limiter bucket. P2P requests have no trusted marker.
+    parts
+        .headers
+        .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .and_then(|v| v.split(',').next_back())
+        .or_else(|| parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
+        .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
+        .map(|ip| ip.to_string())
 }
 
 fn domain_matches(host: &str, pattern: &str) -> bool {
@@ -8694,56 +8922,37 @@ pub(crate) async fn fetch_and_store_object(
         if p2p_attempted && state.p2p_relay_fallback.as_secs() > 0 {
             sleep(state.p2p_relay_fallback).await;
         }
-        let resp = {
-            let uri: Uri = match object_url.parse() {
-                Ok(u) => u,
-                Err(e) => {
-                    enqueue_object_fetch(state, object_url, &format!("bad url: {e:#}"))?;
-                    return Ok(());
-                }
-            };
-            let key_id = format!(
-                "{}/users/{}#main-key",
-                state.cfg.public_base_url.trim_end_matches('/'),
-                state.cfg.username
-            );
-            let build_req = || {
-                let mut headers = HeaderMap::new();
-                headers.insert(
+        crate::net_policy::check_url_allowed(object_url).await?;
+        let uri: Uri = object_url.parse()?;
+        let key_id = format!(
+            "{}/users/{}#main-key",
+            state.cfg.public_base_url.trim_end_matches('/'),
+            state.cfg.username
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
                     "Accept",
                     "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\""
                         .parse()
                         .expect("static header"),
                 );
-                // Authorized fetch (best-effort): sign the GET.
-                let _ = sign_request_rsa_sha256(
-                    &state.private_key_pem,
-                    &key_id,
-                    &Method::GET,
-                    &uri,
-                    &mut headers,
-                    &[],
-                    &["(request-target)", "host", "date"],
-                );
+        // Authorized fetch (best-effort): sign the GET.
+        let _ = sign_request_rsa_sha256(
+            &state.private_key_pem,
+            &key_id,
+            &Method::GET,
+            &uri,
+            &mut headers,
+            &[],
+            &["(request-target)", "host", "date"],
+        );
 
-                let mut req = state
-                    .http
-                    .get(object_url)
-                    .header(
-                        "Accept",
-                        "application/activity+json, application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"",
-                    );
-                for (k, v) in headers.iter() {
-                    req = req.header(k.as_str(), v.to_str().unwrap_or_default());
-                }
-                req
-            };
-            match send_with_retry_metrics(build_req, 3, &state.net).await {
-                Ok(r) => r,
-                Err(e) => {
-                    enqueue_object_fetch(state, object_url, &format!("{e:#}"))?;
-                    return Ok(());
-                }
+        let resp = match crate::net_policy::get_checked(object_url, headers).await {
+            Ok(response) => response,
+            Err(error) => {
+                enqueue_object_fetch(state, object_url, &error.to_string())?;
+                return Ok(());
             }
         };
 
@@ -8751,8 +8960,10 @@ pub(crate) async fn fetch_and_store_object(
             enqueue_object_fetch(state, object_url, &format!("http {}", resp.status()))?;
             return Ok(());
         }
-        bytes = match resp.bytes().await {
-            Ok(b) => Some(b.to_vec()),
+        bytes = match crate::net_policy::read_capped(resp, crate::net_policy::MAX_OBJECT_DOC_BYTES)
+            .await
+        {
+            Ok(b) => Some(b),
             Err(e) => {
                 enqueue_object_fetch(state, object_url, &format!("{e:#}"))?;
                 return Ok(());
@@ -8764,6 +8975,10 @@ pub(crate) async fn fetch_and_store_object(
         enqueue_object_fetch(state, object_url, "empty response")?;
         return Ok(());
     };
+    anyhow::ensure!(
+        bytes.len() <= crate::net_policy::MAX_OBJECT_DOC_BYTES,
+        "object document too large"
+    );
     let v: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(e) => {
@@ -8772,6 +8987,10 @@ pub(crate) async fn fetch_and_store_object(
         }
     };
     let id = v.get("id").and_then(|vv| vv.as_str()).unwrap_or(object_url);
+    anyhow::ensure!(
+        same_origin(object_url, id),
+        "fetched object identity origin mismatch"
+    );
     let ty = v.get("type").and_then(|vv| vv.as_str()).unwrap_or("");
     let actor_opt = v
         .get("attributedTo")
@@ -9494,5 +9713,32 @@ mod search_coverage_tests {
             DAY,
             NOW
         ));
+    }
+}
+
+#[cfg(test)]
+mod request_origin_tests {
+    use super::*;
+    #[test]
+    fn forwarded_ip_cannot_override_direct_socket_or_p2p_origin() {
+        let (mut parts, _) = Request::builder()
+            .header("x-forwarded-for", "198.51.100.1, 203.0.113.8")
+            .header("x-real-ip", "198.51.100.7")
+            .body(Body::empty())
+            .unwrap()
+            .into_parts();
+        assert_eq!(client_ip_from_request(&parts), None);
+        parts.extensions.insert(axum::extract::ConnectInfo(
+            "192.0.2.4:4444".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        assert_eq!(client_ip_from_request(&parts).as_deref(), Some("192.0.2.4"));
+        parts
+            .extensions
+            .remove::<axum::extract::ConnectInfo<std::net::SocketAddr>>();
+        parts.extensions.insert(AuthenticatedRelayForward);
+        assert_eq!(
+            client_ip_from_request(&parts).as_deref(),
+            Some("203.0.113.8")
+        );
     }
 }

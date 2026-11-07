@@ -1,110 +1,128 @@
-## 2026-11-02 — Chiamate E2E, note audio e video
+# FEDI3 Announcements
 
-Chiamate audio/video 1:1 e di gruppo in mesh P2P, con condivisione schermo e
-audio del PC. La segnalazione passa negli envelope cifrati della chat, mentre
-i media viaggiano diretti tra i peer in WebRTC. Aggiunte anche note audio e
-video messaggi registrabili dal composer.
+Official updates from the maintainers. This page is read directly from the Git
+repository and the client checks it periodically. The Italian counterpart is
+[ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
-## 2026-11-02 — Ricerca globale nelle chat
+## 2026-11-07 — Security, reliability and repository update
 
-La ricerca ora copre tutte le conversazioni dell'utente, resta locale al core
-(nessuna query inviata alla rete), è limitata ai thread di cui si è membri e
-cerca solo il testo dei messaggi. Il client apre direttamente il thread con il
-filtro attivo.
+This update hardens federation, the relay and the client without changing the
+protocol:
 
-## 2026-11-02 — Chat: fissati, ricerca completa e inviti
+- Federation fetches validate every redirect and cap response bodies; relay
+  inbox signatures are bound to the declared actor.
+- Relay: bounded database concurrency, streaming media with Range/ETag, graceful
+  shutdown, atomic media quota and account deletion that removes blobs.
+- Core: 4 MiB P2P frame cap, atomic inbox deduplication, stricter device
+  signatures, typed dead-letter classification and bounded legacy sync.
+- Client: no UI freeze when the core fails, keyring recovery screen, encrypted
+  settings backup, foreground-aware polling, notification taps and preserved
+  chat drafts.
+- Repository: English documentation with Italian counterparts, green CI (Rust,
+  Flutter, scripts and PostgreSQL), cleaned runtime data.
 
-I gruppi possono fissare un messaggio condiviso (solo proprietario e
-amministratori), la ricerca ora interroga tutta la cronologia nel core e i
-gruppi hanno un link invito copiabile e un flusso per unirsi dalla schermata
-Chat.
+No protocol-breaking change: interoperability with classic ActivityPub
+instances is preserved.
 
-## 2026-11-02 — Chat: cerca e inoltra
+## 2026-11-02 — E2E calls, audio and video notes
 
-Aggiunte la ricerca dei messaggi dentro una conversazione e l'inoltro di un
-messaggio, con allegati, verso un'altra chat o gruppo. La ricerca filtra solo
-i messaggi già caricati; l'inoltro usa il percorso E2E esistente.
+1:1 and group audio/video calls in a P2P mesh, with screen sharing and PC audio.
+Signalling travels in encrypted chat envelopes, while media goes directly
+between peers over WebRTC. Recordable audio and video notes were also added to
+the composer.
 
-# Annunci Fedi3
+## 2026-11-02 — Global chat search
 
-Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente
-dal repository Git e il client la controlla periodicamente.
+Search now covers all of the user's conversations, stays local to the core (no
+query sent to the network), is limited to threads the user is a member of, and
+searches message text only. The client opens the thread directly with the
+filter active.
 
-## 2026-11-02 — Nuova chat in stile Telegram
+## 2026-11-02 — Chat: pinned messages, full search and invites
 
-La creazione di una chat ora è una schermata dedicata: scegli un contatto
-reciproco (ordinato per interazioni o alfabeticamente) e apri subito la
-conversazione, oppure seleziona più persone e crea un gruppo con nome. Nei
-gruppi sono disponibili ruoli proprietario/amministratore/membro e la rinomina.
+Groups can pin a shared message (owner and admins only), search now queries the
+full history in the core, and groups have a copyable invite link and a join flow
+from the Chat screen.
 
-## 2026-11-02 — Scopri e notifiche raggruppate
+## 2026-11-02 — Chat: search and forward
 
-La scheda Scopri ora mostra hashtag in tendenza e account suggeriti con follow
-in un tap. Le notifiche ripetute dello stesso autore vengono raggruppate e
-possono essere espanse.
+Added message search inside a conversation and forwarding of a message, with
+attachments, to another chat or group. Search filters only the messages already
+loaded; forwarding uses the existing E2E path.
 
-## 2026-11-02 — Post salvati e disponibili offline
+## 2026-11-02 — Telegram-style new chat
 
-I segnalibri ora conservano una copia locale del post: la nuova schermata
-«Salvati» (Configurazioni o rail destro) li mostra anche senza rete e permette
-di rimuoverli con uno swipe.
+Chat creation is now a dedicated screen: pick a mutual contact (sorted by
+interactions or alphabetically) and open the conversation immediately, or select
+multiple people and create a named group. Groups support owner/admin/member
+roles and renaming.
 
-## 2026-11-02 — I tag aprono davvero i post
+## 2026-11-02 — Discover and grouped notifications
 
-Corretto il percorso dei tag: i conteggi considerano solo tag con post
-esistenti, i nomi sono normalizzati e cliccando un hashtag si apre la ricerca
-con i post corrispondenti, senza risultati vuoti.
+The Discover tab now shows trending hashtags and suggested accounts with one-tap
+follow. Repeated notifications from the same author are grouped and can be
+expanded.
 
-## 2026-11-01 — Scopri gli hashtag in tendenza
+## 2026-11-02 — Saved posts available offline
 
-Il rail destro mostra ora gli hashtag più usati nel Fediverso e li apre
-direttamente nella ricerca. Corretta anche la ricerca hashtag, che prima
-restituiva sempre zero risultati.
+Bookmarks now keep a local copy of the post: the new "Saved" screen (Settings or
+right rail) shows them even without a network and lets you remove them with a
+swipe.
 
-## 2026-11-01 — Notifiche e composer più usabili
+## 2026-11-02 — Tags actually open posts
 
-Le notifiche ora sono righe compatte con avatar, stato di presenza e azioni
-rapide. Il composer accetta il trascinamento dei file e la selezione nativa,
-con anteprima degli allegati; la chat ha un campo di scrittura arrotondato in
-stile Telegram con pulsante di invio a gradiente.
+Fixed the tag path: counts only include tags with existing posts, names are
+normalized, and clicking a hashtag opens search with the matching posts instead
+of empty results.
 
-## 2026-11-01 — Chat in stile Telegram e presenza
+## 2026-11-01 — Discover trending hashtags
 
-Le chat hanno bolle con coda, avatar e spunte di consegna: singola, doppia e
-doppia con indicatore quando tutti i membri hanno letto. Lo stato online,
-occupato, AFK e offline viaggia tra utenti Fedi3 anche su relay diversi tramite
-buste cifrate, scade automaticamente ed è visibile sui avatar del client.
+The right rail now shows the most used hashtags in the fediverse and opens them
+directly in search. Also fixed hashtag search, which previously always returned
+zero results.
 
-## 2026-11-01 — Restyling del client
+## 2026-11-01 — More usable notifications and composer
 
-Nuova passata grafica: logo Fedi3 fisso con particelle luminose, bagliore aurora
-nel rail, banner profilo con mesh e avatar sovrapposto, lista chat a schede,
-composer in evidenza nella sidebar e azioni dei post più compatte. La ricerca
-è raggiungibile dalla barra della timeline e gli stati vuoti sono brandizzati.
+Notifications are now compact rows with avatars, presence status and quick
+actions. The composer supports drag-and-drop files and native selection with
+attachment previews; chat has a rounded Telegram-style composer with a gradient
+send button.
 
+## 2026-11-01 — Telegram-style chat and presence
 
-## 2026-11-01 — Composer avanzato e nuovo client
+Chats have bubbles with tails, avatars and delivery checks: single, double, and
+double with an indicator when every member has read. Online, busy, AFK and
+offline status travels between Fedi3 users even across different relays through
+encrypted envelopes, expires automatically and is visible on client avatars.
 
-Il client Fedi3 introduce un composer completo in stile editor: toolbar per
-titoli, caratteri, dimensioni, allineamento, liste, citazioni, link e media,
-anteprima live e statistiche del documento. La pubblicazione resta compatibile
-con il Fediverso.
+## 2026-11-01 — Client restyling
 
-- Nuovo rail con effetti particellari e logo fisso.
-- Scorciatoie Ctrl+1..7, Ctrl+N, Ctrl+F ed Esc.
-- Rimozione del composer rapido: la sidebar apre direttamente l'editor.
+New visual pass: fixed Fedi3 logo with glowing particles, aurora glow in the
+rail, mesh profile banner with overlapping avatar, card-based chat list, composer
+highlighted in the sidebar and more compact post actions. Search is reachable
+from the timeline bar and empty states are branded.
 
-## 2026-10-30 — Specifica OpenAPI e interoperabilità
+## 2026-11-01 — Advanced composer and new client
 
-Pubblicata la specifica OpenAPI 3.1 di core e relay (`docs/openapi.yaml`), con
-66 endpoint documentati. I test di interoperabilità con Mastodon e Misskey
-reali restano verdi.
+The Fedi3 client introduces a full editor-style composer: toolbar for headings,
+fonts, sizes, alignment, lists, quotes, links and media, live preview and
+document statistics. Publishing remains fediverse-compatible.
 
-## 2026-10-25 — Sicurezza e decentralizzazione
+- New rail with particle effects and fixed logo.
+- Shortcuts Ctrl+1..7, Ctrl+N, Ctrl+F and Esc.
+- Removed the quick composer: the sidebar opens the editor directly.
 
-Identità ancorata separata dal trasporto, spool cifrato e mesh dei relay sono
-in produzione. Il client mostra lo stato del core e del tunnel in tempo reale.
+## 2026-10-30 — OpenAPI spec and interoperability
+
+Published the OpenAPI 3.1 specification for core and relay
+(`docs/openapi.yaml`), with 66 documented endpoints. Interoperability tests
+against real Mastodon and Misskey instances remain green.
+
+## 2026-10-25 — Security and decentralization
+
+Anchored identity separated from transport, encrypted spool and relay mesh are
+in production. The client shows core and tunnel status in real time.
 
 ---
 
-Per segnalazioni e proposte: https://github.com/redhunt07/Fedi3/issues
+For reports and proposals: https://github.com/redhunt07/Fedi3/issues

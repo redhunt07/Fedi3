@@ -2300,4 +2300,64 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get followRequestsCoreStopped =>
       'Start the core to see follow requests.';
+
+  @override
+  String get networkingDiscoveryTitle => 'Peer discovery';
+
+  @override
+  String get networkingPublicDiscovery =>
+      'Use the public IPFS network for discovery';
+
+  @override
+  String get networkingPublicDiscoveryHint =>
+      'Additional bootstrap and peer discovery. Fedi3 messages are not stored in IPFS.';
+
+  @override
+  String get networkingPeerExchange =>
+      'Remember peers and exchange signed contacts';
+
+  @override
+  String get networkingPeerExchangeHint =>
+      'Reconnect known peers and help the Fedi3 network grow. Public contact announcements expose network addresses.';
+
+  @override
+  String get networkingBootstrapLabel => 'Independent Fedi3 bootstrap nodes';
+
+  @override
+  String get networkingBootstrapHint =>
+      'One libp2p multiaddress per line. Changes restart the local core.';
+
+  @override
+  String get profileImagesTitle => 'Profile images';
+
+  @override
+  String get profileImageDropHint =>
+      'Drop an image here or click to choose one';
+
+  @override
+  String get profilePasteImage => 'Paste image';
+
+  @override
+  String get profileRemoveImage => 'Remove image';
+
+  @override
+  String get profileDetailsTitle => 'Profile details';
+
+  @override
+  String get backupScopeWarning =>
+      'Encrypted settings backup: does not include cryptographic identity, messages or media. Transferring the same identity also requires a protected copy of the core data folder. Keep the passphrase separately.';
+
+  @override
+  String get backupPassphrase => 'Passphrase (at least 12 characters)';
+
+  @override
+  String get configRecoveryTitle => 'Configuration unavailable';
+
+  @override
+  String get keyringUnavailableHint =>
+      'Unlock your system keyring, then Retry. Linux requires libsecret and an active Secret Service (GNOME Keyring or KWallet). Your existing configuration is preserved.';
+
+  @override
+  String get corruptConfigHint =>
+      'The configuration and its backup could not be read. Restore a valid copy of the file, then Retry. Existing data is preserved.';
 }

@@ -1,3 +1,4 @@
+import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -18,6 +19,7 @@ import '../widgets/status_avatar.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/timeline_activity_card.dart';
 import '../theme/ui_tokens.dart';
+import '../utils/open_url.dart';
 import 'profile_edit_screen.dart';
 import 'relations_screen.dart';
 
@@ -83,8 +85,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {});
       }
       if (p?.outbox.isNotEmpty ?? false) {
-        final page =
-            await ActorRepository.instance.fetchOutboxPage(p!.outbox, limit: 20);
+        final page = await ActorRepository.instance
+            .fetchOutboxPage(p!.outbox, limit: 20);
         if (!mounted) return;
         setState(() {
           _outbox = page.items;
@@ -247,8 +249,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-
-
   Map<String, dynamic>? _noteMap(Map<String, dynamic> activity) {
     final obj = activity['object'];
     if (obj is String) return null;
@@ -274,7 +274,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       };
     }).toList(growable: false);
   }
-
 
   Future<void> _loadMore() async {
     final p = _profile;
@@ -470,7 +469,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _ensureFollowPoll() {
     if (_followPoll != null) return;
-    _followPoll = Timer.periodic(
+    _followPoll = AppActivity.periodic(
         const Duration(seconds: 6), (_) => _refreshFollowingStatus());
   }
 
@@ -666,7 +665,7 @@ class _ProfileHeader extends StatelessWidget {
             ),
             if (profile.summary.isNotEmpty) ...[
               const SizedBox(height: 10),
-              HtmlWidget(profile.summary),
+              HtmlWidget(profile.summary, onTapUrl: UrlPolicy.handleTap),
             ],
             if (fields.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -683,7 +682,9 @@ class _ProfileHeader extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
-                      Expanded(child: HtmlWidget(f.value)),
+                      Expanded(
+                          child: HtmlWidget(f.value,
+                              onTapUrl: UrlPolicy.handleTap)),
                     ],
                   ),
                 ),

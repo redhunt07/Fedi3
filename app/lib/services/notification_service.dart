@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class NotificationService {
@@ -11,6 +14,15 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _ready = false;
+  static final _taps = StreamController<String>.broadcast();
+  static Stream<String> get taps => _taps.stream;
+  static String? pendingThread;
+  static void _onTap(NotificationResponse response) {
+    final thread = response.payload;
+    if (thread == null || thread.isEmpty || thread.length > 512) return;
+    pendingThread = thread;
+    _taps.add(thread);
+  }
 
   static Future<void> init() async {
     if (_ready) return;
@@ -23,12 +35,24 @@ class NotificationService {
       macOS: darwin,
       linux: linux,
     );
-    await _plugin.initialize(settings);
-    _ready = true;
+    try {
+      await _plugin
+          .initialize(settings, onDidReceiveNotificationResponse: _onTap)
+          .timeout(const Duration(seconds: 3));
+      _ready = true;
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) {
+        final response = launch?.notificationResponse;
+        if (response != null) _onTap(response);
+      }
+    } catch (_) {
+      // Missing D-Bus/notification daemon must not prevent startup.
+      _ready = false;
+    }
   }
 
   static Future<void> showChatNotification(
-      {required String title, required String body}) async {
+      {required String title, required String body, String? threadId}) async {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -42,6 +66,15 @@ class NotificationService {
       macOS: DarwinNotificationDetails(),
       iOS: DarwinNotificationDetails(),
     );
-    await _plugin.show(1001, title, body, details);
+    try {
+      if (Platform.isAndroid) {
+        final allowed = await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
+        if (allowed == false) return;
+      }
+      await _plugin.show(1001, title, body, details, payload: threadId);
+    } catch (_) {/* Notification service may disappear after initialization. */}
   }
 }

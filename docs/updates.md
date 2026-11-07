@@ -27,9 +27,9 @@ Publish these assets in each release:
 
 The client compares the release tag with its local version and installs only newer versions.
 
-## Build + publish (guida completa)
+## Build + publish (complete guide)
 
-### 1) Aggiorna la versione app
+### 1) Update the app version
 
 `app/pubspec.yaml`
 
@@ -37,9 +37,9 @@ The client compares the release tag with its local version and installs only new
 version: X.Y.Z+N
 ```
 
-Usa lo stesso `X.Y.Z` del tag release. `N` e' il build number.
+Use the same `X.Y.Z` as the release tag. `N` is the build number.
 
-### Script completo (consigliato)
+### Complete script (recommended)
 
 Windows (manual update, no asset):
 
@@ -47,12 +47,12 @@ Windows (manual update, no asset):
 powershell -ExecutionPolicy Bypass -Command "iex (iwr -useb https://raw.githubusercontent.com/redhunt07/Fedi3/main/scripts/install_windows.ps1); Install-Fedi3 -UpdateOnly"
 ```
 
-La script installa anche il core come servizio in background:
+The script also installs the core as a background service:
 
-- Windows: task schedulata `Fedi3 Core`
+- Windows: scheduled task `Fedi3 Core`
 - Linux: systemd user service `fedi3-core.service`
 
-Comandi utili:
+Useful commands:
 
 Windows (PowerShell):
 
@@ -74,15 +74,15 @@ Linux:
 ./scripts/release_full_linux.sh patch
 ```
 
-Lo script fa:
-1) bump versione in `app/pubspec.yaml`
-2) build core in release
-3) build Flutter release
-4) crea asset + `checksums.txt` in `dist/` (include tutti i file presenti in `dist/`)
+The script does:
+1) bump the version in `app/pubspec.yaml`
+2) build the core in release
+3) build the Flutter release
+4) create assets + `checksums.txt` in `dist/` (includes all files present in `dist/`)
 
-Se vuoi evitare il bump:
+If you want to avoid the bump:
 
-Windows: non serve (aggiornamento manuale).
+Windows: not needed (manual update).
 
 Linux:
 
@@ -90,9 +90,9 @@ Linux:
 NO_BUMP=1 ./scripts/release_full_linux.sh patch
 ```
 
-### 2) Build Windows (local install)
+### 2) Windows build (local install)
 
-Esempio (Windows PowerShell):
+Example (Windows PowerShell):
 
 ```
 scripts\build_core.ps1 -Profile release
@@ -101,20 +101,20 @@ flutter pub get
 flutter build windows --release
 ```
 
-### 3) Build Linux (AppImage)
+### 3) Linux build (AppImage)
 
-Esempio (Linux):
+Example (Linux):
 
 ```
 flutter clean
 flutter pub get
 flutter build linux --release
 
-# Crea AppImage con il tuo toolchain (appimagetool o script esistente).
-# Output finale: Fedi3-linux-x86_64.AppImage
+# Create the AppImage with your toolchain (appimagetool or existing script).
+# Final output: Fedi3-linux-x86_64.AppImage
 ```
 
-### 4) Calcola SHA256
+### 4) Compute SHA256
 
 Linux:
 
@@ -122,16 +122,16 @@ Linux:
 sha256sum Fedi3-linux-x86_64.AppImage > checksums.txt
 ```
 
-Windows: non serve checksum (aggiornamento manuale).
+Windows: no checksum needed (manual update).
 
-### 5) Crea release su GitHub
+### 5) Create the GitHub release
 
 - Tag: `vX.Y.Z`
-- Titolo: `vX.Y.Z`
-- Carica asset:
+- Title: `vX.Y.Z`
+- Upload assets:
   - `Fedi3-linux-x86_64.AppImage`
   - `checksums.txt`
 
-### 6) Verifica
+### 6) Verify
 
-Avvia il client: dovrebbe comparire il banner “Aggiornamento disponibile”.
+Start the client: the "Update available" banner should appear.

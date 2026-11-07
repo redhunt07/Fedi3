@@ -13,6 +13,54 @@ pub struct SocialDb {
     path: PathBuf,
 }
 
+#[cfg(test)]
+mod inbox_claim_tests {
+    use super::*;
+    #[test]
+    fn sync_storage_failure_rolls_back_claim_and_allows_retry() {
+        let dir = crate::test_support::TempDir::new("sync-rollback");
+        let db = SocialDb::open(dir.path().join("social.db")).unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_feed BEFORE INSERT ON federated_feed BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END;").unwrap();
+        assert!(db
+            .store_synced_activity("one", "https://remote.test/alice", Some("Create"), b"{}")
+            .is_err());
+        assert!(!db.has_inbox_seen("one").unwrap());
+        assert!(db.get_inbox("one").unwrap().is_none());
+        conn.execute_batch("DROP TRIGGER fail_feed;").unwrap();
+        assert!(db
+            .store_synced_activity("one", "https://remote.test/alice", Some("Create"), b"{}")
+            .unwrap());
+        assert!(!db
+            .store_synced_activity("one", "https://remote.test/alice", Some("Create"), b"{}")
+            .unwrap());
+        assert!(db.get_inbox("one").unwrap().is_some());
+    }
+    #[test]
+    fn concurrent_duplicate_claim_has_exactly_one_winner() {
+        let dir = crate::test_support::TempDir::new("inbox-claim");
+        let db = std::sync::Arc::new(SocialDb::open(dir.path().join("social.db")).unwrap());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let tasks: Vec<_> = (0..16)
+            .map(|_| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    db.mark_inbox_seen("https://remote.test/activities/one")
+                        .unwrap()
+                })
+            })
+            .collect();
+        let winners = tasks
+            .into_iter()
+            .map(|task| task.join().unwrap())
+            .filter(|claimed| *claimed)
+            .count();
+        assert_eq!(winners, 1);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MediaItem {
     pub id: String,
@@ -113,6 +161,10 @@ pub struct ChatMessage {
 }
 
 impl SocialDb {
+    pub(crate) fn data_dir(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let path = db_path.as_ref().to_path_buf();
         let mut conn = open_with_pragmas(&path)?;
@@ -232,6 +284,12 @@ impl SocialDb {
               actor_id TEXT PRIMARY KEY,
               is_fedi3 INTEGER NOT NULL,
               last_seen_ms INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_actor_cache (
+              actor_id TEXT PRIMARY KEY,
+              fetched_at_ms INTEGER NOT NULL,
+              actor_json BLOB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS global_feed (
@@ -537,20 +595,35 @@ impl SocialDb {
 
     pub fn mark_inbox_seen(&self, activity_id: &str) -> Result<bool> {
         let conn = self.connect()?;
-        let exists: Option<String> = conn
-            .query_row(
-                "SELECT activity_id FROM inbox_seen WHERE activity_id=?1",
-                params![activity_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if exists.is_some() {
-            return Ok(false);
-        }
-        conn.execute(
-            "INSERT INTO inbox_seen(activity_id, seen_at_ms) VALUES (?1, ?2)",
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO inbox_seen(activity_id, seen_at_ms) VALUES (?1, ?2)",
             params![activity_id, now_ms()],
         )?;
+        Ok(inserted == 1)
+    }
+
+    /// Claim and store one synchronized activity atomically. A failed feed write
+    /// must not leave a dedup marker that causes a permanent skip on retry.
+    pub(crate) fn store_synced_activity(
+        &self,
+        id: &str,
+        actor: &str,
+        ty: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        let now = now_ms();
+        let claimed = tx.execute(
+            "INSERT OR IGNORE INTO inbox_seen(activity_id, seen_at_ms) VALUES(?1, ?2)",
+            params![id, now],
+        )?;
+        if claimed == 0 {
+            return Ok(false);
+        }
+        tx.execute("INSERT OR REPLACE INTO inbox_items(activity_id, created_at_ms, actor_id, type, activity_json) VALUES(?1, ?2, ?3, ?4, ?5)", params![id, now, actor, ty, bytes])?;
+        tx.execute("INSERT OR IGNORE INTO federated_feed(activity_id, created_at_ms, actor_id, size_bytes, last_access_ms, activity_json) VALUES(?1, ?2, ?3, ?4, ?2, ?5)", params![id, now, actor, bytes.len() as i64, bytes])?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -766,6 +839,26 @@ impl SocialDb {
         )
         .optional()
         .map_err(Into::into)
+    }
+
+    pub(crate) fn cached_chat_actor(&self, actor_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        let conn = open_with_pragmas(&self.path)?;
+        let result = conn.query_row("SELECT actor_json, fetched_at_ms FROM chat_actor_cache WHERE actor_id=?1 AND fetched_at_ms>=?2",
+            params![actor_id, now_ms() - 7 * 24 * 3600 * 1000], |row| Ok((row.get(0)?, row.get(1)?))).optional()?;
+        Ok(result)
+    }
+
+    pub(crate) fn cache_chat_actor(&self, actor_id: &str, actor_json: &[u8]) -> Result<()> {
+        anyhow::ensure!(
+            actor_json.len() <= crate::net_policy::MAX_ACTOR_DOC_BYTES,
+            "actor document too large"
+        );
+        let mut conn = open_with_pragmas(&self.path)?;
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO chat_actor_cache(actor_id, fetched_at_ms, actor_json) VALUES(?1, ?2, ?3) ON CONFLICT(actor_id) DO UPDATE SET fetched_at_ms=excluded.fetched_at_ms, actor_json=excluded.actor_json", params![actor_id, now_ms(), actor_json])?;
+        tx.execute("DELETE FROM chat_actor_cache WHERE actor_id IN (SELECT actor_id FROM chat_actor_cache ORDER BY fetched_at_ms DESC, actor_id LIMIT -1 OFFSET 256)", [])?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn store_inbox_activity(
@@ -1758,11 +1851,7 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
-    pub fn list_suggested_actor_ids(
-        &self,
-        exclude: &[String],
-        limit: u32,
-    ) -> Result<Vec<String>> {
+    pub fn list_suggested_actor_ids(&self, exclude: &[String], limit: u32) -> Result<Vec<String>> {
         let conn = self.connect()?;
         let limit = limit.min(20).max(1) as i64;
         let mut sql = String::from(
@@ -3874,6 +3963,10 @@ impl SocialDb {
             VALUES (?1, ?2, ?3, ?4)
             ON CONFLICT(message_id, actor_id)
             DO UPDATE SET status=excluded.status, updated_at_ms=excluded.updated_at_ms
+            WHERE (CASE excluded.status
+                WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 WHEN 'seen' THEN 3 ELSE -1 END)
+                >= (CASE chat_message_status.status
+                WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 WHEN 'seen' THEN 3 ELSE -1 END)
             "#,
             params![message_id, actor_id, status, now_ms()],
         )?;
@@ -3931,9 +4024,8 @@ impl SocialDb {
 
     pub fn get_actor_presence(&self, actor_id: &str) -> Result<Option<(String, i64)>> {
         let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT status, updated_at_ms FROM actor_presence WHERE actor_id=?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT status, updated_at_ms FROM actor_presence WHERE actor_id=?1")?;
         let mut rows = stmt.query(params![actor_id])?;
         if let Some(row) = rows.next()? {
             return Ok(Some((row.get(0)?, row.get(1)?)));
@@ -4140,12 +4232,7 @@ impl SocialDb {
         Ok(())
     }
 
-    pub fn set_chat_pin(
-        &self,
-        thread_id: &str,
-        message_id: &str,
-        pinned_by: &str,
-    ) -> Result<()> {
+    pub fn set_chat_pin(&self, thread_id: &str, message_id: &str, pinned_by: &str) -> Result<()> {
         let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO chat_pins (thread_id, message_id, pinned_by, pinned_at_ms) VALUES (?1, ?2, ?3, ?4)",
@@ -4178,6 +4265,34 @@ impl SocialDb {
             rusqlite::params![thread_id, from_actor, to_actor, call_id, action, data_json, now_ms()],
         )?;
         Ok(())
+    }
+
+    pub fn list_global_chat_call_signals(
+        &self,
+        self_actor: &str,
+        after_id: i64,
+        after_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.thread_id, s.from_actor, s.to_actor, s.call_id,
+                    s.action, s.data_json, s.created_at_ms, t.title
+             FROM chat_call_signals s JOIN chat_threads t ON t.thread_id=s.thread_id
+             WHERE s.id>?1 AND s.created_at_ms>=?2
+               AND (s.to_actor IS NULL OR s.to_actor=?3)
+               AND EXISTS(SELECT 1 FROM chat_members m WHERE m.thread_id=s.thread_id AND m.actor_id=?3)
+             ORDER BY s.id ASC LIMIT ?4")?;
+        let rows = stmt.query_map(rusqlite::params![after_id, after_ms, self_actor, limit.clamp(1,200)], |r| {
+            let data: String = r.get(6)?;
+            Ok(serde_json::json!({"id": r.get::<_, i64>(0)?, "thread_id": r.get::<_, String>(1)?,
+                "from_actor": r.get::<_, String>(2)?, "to_actor": r.get::<_, Option<String>>(3)?,
+                "call_id": r.get::<_, String>(4)?, "action": r.get::<_, String>(5)?,
+                "data": serde_json::from_str::<serde_json::Value>(&data).unwrap_or_default(),
+                "created_at_ms": r.get::<_, i64>(7)?, "thread_title": r.get::<_, Option<String>>(8)?}))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn list_chat_call_signals(
@@ -4268,10 +4383,7 @@ impl SocialDb {
         Ok(out)
     }
 
-    pub fn get_chat_pin(
-        &self,
-        thread_id: &str,
-    ) -> Result<Option<(String, String, i64)>> {
+    pub fn get_chat_pin(&self, thread_id: &str) -> Result<Option<(String, String, i64)>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT message_id, pinned_by, pinned_at_ms FROM chat_pins WHERE thread_id=?1",
@@ -4304,21 +4416,18 @@ impl SocialDb {
                ORDER BY created_at_ms DESC
                LIMIT ?3"#,
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![thread_id, pattern, limit as i64],
-            |row| {
-                Ok(ChatMessage {
-                    message_id: row.get(0)?,
-                    thread_id: row.get(1)?,
-                    sender_actor: row.get(2)?,
-                    sender_device: row.get(3)?,
-                    created_at_ms: row.get(4)?,
-                    edited_at_ms: row.get(5)?,
-                    deleted: row.get::<_, i64>(6)? != 0,
-                    body_json: row.get(7)?,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(rusqlite::params![thread_id, pattern, limit as i64], |row| {
+            Ok(ChatMessage {
+                message_id: row.get(0)?,
+                thread_id: row.get(1)?,
+                sender_actor: row.get(2)?,
+                sender_device: row.get(3)?,
+                created_at_ms: row.get(4)?,
+                edited_at_ms: row.get(5)?,
+                deleted: row.get::<_, i64>(6)? != 0,
+                body_json: row.get(7)?,
+            })
+        })?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -4559,10 +4668,7 @@ fn parse_url_field(
 
 /// Current schema version. Bump when adding a numbered migration below.
 ///
-/// Note: `delivery_queue` shares this `schema_version` table and rewrites it with its own
-/// `DELIVERY_SCHEMA_VERSION` (currently 2) on every open, so this constant must stay in sync
-/// with that value. New social columns are therefore added through the idempotent
-/// `ensure_columns` migration above instead of a version bump.
+/// Social storage migration version, independent of delivery queue migrations.
 pub const SCHEMA_VERSION: u32 = 2;
 
 fn open_with_pragmas(path: &Path) -> Result<Connection> {
@@ -4602,33 +4708,7 @@ fn secure_db_permissions(path: &Path) {
 fn secure_db_permissions(_path: &Path) {}
 
 fn migrate(conn: &mut Connection) -> Result<()> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
-    let current: Option<u32> = conn
-        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    // A pre-existing DB without a version row is treated as version 1 (the original schema).
-    let mut version = current.unwrap_or(1);
-    if version > SCHEMA_VERSION {
-        anyhow::bail!(
-            "database schema version {version} is newer than this binary ({SCHEMA_VERSION}); upgrade the app"
-        );
-    }
-    if version == 0 {
-        version = 1;
-    }
-    // The outbox visibility column and follow_requests table are created above with
-    // CREATE TABLE IF NOT EXISTS / ensure_columns; nothing else to migrate yet.
-    let _ = version;
-    let tx = conn.transaction()?;
-    tx.execute("DELETE FROM schema_version", [])?;
-    tx.execute(
-        "INSERT INTO schema_version(version) VALUES (?1)",
-        params![SCHEMA_VERSION],
-    )?;
-    tx.commit()?;
-    Ok(())
+    crate::schema::mark_module_version(conn, "social_schema_version", SCHEMA_VERSION)
 }
 
 fn ensure_columns(conn: &Connection, table: &str, cols: &[(&str, &str)]) -> Result<()> {
@@ -4744,7 +4824,11 @@ mod hashtag_tests {
             .expect("insert tag 2");
             conn.execute(
                 "INSERT INTO object_tags(object_id,tag_type,name,href) VALUES (?1,'Hashtag',?2,?3)",
-                params!["obj-1", "activitypub", "https://fedi3.test/tags/activitypub"],
+                params![
+                    "obj-1",
+                    "activitypub",
+                    "https://fedi3.test/tags/activitypub"
+                ],
             )
             .expect("insert tag 3");
             conn.execute(
@@ -4783,6 +4867,7 @@ mod hashtag_tests {
     }
 }
 
+#[cfg(test)]
 mod chat_pin_search_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4798,7 +4883,8 @@ mod chat_pin_search_tests {
         ));
         let _ = std::fs::remove_file(&path);
         let db = SocialDb::open(&path).expect("open db");
-        db.create_chat_thread("t1", "group", Some("Team")).expect("thread");
+        db.create_chat_thread("t1", "group", Some("Team"))
+            .expect("thread");
         db.upsert_chat_member("t1", "https://a.test/users/alice", "owner")
             .expect("member");
         for (id, text) in [
@@ -4824,7 +4910,9 @@ mod chat_pin_search_tests {
     #[test]
     fn chat_search_matches_text_and_escapes_wildcards() {
         let (db, path) = setup();
-        let hits = db.search_chat_messages("t1", "notizia", 10).expect("search");
+        let hits = db
+            .search_chat_messages("t1", "notizia", 10)
+            .expect("search");
         assert_eq!(hits.len(), 2);
         let percent = db.search_chat_messages("t1", "100%", 10).expect("search");
         assert_eq!(percent.len(), 1);
@@ -4836,6 +4924,40 @@ mod chat_pin_search_tests {
             .search_chat_messages("t1", "op", 10)
             .expect("search")
             .is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn global_signals_use_id_cursor_and_filter_membership_and_recipient() {
+        let (db, path) = setup();
+        let alice = "https://a.test/users/alice";
+        db.create_chat_thread("private", "group", Some("Private"))
+            .unwrap();
+        for (thread, target, call) in [
+            ("t1", None, "a"),
+            ("private", None, "b"),
+            ("t1", Some("https://a.test/users/carol"), "c"),
+            ("t1", Some(alice), "d"),
+        ] {
+            db.insert_chat_call_signal(
+                thread,
+                "https://a.test/users/bob",
+                target,
+                call,
+                "invite",
+                "{}",
+            )
+            .unwrap();
+        }
+        let rows = db.list_global_chat_call_signals(alice, 0, 0, 100).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["call_id"], "a");
+        assert_eq!(rows[1]["call_id"], "d");
+        let next = db
+            .list_global_chat_call_signals(alice, rows[0]["id"].as_i64().unwrap(), 0, 100)
+            .unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0]["call_id"], "d");
         let _ = std::fs::remove_file(path);
     }
 
@@ -4874,7 +4996,9 @@ mod chat_pin_search_tests {
             .expect("list");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|(_, _, _, _, _, _, _)| true));
-        assert!(rows.iter().any(|(_, _, _, _, action, _, _)| action == "offer"));
+        assert!(rows
+            .iter()
+            .any(|(_, _, _, _, action, _, _)| action == "offer"));
         let after = db
             .list_chat_call_signals(
                 "t1",

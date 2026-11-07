@@ -1,28 +1,28 @@
 # Relay Sync API
 
-API incrementali del relay per la convergenza verso backend `relay-authoritative`.
+Incremental relay APIs for convergence toward `relay-authoritative` backends.
 
 ## Auth
 
-Tutti gli endpoint richiedono:
+All endpoints require:
 
 - `Authorization: Bearer <user_token>`
-- oppure token admin relay
+- or relay admin token
 
-La query deve includere `username=<local-user>`.
+The query must include `username=<local-user>`.
 
 ## Endpoints
 
 ### `GET /sync/bootstrap`
 
-Restituisce snapshot iniziale e cursori correnti:
+Returns the initial snapshot and current cursors:
 
 - `events`
 - `notifications`
 - `chat`
 - `timeline.home`
 
-Query principali:
+Main query parameters:
 
 - `username`
 - `event_limit`
@@ -32,7 +32,7 @@ Query principali:
 
 ### `GET /sync/events`
 
-Stream incrementale generico degli eventi relay-first.
+Generic incremental stream of relay-first events.
 
 Query:
 
@@ -43,7 +43,7 @@ Query:
 
 ### `GET /sync/stream`
 
-Stream realtime SSE relay-first. Eventi principali:
+Relay-first realtime SSE stream. Main events:
 
 - `snapshot`
 - `events`
@@ -61,12 +61,12 @@ Header/query:
 
 - `Authorization: Bearer ...`
 - `username`
-- `since_id` opzionale
-- `Last-Event-ID` opzionale (resume)
+- optional `since_id`
+- optional `Last-Event-ID` (resume)
 
 ### `GET /sync/timeline/home`
 
-Read model server-side della home timeline.
+Server-side read model of the home timeline.
 
 Query:
 
@@ -77,7 +77,7 @@ Query:
 
 ### `GET /sync/notifications`
 
-Read model server-side delle notifiche.
+Server-side read model of notifications.
 
 Query:
 
@@ -88,7 +88,7 @@ Query:
 
 ### `GET /sync/chat`
 
-Replay incrementale degli envelope chat cifrati.
+Incremental replay of encrypted chat envelopes.
 
 Query:
 
@@ -99,7 +99,7 @@ Query:
 
 ### `POST /sync/chat/envelope`
 
-Persistenza relay-side di envelope chat E2EE.
+Relay-side persistence of E2EE chat envelopes.
 
 Body:
 
@@ -107,46 +107,46 @@ Body:
 - `thread_id`
 - `message_id`
 - `sender_actor`
-- `sender_user` opzionale
+- optional `sender_user`
 - `recipient_users`
 - `envelope`
-- `created_at_ms` opzionale
+- optional `created_at_ms`
 
 ### `POST /sync/chat/ack`
 
-Ack per device dei messaggi chat.
+Per-device ack for chat messages.
 
 Body:
 
 - `username`
 - `device_id`
 - `message_id`
-- `acked_at_ms` opzionale
+- optional `acked_at_ms`
 
 ### `POST /sync/chat/delete`
 
-Soft-delete user scoped di un messaggio chat relay-first.
+User-scoped soft-delete of a relay-first chat message.
 
 Body:
 
 - `username`
 - `thread_id`
 - `message_id`
-- `deleted_at_ms` opzionale
+- optional `deleted_at_ms`
 
 ### `POST /sync/chat/thread/delete`
 
-Soft-delete user scoped dell'intero thread relay-first.
+User-scoped soft-delete of the entire relay-first thread.
 
 Body:
 
 - `username`
 - `thread_id`
-- `deleted_at_ms` opzionale
+- optional `deleted_at_ms`
 
 ## Notes
 
-- `event_id` e `cursor_id` sono monotoni per `relay_event_log` e `relay_chat_envelopes`.
-- La home timeline usa il read model `relay_legacy_feed` e cursori basati su `inserted_at_ms`.
-- Gli eventi ActivityPub in ingresso vengono scritti nel `relay_event_log` e proiettati nelle notifiche e nello stato oggetti prima del consumo client.
-- Limite dedicato `/sync/*`: `FEDI3_RELAY_RL_SYNC_PER_MIN` (default `1200`).
+- `event_id` and `cursor_id` are monotonic for `relay_event_log` and `relay_chat_envelopes`.
+- The home timeline uses the `relay_legacy_feed` read model and cursors based on `inserted_at_ms`.
+- Incoming ActivityPub events are written to `relay_event_log` and projected into notifications and object state before client consumption.
+- Dedicated `/sync/*` limit: `FEDI3_RELAY_RL_SYNC_PER_MIN` (default `1200`).
