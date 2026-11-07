@@ -622,7 +622,19 @@ impl SocialDb {
             return Ok(false);
         }
         tx.execute("INSERT OR REPLACE INTO inbox_items(activity_id, created_at_ms, actor_id, type, activity_json) VALUES(?1, ?2, ?3, ?4, ?5)", params![id, now, actor, ty, bytes])?;
-        tx.execute("INSERT OR IGNORE INTO federated_feed(activity_id, created_at_ms, actor_id, size_bytes, last_access_ms, activity_json) VALUES(?1, ?2, ?3, ?4, ?2, ?5)", params![id, now, actor, bytes.len() as i64, bytes])?;
+        let parsed = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+        let object_id = parsed.as_ref().and_then(activity_object_ref_id);
+        let insert_feed = match ty {
+            Some("Create") => match object_id.as_deref() {
+                Some(obj_id) => !feed_has_create_for_object_conn(&tx, obj_id).unwrap_or(false),
+                None => true,
+            },
+            Some("Announce") => true,
+            _ => false,
+        };
+        if insert_feed {
+            tx.execute("INSERT OR IGNORE INTO federated_feed(activity_id, created_at_ms, actor_id, size_bytes, last_access_ms, activity_json) VALUES(?1, ?2, ?3, ?4, ?2, ?5)", params![id, now, actor, bytes.len() as i64, bytes])?;
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -1557,7 +1569,6 @@ impl SocialDb {
             VALUES (?1, ?2, ?2, 0, ?3, ?4, ?5, ?6)
             ON CONFLICT(object_id) DO UPDATE SET
               updated_at_ms=excluded.updated_at_ms,
-              deleted=0,
               object_json=excluded.object_json,
               actor_id=COALESCE(excluded.actor_id, objects.actor_id),
               size_bytes=excluded.size_bytes,
@@ -1570,6 +1581,178 @@ impl SocialDb {
         let _ = self.store_meta_from_object_json(object_id, &conn);
         let _ = self.store_tags_from_object_json(object_id, &conn);
         Ok(())
+    }
+
+    /// Delete is terminal: once an object has been tombstoned it must not be
+    /// resurrected by a replayed Create, a late Update or a cache refetch.
+    pub fn is_object_deleted(&self, object_id: &str) -> Result<bool> {
+        let conn = self.connect()?;
+        let deleted: Option<i64> = conn
+            .query_row(
+                "SELECT deleted FROM objects WHERE object_id=?1",
+                params![object_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(deleted.unwrap_or(0) != 0)
+    }
+
+    /// Batch variant used by timeline handlers to avoid one query per item.
+    pub fn list_deleted_object_ids(
+        &self,
+        object_ids: &[String],
+    ) -> Result<std::collections::HashSet<String>> {
+        if object_ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let conn = self.connect()?;
+        let placeholders = std::iter::repeat("?")
+            .take(object_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT object_id FROM objects WHERE deleted=1 AND object_id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(object_ids.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        let mut out = std::collections::HashSet::new();
+        for row in rows {
+            out.insert(row?);
+        }
+        Ok(out)
+    }
+
+    /// Rewrites the embedded object of every stored Create/Update activity that
+    /// references `object_id`, so an edit is reflected in timelines, profiles and
+    /// the AP outbox instead of only in the `objects` table.
+    pub fn rewrite_activity_objects_for_object(
+        &self,
+        object_id: &str,
+        new_object_json: &[u8],
+    ) -> Result<u64> {
+        let object_id = object_id.trim();
+        if object_id.is_empty() {
+            return Ok(0);
+        }
+        let new_obj: serde_json::Value = serde_json::from_slice(new_object_json)?;
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        let mut updated = 0u64;
+        for (table, pk) in [
+            ("outbox_items", "id"),
+            ("inbox_items", "activity_id"),
+            ("global_feed", "activity_id"),
+            ("federated_feed", "activity_id"),
+        ] {
+            let sql = format!(
+                "SELECT {pk}, activity_json FROM {table} WHERE instr(CAST(activity_json AS TEXT), ?1) > 0"
+            );
+            let mut stmt = tx.prepare(&sql)?;
+            let rows = stmt.query_map(params![object_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            let mut changes: Vec<(String, Vec<u8>)> = Vec::new();
+            for row in rows {
+                let (pk_val, bytes) = row?;
+                let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                    continue;
+                };
+                let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty != "Create" && ty != "Update" {
+                    continue;
+                }
+                if replace_object_in_activity(&mut v, object_id, &new_obj) {
+                    if let Ok(new_bytes) = serde_json::to_vec(&v) {
+                        changes.push((pk_val, new_bytes));
+                    }
+                }
+            }
+            drop(stmt);
+            for (pk_val, bytes) in changes {
+                let size = bytes.len() as i64;
+                if table == "global_feed" || table == "federated_feed" {
+                    tx.execute(
+                        &format!(
+                            "UPDATE {table} SET activity_json=?2, size_bytes=?3 WHERE {pk}=?1"
+                        ),
+                        params![pk_val, bytes, size],
+                    )?;
+                } else {
+                    tx.execute(
+                        &format!("UPDATE {table} SET activity_json=?2 WHERE {pk}=?1"),
+                        params![pk_val, bytes],
+                    )?;
+                }
+                updated = updated.saturating_add(1);
+            }
+        }
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    /// Removes every stored Create/Update activity that references `object_id`.
+    /// Delete activities are kept: they are the record of the deletion and are
+    /// needed by P2P/device outbox synchronization.
+    pub fn remove_create_update_activities_for_object(&self, object_id: &str) -> Result<u64> {
+        let object_id = object_id.trim();
+        if object_id.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        let mut removed = 0u64;
+        for (table, pk) in [
+            ("outbox_items", "id"),
+            ("inbox_items", "activity_id"),
+            ("global_feed", "activity_id"),
+            ("federated_feed", "activity_id"),
+        ] {
+            let sql = format!(
+                "SELECT {pk}, activity_json FROM {table} WHERE instr(CAST(activity_json AS TEXT), ?1) > 0"
+            );
+            let mut stmt = tx.prepare(&sql)?;
+            let rows = stmt.query_map(params![object_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            let mut doomed: Vec<String> = Vec::new();
+            for row in rows {
+                let (pk_val, bytes) = row?;
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                    continue;
+                };
+                let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty != "Create" && ty != "Update" {
+                    continue;
+                }
+                if activity_object_ref_id(&v).as_deref() == Some(object_id) {
+                    doomed.push(pk_val);
+                }
+            }
+            drop(stmt);
+            for pk_val in doomed {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE {pk}=?1"),
+                    params![pk_val],
+                )?;
+                removed = removed.saturating_add(1);
+            }
+        }
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    /// True when a Create activity for this object is already present in the
+    /// public feeds. Used to avoid duplicating a post when a peer replays its
+    /// outbox or a legacy instance re-serves an edited Create.
+    pub fn feed_has_create_for_object(&self, object_id: &str) -> Result<bool> {
+        let object_id = object_id.trim();
+        if object_id.is_empty() {
+            return Ok(false);
+        }
+        let conn = self.connect()?;
+        feed_has_create_for_object_conn(&conn, object_id)
     }
 
     pub fn mark_object_deleted(&self, object_id: &str) -> Result<()> {
@@ -4780,6 +4963,92 @@ pub fn parse_cursor(cursor: &str) -> Option<(i64, String)> {
             .ok()
             .map(|v| (v, "\u{10FFFF}".to_string())),
     }
+}
+
+/// Extracts the object id referenced by an activity, including the
+/// `Create{object:{object:Note}}` wrapper form used by some relays.
+pub(crate) fn activity_object_ref_id(activity: &serde_json::Value) -> Option<String> {
+    fn id_from(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => {
+                let s = s.trim();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
+            }
+            serde_json::Value::Object(map) => map
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+
+    let obj = activity.get("object")?;
+    match obj {
+        serde_json::Value::Array(arr) => arr.iter().find_map(id_from),
+        serde_json::Value::Object(map) => {
+            id_from(obj).or_else(|| map.get("object").and_then(id_from))
+        }
+        _ => id_from(obj),
+    }
+}
+
+/// Replaces the embedded object of a Create/Update activity when it matches
+/// `object_id`. Handles both `object: Note` and `object: {object: Note}`.
+fn replace_object_in_activity(
+    activity: &mut serde_json::Value,
+    object_id: &str,
+    new_object: &serde_json::Value,
+) -> bool {
+    let Some(obj) = activity.get_mut("object") else {
+        return false;
+    };
+    match obj {
+        serde_json::Value::Object(map) => {
+            if map.get("id").and_then(|v| v.as_str()) == Some(object_id) {
+                *obj = new_object.clone();
+                return true;
+            }
+            if let Some(inner) = map.get_mut("object") {
+                if let serde_json::Value::Object(im) = inner {
+                    if im.get("id").and_then(|v| v.as_str()) == Some(object_id) {
+                        *inner = new_object.clone();
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn feed_has_create_for_object_conn(conn: &Connection, object_id: &str) -> Result<bool> {
+    let exists: Option<i64> = conn
+        .query_row(
+            r#"
+            SELECT 1 FROM (
+              SELECT activity_json FROM federated_feed WHERE instr(CAST(activity_json AS TEXT), ?1) > 0
+              UNION ALL
+              SELECT activity_json FROM global_feed WHERE instr(CAST(activity_json AS TEXT), ?1) > 0
+            )
+            WHERE json_extract(CAST(activity_json AS TEXT), '$.type') = 'Create'
+              AND COALESCE(
+                json_extract(CAST(activity_json AS TEXT), '$.object.id'),
+                json_extract(CAST(activity_json AS TEXT), '$.object.object.id')
+              ) = ?1
+            LIMIT 1
+            "#,
+            params![object_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(exists.is_some())
 }
 
 pub fn encode_cursor(ms: i64, id: &str) -> String {

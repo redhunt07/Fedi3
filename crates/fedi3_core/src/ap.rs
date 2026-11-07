@@ -2565,6 +2565,53 @@ async fn device_inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
     .into_response()
 }
 
+/// Filters and hydrates raw feed rows for a timeline response:
+/// - drops activities whose object has been tombstoned (deleted posts must not
+///   come back after a refresh, even if a peer replays an old Create);
+/// - keeps only one Create row per object (edits/replays must not duplicate);
+/// - replaces embedded objects with the latest stored version so edits are shown.
+fn timeline_values(state: &ApState, raw_items: Vec<Vec<u8>>) -> Vec<serde_json::Value> {
+    let mut parsed = Vec::new();
+    let mut object_ids = Vec::new();
+    for bytes in raw_items {
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        if let Some(id) = activity_object_ref_id(&v) {
+            object_ids.push(id);
+        }
+        parsed.push(v);
+    }
+    let deleted = state
+        .social
+        .list_deleted_object_ids(&object_ids)
+        .unwrap_or_default();
+    let mut seen_create_objects = std::collections::HashSet::new();
+    let mut cache: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for mut v in parsed {
+        let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        // Timeline entries are only Create/Announce; Update/Delete are applied
+        // to the existing rows and must not occupy a slot in the response.
+        if ty != "Create" && ty != "Announce" {
+            continue;
+        }
+        let obj_id = activity_object_ref_id(&v);
+        if let Some(id) = obj_id.as_deref() {
+            if deleted.contains(id) {
+                continue;
+            }
+            if ty == "Create" && !seen_create_objects.insert(id.to_string()) {
+                continue;
+            }
+        }
+        hydrate_activity(state, &mut v, &mut cache);
+        out.push(v);
+    }
+    out
+}
+
 async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (parts, _body) = req.into_parts();
     if let Err(resp) = require_internal(state, &parts.headers) {
@@ -2588,18 +2635,12 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            hydrate_activity(state, &mut v, &mut cache);
-            items.push(v);
-        }
-    }
+    let total = page.total;
     let next = page.next;
+    let raw: Vec<Vec<u8>> = page.items.into_iter().map(|it| it.activity_json).collect();
+    let items = timeline_values(state, raw);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
       "next": next,
     }))
@@ -2629,19 +2670,14 @@ async fn timeline_federated(state: &ApState, req: Request<Body>) -> Response<Bod
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            hydrate_activity(state, &mut v, &mut cache);
-            items.push(v);
-        }
-    }
+    let total = page.total;
+    let next = page.next;
+    let raw: Vec<Vec<u8>> = page.items.into_iter().map(|it| it.activity_json).collect();
+    let items = timeline_values(state, raw);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
     }))
     .into_response()
 }
@@ -2669,19 +2705,14 @@ async fn timeline_home(state: &ApState, req: Request<Body>) -> Response<Body> {
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            hydrate_activity(state, &mut v, &mut cache);
-            items.push(v);
-        }
-    }
+    let total = page.total;
+    let next = page.next;
+    let raw: Vec<Vec<u8>> = page.items.into_iter().map(|it| it.activity_json).collect();
+    let items = timeline_values(state, raw);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
     }))
     .into_response()
 }
@@ -2709,19 +2740,14 @@ async fn timeline_unified(state: &ApState, req: Request<Body>) -> Response<Body>
         Ok(p) => p,
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
-    let mut items = Vec::<serde_json::Value>::new();
-    let mut cache: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-    for it in page.items {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&it.activity_json) {
-            hydrate_activity(state, &mut v, &mut cache);
-            items.push(v);
-        }
-    }
+    let total = page.total;
+    let next = page.next;
+    let raw: Vec<Vec<u8>> = page.items.into_iter().map(|it| it.activity_json).collect();
+    let items = timeline_values(state, raw);
     axum::Json(serde_json::json!({
-      "total": page.total,
+      "total": total,
       "items": items,
-      "next": page.next,
+      "next": next,
     }))
     .into_response()
 }
@@ -6075,12 +6101,16 @@ async fn outbox_get(
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
 
-    let mut items = Vec::<serde_json::Value>::new();
-    for raw in page.items {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) {
-            items.push(v);
-        }
-    }
+    // Apply the same deleted/edited filtering used by the timelines, then expose
+    // only posts (Create/Announce) as the AP outbox: Update/Delete are applied in
+    // place and must not show up as extra profile entries.
+    let mut items = timeline_values(state, page.items);
+    items.retain(|v| {
+        matches!(
+            v.get("type").and_then(|t| t.as_str()),
+            Some("Create") | Some("Announce")
+        )
+    });
 
     let next = page
         .next
@@ -6189,6 +6219,16 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             map.insert(
                 "actor".to_string(),
                 serde_json::Value::String(expected_actor.clone()),
+            );
+        }
+    }
+
+    // Legacy servers (notably Mastodon) silently drop activities without an AS2 context.
+    if activity.get("@context").is_none() {
+        if let serde_json::Value::Object(map) = &mut activity {
+            map.insert(
+                "@context".to_string(),
+                serde_json::Value::String("https://www.w3.org/ns/activitystreams".to_string()),
             );
         }
     }
@@ -6310,6 +6350,20 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         if !obj_id.contains(&local_prefix) {
             return simple(StatusCode::FORBIDDEN, "not owner");
         }
+        // Preserve fields omitted by a partial Update (published, attachments,
+        // tags, ...) so an edit does not erase the post metadata or its media.
+        if let Ok(Some(existing)) = state.social.get_object_json(&obj_id) {
+            if let Ok(existing_v) = serde_json::from_slice::<serde_json::Value>(&existing) {
+                if let Some(existing_map) = existing_v.as_object() {
+                    for (k, v) in existing_map {
+                        if k == "id" || k == "type" || k == "content" || k == "updated" {
+                            continue;
+                        }
+                        obj_map.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
+                }
+            }
+        }
         if let Some(attributed) = obj_map.get("attributedTo").and_then(|v| v.as_str()) {
             if attributed != expected_actor {
                 return simple(StatusCode::FORBIDDEN, "not owner");
@@ -6386,6 +6440,10 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}"));
     }
 
+    // Keep the outbox/feeds/object cache consistent for local edits and deletions.
+    // Without this the old Create row survives and reappears on profile/timeline refresh.
+    let _ = apply_activity_object_semantics(state, &activity).await;
+
     // Mirror local Like/Announce/EmojiReact and handle Undo for immediate UI counts.
     if let Some(ty) = activity.get("type").and_then(|v| v.as_str()) {
         let actor = expected_actor.as_str();
@@ -6444,12 +6502,32 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     }
 
     // Add our own public posts to the federated feed (what our "instance" has seen).
-    if is_public_activity(&activity) {
-        let _ = state.social.insert_federated_feed_item(
-            &activity_id,
-            Some(&expected_actor),
-            activity_bytes.clone(),
-        );
+    // Only Create/Announce are timeline entries; Update/Delete are applied in place
+    // by `apply_activity_object_semantics`.
+    let is_timeline_item = matches!(
+        activity.get("type").and_then(|v| v.as_str()),
+        Some("Create") | Some("Announce")
+    );
+    if is_timeline_item && is_public_activity(&activity) {
+        let already_present = if activity.get("type").and_then(|v| v.as_str()) == Some("Create") {
+            activity_object_ref_id(&activity)
+                .map(|obj_id| {
+                    state
+                        .social
+                        .feed_has_create_for_object(&obj_id)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if !already_present {
+            let _ = state.social.insert_federated_feed_item(
+                &activity_id,
+                Some(&expected_actor),
+                activity_bytes.clone(),
+            );
+        }
 
         // Also add to the DHT/global feed locally so a single peer sees its own public notes even
         // before any gossip round-trips.
@@ -7978,86 +8056,53 @@ pub(crate) async fn process_inbox_activity(
 
             store_generic_activity(state, activity)?;
 
-            // Basic object/reaction storage to support timelines and interactions.
-            let actor = activity.get("actor").and_then(|v| v.as_str()).unwrap_or("");
-            match ty {
-                "Create" | "Update" => {
-                    if let Some((obj_id, obj_json)) = extract_object(activity) {
-                        let actor_opt = if actor.is_empty() { None } else { Some(actor) };
-
-                        // Index replies (Create Note with inReplyTo) so UI can show replies under posts.
-                        if ty == "Create" {
-                            if let Ok(obj_v) =
-                                serde_json::from_slice::<serde_json::Value>(&obj_json)
+            // Index replies (Create Note with inReplyTo) so UI can show replies under posts.
+            if ty == "Create" {
+                if let Some((_, obj_json)) = extract_object_deep(activity) {
+                    if let Ok(obj_v) = serde_json::from_slice::<serde_json::Value>(&obj_json) {
+                        if obj_v.get("type").and_then(|v| v.as_str()) == Some("Note") {
+                            if let Some(in_reply_to) =
+                                obj_v.get("inReplyTo").and_then(|v| v.as_str())
                             {
-                                if obj_v.get("type").and_then(|v| v.as_str()) == Some("Note") {
-                                    if let Some(in_reply_to) =
-                                        obj_v.get("inReplyTo").and_then(|v| v.as_str())
-                                    {
-                                        let in_reply_to = in_reply_to.trim();
-                                        if !in_reply_to.is_empty() {
-                                            let act_store_id = activity_dedup_id(activity);
-                                            let _ = state.social.upsert_note_reply(
-                                                in_reply_to,
-                                                &act_store_id,
-                                                now_ms(),
-                                            );
-                                        }
-                                    }
+                                let in_reply_to = in_reply_to.trim();
+                                if !in_reply_to.is_empty() {
+                                    let act_store_id = activity_dedup_id(activity);
+                                    let _ = state.social.upsert_note_reply(
+                                        in_reply_to,
+                                        &act_store_id,
+                                        now_ms(),
+                                    );
                                 }
                             }
                         }
+                    }
+                }
+            }
 
-                        let _ = state
-                            .social
-                            .upsert_object_with_actor(&obj_id, actor_opt, obj_json);
-                    } else if let Some(obj_id) = extract_object_id(activity) {
+            // Apply Create/Update/Delete semantics to the object store, the feeds and
+            // the outbox. This is what keeps edits and deletions visible after a refresh.
+            apply_activity_object_semantics(state, activity).await?;
+
+            // Basic reaction storage to support interactions.
+            let actor = activity.get("actor").and_then(|v| v.as_str()).unwrap_or("");
+            if ty == "Announce" || ty == "Like" || ty == "EmojiReact" {
+                if !actor.is_empty() {
+                    if let Some(obj_id) = extract_object_id(activity) {
+                        let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        if !act_id.is_empty() {
+                            let content = activity
+                                .get("content")
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty());
+                            let _ = state
+                                .social
+                                .upsert_reaction_with_content(act_id, ty, actor, &obj_id, content);
+                        }
+                        // Ensure we have the object locally.
                         let _ = fetch_and_store_object(state, &obj_id).await;
                     }
                 }
-                "Delete" => {
-                    if let Some(obj_id) = extract_object_id(activity) {
-                        // Delete is terminal; store tombstone if provided, otherwise mark deleted and try fetch.
-                        if let Some((oid, tombstone_json, is_tombstone)) =
-                            extract_object_or_tombstone(activity)
-                        {
-                            if is_tombstone {
-                                let actor_opt = if actor.is_empty() { None } else { Some(actor) };
-                                let _ = state.social.upsert_object_with_actor(
-                                    &oid,
-                                    actor_opt,
-                                    tombstone_json,
-                                );
-                                let _ = state.social.mark_object_deleted(&oid);
-                            } else {
-                                let _ = state.social.mark_object_deleted(&oid);
-                            }
-                        } else {
-                            let _ = state.social.mark_object_deleted(&obj_id);
-                            let _ = fetch_and_store_object(state, &obj_id).await;
-                        }
-                    }
-                }
-                "Announce" | "Like" | "EmojiReact" => {
-                    if !actor.is_empty() {
-                        if let Some(obj_id) = extract_object_id(activity) {
-                            let act_id = activity.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            if !act_id.is_empty() {
-                                let content = activity
-                                    .get("content")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::trim)
-                                    .filter(|s| !s.is_empty());
-                                let _ = state.social.upsert_reaction_with_content(
-                                    act_id, ty, actor, &obj_id, content,
-                                );
-                            }
-                            // Ensure we have the object locally.
-                            let _ = fetch_and_store_object(state, &obj_id).await;
-                        }
-                    }
-                }
-                _ => {}
             }
 
             let act_id = activity
@@ -8335,10 +8380,27 @@ fn store_generic_activity(state: &ApState, activity: &serde_json::Value) -> anyh
     state
         .social
         .store_inbox_activity(&id, actor.as_deref(), ty, bytes.clone())?;
-    if is_public_activity(activity) {
-        let _ = state
-            .social
-            .insert_federated_feed_item(&id, actor.as_deref(), bytes);
+    // Only Create/Announce are timeline entries. Update/Delete are stored as
+    // inbox records and applied to the feeds by `apply_activity_object_semantics`.
+    let timeline_item = matches!(ty, Some("Create") | Some("Announce"));
+    if timeline_item && is_public_activity(activity) {
+        let already_present = if ty == Some("Create") {
+            activity_object_ref_id(activity)
+                .map(|obj_id| {
+                    state
+                        .social
+                        .feed_has_create_for_object(&obj_id)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if !already_present {
+            let _ = state
+                .social
+                .insert_federated_feed_item(&id, actor.as_deref(), bytes);
+        }
     }
     Ok(())
 }
@@ -8660,31 +8722,64 @@ fn hydrate_activity(
         }
     }
 
+    // Prefer the latest stored version of the object. This is what makes an edit
+    // visible after a timeline/profile refresh even when the feed row still holds
+    // the original Create activity.
+    let latest_obj_id = activity_object_ref_id(activity);
+    let latest = latest_obj_id.as_ref().and_then(|id| {
+        if state.social.is_object_deleted(id).unwrap_or(false) {
+            return None;
+        }
+        if let Some(v) = cache.get(id) {
+            return Some(v.clone());
+        }
+        let bytes = state.social.get_object_json(id).ok().flatten()?;
+        let v = serde_json::from_slice::<Value>(&bytes).ok()?;
+        cache.insert(id.clone(), v.clone());
+        Some(v)
+    });
+
     let Some(obj) = activity.get_mut("object") else {
         return;
     };
 
-    // 1) Replace `object: "<url>"` with the fetched object json if available.
+    // 1) Replace `object: "<url>"` with the latest object json if available.
     if let Value::String(url) = obj {
         let url = url.trim();
         if url.starts_with("http://") || url.starts_with("https://") {
-            if let Some(v) = cache.get(url).cloned() {
+            if let Some(v) = latest {
                 *obj = v;
-                return;
-            }
-            if let Ok(Some(bytes)) = state.social.get_object_json(url) {
+            } else if let Some(v) = cache.get(url).cloned() {
+                *obj = v;
+            } else if let Ok(Some(bytes)) = state.social.get_object_json(url) {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     cache.insert(url.to_string(), v.clone());
                     *obj = v;
-                    return;
                 }
             }
         }
         return;
     }
 
-    // 2) If `object` is embedded, attach best-effort context previews (reply/quote).
-    let Some(obj_map) = obj.as_object_mut() else {
+    // 2) If `object` is embedded, replace it (or the wrapped inner Note) with the
+    // latest version, then attach best-effort context previews (reply/quote).
+    if let Some(latest) = latest {
+        let target_id = latest_obj_id.as_deref().unwrap_or("");
+        let whole_match = match obj {
+            Value::Object(m) => m.get("id").and_then(|v| v.as_str()) == Some(target_id),
+            _ => false,
+        };
+        if whole_match {
+            *obj = latest;
+        } else if let Value::Object(m) = obj {
+            if let Some(inner) = m.get_mut("object") {
+                if inner.is_object() {
+                    *inner = latest;
+                }
+            }
+        }
+    }
+    let Some(obj_map) = activity.get_mut("object").and_then(|o| o.as_object_mut()) else {
         return;
     };
     hydrate_link_field(state, cache, obj_map, "inReplyTo", "fedi3InReplyToObject");
@@ -8797,29 +8892,6 @@ fn extract_object_id(activity: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn extract_object(activity: &serde_json::Value) -> Option<(String, Vec<u8>)> {
-    let obj = activity.get("object")?;
-    match obj {
-        serde_json::Value::Object(map) => {
-            let id = map.get("id")?.as_str()?.to_string();
-            let bytes = serde_json::to_vec(obj).ok()?;
-            Some((id, bytes))
-        }
-        serde_json::Value::Array(arr) => {
-            for it in arr {
-                if let serde_json::Value::Object(map) = it {
-                    if let Some(id) = map.get("id").and_then(|v| v.as_str()) {
-                        let bytes = serde_json::to_vec(it).ok()?;
-                        return Some((id.to_string(), bytes));
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn extract_object_or_tombstone(activity: &serde_json::Value) -> Option<(String, Vec<u8>, bool)> {
     let obj = activity.get("object")?;
     match obj {
@@ -8832,6 +8904,167 @@ fn extract_object_or_tombstone(activity: &serde_json::Value) -> Option<(String, 
         }
         _ => None,
     }
+}
+
+/// Object id referenced by an activity, also handling the
+/// `Create{object:{object:Note}}` wrapper form used by some relays.
+pub(crate) fn activity_object_ref_id(activity: &serde_json::Value) -> Option<String> {
+    fn id_from(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => {
+                let s = s.trim();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
+            }
+            serde_json::Value::Object(map) => map
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+
+    let obj = activity.get("object")?;
+    match obj {
+        serde_json::Value::Array(arr) => arr.iter().find_map(id_from),
+        serde_json::Value::Object(map) => {
+            id_from(obj).or_else(|| map.get("object").and_then(id_from))
+        }
+        _ => id_from(obj),
+    }
+}
+
+/// Extracts the actual Note/Article from an activity, unwrapping the
+/// `object: {object: Note}` form used by some relays.
+fn extract_object_deep(activity: &serde_json::Value) -> Option<(String, Vec<u8>)> {
+    let obj = activity.get("object")?;
+    let serde_json::Value::Object(map) = obj else {
+        return None;
+    };
+    if let Some(inner) = map.get("object") {
+        if let serde_json::Value::Object(inner_map) = inner {
+            if let Some(id) = inner_map
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let bytes = serde_json::to_vec(inner).ok()?;
+                return Some((id.to_string(), bytes));
+            }
+        }
+    }
+    let id = map
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let bytes = serde_json::to_vec(obj).ok()?;
+    Some((id.to_string(), bytes))
+}
+
+/// Applies Create/Update/Delete semantics to every local representation of an
+/// object. Called by the inbox, legacy sync, P2P sync, device sync and the local
+/// outbox so that edits and deletions cannot reappear on a timeline refresh.
+/// Fills fields missing from a partial Update with the previously stored object.
+fn merge_partial_update(social: &SocialDb, object_id: &str, update_json: &[u8]) -> Vec<u8> {
+    let Ok(Some(existing)) = social.get_object_json(object_id) else {
+        return update_json.to_vec();
+    };
+    let Ok(existing_v) = serde_json::from_slice::<serde_json::Value>(&existing) else {
+        return update_json.to_vec();
+    };
+    let Ok(mut update_v) = serde_json::from_slice::<serde_json::Value>(update_json) else {
+        return update_json.to_vec();
+    };
+    let (Some(existing_map), Some(update_map)) = (existing_v.as_object(), update_v.as_object_mut())
+    else {
+        return update_json.to_vec();
+    };
+    for (k, v) in existing_map {
+        if k == "id" || k == "type" || k == "content" || k == "updated" {
+            continue;
+        }
+        update_map.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    serde_json::to_vec(&update_v).unwrap_or_else(|_| update_json.to_vec())
+}
+
+pub(crate) async fn apply_activity_object_semantics(
+    state: &ApState,
+    activity: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match ty {
+        "Create" | "Update" => {
+            if let Some((obj_id, obj_json)) = extract_object_deep(activity) {
+                let actor = activity
+                    .get("actor")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                // A partial Update (some implementations only send changed fields)
+                // must not erase published date, attachments or tags.
+                let merged = if ty == "Update" {
+                    merge_partial_update(&state.social, &obj_id, &obj_json)
+                } else {
+                    obj_json.clone()
+                };
+                let _ = state
+                    .social
+                    .upsert_object_with_actor(&obj_id, actor, merged.clone());
+                // Keep every stored Create/Update activity in sync with the new
+                // object content: timeline, profile/outbox and cached feeds.
+                let _ = state
+                    .social
+                    .rewrite_activity_objects_for_object(&obj_id, &merged);
+            } else if let Some(obj_id) = extract_object_id(activity) {
+                let _ = fetch_and_store_object(state, &obj_id).await;
+            }
+        }
+        "Delete" => {
+            let obj_id = extract_object_id(activity)
+                .or_else(|| extract_object_or_tombstone(activity).map(|(id, _, _)| id));
+            let Some(obj_id) = obj_id else {
+                return Ok(());
+            };
+            let obj_id = obj_id.trim().to_string();
+            if obj_id.is_empty() {
+                return Ok(());
+            }
+            let actor = activity
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some((oid, tombstone_json, is_tombstone)) = extract_object_or_tombstone(activity)
+            {
+                if is_tombstone {
+                    let _ = state
+                        .social
+                        .upsert_object_with_actor(&oid, actor, tombstone_json);
+                    let _ = state.social.mark_object_deleted(&oid);
+                } else {
+                    let _ = state.social.mark_object_deleted(&oid);
+                }
+            } else {
+                let _ = state.social.mark_object_deleted(&obj_id);
+            }
+            // Delete is terminal: drop the Create/Update rows so a refresh cannot
+            // show the post again. The Delete activity itself is preserved for
+            // P2P/device outbox synchronization.
+            let _ = state
+                .social
+                .remove_create_update_activities_for_object(&obj_id);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn actor_from_object_url(object_url: &str) -> Option<String> {

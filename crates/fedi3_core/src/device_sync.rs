@@ -177,6 +177,9 @@ async fn sync_with_did_record(
                 continue;
             }
             let _ = state.social.store_outbox_at(&id, it.created_at_ms, bytes);
+            // Keep the local object/feed view consistent when another device of
+            // the same identity edited or deleted one of our posts.
+            let _ = crate::ap::apply_activity_object_semantics(&state, &it.activity).await;
             stored = stored.saturating_add(1);
         }
 
@@ -271,7 +274,26 @@ async fn sync_with_did_record(
                 ty,
                 bytes.clone(),
             );
-            let _ = state.social.insert_federated_feed_item(&id, actor, bytes);
+            // Only Create/Announce belong to the timeline. Update/Delete are applied
+            // to the existing rows so edits/deletions sync correctly across devices.
+            if matches!(ty, Some("Create") | Some("Announce")) {
+                let already_present = if ty == Some("Create") {
+                    crate::ap::activity_object_ref_id(&it.activity)
+                        .map(|obj_id| {
+                            state
+                                .social
+                                .feed_has_create_for_object(&obj_id)
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+                if !already_present {
+                    let _ = state.social.insert_federated_feed_item(&id, actor, bytes);
+                }
+            }
+            let _ = crate::ap::apply_activity_object_semantics(&state, &it.activity).await;
             stored_inbox = stored_inbox.saturating_add(1);
         }
 

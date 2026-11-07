@@ -926,3 +926,296 @@ async fn device_sync_requires_digest_and_all_signed_request_headers() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Edit/Delete persistence: a refresh must never resurrect stale content.
+// ---------------------------------------------------------------------------
+
+async fn timeline_json(core: &TestCore, kind: &str) -> serde_json::Value {
+    let resp = core.get(&format!("/_fedi3/timeline/{kind}")).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    serde_json::from_str(&text(resp).await).unwrap()
+}
+
+async fn outbox_page_json(core: &TestCore) -> serde_json::Value {
+    let resp = TestCore::client()
+        .get(core.url(&format!("/users/{}/outbox?page=true", core.username)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    serde_json::from_str(&text(resp).await).unwrap()
+}
+
+fn activity_note_id(activity: &serde_json::Value) -> String {
+    let obj = &activity["object"];
+    obj["id"]
+        .as_str()
+        .or_else(|| obj["object"]["id"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tokio::test]
+async fn i20_remote_edit_is_reflected_after_timeline_refresh() {
+    let core = TestCore::new().unwrap();
+    let mock = MockActorServer::new("bob").await.unwrap();
+    let signer = Signer::new(mock.key_id.clone());
+    let note_id = format!("{}/objects/20", mock.actor_url);
+    let create = create_note(&mock.actor_url, &note_id, "original content");
+    assert_eq!(
+        core.post_inbox_signed(&signer, &json_body(&create))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let update = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}/activities/update-20", mock.actor_url),
+        "type": "Update",
+        "actor": mock.actor_url,
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [format!("{}/followers", mock.actor_url)],
+        "object": {
+            "id": note_id,
+            "type": "Note",
+            "attributedTo": mock.actor_url,
+            "content": "edited content",
+            "published": "2026-01-01T00:00:00Z",
+            "to": ["https://www.w3.org/ns/activitystreams#Public"],
+            "cc": [format!("{}/followers", mock.actor_url)]
+        }
+    });
+    assert_eq!(
+        core.post_inbox_signed(&signer, &json_body(&update))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let timeline = timeline_json(&core, "federated").await;
+    let matches: Vec<_> = timeline["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| activity_note_id(a) == note_id)
+        .collect();
+    assert_eq!(matches.len(), 1, "edit must not duplicate the post");
+    assert!(matches[0]["object"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("edited content"));
+    assert_eq!(matches[0]["object"]["published"], "2026-01-01T00:00:00Z");
+
+    let stored: String = {
+        let conn = rusqlite::Connection::open(core.db_path()).unwrap();
+        conn.query_row(
+            "SELECT CAST(object_json AS TEXT) FROM objects WHERE object_id=?1",
+            rusqlite::params![note_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert!(stored.contains("edited content"));
+    assert!(!stored.contains("original content"));
+}
+
+#[tokio::test]
+async fn i21_remote_delete_stays_deleted_even_if_a_create_is_replayed() {
+    let core = TestCore::new().unwrap();
+    let mock = MockActorServer::new("bob").await.unwrap();
+    let signer = Signer::new(mock.key_id.clone());
+    let note_id = format!("{}/objects/21", mock.actor_url);
+    let create = create_note(&mock.actor_url, &note_id, "delete me");
+    assert_eq!(
+        core.post_inbox_signed(&signer, &json_body(&create))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let delete = serde_json::json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": format!("{}/activities/delete-21", mock.actor_url),
+        "type": "Delete",
+        "actor": mock.actor_url,
+        "object": {
+            "id": note_id,
+            "type": "Tombstone",
+            "formerType": "Note",
+            "deleted": "2026-01-02T00:00:00Z"
+        }
+    });
+    assert_eq!(
+        core.post_inbox_signed(&signer, &json_body(&delete))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        sqlite_count(
+            &core.db_path(),
+            "SELECT deleted FROM objects WHERE object_id=?1",
+            &[&note_id]
+        ),
+        1
+    );
+
+    // A legacy outbox replay can re-send the old Create with a different activity id.
+    let mut replay = create.clone();
+    replay["id"] = serde_json::json!(format!("{}/statuses/21-replay", mock.actor_url));
+    replay["object"]["content"] = serde_json::json!("delete me");
+    assert_eq!(
+        core.post_inbox_signed(&signer, &json_body(&replay))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let timeline = timeline_json(&core, "federated").await;
+    assert!(
+        timeline["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| activity_note_id(a) != note_id),
+        "a deleted post must not reappear after a refresh"
+    );
+    assert_eq!(
+        sqlite_count(
+            &core.db_path(),
+            "SELECT deleted FROM objects WHERE object_id=?1",
+            &[&note_id]
+        ),
+        1,
+        "Delete is terminal: a replayed Create must not clear the tombstone"
+    );
+}
+
+#[tokio::test]
+async fn o06_local_edit_and_delete_are_reflected_in_outbox_and_timeline() {
+    let core = TestCore::new().unwrap();
+    let followers = format!("{}/followers", core.actor_url());
+    let create = serde_json::json!({
+        "type": "Create",
+        "actor": core.actor_url(),
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [followers],
+        "object": {"type": "Note", "content": "first version"}
+    });
+    assert_eq!(
+        core.post_internal(
+            &format!("/users/{}/outbox", core.username),
+            &json_body(&create)
+        )
+        .await
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let page = outbox_page_json(&core).await;
+    let items = page["orderedItems"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    let object_id = items[0]["object"]["id"].as_str().unwrap().to_string();
+    let published = items[0]["object"]["published"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let update = serde_json::json!({
+        "type": "Update",
+        "actor": core.actor_url(),
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [followers],
+        "object": {"id": object_id, "type": "Note", "content": "second version"}
+    });
+    assert_eq!(
+        core.post_internal(
+            &format!("/users/{}/outbox", core.username),
+            &json_body(&update)
+        )
+        .await
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let page = outbox_page_json(&core).await;
+    let items = page["orderedItems"].as_array().unwrap();
+    let posts: Vec<_> = items
+        .iter()
+        .filter(|a| activity_note_id(a) == object_id)
+        .collect();
+    assert_eq!(posts.len(), 1, "the edit must replace the original post");
+    assert!(posts[0]["object"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("second version"));
+    assert_eq!(posts[0]["object"]["published"], published);
+    assert!(items
+        .iter()
+        .all(|a| a["type"] == "Create" || a["type"] == "Announce"));
+
+    let timeline = timeline_json(&core, "home").await;
+    let posts: Vec<_> = timeline["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| activity_note_id(a) == object_id)
+        .collect();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0]["object"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("second version"));
+
+    let delete = serde_json::json!({
+        "type": "Delete",
+        "actor": core.actor_url(),
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "cc": [followers],
+        "object": {
+            "id": object_id,
+            "type": "Tombstone",
+            "formerType": "Note",
+            "deleted": "2026-01-03T00:00:00Z"
+        }
+    });
+    assert_eq!(
+        core.post_internal(
+            &format!("/users/{}/outbox", core.username),
+            &json_body(&delete)
+        )
+        .await
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let page = outbox_page_json(&core).await;
+    assert!(
+        page["orderedItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| activity_note_id(a) != object_id),
+        "a deleted local post must disappear from the profile outbox"
+    );
+
+    let timeline = timeline_json(&core, "home").await;
+    assert!(
+        timeline["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| activity_note_id(a) != object_id),
+        "a deleted local post must disappear from the timeline"
+    );
+    assert_eq!(
+        sqlite_count(
+            &core.db_path(),
+            "SELECT deleted FROM objects WHERE object_id=?1",
+            &[&object_id]
+        ),
+        1
+    );
+}

@@ -119,6 +119,9 @@ pub fn start_p2p_sync_worker(
                             break;
                         }
                     }
+                    // Apply Create/Update/Delete semantics so edits and deletions
+                    // received from Fedi3 peers also update feeds and objects.
+                    let _ = crate::ap::apply_activity_object_semantics(&state, &activity).await;
                     let _ = state.social.upsert_actor_meta(&actor_url, true);
                     stored = stored.saturating_add(1);
                 }
