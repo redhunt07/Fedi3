@@ -388,7 +388,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _loadCachedDirectory(Set<String> seen) async {
-    final snapshot = await RelayDirectoryService.cached();
+    final snapshot = await RelayDirectoryService.cached() ??
+        await RelayDirectoryService.bundled();
     if (snapshot == null || !mounted) return;
     final cached = snapshot.entries
         .map(_relayOptionFromEntry)

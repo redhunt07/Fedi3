@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/core_http.dart';
@@ -118,6 +119,25 @@ class RelayDirectoryService {
         entries: entries,
         sourceUrl: await RelayDirectoryStore.cachedSourceUrl() ??
             RelayDirectory.sourceUrls.first,
+        fetchedAt: DateTime.now(),
+        updatedAt: relayDirectoryUpdatedAt(raw),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Last-resort fallback: the directory copy bundled with the app. It is
+  /// generated from `relays/relays.json` at release time, so a fresh install
+  /// always has at least the relays known when the build was produced.
+  static Future<RelayDirectorySnapshot?> bundled() async {
+    try {
+      final raw = await rootBundle.loadString('assets/relays.json');
+      final entries = parseRelayDirectory(raw);
+      if (entries.isEmpty) return null;
+      return RelayDirectorySnapshot(
+        entries: entries,
+        sourceUrl: 'asset:assets/relays.json',
         fetchedAt: DateTime.now(),
         updatedAt: relayDirectoryUpdatedAt(raw),
       );

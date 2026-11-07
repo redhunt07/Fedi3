@@ -76,6 +76,8 @@ Il client Flutter:
 - salva l'ultima copia valida nella directory di supporto dell'applicazione,
   così la schermata iniziale può mostrare i relay anche se GitHub non è
   raggiungibile;
+- ripiega su `app/assets/relays.json`, una copia della directory inclusa nella
+  build, quando né la rete né la cache sono disponibili;
 - misura ogni voce con `GET /healthz` e timeout di 4 s, fino a sei relay in
   parallelo;
 - ordina i relay raggiungibili dalla latenza più bassa alla più alta e mantiene

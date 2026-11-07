@@ -75,6 +75,8 @@ The Flutter client:
   and falls back to the jsDelivr mirror;
 - caches the last good copy under the application support directory, so the
   first-run screen can show relays even when GitHub is unreachable;
+- falls back to `app/assets/relays.json`, a copy of the directory bundled with
+  the build, when neither the network nor the cache is available;
 - probes every entry with `GET /healthz` and a 4 s timeout, up to six relays in
   parallel;
 - ranks reachable relays from the lowest to the highest latency and keeps

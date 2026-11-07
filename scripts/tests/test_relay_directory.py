@@ -133,6 +133,15 @@ def main() -> int:
     try:
         payload = json.loads(DIRECTORY.read_text(encoding="utf-8"))
         validate(payload)
+        bundled = ROOT / "app" / "assets" / "relays.json"
+        if not bundled.exists():
+            raise ValidationError("app/assets/relays.json is missing")
+        bundled_payload = json.loads(bundled.read_text(encoding="utf-8"))
+        if bundled_payload != payload:
+            raise ValidationError(
+                "app/assets/relays.json must match relays/relays.json "
+                "(copy the shared list into the app bundle)"
+            )
     except (OSError, json.JSONDecodeError, ValidationError) as exc:
         print(f"relay directory invalid: {exc}", file=sys.stderr)
         return 1
