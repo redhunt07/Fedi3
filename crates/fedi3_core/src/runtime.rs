@@ -203,6 +203,7 @@ fn data_dir_for(cfg: &CoreStartConfig) -> Result<std::path::PathBuf> {
 /// Start the core. This function returns `Ok(handle)` only after the local server is
 /// actually bound to `cfg.bind` and the database has been opened successfully.
 pub fn start(cfg: CoreStartConfig) -> Result<u64> {
+    crate::init_tls_provider();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -529,7 +530,8 @@ fn run_core(
         let key_id = format!("{}#main-key", crate::ap::canonical_actor_url(&ap_cfg));
         let key_id_for_fetch = key_id.clone();
 
-        let internal_token = cfg.internal_token.clone().unwrap_or_else(random_token);
+        let internal_token = cfg.internal_token.as_deref().map(str::trim)
+            .filter(|token| !token.is_empty()).map(str::to_owned).unwrap_or_else(random_token);
         let (ui_events, _) = tokio::sync::broadcast::channel::<crate::ui_events::UiEvent>(512);
         let global_ingest = GlobalIngestPolicy {
             max_items_per_actor_per_min: cfg.global_ingest_max_items_per_actor_per_min.unwrap_or(20).max(1),
@@ -855,7 +857,7 @@ fn run_core(
             let shutdown = async move {
                 let _ = server_shutdown_rx.changed().await;
             };
-            axum::serve(listener, router.into_make_service())
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(shutdown)
                 .await
         });
@@ -898,8 +900,9 @@ fn run_core(
 
         let user = cfg.username.clone();
         let state_for_tunnel = state.clone();
-        let router2 = Router::new().fallback(any(move |req| {
+        let router2 = Router::new().fallback(any(move |mut req: http::Request<axum::body::Body>| {
             let st = state_for_tunnel.clone();
+            req.extensions_mut().insert(crate::ap::AuthenticatedRelayForward);
             async move { handle_request(&st, req).await }
         }))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))

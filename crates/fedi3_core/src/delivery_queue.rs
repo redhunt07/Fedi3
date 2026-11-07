@@ -241,12 +241,7 @@ impl DeliveryQueue {
                             // Actor resolved but no P2P peer, fall through to HTTP delivery
                         }
                         Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("404")
-                                || err_str.contains("410")
-                                || err_str.contains("429")
-                                || err_str.contains("peer deleted")
-                            {
+                            if crate::delivery::permanent_failure(&e) {
                                 let _ =
                                     self.mark_dead(&job.id, "peer deleted or unreachable").await;
                                 continue;
@@ -294,12 +289,7 @@ impl DeliveryQueue {
                     {
                         Ok(info) => info.inbox,
                         Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("404")
-                                || err_str.contains("410")
-                                || err_str.contains("429")
-                                || err_str.contains("peer deleted")
-                            {
+                            if crate::delivery::permanent_failure(&e) {
                                 let _ =
                                     self.mark_dead(&job.id, "peer deleted or unreachable").await;
                                 continue;
@@ -433,12 +423,7 @@ impl DeliveryQueue {
                 match info {
                     Ok(v) => (v.inbox, v.p2p_peer_id, v.p2p_peer_addrs, v.public_key_pem),
                     Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("404")
-                            || err_str.contains("410")
-                            || err_str.contains("429")
-                            || err_str.contains("peer deleted")
-                        {
+                        if crate::delivery::permanent_failure(&e) {
                             self.mark_dead(&job.id, "peer deleted or unreachable")
                                 .await?;
                             return Ok(());
@@ -811,11 +796,8 @@ async fn resolve_actor_cached(
     {
         Ok(v) => v,
         Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("404")
-                || err_str.contains("410")
-                || err_str.contains("429")
-                || err_str.contains("peer deleted")
+            if crate::delivery::permanent_failure(&e)
+                || crate::delivery::remote_failure_status(&e) == Some(429)
             {
                 return Err(e);
             } else {
@@ -880,19 +862,11 @@ fn init_db(path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_delivery_due ON delivery_jobs(status, next_attempt_at_ms);
         "#,
     )?;
-    // Migrate existing dbs (numbered migrations, recorded in schema_version).
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
-    let current: Option<u32> = conn
-        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
-            r.get(0)
-        })
-        .ok();
-    let version = current.unwrap_or(1);
-    if version > DELIVERY_SCHEMA_VERSION {
-        anyhow::bail!(
-            "delivery schema version {version} is newer than this binary ({DELIVERY_SCHEMA_VERSION})"
-        );
-    }
+    crate::schema::mark_module_version(
+        &mut conn,
+        "delivery_schema_version",
+        DELIVERY_SCHEMA_VERSION,
+    )?;
     let tx = conn.transaction()?;
     // Idempotent: an error here means the column already exists.
     let _ = tx.execute("ALTER TABLE delivery_jobs ADD COLUMN key_id TEXT NULL", []);
@@ -900,11 +874,6 @@ fn init_db(path: &Path) -> Result<()> {
         "ALTER TABLE delivery_jobs ADD COLUMN activity_id TEXT NULL",
         [],
     );
-    tx.execute("DELETE FROM schema_version", [])?;
-    tx.execute(
-        "INSERT INTO schema_version(version) VALUES (?1)",
-        params![DELIVERY_SCHEMA_VERSION],
-    )?;
     tx.commit()?;
     Ok(())
 }
@@ -962,4 +931,24 @@ pub(crate) fn activity_id_from_bytes(bytes: &[u8]) -> Option<String> {
         "urn:fedi3:activity:sha256:{}",
         hex::encode(h.finalize())
     ))
+}
+
+#[cfg(test)]
+mod failure_classification_tests {
+    #[test]
+    fn remote_body_and_urls_cannot_trigger_permanent_delivery_failure() {
+        assert!(!crate::delivery::permanent_failure(&anyhow::anyhow!(
+            "GET https://example.test/404 410 429 peer deleted"
+        )));
+        for status in [429, 500, 503] {
+            let error = anyhow::Error::new(crate::delivery::RemoteDeliveryStatus(status))
+                .context("remote body contains 404 and 410");
+            assert!(!crate::delivery::permanent_failure(&error));
+        }
+        for status in [404, 410] {
+            assert!(crate::delivery::permanent_failure(&anyhow::Error::new(
+                crate::delivery::RemoteDeliveryStatus(status)
+            )));
+        }
+    }
 }

@@ -17,7 +17,12 @@ services:
       - FEDI3_RELAY_BIND=0.0.0.0:8787
       - FEDI3_RELAY_DB=/data/fedi3_relay.db
       - FEDI3_RELAY_DB_DRIVER=${FEDI3_RELAY_DB_DRIVER:-sqlite}
+      # Empty URL derives credentials from these same PostgreSQL settings.
+      # The relay percent-encodes credentials, including @, :, / and $.
       - FEDI3_RELAY_DB_URL=${FEDI3_RELAY_DB_URL:-}
+      - FEDI3_RELAY_PG_USER=${FEDI3_RELAY_PG_USER:-fedi3}
+      - FEDI3_RELAY_PG_DB=${FEDI3_RELAY_PG_DB:-fedi3_relay}
+      - FEDI3_RELAY_PG_PASSWORD=${FEDI3_RELAY_PG_PASSWORD:?set FEDI3_RELAY_PG_PASSWORD in .env}
       - FEDI3_RELAY_REDIS_URL=redis://dragonfly:6379
       - FEDI3_RELAY_REDIS_PREFIX=${FEDI3_RELAY_REDIS_PREFIX:-fedi3}
       - FEDI3_RELAY_PUBLIC_URL=https://${FEDI3_DOMAIN}
@@ -91,6 +96,8 @@ services:
     mem_limit: 2g
     logging: *default-logging
     depends_on:
+      p2p_infra:
+        condition: service_started
       dragonfly:
         condition: service_healthy
       postgres:
@@ -172,6 +179,13 @@ services:
         condition: service_healthy
 
   p2p_infra:
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fedi3_p2p_infra", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     build:
       context: .
       dockerfile: deploy/p2p_infra/Dockerfile
@@ -182,7 +196,12 @@ services:
     environment:
       - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
+      - FEDI3_P2P_EXTERNAL_ADDR=${FEDI3_P2P_EXTERNAL_ADDR:-}
       - FEDI3_P2P_ENABLE_KAD_SERVER=true
+      - FEDI3_P2P_RELAY_MAX_CIRCUITS=${FEDI3_P2P_RELAY_MAX_CIRCUITS:-64}
+      - FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER=${FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER:-8}
+      - FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES=${FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES:-16777216}
+      - FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS=${FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS:-900}
       - FEDI3_P2P_KEY=/data/fedi3_p2p_infra_keypair.pb
       - FEDI3_P2P_MAILBOX_DB=/data/fedi3_p2p_mailbox.sqlite
       - FEDI3_P2P_PEER_ID_FILE=/data/fedi3_p2p_peer_id
@@ -205,8 +224,15 @@ services:
     image: instrumentisto/coturn:4.5.2
     restart: unless-stopped
     network_mode: host
-    env_file:
-      - ./.env
+    mem_limit: 512m
+    environment:
+      - TURN_PORT=${TURN_PORT:-3478}
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_stunclient -p $$TURN_PORT 127.0.0.1 | grep -q 'UDP reflexive addr' "]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     command:
       - "-n"
       - "--log-file=stdout"
@@ -214,7 +240,7 @@ services:
       - "--no-cli"
       - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
-      - "--external-ip=${TURN_EXTERNAL_IP}"
+      - "--external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP in .env}"
       - "--min-port=${TURN_MIN_PORT:-49152}"
       - "--max-port=${TURN_MAX_PORT:-65535}"
       - "--lt-cred-mech"

@@ -10,8 +10,12 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     Client as S3Client, Config as S3Config,
 };
+use axum::body::Body;
+use bytes::Bytes;
 use reqwest::Client as HttpClient;
 use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio_util::io::ReaderStream;
 
 #[derive(Debug, Clone)]
 pub struct MediaConfig {
@@ -38,8 +42,8 @@ pub struct MediaSaved {
 #[async_trait]
 #[allow(clippy::double_must_use)]
 pub trait MediaBackend: Send + Sync {
-    async fn save_upload(&self, key: &str, media_type: &str, bytes: &[u8]) -> Result<MediaSaved>;
-    async fn load(&self, key: &str) -> Result<Vec<u8>>;
+    async fn save_upload(&self, key: &str, media_type: &str, bytes: &Bytes) -> Result<MediaSaved>;
+    async fn load(&self, key: &str, range: Option<(u64, u64)>) -> Result<Body>;
     async fn delete(&self, key: &str) -> Result<()>;
     async fn health_check(&self) -> Result<()>;
 }
@@ -56,12 +60,18 @@ impl LocalMediaBackend {
 
 #[async_trait]
 impl MediaBackend for LocalMediaBackend {
-    async fn save_upload(&self, key: &str, media_type: &str, bytes: &[u8]) -> Result<MediaSaved> {
+    async fn save_upload(&self, key: &str, media_type: &str, bytes: &Bytes) -> Result<MediaSaved> {
         let path = self.dir.join(key);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).context("create media dir")?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context("create media dir")?;
         }
-        std::fs::write(&path, bytes).context("write media file")?;
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .context("create media file")?;
+        file.write_all(bytes).await.context("write media file")?;
+        file.flush().await.context("flush media file")?;
         Ok(MediaSaved {
             storage_key: key.to_string(),
             media_type: media_type.to_string(),
@@ -69,15 +79,28 @@ impl MediaBackend for LocalMediaBackend {
         })
     }
 
-    async fn load(&self, key: &str) -> Result<Vec<u8>> {
+    async fn load(&self, key: &str, range: Option<(u64, u64)>) -> Result<Body> {
         let path = self.dir.join(key);
-        let bytes = std::fs::read(&path).with_context(|| format!("read media {path:?}"))?;
-        Ok(bytes)
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .with_context(|| format!("read media {path:?}"))?;
+        if let Some((start, end)) = range {
+            anyhow::ensure!(
+                end < file.metadata().await?.len(),
+                "media range outside file"
+            );
+            file.seek(std::io::SeekFrom::Start(start)).await?;
+            Ok(Body::from_stream(ReaderStream::new(
+                file.take(end - start + 1),
+            )))
+        } else {
+            Ok(Body::from_stream(ReaderStream::new(file)))
+        }
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
         let path = self.dir.join(key);
-        match std::fs::remove_file(&path) {
+        match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e).with_context(|| format!("delete media {path:?}")),
@@ -118,9 +141,9 @@ impl WebDavMediaBackend {
 
 #[async_trait]
 impl MediaBackend for WebDavMediaBackend {
-    async fn save_upload(&self, key: &str, media_type: &str, bytes: &[u8]) -> Result<MediaSaved> {
+    async fn save_upload(&self, key: &str, media_type: &str, bytes: &Bytes) -> Result<MediaSaved> {
         let url = format!("{}/{}", self.base_url, key);
-        let mut req = self.http.put(&url).body(bytes.to_vec());
+        let mut req = self.http.put(&url).body(bytes.clone());
         req = req.header("Content-Type", media_type);
         if let Some(tok) = &self.bearer_token {
             req = req.header("Authorization", format!("Bearer {}", tok));
@@ -140,21 +163,43 @@ impl MediaBackend for WebDavMediaBackend {
         })
     }
 
-    async fn load(&self, key: &str) -> Result<Vec<u8>> {
+    async fn load(&self, key: &str, range: Option<(u64, u64)>) -> Result<Body> {
         let url = format!("{}/{}", self.base_url, key);
         let mut req = self.http.get(&url);
+        if let Some((start, end)) = range {
+            req = req.header("Range", format!("bytes={start}-{end}"));
+        }
         if let Some(tok) = &self.bearer_token {
             req = req.header("Authorization", format!("Bearer {}", tok));
         } else if let (Some(u), Some(p)) = (&self.username, &self.password) {
             req = req.basic_auth(u, Some(p));
         }
         let resp = req.send().await.context("webdav get")?;
+        if let Some((start, end)) = range {
+            anyhow::ensure!(
+                resp.status() == reqwest::StatusCode::PARTIAL_CONTENT,
+                "WebDAV backend ignored range"
+            );
+            let expected = format!("bytes {start}-{end}/");
+            anyhow::ensure!(
+                resp.headers()
+                    .get("content-range")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|h| h.starts_with(&expected))
+                    .unwrap_or(false),
+                "invalid WebDAV range response"
+            );
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             anyhow::bail!("webdav get failed: {} {}", status, text);
         }
-        Ok(resp.bytes().await?.to_vec())
+        let stream = futures_util::stream::try_unfold(resp, |mut resp| async move {
+            let chunk = resp.chunk().await?;
+            Ok::<_, reqwest::Error>(chunk.map(|chunk| (chunk, resp)))
+        });
+        Ok(Body::from_stream(stream))
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
@@ -200,8 +245,8 @@ impl S3MediaBackend {
 
 #[async_trait]
 impl MediaBackend for S3MediaBackend {
-    async fn save_upload(&self, key: &str, media_type: &str, bytes: &[u8]) -> Result<MediaSaved> {
-        let body = ByteStream::from(bytes.to_vec());
+    async fn save_upload(&self, key: &str, media_type: &str, bytes: &Bytes) -> Result<MediaSaved> {
+        let body = ByteStream::from(bytes.clone());
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -218,17 +263,15 @@ impl MediaBackend for S3MediaBackend {
         })
     }
 
-    async fn load(&self, key: &str) -> Result<Vec<u8>> {
-        let resp = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .context("s3 get")?;
-        let data = resp.body.collect().await.context("s3 body")?;
-        Ok(data.into_bytes().to_vec())
+    async fn load(&self, key: &str, range: Option<(u64, u64)>) -> Result<Body> {
+        let mut request = self.client.get_object().bucket(&self.bucket).key(key);
+        if let Some((start, end)) = range {
+            request = request.range(format!("bytes={start}-{end}"));
+        }
+        let resp = request.send().await.context("s3 get")?;
+        Ok(Body::from_stream(ReaderStream::new(
+            resp.body.into_async_read(),
+        )))
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
@@ -309,4 +352,55 @@ pub fn sanitize_key(key: &str) -> String {
         .filter(|seg| !seg.is_empty() && *seg != "." && *seg != "..")
         .collect();
     cleaned.join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    #[tokio::test]
+    async fn webdav_returns_a_stream_before_the_remote_file_finishes() {
+        use axum::{routing::get, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
+        sender.send(Ok(Bytes::from_static(b"first"))).await.unwrap();
+        let receiver = std::sync::Arc::new(tokio::sync::Mutex::new(Some(receiver)));
+        let router = Router::new().route(
+            "/media",
+            get(move || {
+                let receiver = receiver.clone();
+                async move {
+                    let receiver = receiver.lock().await.take().unwrap();
+                    let stream =
+                        futures_util::stream::unfold(receiver, |mut receiver| async move {
+                            receiver.recv().await.map(|chunk| (chunk, receiver))
+                        });
+                    Body::from_stream(stream)
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let backend = WebDavMediaBackend::new(base, None, None, None, HttpClient::new());
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            backend.load("media", None),
+        )
+        .await
+        .expect("backend buffered the entire response")
+        .unwrap();
+        let mut chunks = body.into_data_stream();
+        assert_eq!(chunks.next().await.unwrap().unwrap().as_ref(), b"first");
+        sender.send(Ok(Bytes::from_static(b"last"))).await.unwrap();
+        drop(sender);
+        let mut tail = Vec::new();
+        while let Some(chunk) = chunks.next().await {
+            tail.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(tail, b"last");
+        server.abort();
+    }
 }

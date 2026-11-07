@@ -54,7 +54,10 @@ use ed25519_dalek::{Signer as _, Verifier as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use subtle::ConstantTimeEq;
 
+mod db;
+mod db_dispatch;
 mod media_store;
+use db_dispatch::DbDispatch;
 
 static REQ_ID: AtomicU64 = AtomicU64::new(1);
 static TUNNEL_CONN_ID: AtomicU64 = AtomicU64::new(1);
@@ -198,6 +201,13 @@ struct SpoolItem {
     created_at_ms: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum MediaReservation {
+    Reserved,
+    QuotaExceeded,
+    UserUnavailable,
+}
+
 #[derive(Debug, Clone)]
 struct MediaItem {
     id: String,
@@ -230,11 +240,12 @@ struct CollectionPage<T> {
 
 #[derive(Clone)]
 struct AppState {
+    shutdown: CancellationToken,
     tunnels: Arc<RwLock<HashMap<String, TunnelHandle>>>,
     inflight_per_user: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
     cfg: RelayConfig,
-    db: Arc<Mutex<Db>>,
+    db: Arc<DbDispatch>,
     limiter: Arc<RateLimiter>,
     http: reqwest::Client,
     search: Option<Arc<MeiliSearch>>,
@@ -572,6 +583,12 @@ impl<'a> PgTx<'a> {
         block_on_result(self.tx.execute(stmt, params))
     }
 
+    fn query_one(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Row> {
+        block_on_result(self.tx.query_one(sql, params))
+    }
+    fn query_opt(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>> {
+        block_on_result(self.tx.query_opt(sql, params))
+    }
     fn commit(self) -> Result<()> {
         block_on_result(self.tx.commit())
     }
@@ -583,7 +600,7 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(fut)).map_err(Into::into)
+        handle.block_on(fut).map_err(Into::into)
     } else {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(fut).map_err(Into::into)
@@ -1013,7 +1030,13 @@ async fn main() {
         pg_init_backoff_ms: cfg.pg_init_backoff_ms,
         pg_pool: OnceLock::new(),
     };
-    db.init().expect("db init");
+    let db = tokio::task::spawn_blocking(move || {
+        db.init()?;
+        Ok::<_, anyhow::Error>(db)
+    })
+    .await
+    .expect("DB init task")
+    .expect("db init");
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(cfg.http_timeout_secs))
         .connect_timeout(Duration::from_secs(cfg.http_connect_timeout_secs))
@@ -1069,11 +1092,12 @@ async fn main() {
     );
 
     let state = AppState {
+        shutdown: CancellationToken::new(),
         tunnels: Arc::new(RwLock::new(HashMap::new())),
         inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
         cfg,
-        db: Arc::new(Mutex::new(db)),
+        db: Arc::new(DbDispatch::new(db)),
         limiter,
         http,
         search,
@@ -1097,8 +1121,8 @@ async fn main() {
             loop {
                 interval.tick().await;
                 let peers = {
-                    let db = peer_state.db.lock().await;
-                    db.list_peers().unwrap_or_default()
+                    let db = peer_state.db.clone();
+                    db.list_peers().await.unwrap_or_default()
                 };
                 for (url, _) in peers {
                     let dir_url = format!("{}/_fedi3/relay/users", url.trim_end_matches('/'));
@@ -1115,18 +1139,18 @@ async fn main() {
                                             .collect()
                                     })
                                     .unwrap_or_default();
-                                let db = peer_state.db.lock().await;
-                                let _ = db.mark_peer_seen(&url);
+                                let db = peer_state.db.clone();
+                                let _ = db.mark_peer_seen(&url).await;
                                 for u in users {
-                                    let _ = db.upsert_remote_user(&u, &url);
+                                    let _ = db.upsert_remote_user(&u, &url).await;
                                 }
                             }
                         }
                     }
                 }
                 let cutoff = now_ms() - (secs as i64 * 1000 * 5);
-                let db = peer_state.db.lock().await;
-                let _ = db.prune_remote_users(cutoff);
+                let db = peer_state.db.clone();
+                let _ = db.prune_remote_users(cutoff).await;
             }
         });
     }
@@ -1144,18 +1168,26 @@ async fn main() {
         ));
         loop {
             interval.tick().await;
-            let db = cleanup_state.db.lock().await;
-            if let Err(e) = db.cleanup_spool(spool_ttl_secs) {
+            if let Err(e) =
+                cleanup_pending_media_uploads(&cleanup_state, now_ms() - 15 * 60 * 1000).await
+            {
+                error!("pending media cleanup failed: {e:#}");
+            }
+            let db = cleanup_state.db.clone();
+            if let Err(e) = db.cleanup_spool(spool_ttl_secs).await {
                 error!("spool cleanup failed: {e}");
             }
-            if let Err(e) = db.cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs) {
+            if let Err(e) = db
+                .cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs)
+                .await
+            {
                 error!("move_notices cleanup failed: {e}");
             }
-            if let Err(e) = db.cleanup_webrtc_signals(webrtc_ttl_secs) {
+            if let Err(e) = db.cleanup_webrtc_signals(webrtc_ttl_secs).await {
                 error!("webrtc signals cleanup failed: {e}");
             }
             if peer_directory_ttl_days > 0 {
-                if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days) {
+                if let Err(e) = db.cleanup_peer_directory(peer_directory_ttl_days).await {
                     error!("peer_directory cleanup failed: {e}");
                 }
             }
@@ -1163,29 +1195,35 @@ async fn main() {
             for (label, result) in [
                 (
                     "admin_audit",
-                    db.cleanup_admin_audit(cleanup_state.cfg.admin_audit_ttl_secs),
+                    db.cleanup_admin_audit(cleanup_state.cfg.admin_audit_ttl_secs)
+                        .await,
                 ),
                 (
                     "relay_notes",
-                    db.cleanup_relay_notes(cleanup_state.cfg.relay_notes_ttl_secs),
+                    db.cleanup_relay_notes(cleanup_state.cfg.relay_notes_ttl_secs)
+                        .await,
                 ),
                 (
                     "peer_registry",
-                    db.cleanup_peer_registry(cleanup_state.cfg.peer_registry_ttl_secs),
+                    db.cleanup_peer_registry(cleanup_state.cfg.peer_registry_ttl_secs)
+                        .await,
                 ),
                 (
                     "relay_registry",
-                    db.cleanup_relay_registry(cleanup_state.cfg.relay_registry_ttl_secs),
+                    db.cleanup_relay_registry(cleanup_state.cfg.relay_registry_ttl_secs)
+                        .await,
                 ),
                 (
                     "relay_user_directory",
                     db.cleanup_relay_user_directory(
                         cleanup_state.cfg.relay_user_directory_ttl_secs,
-                    ),
+                    )
+                    .await,
                 ),
                 (
                     "inbox_dedupe",
-                    db.cleanup_inbox_dedupe(cleanup_state.cfg.inbox_dedupe_ttl_secs),
+                    db.cleanup_inbox_dedupe(cleanup_state.cfg.inbox_dedupe_ttl_secs)
+                        .await,
                 ),
             ] {
                 if let Err(e) = result {
@@ -1314,7 +1352,7 @@ async fn main() {
                 info_span!(
                     "http",
                     method = %req.method(),
-                    uri = %req.uri(),
+                    uri = %req.uri().path(),
                     request_id = %request_id,
                     correlation_id = ?correlation_id
                 )
@@ -1327,10 +1365,12 @@ async fn main() {
 
     // Seed relays + periodic telemetry.
     if let Some(self_url) = state.cfg.public_url.clone() {
-        let mut db = state.db.lock().await;
-        let _ = db.upsert_relay(&self_url, state.cfg.base_domain.clone(), None, None);
+        let db = state.db.clone();
+        let _ = db
+            .upsert_relay(&self_url, state.cfg.base_domain.clone(), None, None)
+            .await;
         for r in &state.cfg.seed_relays {
-            let _ = db.upsert_relay(r, None, None, None);
+            let _ = db.upsert_relay(r, None, None, None).await;
         }
     }
     let sync_state = state.clone();
@@ -1355,8 +1395,47 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        state.shutdown.cancel();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !state.tunnels.read().await.is_empty() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
     .await
     .unwrap();
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    info!("shutdown signal received; draining HTTP requests");
+}
+
+fn postgres_url_from_parts(user: &str, password: &str, database: &str) -> Result<String> {
+    anyhow::ensure!(
+        !user.is_empty() && !password.is_empty() && !database.is_empty(),
+        "empty PostgreSQL credentials"
+    );
+    let mut url = reqwest::Url::parse("postgres://postgres:5432")?;
+    url.set_username(user)
+        .map_err(|_| anyhow::anyhow!("invalid PostgreSQL username"))?;
+    url.set_password(Some(password))
+        .map_err(|_| anyhow::anyhow!("invalid PostgreSQL password"))?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("invalid PostgreSQL URL"))?
+        .push(database);
+    Ok(url.to_string())
 }
 
 fn load_config() -> Result<RelayConfig> {
@@ -1598,10 +1677,17 @@ fn load_config() -> Result<RelayConfig> {
             anyhow::bail!("FEDI3_RELAY_DB_DRIVER invalid: {other:?} (expected sqlite or postgres)")
         }
     };
-    let db_url = std::env::var("FEDI3_RELAY_DB_URL")
+    let mut db_url = std::env::var("FEDI3_RELAY_DB_URL")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    if db_driver == DbDriver::Postgres && db_url.is_none() {
+        let user = std::env::var("FEDI3_RELAY_PG_USER").unwrap_or_else(|_| "fedi3".into());
+        let password = std::env::var("FEDI3_RELAY_PG_PASSWORD")
+            .map_err(|_| anyhow::anyhow!("set FEDI3_RELAY_PG_PASSWORD or FEDI3_RELAY_DB_URL"))?;
+        let database = std::env::var("FEDI3_RELAY_PG_DB").unwrap_or_else(|_| "fedi3_relay".into());
+        db_url = Some(postgres_url_from_parts(&user, &password, &database)?);
+    }
     let db_synchronous = std::env::var("FEDI3_RELAY_DB_SYNC")
         .ok()
         .map(|v| v.trim().to_ascii_uppercase())
@@ -2089,6 +2175,9 @@ async fn handle_tunnel(
     headers: HeaderMap,
     socket: WebSocket,
 ) {
+    if state.shutdown.is_cancelled() {
+        return;
+    }
     let token = match token {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -2121,8 +2210,8 @@ async fn handle_tunnel(
     }
 
     // Auth / registration
-    let mut db = state.db.lock().await;
-    match db.verify_or_register(&state.cfg, &user, &token) {
+    let db = state.db.clone();
+    match db.verify_or_register(&state.cfg, &user, &token).await {
         Ok(()) => {}
         Err(e) => {
             error!(%user, "tunnel rejected: {e}");
@@ -2157,11 +2246,13 @@ async fn handle_tunnel(
     tokio::spawn(async move {
         if let Ok(Some(hello)) = fetch_peer_hello(&hello_state, &hello_user, tx_for_hello).await {
             if let Some(p) = hello.p2p.as_ref().and_then(|p| p.peer_id.clone()) {
-                let mut db = hello_state.db.lock().await;
-                let _ = db.upsert_peer_seen(&p);
+                let db = hello_state.db.clone();
+                let _ = db.upsert_peer_seen(&p).await;
                 let actor_url = hello.actor.trim().to_string();
                 if !actor_url.is_empty() {
-                    let _ = db.upsert_peer_directory(&p, &hello.username, &actor_url);
+                    let _ = db
+                        .upsert_peer_directory(&p, &hello.username, &actor_url)
+                        .await;
                     let stub = actor_stub_from_actor_url(
                         &hello.username,
                         &actor_url,
@@ -2196,7 +2287,7 @@ async fn handle_tunnel(
 
     let inflight_writer = inflight.clone();
     let user_writer = user.clone();
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let id = msg.id.clone();
             inflight_writer
@@ -2218,11 +2309,25 @@ async fn handle_tunnel(
 
     let inflight_reader = inflight.clone();
     let user_reader = user.clone();
-    let cancel = CancellationToken::new();
-    let cancel_reader = cancel.clone();
-    let cancel_writer = cancel.clone();
-    let reader = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
+    let service_shutdown = state.shutdown.clone();
+    let mut reader = tokio::spawn(async move {
+        let mut drain_deadline = None;
+        loop {
+            let next = tokio::select! {
+                _ = service_shutdown.cancelled(), if drain_deadline.is_none() => {
+                    drain_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(5));
+                    continue;
+                },
+                _ = tokio::time::sleep(Duration::from_millis(20)), if drain_deadline.is_some() => {
+                    if inflight_reader.read().await.is_empty()
+                        || tokio::time::Instant::now() >= drain_deadline.unwrap() { break; }
+                    continue;
+                },
+                next = ws_rx.next() => next,
+            };
+            let Some(Ok(msg)) = next else {
+                break;
+            };
             let Message::Text(text) = msg else { continue };
             let resp: RelayHttpResponse = match serde_json::from_str(&text) {
                 Ok(v) => v,
@@ -2236,18 +2341,14 @@ async fn handle_tunnel(
                 let _ = tx.send(resp);
             }
         }
-        cancel_reader.cancel();
     });
 
-    // Stop writer when socket closes.
-    let writer2 = tokio::spawn(async move {
-        tokio::select! {
-          _ = cancel_writer.cancelled() => {}
-          _ = writer => {}
-        }
-    });
-
-    let _ = tokio::join!(writer2, reader);
+    tokio::select! {
+        _ = &mut writer => { reader.abort(); let _ = reader.await; },
+        _ = &mut reader => { writer.abort(); let _ = writer.await; },
+    }
+    // Dropping senders wakes requests whose core did not answer by the deadline.
+    inflight.write().await.clear();
 
     {
         let mut tunnels = state.tunnels.write().await;
@@ -2303,9 +2404,9 @@ async fn webfinger(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
 
-    let db = state.db.lock().await;
-    let enabled = db.is_user_enabled(&user).unwrap_or(false);
-    let moved = db.get_user_move(&user).ok().flatten().is_some();
+    let db = state.db.clone();
+    let enabled = db.is_user_enabled(&user).await.unwrap_or(false);
+    let moved = db.get_user_move(&user).await.ok().flatten().is_some();
     drop(db);
     if !enabled && !moved {
         return (StatusCode::NOT_FOUND, "not found").into_response();
@@ -2314,8 +2415,8 @@ async fn webfinger(
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
     let mut actor_url = format!("{scheme}://{host}/users/{user}");
     {
-        let db = state.db.lock().await;
-        let cached = db.get_actor_cache(&user).ok().flatten();
+        let db = state.db.clone();
+        let cached = db.get_actor_cache(&user).await.ok().flatten();
         drop(db);
         if let Some(anchor) = anchor_actor_id(&state, &user, cached.as_deref()) {
             actor_url = anchor;
@@ -2367,8 +2468,10 @@ async fn register(
         return (StatusCode::UNAUTHORIZED, "admin token required").into_response();
     }
 
-    let mut db = state.db.lock().await;
-    let result = db.upsert_user_token(&state.cfg, &headers, &req.username, &req.token);
+    let db = state.db.clone();
+    let result = db
+        .upsert_user_token(&state.cfg, &headers, &req.username, &req.token)
+        .await;
     drop(db);
     if matches!(
         result,
@@ -2406,13 +2509,50 @@ fn media_type_allowed(content_type: &str) -> bool {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    base.starts_with("image/")
-        || base.starts_with("video/")
-        || base.starts_with("audio/")
-        || matches!(
-            base.as_str(),
-            "application/pdf" | "application/octet-stream"
-        )
+    base != "image/svg+xml"
+        && (base.starts_with("image/")
+            || base.starts_with("video/")
+            || base.starts_with("audio/")
+            || matches!(
+                base.as_str(),
+                "application/pdf" | "application/octet-stream"
+            ))
+}
+
+fn media_signature_matches(content_type: &str, bytes: &[u8]) -> bool {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let riff = |kind: &[u8]| bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(kind);
+    let bmff = bytes.get(4..8) == Some(b"ftyp");
+    match mime.as_str() {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" | "image/jpg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => riff(b"WEBP"),
+        "image/bmp" => bytes.starts_with(b"BM"),
+        "image/tiff" => bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => bytes.starts_with(b"\0\0\x01\0"),
+        "image/avif" | "image/heic" | "image/heif" => bmff,
+        "audio/ogg" | "video/ogg" | "application/ogg" => bytes.starts_with(b"OggS"),
+        "audio/wav" | "audio/x-wav" | "audio/wave" => riff(b"WAVE"),
+        "video/avi" | "video/x-msvideo" => riff(b"AVI "),
+        "video/webm" | "audio/webm" | "video/x-matroska" => bytes.starts_with(b"\x1aE\xdf\xa3"),
+        "video/mp4" | "audio/mp4" | "audio/x-m4a" | "video/quicktime" => bmff,
+        "audio/mpeg" | "audio/aac" => {
+            bytes.starts_with(b"ID3")
+                || (bytes.first() == Some(&255)
+                    && bytes.get(1).map(|b| b & 0xe0 == 0xe0).unwrap_or(false))
+        }
+        "audio/flac" | "audio/x-flac" => bytes.starts_with(b"fLaC"),
+        "audio/amr" => bytes.starts_with(b"#!AMR"),
+        "application/pdf" => bytes.starts_with(b"%PDF-"),
+        "application/octet-stream" => true,
+        _ => false,
+    }
 }
 
 /// Restrict the extension used in storage keys to a short alphanumeric token
@@ -2424,6 +2564,18 @@ fn safe_extension(ext: &str) -> String {
     } else {
         ext
     }
+}
+
+async fn cleanup_pending_media_uploads(state: &AppState, cutoff: i64) -> Result<()> {
+    for item in state
+        .db
+        .expired_media_reservations(&state.media_cfg.backend, cutoff)
+        .await?
+    {
+        state.media_backend.delete(&item.storage_key).await?;
+        state.db.delete_media_item(&item.username, &item.id).await?;
+    }
+    Ok(())
 }
 
 async fn media_upload(
@@ -2440,9 +2592,9 @@ async fn media_upload(
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, "missing token").into_response(),
     };
-    let db = state.db.lock().await;
-    let ok = db.verify_user_token(&user, &token).unwrap_or(false);
-    let enabled = db.is_user_enabled(&user).unwrap_or(false);
+    let db = state.db.clone();
+    let ok = db.verify_user_token(&user, &token).await.unwrap_or(false);
+    let enabled = db.is_user_enabled(&user).await.unwrap_or(false);
     drop(db);
     if !ok || !enabled {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
@@ -2462,7 +2614,7 @@ async fn media_upload(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "empty body").into_response();
     }
-    let bytes = body.to_vec();
+    let bytes = body.clone();
     let filename = headers
         .get("X-Filename")
         .and_then(|v| v.to_str().ok())
@@ -2477,19 +2629,10 @@ async fn media_upload(
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
-    if !media_type_allowed(media_type) {
+    if !media_type_allowed(media_type) || !media_signature_matches(media_type, &bytes) {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported media type").into_response();
     }
     let id = generate_media_id(&ext);
-    // Per-user quota, measured from the media_items table (RM-04 / H-28).
-    if state.cfg.media_max_bytes_per_user > 0 {
-        let db = state.db.lock().await;
-        let used = db.user_media_bytes(&user).unwrap_or(0);
-        drop(db);
-        if used.saturating_add(body.len() as u64) > state.cfg.media_max_bytes_per_user {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "media quota exceeded").into_response();
-        }
-    }
     let prefix = state.cfg.media_prefix.trim().trim_matches('/').to_string();
     let prefix = if prefix.is_empty() {
         String::new()
@@ -2497,26 +2640,51 @@ async fn media_upload(
         format!("{}/", prefix)
     };
     let storage_key = media_store::sanitize_key(&format!("{prefix}{user}/{id}"));
+    let item = MediaItem {
+        id: id.clone(),
+        username: user.clone(),
+        backend: state.media_cfg.backend.clone(),
+        storage_key: storage_key.clone(),
+        media_type: media_type.to_string(),
+        size: bytes.len() as i64,
+        created_at_ms: now_ms(),
+    };
+    match state
+        .db
+        .reserve_media_item(&item, state.cfg.media_max_bytes_per_user)
+        .await
+    {
+        Ok(MediaReservation::Reserved) => {}
+        Ok(MediaReservation::QuotaExceeded) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "media quota exceeded").into_response()
+        }
+        Ok(MediaReservation::UserUnavailable) => {
+            return (StatusCode::FORBIDDEN, "user unavailable").into_response()
+        }
+        Err(_) => return (StatusCode::BAD_GATEWAY, "quota database unavailable").into_response(),
+    }
     let saved = match state
         .media_backend
         .save_upload(&storage_key, media_type, &bytes)
         .await
     {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("store failed: {e:#}")).into_response(),
+        Ok(saved) if saved.size == bytes.len() as u64 && saved.storage_key == storage_key => saved,
+        _ => {
+            if state.media_backend.delete(&storage_key).await.is_ok() {
+                let _ = state.db.delete_media_item(&user, &id).await;
+            }
+            return (StatusCode::BAD_GATEWAY, "media storage failed").into_response();
+        }
     };
-    let item = MediaItem {
-        id: id.clone(),
-        username: user.clone(),
-        backend: state.media_cfg.backend.clone(),
-        storage_key: saved.storage_key.clone(),
-        media_type: saved.media_type.clone(),
-        size: saved.size as i64,
-        created_at_ms: now_ms(),
-    };
-    let db = state.db.lock().await;
-    if db.upsert_media_item(&item).is_err() {
-        return (StatusCode::BAD_GATEWAY, "db error").into_response();
+    if !matches!(state.db.finish_media_upload(&item).await, Ok(true)) {
+        if state.media_backend.delete(&storage_key).await.is_ok() {
+            let _ = state.db.delete_media_item(&user, &id).await;
+        }
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upload cancelled; retry later",
+        )
+            .into_response();
     }
     let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
     let url = format!("{scheme}://{host}/users/{user}/media/{id}");
@@ -2551,9 +2719,9 @@ async fn media_delete(
     let Some(token) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
-    let db = state.db.lock().await;
-    let ok = db.verify_user_token(&user, &token).unwrap_or(false);
-    let item = match db.get_media_item(&user, &id) {
+    let db = state.db.clone();
+    let ok = db.verify_user_token(&user, &token).await.unwrap_or(false);
+    let item = match db.get_media_item(&user, &id).await {
         Ok(v) => v,
         Err(_) => return (StatusCode::BAD_GATEWAY, "db error").into_response(),
     };
@@ -2567,8 +2735,8 @@ async fn media_delete(
     if let Err(e) = state.media_backend.delete(&item.storage_key).await {
         return (StatusCode::BAD_GATEWAY, format!("delete failed: {e:#}")).into_response();
     }
-    let db = state.db.lock().await;
-    if let Err(e) = db.delete_media_item(&user, &id) {
+    let db = state.db.clone();
+    if let Err(e) = db.delete_media_item(&user, &id).await {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
     (StatusCode::OK, "deleted").into_response()
@@ -2577,6 +2745,7 @@ async fn media_delete(
 async fn media_get(
     State(state): State<AppState>,
     Path((user, id)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
@@ -2584,21 +2753,32 @@ async fn media_get(
     if id.is_empty() || id.contains("..") || id.contains('/') || id.contains('\\') {
         return (StatusCode::BAD_REQUEST, "invalid media id").into_response();
     }
-    let db = state.db.lock().await;
-    let item = match db.get_media_item(&user, &id) {
+    let db = state.db.clone();
+    let item = match db.get_media_item(&user, &id).await {
         Ok(Some(v)) => v,
         Ok(None) => {
             drop(db);
             let is_online = { state.tunnels.read().await.contains_key(&user) };
             if is_online {
                 let media_path = format!("/users/{user}/media/{id}");
+                let mut media_headers = HeaderMap::new();
+                for name in [
+                    header::RANGE,
+                    header::IF_RANGE,
+                    header::IF_NONE_MATCH,
+                    header::ACCEPT,
+                ] {
+                    if let Some(value) = headers.get(&name) {
+                        media_headers.insert(name, value.clone());
+                    }
+                }
                 return forward_to_user(
                     state,
                     user.clone(),
                     Method::GET,
                     &media_path,
                     String::new(),
-                    HeaderMap::new(),
+                    media_headers,
                     Bytes::new(),
                 )
                 .await;
@@ -2608,8 +2788,51 @@ async fn media_get(
         Err(_) => return (StatusCode::BAD_GATEWAY, "db error").into_response(),
     };
     drop(db);
-    match state.media_backend.load(&item.storage_key).await {
-        Ok(bytes) => {
+    let size = item.size.max(0) as u64;
+    let etag = format!(
+        "\"{}\"",
+        token_hash_hex(&format!("{}:{size}", item.storage_key))
+    );
+    let not_modified = headers
+        .get(http::header::IF_NONE_MATCH)
+        .and_then(|h| h.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .any(|v| v.trim() == "*" || v.trim().trim_start_matches("W/") == etag)
+        })
+        .unwrap_or(false);
+    let range = if not_modified
+        || headers
+            .get(http::header::IF_RANGE)
+            .map(|h| h.as_bytes() != etag.as_bytes())
+            .unwrap_or(false)
+    {
+        None
+    } else {
+        match media_byte_range(
+            headers
+                .get(http::header::RANGE)
+                .and_then(|h| h.to_str().ok()),
+            size,
+        ) {
+            Ok(range) => range,
+            Err(()) => {
+                return (
+                    StatusCode::RANGE_NOT_SATISFIABLE,
+                    [(http::header::CONTENT_RANGE, format!("bytes */{size}"))],
+                )
+                    .into_response()
+            }
+        }
+    };
+    let body = if not_modified {
+        Ok(axum::body::Body::empty())
+    } else {
+        state.media_backend.load(&item.storage_key, range).await
+    };
+    match body {
+        Ok(body) => {
             let mut headers_out = HeaderMap::new();
             headers_out.insert(
                 http::header::CONTENT_TYPE,
@@ -2620,10 +2843,77 @@ async fn media_get(
                 http::header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=31536000, immutable"),
             );
-            (StatusCode::OK, headers_out, bytes).into_response()
+            headers_out.insert(
+                http::header::ETAG,
+                HeaderValue::from_str(&etag).expect("hex ETag"),
+            );
+            headers_out.insert(
+                http::header::ACCEPT_RANGES,
+                HeaderValue::from_static("bytes"),
+            );
+            headers_out.insert(
+                http::header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("default-src 'none'; sandbox"),
+            );
+            headers_out.insert(
+                http::header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
+            if not_modified {
+                return (StatusCode::NOT_MODIFIED, headers_out, body).into_response();
+            }
+            let (status, length) = if let Some((start, end)) = range {
+                headers_out.insert(
+                    http::header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{size}"))
+                        .expect("numeric range"),
+                );
+                (StatusCode::PARTIAL_CONTENT, end - start + 1)
+            } else {
+                (StatusCode::OK, size)
+            };
+            headers_out.insert(
+                http::header::CONTENT_LENGTH,
+                HeaderValue::from_str(&length.to_string()).expect("numeric length"),
+            );
+            (status, headers_out, body).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+fn media_byte_range(value: Option<&str>, size: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(value) = value.strip_prefix("bytes=") else {
+        return Ok(None);
+    };
+    // Multipart ranges are optional; serve the full representation instead.
+    if value.contains(',') {
+        return Ok(None);
+    }
+    let (start, end) = value.trim().split_once('-').ok_or(())?;
+    if size == 0 {
+        return Err(());
+    }
+    if start.is_empty() {
+        let suffix: u64 = end.parse().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        return Ok(Some((size.saturating_sub(suffix), size - 1)));
+    }
+    let start: u64 = start.parse().map_err(|_| ())?;
+    let end: u64 = if end.is_empty() {
+        size - 1
+    } else {
+        end.parse::<u64>().map_err(|_| ())?.min(size - 1)
+    };
+    if start >= size || start > end {
+        return Err(());
+    }
+    Ok(Some((start, end)))
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -2634,18 +2924,17 @@ async fn healthz() -> impl IntoResponse {
 async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
     // Readiness probe: unauthenticated, read-only DB ping, no audit side effect.
     let db_ok = {
-        let db = state.db.lock().await;
-        db.health_check().is_ok()
+        let db = state.db.clone();
+        matches!(
+            tokio::time::timeout(Duration::from_secs(1), db.health_check()).await,
+            Ok(Ok(()))
+        )
     };
     if !db_ok {
         return (StatusCode::SERVICE_UNAVAILABLE, "db not ready").into_response();
     }
-    if let Err(e) = state.media_backend.health_check().await {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("media not ready: {e}"),
-        )
-            .into_response();
+    if state.media_backend.health_check().await.is_err() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "media not ready").into_response();
     }
     (StatusCode::OK, "ready").into_response()
 }
@@ -2774,15 +3063,19 @@ async fn relay_metrics_json(
             return (StatusCode::BAD_GATEWAY, format!("telemetry error: {e}")).into_response()
         }
     };
-    let _ = state.db.lock().await.insert_admin_audit(
-        "admin_metrics_json",
-        None,
-        None,
-        Some(&audit.ip),
-        true,
-        None,
-        &audit.meta,
-    );
+    let _ = state
+        .db
+        .clone()
+        .insert_admin_audit(
+            "admin_metrics_json",
+            None,
+            None,
+            Some(&audit.ip),
+            true,
+            None,
+            &audit.meta,
+        )
+        .await;
     axum::Json(telemetry).into_response()
 }
 
@@ -2837,15 +3130,19 @@ async fn relay_metrics_prom(
         out,
     )
         .into_response();
-    let _ = state.db.lock().await.insert_admin_audit(
-        "admin_metrics_prom",
-        None,
-        None,
-        Some(&audit.ip),
-        true,
-        None,
-        &audit.meta,
-    );
+    let _ = state
+        .db
+        .clone()
+        .insert_admin_audit(
+            "admin_metrics_prom",
+            None,
+            None,
+            Some(&audit.ip),
+            true,
+            None,
+            &audit.meta,
+        )
+        .await;
     resp
 }
 
@@ -2899,8 +3196,8 @@ async fn nodeinfo_links(State(state): State<AppState>, headers: HeaderMap) -> im
 
 async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
     let total_users = {
-        let db = state.db.lock().await;
-        db.count_users().unwrap_or(0)
+        let db = state.db.clone();
+        db.count_users().await.unwrap_or(0)
     };
 
     axum::Json(NodeInfo2 {
@@ -3004,8 +3301,8 @@ async fn forward_user_root(
     }
     if method == Method::GET {
         let cached = {
-            let db = state.db.lock().await;
-            db.get_actor_cache(&user).ok().flatten()
+            let db = state.db.clone();
+            db.get_actor_cache(&user).await.ok().flatten()
         };
         if let Some(actor_id) = anchor_actor_id(&state, &user, cached.as_deref()) {
             // Identity lives on a static anchor: send remote servers to the canonical URL.
@@ -3016,8 +3313,8 @@ async fn forward_user_root(
     let path = format!("/users/{user}");
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
     let local = {
-        let db = state.db.lock().await;
-        db.user_exists(&user).unwrap_or(false)
+        let db = state.db.clone();
+        db.user_exists(&user).await.unwrap_or(false)
     };
     if !local {
         if let Some(resp) =
@@ -3076,8 +3373,8 @@ async fn forward_user_rest(
     };
     let query = raw_query.map(|q| format!("?{q}")).unwrap_or_default();
     let local = {
-        let db = state.db.lock().await;
-        db.user_exists(&user).unwrap_or(false)
+        let db = state.db.clone();
+        db.user_exists(&user).await.unwrap_or(false)
     };
     if !local {
         if let Some(resp) =
@@ -3101,8 +3398,8 @@ async fn forward_to_peer(
     body: &Bytes,
 ) -> Option<Response> {
     let relay_url = {
-        let db = state.db.lock().await;
-        db.get_remote_user_relay(user).ok().flatten()
+        let db = state.db.clone();
+        db.get_remote_user_relay(user).await.ok().flatten()
     }?;
     let hops = headers
         .get("x-fedi3-hops")
@@ -3122,7 +3419,7 @@ async fn forward_to_peer(
         .request(method.clone(), &url)
         .header("x-fedi3-hops", (hops + 1).to_string());
     for (k, v) in headers.iter() {
-        if k == header::HOST || k.as_str().eq_ignore_ascii_case("x-fedi3-hops") {
+        if !peer_forward_header_allowed(k.as_str(), headers) {
             continue;
         }
         req = req.header(k, v);
@@ -3130,16 +3427,49 @@ async fn forward_to_peer(
     let resp = req.body(body.clone()).send().await.ok()?;
     let status = resp.status();
     let resp_headers = resp.headers().clone();
-    let bytes = resp.bytes().await.ok()?;
+    let bytes = read_body_capped(resp, state.cfg.max_body_bytes)
+        .await
+        .ok()?;
     let mut out = Response::builder().status(status);
     for (k, v) in resp_headers.iter() {
-        if k == header::CONTENT_LENGTH || k == header::TRANSFER_ENCODING || k == header::CONNECTION
+        if k == header::CONTENT_LENGTH
+            || !peer_forward_header_allowed(k.as_str(), &resp_headers)
+            || k == header::SET_COOKIE
         {
             continue;
         }
         out = out.header(k, v);
     }
     out.body(axum::body::Body::from(bytes)).ok()
+}
+
+fn peer_forward_header_allowed(name: &str, headers: &HeaderMap) -> bool {
+    let name = name.to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "authorization"
+            | "cookie"
+            | "proxy-authorization"
+            | "proxy-authenticate"
+            | "connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "x-fedi3-hops"
+            | "x-fedi3-internal"
+            | "x-fedi3-telemetry-token"
+    ) {
+        return false;
+    }
+    !headers
+        .get_all(header::CONNECTION)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .any(|v| v.trim().eq_ignore_ascii_case(&name))
 }
 
 /// Extract the sender actor of an activity body (string or embedded object form).
@@ -3159,8 +3489,8 @@ async fn sender_blocked(state: &AppState, user: &str, body: &Bytes) -> bool {
     let Some(actor) = sender_from_body(body) else {
         return false;
     };
-    let db = state.db.lock().await;
-    db.is_blocked(user, &actor).unwrap_or(false)
+    let db = state.db.clone();
+    db.is_blocked(user, &actor).await.unwrap_or(false)
 }
 
 async fn forward_to_user(
@@ -3176,8 +3506,8 @@ async fn forward_to_user(
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
     {
-        let db = state.db.lock().await;
-        if !db.user_exists(&user).unwrap_or(false) {
+        let db = state.db.clone();
+        if !db.user_exists(&user).await.unwrap_or(false) {
             return (StatusCode::NOT_FOUND, "not found").into_response();
         }
     }
@@ -3189,12 +3519,12 @@ async fn forward_to_user(
     {
         let is_online = { state.tunnels.read().await.contains_key(&user) };
         if !is_online {
-            let db = state.db.lock().await;
-            if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(&user) {
+            let db = state.db.clone();
+            if let Ok(Some((moved_to, _moved_at_ms))) = db.get_user_move(&user).await {
                 if path == format!("/users/{user}") {
                     if wants_activity_json(&headers) {
                         // Prefer serving a movedTo stub actor so legacy servers can pick up the migration.
-                        if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
+                        if let Ok(Some(actor_json)) = db.get_actor_cache(&user).await {
                             if let Some(patched) = patch_actor_with_moved_to(&actor_json, &moved_to)
                             {
                                 return (
@@ -3224,7 +3554,7 @@ async fn forward_to_user(
                     .into_response();
             }
             if path == format!("/users/{user}") {
-                if let Ok(Some(actor_json)) = db.get_actor_cache(&user) {
+                if let Ok(Some(actor_json)) = db.get_actor_cache(&user).await {
                     return (
                         StatusCode::OK,
                         [("Content-Type", "application/activity+json; charset=utf-8")],
@@ -3233,7 +3563,7 @@ async fn forward_to_user(
                         .into_response();
                 }
             } else if let Some(kind) = collection_kind_from_path(&user, path) {
-                if let Ok(Some(json)) = db.get_collection_cache(&user, kind) {
+                if let Ok(Some(json)) = db.get_collection_cache(&user, kind).await {
                     return (
                         StatusCode::OK,
                         [("Content-Type", "application/activity+json; charset=utf-8")],
@@ -3268,6 +3598,21 @@ async fn forward_to_user(
         )
         .await;
     };
+
+    if state.shutdown.is_cancelled() {
+        return forward_failure(
+            &state,
+            &user,
+            &method,
+            path,
+            &query,
+            &headers,
+            &body,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "relay shutting down",
+        )
+        .await;
+    }
 
     // Clone the sender and release the tunnels lock *before* awaiting. Holding
     // the read guard across `tx.send().await` blocked every other forward and
@@ -3398,9 +3743,9 @@ async fn forward_to_user(
     if method == Method::GET && resp.status == 200 {
         if let Ok(bytes) = B64.decode(resp.body_b64.as_bytes()) {
             if let Ok(actor_json) = String::from_utf8(bytes) {
-                let db = state.db.lock().await;
+                let db = state.db.clone();
                 if path == format!("/users/{user}") {
-                    let _ = db.upsert_actor_cache(&user, &actor_json);
+                    let _ = db.upsert_actor_cache(&user, &actor_json).await;
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
                         let actor_url = v
                             .get("id")
@@ -3422,12 +3767,12 @@ async fn forward_to_user(
                         state.meili_index_user(doc);
                     }
                 } else if let Some(kind) = collection_kind_from_path(&user, path) {
-                    let _ = db.upsert_collection_cache(&user, kind, &actor_json);
+                    let _ = db.upsert_collection_cache(&user, kind, &actor_json).await;
                     if kind == "outbox" {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
                             for note in extract_notes_from_value(&v) {
                                 if let Some(idx) = note_to_index(&note) {
-                                    let _ = db.upsert_relay_note(&idx);
+                                    let _ = db.upsert_relay_note(&idx).await;
                                 }
                             }
                         }
@@ -3493,8 +3838,8 @@ async fn spool_request(
     body: &Bytes,
 ) -> bool {
     let actor_json = {
-        let db = state.db.lock().await;
-        db.get_actor_cache(user).ok().flatten()
+        let db = state.db.clone();
+        db.get_actor_cache(user).await.ok().flatten()
     };
     let mut stored_headers = headers_to_vec(headers);
     let stored_body = match actor_json
@@ -3511,7 +3856,7 @@ async fn spool_request(
         }
         None => B64.encode(body),
     };
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     db.enqueue_spool(
         &state.cfg,
         user,
@@ -3522,6 +3867,7 @@ async fn spool_request(
         &stored_body,
         body.len() as i64,
     )
+    .await
     .is_ok()
 }
 
@@ -3665,11 +4011,26 @@ async fn shared_inbox(
 
     // The relay used to accept every POST on trust (P0-06 / SEC-01). Verify the
     // HTTP signature and its mandatory signed headers before doing any work.
-    if let Err(e) =
-        verify_actor_signature_for_request(&state, &Method::POST, &uri.0, &headers, Some(&body))
-            .await
+    let (verified_actor, _) = match verify_actor_signature_for_request(
+        &state,
+        &Method::POST,
+        &uri.0,
+        &headers,
+        Some(&body),
+    )
+    .await
     {
-        return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response();
+        Ok(verified) => verified,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, format!("signature invalid: {e}")).into_response()
+        }
+    };
+    if sender_from_body(&body).as_deref() != Some(verified_actor.as_str()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "activity actor does not match signer",
+        )
+            .into_response();
     }
 
     let users = match extract_users_from_activity(&body) {
@@ -3678,11 +4039,14 @@ async fn shared_inbox(
     };
     // Only recipients that exist on this relay are ours (RI-05).
     let users: Vec<String> = {
-        let db = state.db.lock().await;
-        users
-            .into_iter()
-            .filter(|u| db.user_exists(u).unwrap_or(false))
-            .collect()
+        let db = state.db.clone();
+        let mut local = Vec::new();
+        for user in users {
+            if db.user_exists(&user).await.unwrap_or(false) {
+                local.push(user);
+            }
+        }
+        local
     };
     if users.is_empty() {
         return (StatusCode::BAD_REQUEST, "no local recipients").into_response();
@@ -3691,14 +4055,18 @@ async fn shared_inbox(
     // forwarded, so the block is enforced before any core sees the activity.
     let sender = sender_from_body(&body);
     let users: Vec<String> = {
-        let db = state.db.lock().await;
-        users
-            .into_iter()
-            .filter(|u| match sender.as_deref() {
-                Some(actor) => !db.is_blocked(u, actor).unwrap_or(false),
-                None => true,
-            })
-            .collect()
+        let db = state.db.clone();
+        let mut allowed = Vec::new();
+        for user in users {
+            let blocked = match sender.as_deref() {
+                Some(actor) => db.is_blocked(&user, actor).await.unwrap_or(true),
+                None => false,
+            };
+            if !blocked {
+                allowed.push(user);
+            }
+        }
+        allowed
     };
     if users.is_empty() {
         return (StatusCode::ACCEPTED, "no local recipients").into_response();
@@ -3739,8 +4107,8 @@ async fn shared_inbox(
         // the same activity twice (H-20 / RI-06 / SEC-12).
         if let Some(aid) = activity_id.as_deref() {
             let inserted = {
-                let db = state.db.lock().await;
-                db.insert_inbox_dedupe(aid, user).unwrap_or(true)
+                let db = state.db.clone();
+                db.insert_inbox_dedupe(aid, user).await.unwrap_or(true)
             };
             if !inserted {
                 duplicate += 1;
@@ -3778,8 +4146,8 @@ async fn shared_inbox(
                 }
             }
         } else {
-            let db = state.db.lock().await;
-            match db.is_user_enabled(user) {
+            let db = state.db.clone();
+            match db.is_user_enabled(user).await {
                 Ok(true) => {
                     if db
                         .enqueue_spool(
@@ -3792,6 +4160,7 @@ async fn shared_inbox(
                             &body_b64,
                             body.len() as i64,
                         )
+                        .await
                         .is_ok()
                     {
                         spooled += 1;
@@ -3805,8 +4174,8 @@ async fn shared_inbox(
 
         if !ok {
             if let Some(aid) = activity_id.as_deref() {
-                let db = state.db.lock().await;
-                let _ = db.delete_inbox_dedupe(aid, user);
+                let db = state.db.clone();
+                let _ = db.delete_inbox_dedupe(aid, user).await;
             }
         }
     }
@@ -3838,10 +4207,10 @@ async fn index_activity_bytes_for_search(state: &AppState, body: &Bytes) -> Resu
         return Ok(());
     }
     let mut meili_docs = Vec::new();
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     for note in notes {
         if let Some(idx) = note_to_index(&note) {
-            let _ = db.upsert_relay_note(&idx);
+            let _ = db.upsert_relay_note(&idx).await;
             meili_docs.push(MeiliNoteDoc {
                 id: meili_doc_id(&idx.note_id),
                 note_json: idx.note_json.clone(),
@@ -3864,8 +4233,8 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
     let batch = 200u32;
     loop {
         let users = {
-            let db = state.db.lock().await;
-            db.list_users(batch, offset).unwrap_or_default()
+            let db = state.db.clone();
+            db.list_users(batch, offset).await.unwrap_or_default()
         };
         if users.is_empty() {
             break;
@@ -3876,14 +4245,16 @@ async fn run_outbox_index_once(state: &AppState) -> Result<()> {
             }
             if let Err(e) = index_outbox_for_user(state, &user).await {
                 error!(%user, "outbox index error: {e:#}");
-                let db = state.db.lock().await;
-                let _ = db.upsert_outbox_index_state(&user, false);
+                let db = state.db.clone();
+                let _ = db.upsert_outbox_index_state(&user, false).await;
             }
         }
         offset = offset.saturating_add(batch);
     }
-    let db = state.db.lock().await;
-    let _ = db.relay_meta_set("search_index_last_ms", &now_ms().to_string());
+    let db = state.db.clone();
+    let _ = db
+        .relay_meta_set("search_index_last_ms", &now_ms().to_string())
+        .await;
     Ok(())
 }
 
@@ -3901,8 +4272,8 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
         let mut meili_docs = Vec::new();
         for note in extract_notes_from_value(&value) {
             if let Some(idx) = note_to_index(&note) {
-                let db = state.db.lock().await;
-                let _ = db.upsert_relay_note(&idx);
+                let db = state.db.clone();
+                let _ = db.upsert_relay_note(&idx).await;
                 meili_docs.push(MeiliNoteDoc {
                     id: meili_doc_id(&idx.note_id),
                     note_json: idx.note_json.clone(),
@@ -3921,8 +4292,8 @@ async fn index_outbox_for_user(state: &AppState, user: &str) -> Result<()> {
             break;
         }
     }
-    let db = state.db.lock().await;
-    let _ = db.upsert_outbox_index_state(user, true);
+    let db = state.db.clone();
+    let _ = db.upsert_outbox_index_state(user, true).await;
     Ok(())
 }
 
@@ -3944,8 +4315,8 @@ async fn ensure_user_cached(state: &AppState, user: &str) -> Result<()> {
             if let Ok(bytes) = axum::body::to_bytes(resp.into_body(), MAX_PEER_PAGE_BYTES).await {
                 if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                     if let Ok(json) = serde_json::to_string(&value) {
-                        let db = state.db.lock().await;
-                        let _ = db.upsert_actor_cache(user, &json);
+                        let db = state.db.clone();
+                        let _ = db.upsert_actor_cache(user, &json).await;
                         return Ok(());
                     }
                 }
@@ -4084,8 +4455,8 @@ async fn flush_spool_for_user(state: AppState, user: String) {
         }
 
         let items = {
-            let db = state.db.lock().await;
-            match db.list_spool(&user, batch) {
+            let db = state.db.clone();
+            match db.list_spool(&user, batch).await {
                 Ok(v) => v,
                 Err(e) => {
                     error!(%user, "spool list failed: {e}");
@@ -4173,8 +4544,8 @@ async fn flush_spool_for_user(state: AppState, user: String) {
         }
 
         if !delivered_ids.is_empty() {
-            let db = state.db.lock().await;
-            if let Err(e) = db.delete_spool_ids(&delivered_ids) {
+            let db = state.db.clone();
+            if let Err(e) = db.delete_spool_ids(&delivered_ids).await {
                 error!(%user, "spool delete failed: {e}");
                 break;
             }
@@ -4570,3723 +4941,6 @@ fn migrate_postgres_search_tsv(conn: &mut PgConn) -> Result<()> {
     }
     conn.batch_execute(PG_TAG_TSV_INDEX_SQL)?;
     Ok(())
-}
-
-impl Db {
-    fn open_sqlite_conn(&self) -> Result<Connection> {
-        let conn = Connection::open(&self.path)?;
-        self.apply_pragmas(&conn)?;
-        Ok(conn)
-    }
-
-    fn open_pg_conn(&self) -> Result<PgConn> {
-        let pool = self
-            .pg_pool
-            .get()
-            .ok_or_else(|| anyhow::anyhow!("postgres pool not initialized"))?;
-        let client = block_on_result(pool.get())?;
-        Ok(PgConn { client })
-    }
-
-    fn apply_pragmas(&self, conn: &Connection) -> rusqlite::Result<()> {
-        let _ = conn.pragma_update(None, "journal_mode", "WAL");
-        let _ = conn.pragma_update(None, "synchronous", self.db_synchronous.as_str());
-        let _ = conn.pragma_update(None, "temp_store", "MEMORY");
-        let _ = conn.pragma_update(None, "cache_size", self.db_cache_kb);
-        let _ = conn.busy_timeout(Duration::from_millis(self.db_busy_timeout_ms));
-        Ok(())
-    }
-
-    fn init(&self) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute_batch(
-                    r#"
-            PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS users (
-              username TEXT PRIMARY KEY,
-              token_sha256 TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL,
-              disabled INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(lower(username));
-            CREATE TABLE IF NOT EXISTS user_cache (
-              username TEXT PRIMARY KEY,
-              actor_json TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL,
-              actor_id TEXT NULL,
-              actor_url TEXT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_cache_updated ON user_cache(updated_at_ms DESC);
-            CREATE INDEX IF NOT EXISTS idx_user_cache_username_lower ON user_cache(lower(username));
-            CREATE INDEX IF NOT EXISTS idx_user_cache_actor_id_lower ON user_cache(lower(actor_id));
-            CREATE INDEX IF NOT EXISTS idx_user_cache_actor_url_lower ON user_cache(lower(actor_url));
-            CREATE TABLE IF NOT EXISTS user_collection_cache (
-              username TEXT NOT NULL,
-              kind TEXT NOT NULL,
-              json TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL,
-              PRIMARY KEY(username, kind)
-            );
-            CREATE TABLE IF NOT EXISTS inbox_spool (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              username TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL,
-              method TEXT NOT NULL,
-              path TEXT NOT NULL,
-              query TEXT NOT NULL,
-              headers_json TEXT NOT NULL,
-              body_b64 TEXT NOT NULL,
-              body_len INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS inbox_spool_user_created ON inbox_spool(username, created_at_ms);
-
-            CREATE TABLE IF NOT EXISTS relay_registry (
-              relay_url TEXT PRIMARY KEY,
-              base_domain TEXT NULL,
-              last_seen_ms INTEGER NOT NULL,
-              last_telemetry_json TEXT NULL,
-              sign_pubkey_b64 TEXT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_relay_registry_seen ON relay_registry(last_seen_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS relay_meta (
-              key TEXT PRIMARY KEY,
-              value TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS peer_registry (
-              peer_id TEXT PRIMARY KEY,
-              last_seen_ms INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS relay_peers (
-              relay_url TEXT PRIMARY KEY,
-              added_at_ms INTEGER NOT NULL,
-              last_seen_ms INTEGER NULL
-            );
-            CREATE TABLE IF NOT EXISTS remote_users (
-              username TEXT PRIMARY KEY,
-              relay_url TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_remote_users_relay ON remote_users(relay_url);
-            CREATE TABLE IF NOT EXISTS relay_blocks (
-              kind TEXT NOT NULL,
-              value TEXT NOT NULL,
-              reason TEXT NULL,
-              created_at_ms INTEGER NOT NULL,
-              created_by TEXT NULL,
-              expires_at_ms INTEGER NULL,
-              PRIMARY KEY(kind, value)
-            );
-            CREATE TABLE IF NOT EXISTS user_blocks (
-              username TEXT NOT NULL,
-              kind TEXT NOT NULL,
-              value TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL,
-              PRIMARY KEY(username, kind, value)
-            );
-            CREATE TABLE IF NOT EXISTS peer_directory (
-              peer_id TEXT PRIMARY KEY,
-              username TEXT NOT NULL,
-              actor_url TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_peer_directory_user ON peer_directory(username);
-            CREATE INDEX IF NOT EXISTS idx_peer_directory_actor ON peer_directory(actor_url);
-            CREATE INDEX IF NOT EXISTS idx_peer_directory_user_lower ON peer_directory(lower(username));
-            CREATE INDEX IF NOT EXISTS idx_peer_directory_actor_lower ON peer_directory(lower(actor_url));
-            CREATE INDEX IF NOT EXISTS idx_peer_directory_updated ON peer_directory(updated_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS relay_user_directory (
-              actor_url TEXT PRIMARY KEY,
-              username TEXT NOT NULL,
-              relay_url TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_relay_user_dir_name ON relay_user_directory(username);
-            CREATE INDEX IF NOT EXISTS idx_relay_user_dir_relay ON relay_user_directory(relay_url);
-            CREATE INDEX IF NOT EXISTS idx_relay_user_dir_name_lower ON relay_user_directory(lower(username));
-            CREATE INDEX IF NOT EXISTS idx_relay_user_dir_actor_lower ON relay_user_directory(lower(actor_url));
-            CREATE INDEX IF NOT EXISTS idx_relay_user_dir_updated ON relay_user_directory(updated_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS user_moves (
-              username TEXT PRIMARY KEY,
-              moved_to_actor TEXT NOT NULL,
-              moved_at_ms INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS move_notices (
-              notice_id TEXT PRIMARY KEY,
-              notice_json TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_move_notices_created ON move_notices(created_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS move_notice_fanout (
-              notice_id TEXT NOT NULL,
-              relay_url TEXT NOT NULL,
-              tries INTEGER NOT NULL,
-              last_try_ms INTEGER NOT NULL,
-              sent_ok INTEGER NOT NULL,
-              PRIMARY KEY(notice_id, relay_url)
-            );
-
-            CREATE TABLE IF NOT EXISTS webrtc_signals (
-              signal_id TEXT PRIMARY KEY,
-              to_peer_id TEXT NOT NULL,
-              from_actor TEXT NOT NULL,
-              session_id TEXT NOT NULL,
-              kind TEXT NOT NULL,
-              payload_json TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_webrtc_to_created ON webrtc_signals(to_peer_id, created_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS media_items (
-              id TEXT PRIMARY KEY,
-              username TEXT NOT NULL,
-              backend TEXT NOT NULL,
-              storage_key TEXT NOT NULL,
-              media_type TEXT NOT NULL,
-              size INTEGER NOT NULL,
-              created_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_media_user_created ON media_items(username, created_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS relay_notes (
-              note_id TEXT PRIMARY KEY,
-              actor_id TEXT NULL,
-              published_ms INTEGER NULL,
-              content_text TEXT NOT NULL,
-              content_html TEXT NOT NULL,
-              note_json TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_relay_notes_created ON relay_notes(created_at_ms DESC);
-            CREATE INDEX IF NOT EXISTS idx_relay_notes_actor ON relay_notes(actor_id);
-            CREATE INDEX IF NOT EXISTS idx_relay_notes_published ON relay_notes(published_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS relay_note_tags (
-              note_id TEXT NOT NULL,
-              tag TEXT NOT NULL,
-              PRIMARY KEY(note_id, tag)
-            );
-            CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tag ON relay_note_tags(tag);
-            CREATE INDEX IF NOT EXISTS idx_relay_note_tags_tag_lower ON relay_note_tags(lower(tag));
-
-            CREATE TABLE IF NOT EXISTS relay_tag_counts (
-              tag TEXT PRIMARY KEY,
-              count INTEGER NOT NULL
-            );
-            INSERT OR IGNORE INTO relay_tag_counts(tag, count)
-              SELECT tag, COUNT(*) FROM relay_note_tags GROUP BY tag;
-            CREATE TRIGGER IF NOT EXISTS relay_tag_counts_insert
-              AFTER INSERT ON relay_note_tags
-            BEGIN
-              INSERT INTO relay_tag_counts(tag, count) VALUES (NEW.tag, 1)
-              ON CONFLICT(tag) DO UPDATE SET count = count + 1;
-            END;
-            CREATE TRIGGER IF NOT EXISTS relay_tag_counts_delete
-              AFTER DELETE ON relay_note_tags
-            BEGIN
-              UPDATE relay_tag_counts SET count = count - 1 WHERE tag = OLD.tag;
-              DELETE FROM relay_tag_counts WHERE tag = OLD.tag AND count <= 0;
-            END;
-
-            CREATE TABLE IF NOT EXISTS relay_notes_count (
-              id INTEGER PRIMARY KEY CHECK(id = 1),
-              count INTEGER NOT NULL
-            );
-            INSERT OR IGNORE INTO relay_notes_count(id, count)
-              VALUES (1, (SELECT COUNT(*) FROM relay_notes));
-            CREATE TRIGGER IF NOT EXISTS relay_notes_count_insert
-              AFTER INSERT ON relay_notes
-            BEGIN
-              UPDATE relay_notes_count SET count = count + 1 WHERE id = 1;
-            END;
-            CREATE TRIGGER IF NOT EXISTS relay_notes_count_delete
-              AFTER DELETE ON relay_notes
-            BEGIN
-              UPDATE relay_notes_count SET count = count - 1 WHERE id = 1;
-            END;
-
-            CREATE TABLE IF NOT EXISTS relay_outbox_index (
-              username TEXT PRIMARY KEY,
-              last_index_ms INTEGER NOT NULL,
-              last_ok INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS admin_audit (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              action TEXT NOT NULL,
-              username TEXT NULL,
-              actor TEXT NULL,
-              ip TEXT NULL,
-              ok INTEGER NOT NULL,
-              detail TEXT NULL,
-              created_at_ms INTEGER NOT NULL,
-              request_id TEXT NULL,
-              correlation_id TEXT NULL,
-              user_agent TEXT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at_ms DESC);
-
-            CREATE TABLE IF NOT EXISTS schema_version (
-              id INTEGER PRIMARY KEY CHECK(id = 1),
-              version INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS inbox_dedupe (
-              activity_id TEXT NOT NULL,
-              recipient TEXT NOT NULL,
-              created_at_ms INTEGER NOT NULL,
-              PRIMARY KEY(activity_id, recipient)
-            );
-            CREATE INDEX IF NOT EXISTS idx_inbox_dedupe_created ON inbox_dedupe(created_at_ms);
-            "#,
-                )?;
-                migrate_sqlite_schema(&conn)?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let url = self.db_url.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("FEDI3_RELAY_DB_URL is required for postgres")
-                })?;
-                let mut cfg = deadpool_postgres::Config::new();
-                cfg.url = Some(url.to_string());
-                cfg.manager = Some(ManagerConfig {
-                    recycling_method: RecyclingMethod::Fast,
-                });
-                let mut pool_cfg = PoolConfig::new(self.pg_pool_max_size);
-                pool_cfg.queue_mode = self.pg_pool_queue_mode;
-                pool_cfg.timeouts = Timeouts {
-                    wait: self.pg_pool_wait_ms.map(Duration::from_millis),
-                    create: self.pg_pool_create_timeout_ms.map(Duration::from_millis),
-                    recycle: self.pg_pool_recycle_timeout_ms.map(Duration::from_millis),
-                };
-                cfg.pool = Some(pool_cfg);
-                let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
-                let _ = self.pg_pool.set(pool);
-                let max_retries = self.pg_init_retries;
-                let mut last_err: Option<anyhow::Error> = None;
-                for attempt in 1..=max_retries {
-                    match self.open_pg_conn() {
-                        Ok(mut conn) => {
-                            conn.batch_execute(include_str!("../sql/postgres_schema.sql"))?;
-                            migrate_postgres_search_tsv(&mut conn)?;
-                            // Reject databases written by a newer binary instead of
-                            // silently running against an unknown schema (RD-03).
-                            if let Some(row) = conn
-                                .query_opt("SELECT version FROM schema_version WHERE id = 1", &[])?
-                            {
-                                let version: i64 = row.get(0);
-                                if version > SCHEMA_VERSION {
-                                    anyhow::bail!(
-                                        "relay database schema version {version} is newer than this binary supports ({SCHEMA_VERSION})"
-                                    );
-                                }
-                            }
-                            conn.execute(
-                                "INSERT INTO schema_version(id, version) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version",
-                                &[&SCHEMA_VERSION],
-                            )?;
-                            return Ok(());
-                        }
-                        Err(err) => {
-                            last_err = Some(err);
-                            let backoff_ms = (attempt as u64 * self.pg_init_backoff_ms).min(30_000);
-                            warn!(
-                                "postgres not ready (attempt {attempt}/{max_retries}); retrying in {backoff_ms}ms"
-                            );
-                            std::thread::sleep(Duration::from_millis(backoff_ms));
-                        }
-                    }
-                }
-                Err(anyhow::anyhow!(
-                    "db init: Error occurred while creating a new object: {:#}",
-                    last_err.unwrap()
-                ))
-            }
-        }
-    }
-
-    fn health_check(&self) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row("SELECT 1", [], |_| Ok(()))?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one("SELECT 1", &[])?;
-                let _: i32 = row.get(0);
-                Ok(())
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn insert_admin_audit(
-        &self,
-        action: &str,
-        username: Option<&str>,
-        actor: Option<&str>,
-        ip: Option<&str>,
-        ok: bool,
-        detail: Option<&str>,
-        meta: &AuditMeta,
-    ) -> Result<()> {
-        let ts = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO admin_audit(action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    params![
-                        action,
-                        username,
-                        actor,
-                        ip,
-                        if ok { 1 } else { 0 },
-                        detail,
-                        ts,
-                        meta.request_id,
-                        meta.correlation_id,
-                        meta.user_agent
-                    ],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO admin_audit(action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-                    &[
-                        &action,
-                        &username,
-                        &actor,
-                        &ip,
-                        &ok,
-                        &detail,
-                        &ts,
-                        &meta.request_id,
-                        &meta.correlation_id,
-                        &meta.user_agent,
-                    ],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn list_admin_audit(
-        &self,
-        limit: u32,
-        offset: u32,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            bool,
-            Option<String>,
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
-        let limit = limit.clamp(1, 500) as i64;
-        let offset = offset as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT id, action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent FROM admin_audit ORDER BY created_at_ms DESC LIMIT ?1 OFFSET ?2",
-                )?;
-                let mut rows = stmt.query(params![limit, offset])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    let ok_int: i64 = r.get(5)?;
-                    out.push((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        ok_int != 0,
-                        r.get(6)?,
-                        r.get(7)?,
-                        r.get(8)?,
-                        r.get(9)?,
-                        r.get(10)?,
-                    ));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT id, action, username, actor, ip, ok, detail, created_at_ms, request_id, correlation_id, user_agent FROM admin_audit ORDER BY created_at_ms DESC LIMIT $1 OFFSET $2",
-                    &[&limit, &offset],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push((
-                        r.get(0),
-                        r.get(1),
-                        r.get(2),
-                        r.get(3),
-                        r.get(4),
-                        r.get(5),
-                        r.get(6),
-                        r.get(7),
-                        r.get(8),
-                        r.get(9),
-                        r.get(10),
-                    ));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn upsert_relay(
-        &mut self,
-        relay_url: &str,
-        base_domain: Option<String>,
-        telemetry_json: Option<String>,
-        sign_pubkey_b64: Option<String>,
-    ) -> Result<()> {
-        let relay_url = relay_url.trim_end_matches('/');
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO relay_registry(relay_url, base_domain, last_seen_ms, last_telemetry_json, sign_pubkey_b64)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            ON CONFLICT(relay_url) DO UPDATE SET
-              base_domain=COALESCE(excluded.base_domain, relay_registry.base_domain),
-              last_seen_ms=excluded.last_seen_ms,
-              last_telemetry_json=COALESCE(excluded.last_telemetry_json, relay_registry.last_telemetry_json),
-              sign_pubkey_b64=COALESCE(relay_registry.sign_pubkey_b64, excluded.sign_pubkey_b64)
-            "#,
-                    params![relay_url, base_domain, now, telemetry_json, sign_pubkey_b64],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO relay_registry(relay_url, base_domain, last_seen_ms, last_telemetry_json, sign_pubkey_b64)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT(relay_url) DO UPDATE SET
-              base_domain=COALESCE(EXCLUDED.base_domain, relay_registry.base_domain),
-              last_seen_ms=EXCLUDED.last_seen_ms,
-              last_telemetry_json=COALESCE(EXCLUDED.last_telemetry_json, relay_registry.last_telemetry_json),
-              sign_pubkey_b64=COALESCE(relay_registry.sign_pubkey_b64, EXCLUDED.sign_pubkey_b64)
-            "#,
-                    &[&relay_url, &base_domain, &now, &telemetry_json, &sign_pubkey_b64],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn list_relays(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<(String, Option<String>, i64, Option<String>, Option<String>)>> {
-        let limit = limit.min(500) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT relay_url, base_domain, last_seen_ms, last_telemetry_json, sign_pubkey_b64 FROM relay_registry ORDER BY last_seen_ms DESC LIMIT ?1",
-                )?;
-                let mut rows = stmt.query(params![limit])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT relay_url, base_domain, last_seen_ms, last_telemetry_json, sign_pubkey_b64 FROM relay_registry ORDER BY last_seen_ms DESC LIMIT $1",
-                    &[&limit],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn get_relay_pubkey_b64(&self, relay_url: &str) -> Result<Option<String>> {
-        let relay_url = relay_url.trim_end_matches('/');
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT sign_pubkey_b64 FROM relay_registry WHERE relay_url=?1",
-                    params![relay_url],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT sign_pubkey_b64 FROM relay_registry WHERE relay_url=$1",
-                    &[&relay_url],
-                )?;
-                Ok(row.map(|r| r.get(0)))
-            }
-        }
-    }
-
-    fn relay_meta_get(&self, key: &str) -> Result<Option<String>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT value FROM relay_meta WHERE key=?1",
-                    params![key],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt("SELECT value FROM relay_meta WHERE key=$1", &[&key])?;
-                Ok(row.map(|r| r.get(0)))
-            }
-        }
-    }
-
-    fn relay_meta_set(&self, key: &str, value: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT OR REPLACE INTO relay_meta(key,value) VALUES (?1,?2)",
-                    params![key, value],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_meta(key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
-                    &[&key, &value],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_relay_sync_state(&self) -> Result<Vec<(String, i64)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare("SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%' ESCAPE '\\'")?;
-                let mut rows = stmt.query([])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    let key: String = row.get(0)?;
-                    let value: String = row.get(1)?;
-                    let relay_url = key.trim_start_matches("relay_sync_last_ms:").to_string();
-                    let last_ms = value.parse::<i64>().unwrap_or(0);
-                    out.push((relay_url, last_ms));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT key, value FROM relay_meta WHERE key LIKE 'relay_sync_last_ms:%' ESCAPE '\\'",
-                    &[],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    let key: String = row.get(0);
-                    let value: String = row.get(1);
-                    let relay_url = key.trim_start_matches("relay_sync_last_ms:").to_string();
-                    let last_ms = value.parse::<i64>().unwrap_or(0);
-                    out.push((relay_url, last_ms));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn load_or_create_signing_keypair_b64(&self) -> Result<(String, String)> {
-        if let (Some(pk), Some(sk)) = (
-            self.relay_meta_get("sign_pk_b64")?,
-            self.relay_meta_get("sign_sk_b64")?,
-        ) {
-            return Ok((pk, sk));
-        }
-
-        let signing = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-        let verifying = signing.verifying_key();
-        let pk_b64 = B64.encode(verifying.to_bytes());
-        let sk_b64 = B64.encode(signing.to_bytes());
-        self.relay_meta_set("sign_pk_b64", &pk_b64)?;
-        self.relay_meta_set("sign_sk_b64", &sk_b64)?;
-        Ok((pk_b64, sk_b64))
-    }
-
-    fn upsert_peer_seen(&mut self, peer_id: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO peer_registry(peer_id, last_seen_ms) VALUES (?1, ?2)
-            ON CONFLICT(peer_id) DO UPDATE SET last_seen_ms=excluded.last_seen_ms
-            "#,
-                    params![peer_id, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO peer_registry(peer_id, last_seen_ms) VALUES ($1, $2)
-            ON CONFLICT(peer_id) DO UPDATE SET last_seen_ms=EXCLUDED.last_seen_ms
-            "#,
-                    &[&peer_id, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn count_peers_seen_since(&self, cutoff_ms: i64) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row(
-                    "SELECT COUNT(*) FROM peer_registry WHERE last_seen_ms >= ?1",
-                    params![cutoff_ms],
-                    |r| r.get(0),
-                )?;
-                Ok(n)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*) FROM peer_registry WHERE last_seen_ms >= $1",
-                    &[&cutoff_ms],
-                )?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn count_users_total(&self) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let n: u64 =
-                    conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| {
-                        r.get(0)
-                    })?;
-                Ok(n)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one("SELECT COUNT(*) FROM users WHERE disabled=false", &[])?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn create_user(&mut self, username: &str, token: &str) -> Result<bool> {
-        let hash = token_hash_hex(token);
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let exists: Option<String> = conn
-                    .query_row(
-                        "SELECT username FROM users WHERE username = ?1",
-                        params![username],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                if exists.is_some() {
-                    return Ok(false);
-                }
-                conn.execute(
-                    "INSERT INTO users(username, token_sha256, created_at_ms) VALUES (?1, ?2, ?3)",
-                    params![username, hash, now],
-                )?;
-                Ok(true)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let exists = conn.query_opt(
-                    "SELECT username FROM users WHERE username = $1",
-                    &[&username],
-                )?;
-                if exists.is_some() {
-                    return Ok(false);
-                }
-                conn.execute(
-                    "INSERT INTO users(username, token_sha256, created_at_ms) VALUES ($1, $2, $3)",
-                    &[&username, &hash, &now],
-                )?;
-                Ok(true)
-            }
-        }
-    }
-
-    fn update_user_token(&mut self, username: &str, token: &str) -> Result<()> {
-        let hash = token_hash_hex(token);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "UPDATE users SET token_sha256=?2 WHERE username=?1",
-                    params![username, hash],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "UPDATE users SET token_sha256=$2 WHERE username=$1",
-                    &[&username, &hash],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn verify_user_token(&self, username: &str, token: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let row: Option<(String, i64)> = conn
-                    .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
-                        params![username],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                match row {
-                    Some((stored, disabled)) => {
-                        if disabled != 0 {
-                            return Ok(false);
-                        }
-                        Ok(ct_eq_str(&stored, &token_hash_hex(token)))
-                    }
-                    None => Ok(false),
-                }
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
-                    &[&username],
-                )?;
-                match row {
-                    Some(r) => {
-                        let stored: String = r.get(0);
-                        let disabled: bool = r.get(1);
-                        if disabled {
-                            return Ok(false);
-                        }
-                        Ok(ct_eq_str(&stored, &token_hash_hex(token)))
-                    }
-                    None => Ok(false),
-                }
-            }
-        }
-    }
-
-    fn user_exists(&self, username: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let exists: Option<String> = conn
-                    .query_row(
-                        "SELECT username FROM users WHERE username = ?1",
-                        params![username],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                Ok(exists.is_some())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let exists = conn.query_opt(
-                    "SELECT username FROM users WHERE username = $1",
-                    &[&username],
-                )?;
-                Ok(exists.is_some())
-            }
-        }
-    }
-
-    fn upsert_user_token(
-        &mut self,
-        cfg: &RelayConfig,
-        headers: &HeaderMap,
-        username: &str,
-        new_token: &str,
-    ) -> Result<UpsertUserResult> {
-        if !self.user_exists(username)? {
-            let created = self.create_user(username, new_token)?;
-            return Ok(if created {
-                UpsertUserResult::Created
-            } else {
-                UpsertUserResult::Exists
-            });
-        }
-
-        // User exists: only admin can change token unless self-register is enabled
-        // and the caller proves ownership by presenting the current token.
-        if is_authorized_admin(cfg, headers) {
-            self.update_user_token(username, new_token)?;
-            return Ok(UpsertUserResult::Updated);
-        }
-        if cfg.allow_self_register {
-            if let Some(old) = bearer_token(headers) {
-                if self.verify_user_token(username, &old)? {
-                    self.update_user_token(username, new_token)?;
-                    return Ok(UpsertUserResult::Updated);
-                }
-                return Ok(UpsertUserResult::Unauthorized);
-            }
-            return Ok(UpsertUserResult::Exists);
-        }
-
-        Ok(UpsertUserResult::Unauthorized)
-    }
-
-    fn verify_or_register(&mut self, cfg: &RelayConfig, username: &str, token: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let row: Option<(String, i64)> = conn
-                    .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
-                        params![username],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                match row {
-                    Some((stored, disabled)) => {
-                        if disabled != 0 {
-                            return Err(anyhow::anyhow!("user disabled"));
-                        }
-                        let got = token_hash_hex(token);
-                        if ct_eq_str(&stored, &got) {
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("invalid token"))
-                        }
-                    }
-                    None => {
-                        if !cfg.allow_self_register {
-                            return Err(anyhow::anyhow!("unknown user (registration disabled)"));
-                        }
-                        drop(conn);
-                        let created = self.create_user(username, token)?;
-                        if created {
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("user exists"))
-                        }
-                    }
-                }
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
-                    &[&username],
-                )?;
-                match row {
-                    Some(r) => {
-                        let stored: String = r.get(0);
-                        let disabled: bool = r.get(1);
-                        if disabled {
-                            return Err(anyhow::anyhow!("user disabled"));
-                        }
-                        let got = token_hash_hex(token);
-                        if ct_eq_str(&stored, &got) {
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("invalid token"))
-                        }
-                    }
-                    None => {
-                        if !cfg.allow_self_register {
-                            return Err(anyhow::anyhow!("unknown user (registration disabled)"));
-                        }
-                        drop(conn);
-                        let created = self.create_user(username, token)?;
-                        if created {
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("user exists"))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn verify_token(&self, username: &str, token: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let row: Option<(String, i64)> = conn
-                    .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username = ?1",
-                        params![username],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                let Some((stored, disabled)) = row else {
-                    return Ok(false);
-                };
-                if disabled != 0 {
-                    return Ok(false);
-                }
-                Ok(ct_eq_str(&stored, &token_hash_hex(token)))
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username = $1",
-                    &[&username],
-                )?;
-                let Some(r) = row else { return Ok(false) };
-                let stored: String = r.get(0);
-                let disabled: bool = r.get(1);
-                if disabled {
-                    return Ok(false);
-                }
-                Ok(ct_eq_str(&stored, &token_hash_hex(token)))
-            }
-        }
-    }
-
-    fn set_user_move(&self, username: &str, moved_to_actor: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO user_moves(username, moved_to_actor, moved_at_ms) VALUES (?1, ?2, ?3)\n             ON CONFLICT(username) DO UPDATE SET moved_to_actor=excluded.moved_to_actor, moved_at_ms=excluded.moved_at_ms",
-                    params![username, moved_to_actor, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO user_moves(username, moved_to_actor, moved_at_ms) VALUES ($1, $2, $3)\n             ON CONFLICT(username) DO UPDATE SET moved_to_actor=EXCLUDED.moved_to_actor, moved_at_ms=EXCLUDED.moved_at_ms",
-                    &[&username, &moved_to_actor, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn clear_user_move(&self, username: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute(
-                    "DELETE FROM user_moves WHERE username=?1",
-                    params![username],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let _ = conn.execute("DELETE FROM user_moves WHERE username=$1", &[&username])?;
-                Ok(())
-            }
-        }
-    }
-
-    fn get_user_move(&self, username: &str) -> Result<Option<(String, i64)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT moved_to_actor, moved_at_ms FROM user_moves WHERE username=?1",
-                    params![username],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT moved_to_actor, moved_at_ms FROM user_moves WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(row.map(|r| (r.get(0), r.get(1))))
-            }
-        }
-    }
-
-    fn has_move_notice(&self, notice_id: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let v: Option<String> = conn
-                    .query_row(
-                        "SELECT notice_id FROM move_notices WHERE notice_id=?1",
-                        params![notice_id],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                Ok(v.is_some())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT notice_id FROM move_notices WHERE notice_id=$1",
-                    &[&notice_id],
-                )?;
-                Ok(row.is_some())
-            }
-        }
-    }
-
-    fn upsert_move_notice(&self, notice_id: &str, notice_json: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO move_notices(notice_id, notice_json, created_at_ms) VALUES (?1, ?2, ?3)\n             ON CONFLICT(notice_id) DO UPDATE SET notice_json=excluded.notice_json, created_at_ms=excluded.created_at_ms",
-                    params![notice_id, notice_json, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO move_notices(notice_id, notice_json, created_at_ms) VALUES ($1, $2, $3)\n             ON CONFLICT(notice_id) DO UPDATE SET notice_json=EXCLUDED.notice_json, created_at_ms=EXCLUDED.created_at_ms",
-                    &[&notice_id, &notice_json, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_recent_move_notices(
-        &self,
-        cutoff_ms: i64,
-        limit: u32,
-    ) -> Result<Vec<(String, String, i64)>> {
-        let limit = limit.clamp(1, 1000) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT notice_id, notice_json, created_at_ms FROM move_notices WHERE created_at_ms >= ?1 ORDER BY created_at_ms DESC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![cutoff_ms, limit])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    out.push((r.get(0)?, r.get(1)?, r.get(2)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT notice_id, notice_json, created_at_ms FROM move_notices WHERE created_at_ms >= $1 ORDER BY created_at_ms DESC LIMIT $2",
-                    &[&cutoff_ms, &limit],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn get_fanout_status(
-        &self,
-        notice_id: &str,
-        relay_url: &str,
-    ) -> Result<Option<(i64, i64, i64)>> {
-        // returns (tries, last_try_ms, sent_ok)
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT tries, last_try_ms, sent_ok FROM move_notice_fanout WHERE notice_id=?1 AND relay_url=?2",
-                    params![notice_id, relay_url],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT tries, last_try_ms, CASE WHEN sent_ok THEN 1 ELSE 0 END::bigint FROM move_notice_fanout WHERE notice_id=$1 AND relay_url=$2",
-                    &[&notice_id, &relay_url],
-                )?;
-                Ok(row.map(|r| (r.get(0), r.get(1), r.get(2))))
-            }
-        }
-    }
-
-    fn record_fanout_attempt(&self, notice_id: &str, relay_url: &str, sent_ok: bool) -> Result<()> {
-        let relay_url = relay_url.trim_end_matches('/');
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO move_notice_fanout(notice_id, relay_url, tries, last_try_ms, sent_ok) VALUES (?1, ?2, 1, ?3, ?4)\n             ON CONFLICT(notice_id, relay_url) DO UPDATE SET tries=move_notice_fanout.tries+1, last_try_ms=excluded.last_try_ms, sent_ok=excluded.sent_ok",
-                    params![notice_id, relay_url, now, if sent_ok { 1 } else { 0 }],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO move_notice_fanout(notice_id, relay_url, tries, last_try_ms, sent_ok) VALUES ($1, $2, 1, $3, $4)\n             ON CONFLICT(notice_id, relay_url) DO UPDATE SET tries=move_notice_fanout.tries+1, last_try_ms=EXCLUDED.last_try_ms, sent_ok=EXCLUDED.sent_ok",
-                    &[&notice_id, &relay_url, &now, &sent_ok],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn count_users(&self) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
-                Ok(n)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one("SELECT COUNT(*) FROM users", &[])?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn list_users(&self, limit: u32, offset: u32) -> Result<Vec<(String, i64, i64)>> {
-        let limit = limit.clamp(1, 500) as i64;
-        let offset = offset as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT username, created_at_ms, disabled FROM users ORDER BY created_at_ms DESC LIMIT ?1 OFFSET ?2",
-                )?;
-                let mut rows = stmt.query(params![limit, offset])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    out.push((row.get(0)?, row.get(1)?, row.get(2)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT username, created_at_ms, disabled FROM users ORDER BY created_at_ms DESC LIMIT $1 OFFSET $2",
-                    &[&limit, &offset],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    let disabled: bool = row.get(2);
-                    out.push((row.get(0), row.get(1), if disabled { 1 } else { 0 }));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn set_disabled(&self, username: &str, disabled: bool) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "UPDATE users SET disabled=?2 WHERE username=?1",
-                    params![username, if disabled { 1 } else { 0 }],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "UPDATE users SET disabled=$2 WHERE username=$1",
-                    &[&username, &disabled],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn rotate_token(&self, username: &str, new_token: &str) -> Result<()> {
-        let hash = token_hash_hex(new_token);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "UPDATE users SET token_sha256=?2 WHERE username=?1",
-                    params![username, hash],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "UPDATE users SET token_sha256=$2 WHERE username=$1",
-                    &[&username, &hash],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn get_user(&self, username: &str) -> Result<Option<(i64, i64)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT created_at_ms, disabled FROM users WHERE username=?1",
-                    params![username],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT created_at_ms, disabled FROM users WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(row.map(|r| {
-                    let disabled: bool = r.get(1);
-                    (r.get(0), if disabled { 1 } else { 0 })
-                }))
-            }
-        }
-    }
-
-    fn delete_user(&self, username: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let _ = conn.execute(
-                    "DELETE FROM inbox_spool WHERE username=?1",
-                    params![username],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM user_cache WHERE username=?1",
-                    params![username],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM user_collection_cache WHERE username=?1",
-                    params![username],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM media_items WHERE username=?1",
-                    params![username],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM peer_directory WHERE username=?1",
-                    params![username],
-                )?;
-                let changed =
-                    conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
-                Ok(changed > 0)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let _ = conn.execute("DELETE FROM inbox_spool WHERE username=$1", &[&username])?;
-                let _ = conn.execute("DELETE FROM user_cache WHERE username=$1", &[&username])?;
-                let _ = conn.execute(
-                    "DELETE FROM user_collection_cache WHERE username=$1",
-                    &[&username],
-                )?;
-                let _ = conn.execute("DELETE FROM media_items WHERE username=$1", &[&username])?;
-                let _ =
-                    conn.execute("DELETE FROM peer_directory WHERE username=$1", &[&username])?;
-                let changed = conn.execute("DELETE FROM users WHERE username=$1", &[&username])?;
-                Ok(changed > 0)
-            }
-        }
-    }
-
-    fn is_user_enabled(&self, username: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let row: Option<i64> = conn
-                    .query_row(
-                        "SELECT disabled FROM users WHERE username=?1",
-                        params![username],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                Ok(matches!(row, Some(v) if v == 0))
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row =
-                    conn.query_opt("SELECT disabled FROM users WHERE username=$1", &[&username])?;
-                Ok(row.map(|r| !r.get::<_, bool>(0)).unwrap_or(false))
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn enqueue_spool(
-        &self,
-        cfg: &RelayConfig,
-        username: &str,
-        method: &str,
-        path: &str,
-        query: &str,
-        headers: &[(String, String)],
-        body_b64: &str,
-        body_len: i64,
-    ) -> Result<()> {
-        let headers_json = serde_json::to_string(headers).unwrap_or_else(|_| "[]".to_string());
-        let now = now_ms();
-        let cap = cfg.spool_max_rows_per_user as i64;
-        let byte_cap = cfg.spool_max_bytes_per_user as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                if byte_cap > 0 {
-                    if body_len > byte_cap {
-                        anyhow::bail!("spool body exceeds per-user byte cap");
-                    }
-                    let used: i64 = conn.query_row(
-                        "SELECT COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=?1",
-                        params![username],
-                        |r| r.get(0),
-                    )?;
-                    let mut excess = used.saturating_add(body_len) - byte_cap;
-                    if excess > 0 {
-                        let mut stmt = conn.prepare(
-                            "SELECT id, body_len FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC",
-                        )?;
-                        let mut rows = stmt.query(params![username])?;
-                        let mut to_delete = Vec::new();
-                        while let Some(row) = rows.next()? {
-                            if excess <= 0 {
-                                break;
-                            }
-                            let id: i64 = row.get(0)?;
-                            let len: i64 = row.get(1)?;
-                            to_delete.push(id);
-                            excess -= len.max(0);
-                        }
-                        drop(rows);
-                        drop(stmt);
-                        for id in to_delete {
-                            conn.execute("DELETE FROM inbox_spool WHERE id=?1", params![id])?;
-                        }
-                    }
-                }
-                conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![username, now, method, path, query, headers_json, body_b64, body_len],
-                )?;
-
-                let count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM inbox_spool WHERE username=?1",
-                    params![username],
-                    |r| r.get(0),
-                )?;
-                if cap > 0 && count > cap {
-                    let excess = count - cap;
-                    let _ = conn.execute(
-                        "DELETE FROM inbox_spool WHERE id IN (SELECT id FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2)",
-                        params![username, excess],
-                    )?;
-                }
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                if byte_cap > 0 {
-                    if body_len > byte_cap {
-                        anyhow::bail!("spool body exceeds per-user byte cap");
-                    }
-                    let row = conn.query_one(
-                        "SELECT COALESCE(SUM(body_len)::bigint, 0) FROM inbox_spool WHERE username=$1",
-                        &[&username],
-                    )?;
-                    let used: i64 = row.get(0);
-                    let mut excess = used.saturating_add(body_len) - byte_cap;
-                    if excess > 0 {
-                        let rows = conn.query(
-                            "SELECT id, body_len FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC",
-                            &[&username],
-                        )?;
-                        let mut to_delete = Vec::new();
-                        for r in rows {
-                            if excess <= 0 {
-                                break;
-                            }
-                            let id: i64 = r.get(0);
-                            let len: i64 = r.get(1);
-                            to_delete.push(id);
-                            excess -= len.max(0);
-                        }
-                        for id in to_delete {
-                            conn.execute("DELETE FROM inbox_spool WHERE id=$1", &[&id])?;
-                        }
-                    }
-                }
-                conn.execute(
-                    "INSERT INTO inbox_spool(username, created_at_ms, method, path, query, headers_json, body_b64, body_len) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                    &[&username, &now, &method, &path, &query, &headers_json, &body_b64, &body_len],
-                )?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*) FROM inbox_spool WHERE username=$1",
-                    &[&username],
-                )?;
-                let count: i64 = row.get(0);
-                if cap > 0 && count > cap {
-                    let excess = count - cap;
-                    let _ = conn.execute(
-                        "DELETE FROM inbox_spool WHERE id IN (SELECT id FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2)",
-                        &[&username, &excess],
-                    )?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn list_spool(&self, username: &str, limit: usize) -> Result<Vec<SpoolItem>> {
-        let limit = limit.min(1000) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT id, method, path, query, headers_json, body_b64, created_at_ms FROM inbox_spool WHERE username=?1 ORDER BY created_at_ms ASC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![username, limit])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    out.push(SpoolItem {
-                        id: r.get(0)?,
-                        method: r.get(1)?,
-                        path: r.get(2)?,
-                        query: r.get(3)?,
-                        headers_json: r.get(4)?,
-                        body_b64: r.get(5)?,
-                        created_at_ms: r.get(6)?,
-                    });
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT id, method, path, query, headers_json, body_b64, created_at_ms FROM inbox_spool WHERE username=$1 ORDER BY created_at_ms ASC LIMIT $2",
-                    &[&username, &limit],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push(SpoolItem {
-                        id: r.get(0),
-                        method: r.get(1),
-                        path: r.get(2),
-                        query: r.get(3),
-                        headers_json: r.get(4),
-                        body_b64: r.get(5),
-                        created_at_ms: r.get(6),
-                    });
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn delete_spool_ids(&self, ids: &[i64]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        match self.driver {
-            DbDriver::Sqlite => {
-                let mut conn = self.open_sqlite_conn()?;
-                let tx = conn.transaction()?;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let placeholders = std::iter::repeat_n("?", chunk.len())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let sql = format!("DELETE FROM inbox_spool WHERE id IN ({placeholders})");
-                    let params: Vec<&dyn rusqlite::ToSql> =
-                        chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-                    let _ = tx.execute(&sql, rusqlite::params_from_iter(params))?;
-                }
-                tx.commit()?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let _ =
-                        conn.execute("DELETE FROM inbox_spool WHERE id = ANY($1)", &[&chunk])?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn cleanup_spool(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM inbox_spool WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )?;
-                Ok(deleted as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM inbox_spool WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?;
-                Ok(deleted)
-            }
-        }
-    }
-
-    fn cleanup_move_notices(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms() - (ttl_secs as i64 * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM move_notices WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
-                    [],
-                )?;
-                Ok(deleted as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM move_notices WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?;
-                let _ = conn.execute(
-                    "DELETE FROM move_notice_fanout WHERE notice_id NOT IN (SELECT notice_id FROM move_notices)",
-                    &[],
-                )?;
-                Ok(deleted)
-            }
-        }
-    }
-
-    fn spool_stats(&self, username: &str) -> Result<(u64, u64)> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let (count, bytes): (i64, i64) = conn.query_row(
-                    "SELECT COUNT(*), COALESCE(SUM(body_len), 0) FROM inbox_spool WHERE username=?1",
-                    params![username],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?;
-                Ok((count.max(0) as u64, bytes.max(0) as u64))
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*), COALESCE(SUM(body_len)::bigint, 0) FROM inbox_spool WHERE username=$1",
-                    &[&username],
-                )?;
-                let count: i64 = row.get(0);
-                let bytes: i64 = row.get(1);
-                Ok((count.max(0) as u64, bytes.max(0) as u64))
-            }
-        }
-    }
-
-    fn upsert_peer(&self, relay_url: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_peers(relay_url, added_at_ms, last_seen_ms) VALUES (?1, ?2, NULL) ON CONFLICT(relay_url) DO NOTHING",
-                    params![relay_url, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_peers(relay_url, added_at_ms, last_seen_ms) VALUES ($1, $2, NULL) ON CONFLICT(relay_url) DO NOTHING",
-                    &[&relay_url, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_peers(&self) -> Result<Vec<(String, Option<i64>)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT relay_url, last_seen_ms FROM relay_peers ORDER BY added_at_ms ASC",
-                )?;
-                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                Ok(rows.flatten().collect())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT relay_url, last_seen_ms FROM relay_peers ORDER BY added_at_ms ASC",
-                    &[],
-                )?;
-                Ok(rows
-                    .iter()
-                    .map(|r| (r.get::<_, String>(0), r.get::<_, Option<i64>>(1)))
-                    .collect())
-            }
-        }
-    }
-
-    fn mark_peer_seen(&self, relay_url: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "UPDATE relay_peers SET last_seen_ms=?2 WHERE relay_url=?1",
-                    params![relay_url, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "UPDATE relay_peers SET last_seen_ms=$2 WHERE relay_url=$1",
-                    &[&relay_url, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn delete_peer(&self, relay_url: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "DELETE FROM relay_peers WHERE relay_url=?1",
-                    params![relay_url],
-                )?;
-                conn.execute(
-                    "DELETE FROM remote_users WHERE relay_url=?1",
-                    params![relay_url],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute("DELETE FROM relay_peers WHERE relay_url=$1", &[&relay_url])?;
-                conn.execute("DELETE FROM remote_users WHERE relay_url=$1", &[&relay_url])?;
-                Ok(())
-            }
-        }
-    }
-
-    fn upsert_remote_user(&self, username: &str, relay_url: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO remote_users(username, relay_url, updated_at_ms) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(username) DO UPDATE SET relay_url=excluded.relay_url, updated_at_ms=excluded.updated_at_ms",
-                    params![username, relay_url, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO remote_users(username, relay_url, updated_at_ms) VALUES ($1, $2, $3)
-                     ON CONFLICT(username) DO UPDATE SET relay_url=EXCLUDED.relay_url, updated_at_ms=EXCLUDED.updated_at_ms",
-                    &[&username, &relay_url, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn get_remote_user_relay(&self, username: &str) -> Result<Option<String>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT relay_url FROM remote_users WHERE username=?1",
-                    params![username],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT relay_url FROM remote_users WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(row.map(|r| r.get(0)))
-            }
-        }
-    }
-
-    fn prune_remote_users(&self, older_than_ms: i64) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "DELETE FROM remote_users WHERE updated_at_ms < ?1",
-                    params![older_than_ms],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "DELETE FROM remote_users WHERE updated_at_ms < $1",
-                    &[&older_than_ms],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_local_usernames(&self) -> Result<Vec<String>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT username FROM users WHERE disabled=0 ORDER BY username ASC LIMIT 5000",
-                )?;
-                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-                Ok(rows.flatten().collect())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT username FROM users WHERE disabled=FALSE ORDER BY username ASC LIMIT 5000",
-                    &[],
-                )?;
-                Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
-            }
-        }
-    }
-
-    fn user_token_matches(&self, username: &str, token: &str) -> Result<bool> {
-        let hash = token_hash_hex(token);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let row: Option<(String, i64)> = conn
-                    .query_row(
-                        "SELECT token_sha256, disabled FROM users WHERE username=?1",
-                        params![username],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                Ok(matches!(row, Some((h, d)) if h == hash && d == 0))
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT token_sha256, disabled FROM users WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(matches!(row, Some(r) if r.get::<_, String>(0) == hash && !r.get::<_, bool>(1)))
-            }
-        }
-    }
-
-    fn upsert_relay_block(
-        &self,
-        kind: &str,
-        value: &str,
-        reason: Option<&str>,
-        created_by: Option<&str>,
-        expires_at_ms: Option<i64>,
-    ) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_blocks(kind, value, reason, created_at_ms, created_by, expires_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                     ON CONFLICT(kind, value) DO UPDATE SET reason=excluded.reason, created_at_ms=excluded.created_at_ms,
-                       created_by=excluded.created_by, expires_at_ms=excluded.expires_at_ms",
-                    params![kind, value, reason, now, created_by, expires_at_ms],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_blocks(kind, value, reason, created_at_ms, created_by, expires_at_ms)
-                     VALUES ($1, $2, $3, $4, $5, $6)
-                     ON CONFLICT(kind, value) DO UPDATE SET reason=EXCLUDED.reason, created_at_ms=EXCLUDED.created_at_ms,
-                       created_by=EXCLUDED.created_by, expires_at_ms=EXCLUDED.expires_at_ms",
-                    &[&kind, &value, &reason, &now, &created_by, &expires_at_ms],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn delete_relay_block(&self, kind: &str, value: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "DELETE FROM relay_blocks WHERE kind=?1 AND value=?2",
-                    params![kind, value],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "DELETE FROM relay_blocks WHERE kind=$1 AND value=$2",
-                    &[&kind, &value],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_relay_blocks(&self) -> Result<Vec<RelayBlockRow>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT kind, value, reason, expires_at_ms FROM relay_blocks ORDER BY created_at_ms DESC LIMIT 5000",
-                )?;
-                let rows = stmt.query_map([], |r| {
-                    Ok(RelayBlockRow {
-                        kind: r.get(0)?,
-                        value: r.get(1)?,
-                        reason: r.get(2)?,
-                        expires_at_ms: r.get(3)?,
-                    })
-                })?;
-                Ok(rows.flatten().collect())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT kind, value, reason, expires_at_ms FROM relay_blocks ORDER BY created_at_ms DESC LIMIT 5000",
-                    &[],
-                )?;
-                Ok(rows
-                    .iter()
-                    .map(|r| RelayBlockRow {
-                        kind: r.get::<_, String>(0),
-                        value: r.get::<_, String>(1),
-                        reason: r.get::<_, Option<String>>(2),
-                        expires_at_ms: r.get::<_, Option<i64>>(3),
-                    })
-                    .collect())
-            }
-        }
-    }
-
-    fn replace_user_blocks(
-        &self,
-        username: &str,
-        actors: &[String],
-        domains: &[String],
-    ) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let mut conn = self.open_sqlite_conn()?;
-                let tx = conn.transaction()?;
-                tx.execute(
-                    "DELETE FROM user_blocks WHERE username=?1",
-                    params![username],
-                )?;
-                for a in actors {
-                    tx.execute(
-                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES (?1, 'actor', ?2, ?3) ON CONFLICT DO NOTHING",
-                        params![username, a, now],
-                    )?;
-                }
-                for d in domains {
-                    tx.execute(
-                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES (?1, 'domain', ?2, ?3) ON CONFLICT DO NOTHING",
-                        params![username, d, now],
-                    )?;
-                }
-                tx.commit()?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let mut tx = conn.transaction()?;
-                tx.execute("DELETE FROM user_blocks WHERE username=$1", &[&username])?;
-                for a in actors {
-                    tx.execute(
-                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES ($1, 'actor', $2, $3) ON CONFLICT DO NOTHING",
-                        &[&username, &a, &now],
-                    )?;
-                }
-                for d in domains {
-                    tx.execute(
-                        "INSERT INTO user_blocks(username, kind, value, updated_at_ms) VALUES ($1, 'domain', $2, $3) ON CONFLICT DO NOTHING",
-                        &[&username, &d, &now],
-                    )?;
-                }
-                tx.commit()?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_user_blocks(&self, username: &str) -> Result<Vec<(String, String)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt =
-                    conn.prepare("SELECT kind, value FROM user_blocks WHERE username=?1")?;
-                let rows = stmt.query_map(params![username], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                Ok(rows.flatten().collect())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT kind, value FROM user_blocks WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(rows
-                    .iter()
-                    .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
-                    .collect())
-            }
-        }
-    }
-
-    /// Relay-wide or per-user block match (actor exact, domain exact/suffix), honoring expiry.
-    fn is_blocked(&self, username: &str, sender_actor: &str) -> Result<bool> {
-        let now = now_ms();
-        let domain = origin_host(sender_actor).unwrap_or_default();
-        let mut rules: Vec<(String, String, Option<i64>)> = Vec::new();
-        for row in self.list_relay_blocks()? {
-            rules.push((row.kind, row.value, row.expires_at_ms));
-        }
-        for (kind, value) in self.list_user_blocks(username)? {
-            rules.push((kind, value, None));
-        }
-        for (kind, value, expires) in rules {
-            if expires.map(|e| e <= now).unwrap_or(false) {
-                continue;
-            }
-            let value = value.trim().trim_end_matches('/');
-            if value.is_empty() {
-                continue;
-            }
-            match kind.as_str() {
-                "actor" if value == sender_actor.trim().trim_end_matches('/') => return Ok(true),
-                "domain" if value == domain || domain.ends_with(&format!(".{value}")) => {
-                    return Ok(true)
-                }
-                _ => {}
-            }
-        }
-        Ok(false)
-    }
-
-    fn upsert_actor_cache(&self, username: &str, actor_json: &str) -> Result<()> {
-        let now = now_ms();
-        let (actor_id, actor_url) = extract_actor_ids_from_json(actor_json);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO user_cache(username, actor_json, updated_at_ms, actor_id, actor_url) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(username) DO UPDATE SET actor_json=excluded.actor_json, updated_at_ms=excluded.updated_at_ms, actor_id=excluded.actor_id, actor_url=excluded.actor_url",
-                    params![username, actor_json, now, actor_id, actor_url],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO user_cache(username, actor_json, updated_at_ms, actor_id, actor_url) VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT(username) DO UPDATE SET actor_json=EXCLUDED.actor_json, updated_at_ms=EXCLUDED.updated_at_ms, actor_id=EXCLUDED.actor_id, actor_url=EXCLUDED.actor_url",
-                    &[&username, &actor_json, &now, &actor_id, &actor_url],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn get_actor_cache(&self, username: &str) -> Result<Option<String>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT actor_json FROM user_cache WHERE username=?1",
-                    params![username],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT actor_json FROM user_cache WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(row.map(|r| r.get(0)))
-            }
-        }
-    }
-
-    fn upsert_collection_cache(&self, username: &str, kind: &str, json: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO user_collection_cache(username, kind, json, updated_at_ms) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(username, kind) DO UPDATE SET json=excluded.json, updated_at_ms=excluded.updated_at_ms",
-                    params![username, kind, json, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO user_collection_cache(username, kind, json, updated_at_ms) VALUES ($1, $2, $3, $4)
-             ON CONFLICT(username, kind) DO UPDATE SET json=EXCLUDED.json, updated_at_ms=EXCLUDED.updated_at_ms",
-                    &[&username, &kind, &json, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn get_collection_cache(&self, username: &str, kind: &str) -> Result<Option<String>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT json FROM user_collection_cache WHERE username=?1 AND kind=?2",
-                    params![username, kind],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT json FROM user_collection_cache WHERE username=$1 AND kind=$2",
-                    &[&username, &kind],
-                )?;
-                Ok(row.map(|r| r.get(0)))
-            }
-        }
-    }
-
-    fn cleanup_peer_directory(&self, ttl_days: u32) -> Result<u64> {
-        if ttl_days == 0 {
-            return Ok(0);
-        }
-        let cutoff = now_ms().saturating_sub((ttl_days as i64) * 24 * 60 * 60 * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM peer_directory WHERE updated_at_ms < ?1",
-                    params![cutoff],
-                )?;
-                Ok(deleted as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM peer_directory WHERE updated_at_ms < $1",
-                    &[&cutoff],
-                )?;
-                Ok(deleted)
-            }
-        }
-    }
-
-    fn cleanup_webrtc_signals(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM webrtc_signals WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let deleted = conn.execute(
-                    "DELETE FROM webrtc_signals WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?;
-                Ok(deleted)
-            }
-        }
-    }
-
-    /// Retention for append-only tables that used to grow forever (M-02 / RD-05).
-    fn cleanup_admin_audit(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM admin_audit WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM admin_audit WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    fn cleanup_relay_notes(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE created_at_ms < ?1)",
-                    params![cutoff],
-                )?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_notes WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE created_at_ms < $1)",
-                    &[&cutoff],
-                )?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_notes WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    fn cleanup_peer_registry(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM peer_registry WHERE last_seen_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM peer_registry WHERE last_seen_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    fn cleanup_relay_registry(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_registry WHERE last_seen_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_registry WHERE last_seen_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    fn cleanup_relay_user_directory(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_user_directory WHERE updated_at_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM relay_user_directory WHERE updated_at_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    /// Dedupe activities per (activity_id, recipient) with a short TTL (H-20 / RI-06).
-    fn insert_inbox_dedupe(&self, activity_id: &str, recipient: &str) -> Result<bool> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let changed = conn.execute(
-                    "INSERT OR IGNORE INTO inbox_dedupe(activity_id, recipient, created_at_ms) VALUES (?1, ?2, ?3)",
-                    params![activity_id, recipient, now],
-                )?;
-                Ok(changed > 0)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let changed = conn.execute(
-                    "INSERT INTO inbox_dedupe(activity_id, recipient, created_at_ms) VALUES ($1, $2, $3) ON CONFLICT (activity_id, recipient) DO NOTHING",
-                    &[&activity_id, &recipient, &now],
-                )?;
-                Ok(changed > 0)
-            }
-        }
-    }
-
-    fn delete_inbox_dedupe(&self, activity_id: &str, recipient: &str) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "DELETE FROM inbox_dedupe WHERE activity_id = ?1 AND recipient = ?2",
-                    params![activity_id, recipient],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "DELETE FROM inbox_dedupe WHERE activity_id = $1 AND recipient = $2",
-                    &[&activity_id, &recipient],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn cleanup_inbox_dedupe(&self, ttl_secs: u64) -> Result<u64> {
-        let cutoff = now_ms().saturating_sub((ttl_secs as i64) * 1000);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM inbox_dedupe WHERE created_at_ms < ?1",
-                    params![cutoff],
-                )? as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                Ok(conn.execute(
-                    "DELETE FROM inbox_dedupe WHERE created_at_ms < $1",
-                    &[&cutoff],
-                )?)
-            }
-        }
-    }
-
-    fn upsert_media_item(&self, item: &MediaItem) -> Result<()> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO media_items(id, username, backend, storage_key, media_type, size, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT(id) DO UPDATE SET backend=excluded.backend, storage_key=excluded.storage_key, media_type=excluded.media_type, size=excluded.size",
-                    params![
-                        item.id,
-                        item.username,
-                        item.backend,
-                        item.storage_key,
-                        item.media_type,
-                        item.size,
-                        item.created_at_ms
-                    ],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO media_items(id, username, backend, storage_key, media_type, size, created_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(id) DO UPDATE SET backend=EXCLUDED.backend, storage_key=EXCLUDED.storage_key, media_type=EXCLUDED.media_type, size=EXCLUDED.size",
-                    &[
-                        &item.id,
-                        &item.username,
-                        &item.backend,
-                        &item.storage_key,
-                        &item.media_type,
-                        &item.size,
-                        &item.created_at_ms,
-                    ],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn user_media_bytes(&self, username: &str) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let used: i64 = conn.query_row(
-                    "SELECT COALESCE(SUM(size), 0) FROM media_items WHERE username=?1",
-                    params![username],
-                    |r| r.get(0),
-                )?;
-                Ok(used.max(0) as u64)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COALESCE(SUM(size)::bigint, 0) FROM media_items WHERE username=$1",
-                    &[&username],
-                )?;
-                let used: i64 = row.get(0);
-                Ok(used.max(0) as u64)
-            }
-        }
-    }
-
-    fn delete_media_item(&self, username: &str, id: &str) -> Result<bool> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let changed = conn.execute(
-                    "DELETE FROM media_items WHERE username=?1 AND id=?2",
-                    params![username, id],
-                )?;
-                Ok(changed > 0)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let changed = conn.execute(
-                    "DELETE FROM media_items WHERE username=$1 AND id=$2",
-                    &[&username, &id],
-                )?;
-                Ok(changed > 0)
-            }
-        }
-    }
-
-    fn get_media_item(&self, username: &str, id: &str) -> Result<Option<MediaItem>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT id, username, backend, storage_key, media_type, size, created_at_ms FROM media_items WHERE username=?1 AND id=?2",
-                    params![username, id],
-                    |r| {
-                        Ok(MediaItem {
-                            id: r.get(0)?,
-                            username: r.get(1)?,
-                            backend: r.get(2)?,
-                            storage_key: r.get(3)?,
-                            media_type: r.get(4)?,
-                            size: r.get(5)?,
-                            created_at_ms: r.get(6)?,
-                        })
-                    },
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT id, username, backend, storage_key, media_type, size, created_at_ms FROM media_items WHERE username=$1 AND id=$2",
-                    &[&username, &id],
-                )?;
-                Ok(row.map(|r| MediaItem {
-                    id: r.get(0),
-                    username: r.get(1),
-                    backend: r.get(2),
-                    storage_key: r.get(3),
-                    media_type: r.get(4),
-                    size: r.get(5),
-                    created_at_ms: r.get(6),
-                }))
-            }
-        }
-    }
-
-    fn upsert_relay_note(&self, note: &RelayNoteIndex) -> Result<()> {
-        let published_ms = note.published_ms.unwrap_or(note.created_at_ms);
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=excluded.actor_id,\n               published_ms=excluded.published_ms,\n               content_text=excluded.content_text,\n               content_html=excluded.content_html,\n               note_json=excluded.note_json",
-                    params![
-                        note.note_id,
-                        note.actor_id,
-                        published_ms,
-                        note.content_text,
-                        note.content_html,
-                        note.note_json,
-                        note.created_at_ms
-                    ],
-                )?;
-                let tx = conn.unchecked_transaction()?;
-                tx.execute(
-                    "DELETE FROM relay_note_tags WHERE note_id=?1",
-                    params![note.note_id],
-                )?;
-                for tag in &note.tags {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO relay_note_tags(note_id, tag) VALUES (?1, ?2)",
-                        params![note.note_id, tag],
-                    )?;
-                }
-                tx.commit()?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let mut tx = conn.transaction()?;
-                let params: &[&(dyn ToSql + Sync)] = &[
-                    &note.note_id,
-                    &note.actor_id,
-                    &published_ms,
-                    &note.content_text,
-                    &note.content_html,
-                    &note.note_json,
-                    &note.created_at_ms,
-                ];
-                tx.execute(
-                    "INSERT INTO relay_notes(note_id, actor_id, published_ms, content_text, content_html, note_json, created_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT(note_id) DO UPDATE SET\n               actor_id=EXCLUDED.actor_id,\n               published_ms=EXCLUDED.published_ms,\n               content_text=EXCLUDED.content_text,\n               content_html=EXCLUDED.content_html,\n               note_json=EXCLUDED.note_json",
-                    params,
-                )?;
-                tx.execute(
-                    "DELETE FROM relay_note_tags WHERE note_id=$1",
-                    &[&note.note_id],
-                )?;
-                for tag in &note.tags {
-                    tx.execute(
-                        "INSERT INTO relay_note_tags(note_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                        &[&note.note_id, &tag],
-                    )?;
-                }
-                tx.commit()?;
-                Ok(())
-            }
-        }
-    }
-
-    fn search_relay_notes(
-        &self,
-        q: &str,
-        tag: &str,
-        limit: u32,
-        cursor: Option<i64>,
-        since: Option<i64>,
-        total_mode: SearchTotalMode,
-    ) -> Result<CollectionPage<String>> {
-        let limit = limit.clamp(1, 200) as i64;
-        let q_norm = q.trim().to_lowercase();
-        let tag_norm = tag.trim().trim_start_matches('#').to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        let tag_like = if tag_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&tag_norm))
-        };
-
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
-                    if !tag_norm.is_empty() {
-                        conn.query_row(
-                            r#"
-                SELECT COUNT(*)
-                FROM relay_note_tags t
-                JOIN relay_notes n ON n.note_id = t.note_id
-                WHERE lower(t.tag) LIKE ?1 ESCAPE '\\'
-                "#,
-                            params![tag_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0)
-                    } else {
-                        conn.query_row(
-                            "SELECT COUNT(*) FROM relay_notes WHERE lower(content_text) LIKE ?1 ESCAPE '\\'",
-                            params![q_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0)
-                    }
-                } else {
-                    0
-                };
-
-                let mut stmt;
-                let mut rows;
-                if !tag_norm.is_empty() {
-                    if let Some(since) = since {
-                        stmt = conn.prepare(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\' AND n.created_at_ms > ?2
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT ?3
-                    "#,
-                        )?;
-                        rows = stmt.query(params![tag_like, since, limit])?;
-                    } else if let Some(cur) = cursor {
-                        stmt = conn.prepare(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\' AND n.created_at_ms < ?2
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT ?3
-                    "#,
-                        )?;
-                        rows = stmt.query(params![tag_like, cur, limit])?;
-                    } else {
-                        stmt = conn.prepare(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE lower(t.tag) LIKE ?1 ESCAPE '\\'
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT ?2
-                    "#,
-                        )?;
-                        rows = stmt.query(params![tag_like, limit])?;
-                    }
-                } else if let Some(since) = since {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 ESCAPE '\\') AND created_at_ms > ?2 ORDER BY created_at_ms DESC LIMIT ?3",
-                    )?;
-                    rows = stmt.query(params![q_like, since, limit])?;
-                } else if let Some(cur) = cursor {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE (lower(content_text) LIKE ?1 ESCAPE '\\') AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
-                    )?;
-                    rows = stmt.query(params![q_like, cur, limit])?;
-                } else {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE lower(content_text) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
-                    )?;
-                    rows = stmt.query(params![q_like, limit])?;
-                }
-                let mut items = Vec::<String>::new();
-                let mut last_created = None;
-                while let Some(row) = rows.next()? {
-                    let note_json: String = row.get(0)?;
-                    let created_at_ms: i64 = row.get(1)?;
-                    last_created = Some(created_at_ms);
-                    items.push(note_json);
-                }
-                let next = if items.len() as i64 == limit {
-                    last_created.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                let total = match total_mode {
-                    SearchTotalMode::Exact => total_exact,
-                    SearchTotalMode::Approx => {
-                        if !tag_norm.is_empty() {
-                            let n: i64 = conn
-                                .query_row(
-                                    "SELECT COALESCE(SUM(count), 0) FROM relay_tag_counts WHERE lower(tag) LIKE ?1 ESCAPE '\\'",
-                                    params![tag_like],
-                                    |r| r.get(0),
-                                )
-                                .unwrap_or(0);
-                            n.max(0) as u64
-                        } else if q_norm.is_empty() {
-                            let n: i64 = conn
-                                .query_row(
-                                    "SELECT count FROM relay_notes_count WHERE id = 1",
-                                    [],
-                                    |r| r.get(0),
-                                )
-                                .unwrap_or(0);
-                            n.max(0) as u64
-                        } else {
-                            items.len() as u64
-                        }
-                    }
-                    SearchTotalMode::None => 0,
-                };
-                Ok(CollectionPage { total, items, next })
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
-                    if !tag_norm.is_empty() {
-                        let row = conn.query_one(
-                            r#"
-                SELECT COUNT(*)
-                FROM relay_note_tags t
-                JOIN relay_notes n ON n.note_id = t.note_id
-                WHERE t.tag_tsv @@ plainto_tsquery('simple', $1)
-                "#,
-                            &[&tag_norm],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    } else if !q_norm.is_empty() {
-                        let row = conn.query_one(
-                            "SELECT COUNT(*) FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1)",
-                            &[&q_norm],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    } else {
-                        let row = conn.query_one("SELECT COUNT(*) FROM relay_notes", &[])?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    }
-                } else {
-                    0
-                };
-
-                let rows = if !tag_norm.is_empty() {
-                    if let Some(since) = since {
-                        conn.query(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE t.tag_tsv @@ plainto_tsquery('simple', $1) AND n.created_at_ms > $2
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT $3
-                    "#,
-                            &[&tag_norm, &since, &limit],
-                        )?
-                    } else if let Some(cur) = cursor {
-                        conn.query(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE t.tag_tsv @@ plainto_tsquery('simple', $1) AND n.created_at_ms < $2
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT $3
-                    "#,
-                            &[&tag_norm, &cur, &limit],
-                        )?
-                    } else {
-                        conn.query(
-                            r#"
-                    SELECT n.note_json, n.created_at_ms
-                    FROM relay_note_tags t
-                    JOIN relay_notes n ON n.note_id = t.note_id
-                    WHERE t.tag_tsv @@ plainto_tsquery('simple', $1)
-                    ORDER BY n.created_at_ms DESC
-                    LIMIT $2
-                    "#,
-                            &[&tag_norm, &limit],
-                        )?
-                    }
-                } else if let (false, Some(since_val)) = (q_norm.is_empty(), since) {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1) AND created_at_ms > $2 ORDER BY created_at_ms DESC LIMIT $3",
-                        &[&q_norm, &since_val, &limit],
-                    )?
-                } else if let (false, Some(cur)) = (q_norm.is_empty(), cursor) {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1) AND created_at_ms < $2 ORDER BY created_at_ms DESC LIMIT $3",
-                        &[&q_norm, &cur, &limit],
-                    )?
-                } else if !q_norm.is_empty() {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE search_tsv @@ plainto_tsquery('simple', $1) ORDER BY created_at_ms DESC LIMIT $2",
-                        &[&q_norm, &limit],
-                    )?
-                } else if let Some(since) = since {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms > $1 ORDER BY created_at_ms DESC LIMIT $2",
-                        &[&since, &limit],
-                    )?
-                } else if let Some(cur) = cursor {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms < $1 ORDER BY created_at_ms DESC LIMIT $2",
-                        &[&cur, &limit],
-                    )?
-                } else {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes ORDER BY created_at_ms DESC LIMIT $1",
-                        &[&limit],
-                    )?
-                };
-
-                let mut items = Vec::<String>::new();
-                let mut last_created = None;
-                for row in rows {
-                    let note_json: String = row.get(0);
-                    let created_at_ms: i64 = row.get(1);
-                    last_created = Some(created_at_ms);
-                    items.push(note_json);
-                }
-                let next = if items.len() as i64 == limit {
-                    last_created.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                let total = match total_mode {
-                    SearchTotalMode::Exact => total_exact,
-                    SearchTotalMode::Approx => {
-                        if !tag_norm.is_empty() {
-                            let row = conn.query_one(
-                                "SELECT COALESCE(SUM(count)::bigint, 0) FROM relay_tag_counts WHERE lower(tag) LIKE $1 ESCAPE '\\'",
-                                &[&tag_like],
-                            )?;
-                            let n: i64 = row.get(0);
-                            n.max(0) as u64
-                        } else if q_norm.is_empty() {
-                            let row = conn.query_one(
-                                "SELECT count FROM relay_notes_count WHERE id = 1",
-                                &[],
-                            )?;
-                            let n: i64 = row.get(0);
-                            n.max(0) as u64
-                        } else {
-                            items.len() as u64
-                        }
-                    }
-                    SearchTotalMode::None => 0,
-                };
-                Ok(CollectionPage { total, items, next })
-            }
-        }
-    }
-
-    fn list_relay_notes_sync(
-        &self,
-        limit: u32,
-        since: Option<i64>,
-        cursor: Option<i64>,
-    ) -> Result<CollectionPage<(String, i64)>> {
-        let limit = limit.clamp(1, 200) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt;
-                let mut rows;
-                if let Some(since) = since {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms > ?1 ORDER BY created_at_ms DESC LIMIT ?2",
-                    )?;
-                    rows = stmt.query(params![since, limit])?;
-                } else if let Some(cur) = cursor {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms < ?1 ORDER BY created_at_ms DESC LIMIT ?2",
-                    )?;
-                    rows = stmt.query(params![cur, limit])?;
-                } else {
-                    stmt = conn.prepare(
-                        "SELECT note_json, created_at_ms FROM relay_notes ORDER BY created_at_ms DESC LIMIT ?1",
-                    )?;
-                    rows = stmt.query(params![limit])?;
-                }
-                let mut items = Vec::<(String, i64)>::new();
-                let mut last_created = None;
-                while let Some(row) = rows.next()? {
-                    let note_json: String = row.get(0)?;
-                    let created_at_ms: i64 = row.get(1)?;
-                    last_created = Some(created_at_ms);
-                    items.push((note_json, created_at_ms));
-                }
-                let next = if items.len() as i64 == limit {
-                    last_created.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                Ok(CollectionPage {
-                    total: items.len() as u64,
-                    items,
-                    next,
-                })
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = if let Some(since) = since {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms > $1 ORDER BY created_at_ms DESC LIMIT $2",
-                        &[&since, &limit],
-                    )?
-                } else if let Some(cur) = cursor {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes WHERE created_at_ms < $1 ORDER BY created_at_ms DESC LIMIT $2",
-                        &[&cur, &limit],
-                    )?
-                } else {
-                    conn.query(
-                        "SELECT note_json, created_at_ms FROM relay_notes ORDER BY created_at_ms DESC LIMIT $1",
-                        &[&limit],
-                    )?
-                };
-                let mut items = Vec::<(String, i64)>::new();
-                let mut last_created = None;
-                for row in rows {
-                    let note_json: String = row.get(0);
-                    let created_at_ms: i64 = row.get(1);
-                    last_created = Some(created_at_ms);
-                    items.push((note_json, created_at_ms));
-                }
-                let next = if items.len() as i64 == limit {
-                    last_created.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                Ok(CollectionPage {
-                    total: items.len() as u64,
-                    items,
-                    next,
-                })
-            }
-        }
-    }
-
-    fn search_relay_users(
-        &self,
-        q: &str,
-        limit: u32,
-        cursor: Option<i64>,
-        base_template: &str,
-        total_mode: SearchTotalMode,
-    ) -> Result<CollectionPage<String>> {
-        let limit = limit.clamp(1, 200) as i64;
-        let q_norm = q.trim().to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
-                    let total_cache: u64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
-                            params![q_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    let total_users: u64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM users WHERE disabled=0 AND lower(username) LIKE ?1 ESCAPE '\\'",
-                            params![q_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    let total_peers: u64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
-                            params![q_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    let total_relay_users: u64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\'",
-                            params![q_like],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    total_cache
-                        .saturating_add(total_users)
-                        .saturating_add(total_peers)
-                        .saturating_add(total_relay_users)
-                } else {
-                    0
-                };
-
-                let mut stmt = if cursor.is_some() {
-                    conn.prepare(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\') AND updated_at_ms < ?2 ORDER BY updated_at_ms DESC LIMIT ?3",
-                    )?
-                } else {
-                    conn.prepare(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_id) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
-                    )?
-                };
-                let mut rows = if let Some(cur) = cursor {
-                    stmt.query(params![q_like, cur, limit])?
-                } else {
-                    stmt.query(params![q_like, limit])?
-                };
-                let mut items = Vec::<String>::new();
-                let mut seen_ids = std::collections::HashSet::new();
-                let mut last_updated = None;
-                while let Some(row) = rows.next()? {
-                    let actor_json: String = row.get(0)?;
-                    let updated_at_ms: i64 = row.get(1)?;
-                    last_updated = Some(updated_at_ms);
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                        if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                            if seen_ids.insert(id.to_string()) {
-                                items.push(actor_json);
-                            }
-                        } else {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let mut stmt_users = conn.prepare(
-                    "SELECT username, created_at_ms FROM users WHERE disabled=0 AND lower(username) LIKE ?1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT ?2",
-                )?;
-                let mut user_rows = stmt_users.query(params![q_like, limit])?;
-                while let Some(row) = user_rows.next()? {
-                    let username: String = row.get(0)?;
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_json(&username, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let mut stmt_peers = conn.prepare(
-                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut peer_rows = stmt_peers.query(params![q_like, limit])?;
-                while let Some(row) = peer_rows.next()? {
-                    let username: String = row.get(0)?;
-                    let actor_url: String = row.get(1)?;
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_from_actor_url(&username, &actor_url, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let mut stmt_remote = conn.prepare(
-                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut remote_rows = stmt_remote.query(params![q_like, limit])?;
-                while let Some(row) = remote_rows.next()? {
-                    let username: String = row.get(0)?;
-                    let actor_url: String = row.get(1)?;
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_from_actor_url(&username, &actor_url, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let next = if items.len() as i64 == limit {
-                    last_updated.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                let total = match total_mode {
-                    SearchTotalMode::Exact => total_exact,
-                    SearchTotalMode::Approx => items.len() as u64,
-                    SearchTotalMode::None => 0,
-                };
-                Ok(CollectionPage { total, items, next })
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let total_exact: u64 = if total_mode == SearchTotalMode::Exact {
-                    let total_cache: u64 = {
-                        let row = conn.query_one(
-                            "SELECT COUNT(*) FROM user_cache WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
-                            &[&q_like],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    };
-                    let total_users: u64 = {
-                        let row = conn.query_one(
-                            "SELECT COUNT(*) FROM users WHERE disabled=false AND lower(username) LIKE $1 ESCAPE '\\'",
-                            &[&q_like],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    };
-                    let total_peers: u64 = {
-                        let row = conn.query_one(
-                            "SELECT COUNT(*) FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
-                            &[&q_like],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    };
-                    let total_relay_users: u64 = {
-                        let row = conn.query_one(
-                            "SELECT COUNT(*) FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\'",
-                            &[&q_like],
-                        )?;
-                        let n: i64 = row.get(0);
-                        n.max(0) as u64
-                    };
-                    total_cache
-                        .saturating_add(total_users)
-                        .saturating_add(total_peers)
-                        .saturating_add(total_relay_users)
-                } else {
-                    0
-                };
-
-                let rows = if let Some(cur) = cursor {
-                    conn.query(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE (lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\') AND updated_at_ms < $2 ORDER BY updated_at_ms DESC LIMIT $3",
-                        &[&q_like, &cur, &limit],
-                    )?
-                } else {
-                    conn.query(
-                        "SELECT actor_json, updated_at_ms FROM user_cache WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_id) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
-                        &[&q_like, &limit],
-                    )?
-                };
-                let mut items = Vec::<String>::new();
-                let mut seen_ids = std::collections::HashSet::new();
-                let mut last_updated = None;
-                for row in rows {
-                    let actor_json: String = row.get(0);
-                    let updated_at_ms: i64 = row.get(1);
-                    last_updated = Some(updated_at_ms);
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                        if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                            if seen_ids.insert(id.to_string()) {
-                                items.push(actor_json);
-                            }
-                        } else {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let user_rows = conn.query(
-                    "SELECT username, created_at_ms FROM users WHERE disabled=false AND lower(username) LIKE $1 ESCAPE '\\' ORDER BY created_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                for row in user_rows {
-                    let username: String = row.get(0);
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_json(&username, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let peer_rows = conn.query(
-                    "SELECT username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                for row in peer_rows {
-                    let username: String = row.get(0);
-                    let actor_url: String = row.get(1);
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_from_actor_url(&username, &actor_url, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let remote_rows = conn.query(
-                    "SELECT username, actor_url FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                for row in remote_rows {
-                    let username: String = row.get(0);
-                    let actor_url: String = row.get(1);
-                    if let Some(actor_json) = self.get_actor_cache(&username).unwrap_or(None) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&actor_json) {
-                            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                                if seen_ids.insert(id.to_string()) {
-                                    items.push(actor_json);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    let stub = actor_stub_from_actor_url(&username, &actor_url, base_template);
-                    let actor_json = serde_json::to_string(&stub).unwrap_or_default();
-                    if let Some(id) = stub.get("id").and_then(|i| i.as_str()) {
-                        if seen_ids.insert(id.to_string()) {
-                            items.push(actor_json);
-                        }
-                    }
-                }
-
-                let next = if items.len() as i64 == limit {
-                    last_updated.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                let total = match total_mode {
-                    SearchTotalMode::Exact => total_exact,
-                    SearchTotalMode::Approx => items.len() as u64,
-                    SearchTotalMode::None => 0,
-                };
-                Ok(CollectionPage { total, items, next })
-            }
-        }
-    }
-
-    fn search_relay_tags(&self, q: &str, limit: u32) -> Result<Vec<(String, u64)>> {
-        let limit = limit.clamp(1, 200) as i64;
-        let q_norm = q.trim().trim_start_matches('#').to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    r#"
-            SELECT tag, count
-            FROM relay_tag_counts
-            WHERE lower(tag) LIKE ?1 ESCAPE '\\'
-            ORDER BY count DESC
-            LIMIT ?2
-            "#,
-                )?;
-                let mut rows = stmt.query(params![q_like, limit])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    let tag: String = row.get(0)?;
-                    let count: u64 = row.get(1)?;
-                    out.push((tag, count));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    r#"
-            SELECT tag, count
-            FROM relay_tag_counts
-            WHERE lower(tag) LIKE $1 ESCAPE '\\'
-            ORDER BY count DESC
-            LIMIT $2
-            "#,
-                    &[&q_like, &limit],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    let tag: String = row.get(0);
-                    let count: i64 = row.get(1);
-                    out.push((tag, count.max(0) as u64));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn upsert_peer_directory(&self, peer_id: &str, username: &str, actor_url: &str) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO peer_directory(peer_id, username, actor_url, updated_at_ms) VALUES (?1, ?2, ?3, ?4)\n             ON CONFLICT(peer_id) DO UPDATE SET username=excluded.username, actor_url=excluded.actor_url, updated_at_ms=excluded.updated_at_ms",
-                    params![peer_id, username, actor_url, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO peer_directory(peer_id, username, actor_url, updated_at_ms) VALUES ($1, $2, $3, $4)\n             ON CONFLICT(peer_id) DO UPDATE SET username=EXCLUDED.username, actor_url=EXCLUDED.actor_url, updated_at_ms=EXCLUDED.updated_at_ms",
-                    &[&peer_id, &username, &actor_url, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn list_peer_directory(&self, q: &str, limit: u32) -> Result<Vec<(String, String, String)>> {
-        let limit = limit.clamp(1, 200) as i64;
-        let q_norm = q.trim().to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![q_like, limit])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    out.push((row.get(0)?, row.get(1)?, row.get(2)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT peer_id, username, actor_url FROM peer_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push((row.get(0), row.get(1), row.get(2)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn upsert_relay_user_directory(
-        &self,
-        username: &str,
-        actor_url: &str,
-        relay_url: &str,
-    ) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_user_directory(actor_url, username, relay_url, updated_at_ms) VALUES (?1, ?2, ?3, ?4)\n             ON CONFLICT(actor_url) DO UPDATE SET username=excluded.username, relay_url=excluded.relay_url, updated_at_ms=excluded.updated_at_ms",
-                    params![actor_url, username, relay_url, now],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_user_directory(actor_url, username, relay_url, updated_at_ms) VALUES ($1, $2, $3, $4)\n             ON CONFLICT(actor_url) DO UPDATE SET username=EXCLUDED.username, relay_url=EXCLUDED.relay_url, updated_at_ms=EXCLUDED.updated_at_ms",
-                    &[&actor_url, &username, &relay_url, &now],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn list_relay_user_directory(
-        &self,
-        q: &str,
-        limit: u32,
-    ) -> Result<Vec<(String, String, String)>> {
-        let limit = limit.clamp(1, 200) as i64;
-        let q_norm = q.trim().to_lowercase();
-        let q_like = if q_norm.is_empty() {
-            "%".to_string()
-        } else {
-            format!("%{}%", escape_like(&q_norm))
-        };
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE ?1 ESCAPE '\\' OR lower(actor_url) LIKE ?1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT ?2",
-                )?;
-                let mut rows = stmt.query(params![q_like, limit])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    out.push((row.get(0)?, row.get(1)?, row.get(2)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    "SELECT username, actor_url, relay_url FROM relay_user_directory WHERE lower(username) LIKE $1 ESCAPE '\\' OR lower(actor_url) LIKE $1 ESCAPE '\\' ORDER BY updated_at_ms DESC LIMIT $2",
-                    &[&q_like, &limit],
-                )?;
-                let mut out = Vec::new();
-                for row in rows {
-                    out.push((row.get(0), row.get(1), row.get(2)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn upsert_outbox_index_state(&self, username: &str, ok: bool) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_outbox_index(username, last_index_ms, last_ok) VALUES (?1, ?2, ?3)\n             ON CONFLICT(username) DO UPDATE SET last_index_ms=excluded.last_index_ms, last_ok=excluded.last_ok",
-                    params![username, now, if ok { 1 } else { 0 }],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    "INSERT INTO relay_outbox_index(username, last_index_ms, last_ok) VALUES ($1, $2, $3)\n             ON CONFLICT(username) DO UPDATE SET last_index_ms=EXCLUDED.last_index_ms, last_ok=EXCLUDED.last_ok",
-                    &[&username, &now, &ok],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    fn count_outbox_indexed_since(&self, cutoff_ms: i64) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT COUNT(*) FROM relay_outbox_index WHERE last_index_ms >= ?1 AND last_ok=1",
-                    params![cutoff_ms],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*) FROM relay_outbox_index WHERE last_index_ms >= $1 AND last_ok=true",
-                    &[&cutoff_ms],
-                )?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn get_outbox_index_state(&self, username: &str) -> Result<Option<(i64, bool)>> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.query_row(
-                    "SELECT last_index_ms, last_ok FROM relay_outbox_index WHERE username=?1",
-                    params![username],
-                    |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
-                )
-                .optional()
-                .map_err(Into::into)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_opt(
-                    "SELECT last_index_ms, last_ok FROM relay_outbox_index WHERE username=$1",
-                    &[&username],
-                )?;
-                Ok(row.map(|r| (r.get(0), r.get(1))))
-            }
-        }
-    }
-
-    fn count_webrtc_signals_for_peer(&self, to_peer_id: &str) -> Result<u64> {
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row(
-                    "SELECT COUNT(*) FROM webrtc_signals WHERE to_peer_id=?1",
-                    params![to_peer_id],
-                    |r| r.get(0),
-                )?;
-                Ok(n)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let row = conn.query_one(
-                    "SELECT COUNT(*) FROM webrtc_signals WHERE to_peer_id=$1",
-                    &[&to_peer_id],
-                )?;
-                let n: i64 = row.get(0);
-                Ok(n.max(0) as u64)
-            }
-        }
-    }
-
-    fn insert_webrtc_signal(
-        &self,
-        signal_id: &str,
-        to_peer_id: &str,
-        from_actor: &str,
-        session_id: &str,
-        kind: &str,
-        payload_json: &str,
-    ) -> Result<()> {
-        let now = now_ms();
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
-                    r#"
-            INSERT OR REPLACE INTO webrtc_signals(
-              signal_id, to_peer_id, from_actor, session_id, kind, payload_json, created_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            "#,
-                    params![
-                        signal_id,
-                        to_peer_id,
-                        from_actor,
-                        session_id,
-                        kind,
-                        payload_json,
-                        now
-                    ],
-                )?;
-                Ok(())
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                conn.execute(
-                    r#"
-            INSERT INTO webrtc_signals(
-              signal_id, to_peer_id, from_actor, session_id, kind, payload_json, created_at_ms
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT(signal_id) DO UPDATE SET
-              to_peer_id=EXCLUDED.to_peer_id,
-              from_actor=EXCLUDED.from_actor,
-              session_id=EXCLUDED.session_id,
-              kind=EXCLUDED.kind,
-              payload_json=EXCLUDED.payload_json,
-              created_at_ms=EXCLUDED.created_at_ms
-            "#,
-                    &[
-                        &signal_id,
-                        &to_peer_id,
-                        &from_actor,
-                        &session_id,
-                        &kind,
-                        &payload_json,
-                        &now,
-                    ],
-                )?;
-                Ok(())
-            }
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn list_webrtc_signals(
-        &self,
-        to_peer_id: &str,
-        limit: u32,
-    ) -> Result<Vec<(String, String, String, String, String)>> {
-        let limit = limit.clamp(1, 200) as i64;
-        match self.driver {
-            DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                let mut stmt = conn.prepare(
-                    r#"
-            SELECT signal_id, from_actor, session_id, kind, payload_json
-            FROM webrtc_signals
-            WHERE to_peer_id=?1
-            ORDER BY created_at_ms ASC
-            LIMIT ?2
-            "#,
-                )?;
-                let mut rows = stmt.query(params![to_peer_id, limit])?;
-                let mut out = Vec::new();
-                while let Some(r) = rows.next()? {
-                    out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
-                }
-                Ok(out)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let rows = conn.query(
-                    r#"
-            SELECT signal_id, from_actor, session_id, kind, payload_json
-            FROM webrtc_signals
-            WHERE to_peer_id=$1
-            ORDER BY created_at_ms ASC
-            LIMIT $2
-            "#,
-                    &[&to_peer_id, &limit],
-                )?;
-                let mut out = Vec::new();
-                for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    fn delete_webrtc_signals(&self, to_peer_id: &str, ids: &[String]) -> Result<u64> {
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        match self.driver {
-            DbDriver::Sqlite => {
-                let mut conn = self.open_sqlite_conn()?;
-                let tx = conn.transaction()?;
-                let mut deleted: u64 = 0;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let placeholders = std::iter::repeat_n("?", chunk.len())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let sql = format!(
-                        "DELETE FROM webrtc_signals WHERE to_peer_id=?1 AND signal_id IN ({placeholders})"
-                    );
-                    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
-                    params.push(&to_peer_id);
-                    params.extend(chunk.iter().map(|id| id as &dyn rusqlite::ToSql));
-                    let n = tx.execute(&sql, rusqlite::params_from_iter(params))?;
-                    deleted = deleted.saturating_add(n as u64);
-                }
-                tx.commit()?;
-                Ok(deleted)
-            }
-            DbDriver::Postgres => {
-                let mut conn = self.open_pg_conn()?;
-                let mut deleted: u64 = 0;
-                for chunk in ids.chunks(DB_BATCH_DELETE_MAX) {
-                    let params: &[&(dyn ToSql + Sync)] = &[&to_peer_id, &chunk];
-                    let n = conn.execute(
-                        "DELETE FROM webrtc_signals WHERE to_peer_id=$1 AND signal_id = ANY($2)",
-                        params,
-                    )?;
-                    deleted = deleted.saturating_add(n);
-                }
-                Ok(deleted)
-            }
-        }
-    }
 }
 
 enum UpsertUserResult {
@@ -8737,27 +5391,35 @@ async fn admin_guard(
         .check(ip.clone(), "admin", state.cfg.rate_limit_admin_per_min)
         .await
     {
-        let _ = state.db.lock().await.insert_admin_audit(
-            action,
-            username,
-            None,
-            Some(&ip),
-            false,
-            Some("rate limited"),
-            &meta,
-        );
+        let _ = state
+            .db
+            .clone()
+            .insert_admin_audit(
+                action,
+                username,
+                None,
+                Some(&ip),
+                false,
+                Some("rate limited"),
+                &meta,
+            )
+            .await;
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response());
     }
     if !is_authorized_admin(&state.cfg, headers) {
-        let _ = state.db.lock().await.insert_admin_audit(
-            action,
-            username,
-            None,
-            Some(&ip),
-            false,
-            Some("unauthorized"),
-            &meta,
-        );
+        let _ = state
+            .db
+            .clone()
+            .insert_admin_audit(
+                action,
+                username,
+                None,
+                Some(&ip),
+                false,
+                Some("unauthorized"),
+                &meta,
+            )
+            .await;
         return Err((StatusCode::UNAUTHORIZED, "admin token required").into_response());
     }
     Ok(AdminAuditContext { ip, meta })
@@ -8788,8 +5450,8 @@ struct BlockReq {
 
 /// Public relay directory used by peers to learn which users are hosted here.
 async fn relay_user_directory(State(state): State<AppState>) -> impl IntoResponse {
-    let db = state.db.lock().await;
-    let users = db.list_local_usernames().unwrap_or_default();
+    let db = state.db.clone();
+    let users = db.list_local_usernames().await.unwrap_or_default();
     drop(db);
     let body = serde_json::json!({
         "relay": relay_self_base(&state.cfg),
@@ -8811,8 +5473,8 @@ async fn admin_list_peers(
     if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_list_peers", None).await {
         return resp;
     }
-    let db = state.db.lock().await;
-    let peers = db.list_peers().unwrap_or_default();
+    let db = state.db.clone();
+    let peers = db.list_peers().await.unwrap_or_default();
     drop(db);
     let body = serde_json::json!({
         "peers": peers
@@ -8841,8 +5503,8 @@ async fn admin_add_peer(
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return (StatusCode::BAD_REQUEST, "invalid peer url").into_response();
     }
-    let db = state.db.lock().await;
-    match db.upsert_peer(&url) {
+    let db = state.db.clone();
+    match db.upsert_peer(&url).await {
         Ok(()) => (StatusCode::OK, "ok").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
@@ -8863,8 +5525,8 @@ async fn admin_delete_peer(
     else {
         return (StatusCode::BAD_REQUEST, "missing url").into_response();
     };
-    let db = state.db.lock().await;
-    match db.delete_peer(&url) {
+    let db = state.db.clone();
+    match db.delete_peer(&url).await {
         Ok(()) => (StatusCode::OK, "ok").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
@@ -8878,8 +5540,8 @@ async fn admin_list_blocks(
     if let Err(resp) = admin_guard(&state, &peer, &headers, "admin_list_blocks", None).await {
         return resp;
     }
-    let db = state.db.lock().await;
-    let blocks = db.list_relay_blocks().unwrap_or_default();
+    let db = state.db.clone();
+    let blocks = db.list_relay_blocks().await.unwrap_or_default();
     drop(db);
     let body = serde_json::json!({
         "blocks": blocks
@@ -8917,14 +5579,17 @@ async fn admin_add_block(
     if value.is_empty() {
         return (StatusCode::BAD_REQUEST, "empty value").into_response();
     }
-    let db = state.db.lock().await;
-    match db.upsert_relay_block(
-        &kind,
-        &value,
-        req.reason.as_deref(),
-        Some("admin"),
-        req.expires_at_ms,
-    ) {
+    let db = state.db.clone();
+    match db
+        .upsert_relay_block(
+            &kind,
+            &value,
+            req.reason.as_deref(),
+            Some("admin"),
+            req.expires_at_ms,
+        )
+        .await
+    {
         Ok(()) => (StatusCode::OK, "ok").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
@@ -8942,8 +5607,11 @@ async fn admin_delete_block(
     let (Some(kind), Some(value)) = (q.get("kind"), q.get("value")) else {
         return (StatusCode::BAD_REQUEST, "missing kind or value").into_response();
     };
-    let db = state.db.lock().await;
-    match db.delete_relay_block(kind.trim(), value.trim().trim_end_matches('/')) {
+    let db = state.db.clone();
+    match db
+        .delete_relay_block(kind.trim(), value.trim().trim_end_matches('/'))
+        .await
+    {
         Ok(()) => (StatusCode::OK, "ok").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
@@ -8964,11 +5632,14 @@ async fn user_blocks_put(
     if token.is_empty() {
         return (StatusCode::UNAUTHORIZED, "missing relay token").into_response();
     }
-    let db = state.db.lock().await;
-    if !db.user_token_matches(&user, token).unwrap_or(false) {
+    let db = state.db.clone();
+    if !db.user_token_matches(&user, token).await.unwrap_or(false) {
         return (StatusCode::UNAUTHORIZED, "invalid relay token").into_response();
     }
-    match db.replace_user_blocks(&user, &req.blocked_actors, &req.blocked_domains) {
+    match db
+        .replace_user_blocks(&user, &req.blocked_actors, &req.blocked_domains)
+        .await
+    {
         Ok(()) => (StatusCode::OK, "ok").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
@@ -8993,18 +5664,20 @@ async fn admin_list_users(
         .get("offset")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    let db = state.db.lock().await;
-    match db.list_users(limit, offset) {
+    let db = state.db.clone();
+    match db.list_users(limit, offset).await {
         Ok(users) => {
-            let _ = db.insert_admin_audit(
-                "admin_list_users",
-                None,
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_list_users",
+                    None,
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             axum::Json(
                 users
                     .into_iter()
@@ -9020,15 +5693,17 @@ async fn admin_list_users(
             .into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_list_users",
-                None,
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_list_users",
+                    None,
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -9049,44 +5724,50 @@ async fn admin_get_user(
     }
 
     let online = state.tunnels.read().await.contains_key(&user);
-    let db = state.db.lock().await;
-    let row = match db.get_user(&user) {
+    let db = state.db.clone();
+    let row = match db.get_user(&user).await {
         Ok(v) => v,
         Err(e) => {
-            let _ = db.insert_admin_audit(
+            let _ = db
+                .insert_admin_audit(
+                    "admin_get_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
+            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
+        }
+    };
+    let Some((created_at_ms, disabled)) = row else {
+        let _ = db
+            .insert_admin_audit(
                 "admin_get_user",
                 Some(&user),
                 None,
                 Some(&audit.ip),
                 false,
-                Some("db error"),
+                Some("not found"),
                 &audit.meta,
-            );
-            return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
-        }
+            )
+            .await;
+        return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    let Some((created_at_ms, disabled)) = row else {
-        let _ = db.insert_admin_audit(
+    let (spool_count, spool_bytes) = db.spool_stats(&user).await.unwrap_or((0, 0));
+    let _ = db
+        .insert_admin_audit(
             "admin_get_user",
             Some(&user),
             None,
             Some(&audit.ip),
-            false,
-            Some("not found"),
+            true,
+            None,
             &audit.meta,
-        );
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    };
-    let (spool_count, spool_bytes) = db.spool_stats(&user).unwrap_or((0, 0));
-    let _ = db.insert_admin_audit(
-        "admin_get_user",
-        Some(&user),
-        None,
-        Some(&audit.ip),
-        true,
-        None,
-        &audit.meta,
-    );
+        )
+        .await;
 
     axum::Json(serde_json::json!({
       "username": user,
@@ -9112,30 +5793,34 @@ async fn admin_disable_user(
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
-    let db = state.db.lock().await;
-    match db.set_disabled(&user, true) {
+    let db = state.db.clone();
+    match db.set_disabled(&user, true).await {
         Ok(()) => {
-            let _ = db.insert_admin_audit(
-                "admin_disable_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_disable_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::OK, "disabled").into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_disable_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_disable_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -9154,30 +5839,34 @@ async fn admin_enable_user(
     if !is_valid_username(&user) {
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
-    let db = state.db.lock().await;
-    match db.set_disabled(&user, false) {
+    let db = state.db.clone();
+    match db.set_disabled(&user, false).await {
         Ok(()) => {
-            let _ = db.insert_admin_audit(
-                "admin_enable_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_enable_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::OK, "enabled").into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_enable_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_enable_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -9198,30 +5887,34 @@ async fn admin_rotate_token(
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
     let token = generate_token();
-    let db = state.db.lock().await;
-    match db.rotate_token(&user, &token) {
+    let db = state.db.clone();
+    match db.rotate_token(&user, &token).await {
         Ok(()) => {
-            let _ = db.insert_admin_audit(
-                "admin_rotate_token",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_rotate_token",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             axum::Json(AdminRotateResponse { token }).into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_rotate_token",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_rotate_token",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -9254,10 +5947,10 @@ async fn relay_me(
     };
 
     let online = { state.tunnels.read().await.contains_key(&q.username) };
-    let db = state.db.lock().await;
-    let known = db.user_exists(&q.username).unwrap_or(false);
-    let enabled = db.is_user_enabled(&q.username).unwrap_or(false);
-    let token_ok = db.verify_token(&q.username, &tok).unwrap_or(false);
+    let db = state.db.clone();
+    let known = db.user_exists(&q.username).await.unwrap_or(false);
+    let enabled = db.is_user_enabled(&q.username).await.unwrap_or(false);
+    let token_ok = db.verify_token(&q.username, &tok).await.unwrap_or(false);
 
     axum::Json(serde_json::json!({
       "username": q.username,
@@ -9300,9 +5993,27 @@ fn relay_p2p_infra_multiaddrs(cfg: &RelayConfig) -> Vec<String> {
 }
 
 async fn relay_p2p_infra(State(state): State<AppState>) -> impl IntoResponse {
-    let multiaddrs = relay_p2p_infra_multiaddrs(&state.cfg);
+    let mut cfg = state.cfg.clone();
+    if std::env::var("FEDI3_P2P_INFRA_PEER_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_none()
+    {
+        let path = std::env::var("FEDI3_P2P_INFRA_PEER_ID_FILE")
+            .unwrap_or_else(|_| "/p2p_infra/fedi3_p2p_peer_id".into());
+        if let Ok(Ok(value)) =
+            tokio::time::timeout(Duration::from_millis(200), tokio::fs::read_to_string(path)).await
+        {
+            let value = value.trim();
+            if (32..=128).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_alphanumeric())
+            {
+                cfg.p2p_infra_peer_id = Some(value.to_owned());
+            }
+        }
+    }
+    let multiaddrs = relay_p2p_infra_multiaddrs(&cfg);
     axum::Json(RelayP2pInfraResponse {
-        peer_id: state.cfg.p2p_infra_peer_id.clone(),
+        peer_id: cfg.p2p_infra_peer_id.clone(),
         multiaddrs,
     })
     .into_response()
@@ -9342,11 +6053,11 @@ async fn relay_search_notes(
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else {
-        db.verify_token(&user, &tok).unwrap_or(false)
+        db.verify_token(&user, &tok).await.unwrap_or(false)
     };
     drop(db);
     if !authorized {
@@ -9384,15 +6095,18 @@ async fn relay_search_notes(
             }
         }
     } else {
-        let db = state.db.lock().await;
-        match db.search_relay_notes(
-            &query,
-            &tag,
-            limit,
-            cursor,
-            since,
-            state.cfg.search_total_mode,
-        ) {
+        let db = state.db.clone();
+        match db
+            .search_relay_notes(
+                &query,
+                &tag,
+                limit,
+                cursor,
+                since,
+                state.cfg.search_total_mode,
+            )
+            .await
+        {
             Ok(p) => p,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -9436,8 +6150,8 @@ async fn relay_sync_notes(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
     }
     let limit = q.limit.unwrap_or(200).min(200);
-    let db = state.db.lock().await;
-    let page = match db.list_relay_notes_sync(limit, q.since, q.cursor) {
+    let db = state.db.clone();
+    let page = match db.list_relay_notes_sync(limit, q.since, q.cursor).await {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     };
@@ -9472,11 +6186,11 @@ async fn relay_search_users(
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else {
-        db.verify_token(&user, &tok).unwrap_or(false)
+        db.verify_token(&user, &tok).await.unwrap_or(false)
     };
     drop(db);
     if !authorized {
@@ -9511,14 +6225,17 @@ async fn relay_search_users(
             }
         }
     } else {
-        let db = state.db.lock().await;
-        match db.search_relay_users(
-            &query,
-            limit,
-            cursor,
-            &base_template,
-            state.cfg.search_total_mode,
-        ) {
+        let db = state.db.clone();
+        match db
+            .search_relay_users(
+                &query,
+                limit,
+                cursor,
+                &base_template,
+                state.cfg.search_total_mode,
+            )
+            .await
+        {
             Ok(p) => p,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -9556,18 +6273,18 @@ async fn relay_search_hashtags(
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else {
-        db.verify_token(&user, &tok).unwrap_or(false)
+        db.verify_token(&user, &tok).await.unwrap_or(false)
     };
     if !authorized {
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
     let limit = q.limit.unwrap_or(30).min(200);
     let query = q.q.unwrap_or_default();
-    let rows = match db.search_relay_tags(&query, limit) {
+    let rows = match db.search_relay_tags(&query, limit).await {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     };
@@ -9591,11 +6308,11 @@ async fn relay_search_coverage(
     let Some(tok) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else if let Some(user) = q.username.as_deref() {
-        db.verify_token(user, &tok).unwrap_or(false)
+        db.verify_token(user, &tok).await.unwrap_or(false)
     } else {
         false
     };
@@ -9603,18 +6320,19 @@ async fn relay_search_coverage(
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
 
-    let total_users = db.count_users().unwrap_or(0);
+    let total_users = db.count_users().await.unwrap_or(0);
     let coverage_window_ms: i64 = 24 * 3600 * 1000;
     let cutoff = now_ms().saturating_sub(coverage_window_ms);
-    let indexed_users = db.count_outbox_indexed_since(cutoff).unwrap_or(0);
+    let indexed_users = db.count_outbox_indexed_since(cutoff).await.unwrap_or(0);
     let last_index_ms = db
         .relay_meta_get("search_index_last_ms")
+        .await
         .ok()
         .flatten()
         .and_then(|v| v.parse::<i64>().ok());
     let relay_sync_window_ms: i64 = 24 * 3600 * 1000;
     let relay_sync_cutoff = now_ms().saturating_sub(relay_sync_window_ms);
-    let sync_rows = db.list_relay_sync_state().unwrap_or_default();
+    let sync_rows = db.list_relay_sync_state().await.unwrap_or_default();
     let relays_total = sync_rows.len() as u64;
     let mut relays_synced = 0u64;
     let mut relays_last_sync_ms = None;
@@ -9629,7 +6347,7 @@ async fn relay_search_coverage(
 
     let mut user_state = None;
     if let Some(user) = q.username.as_deref() {
-        if let Ok(Some((ms, ok))) = db.get_outbox_index_state(user) {
+        if let Ok(Some((ms, ok))) = db.get_outbox_index_state(user).await {
             user_state = Some(serde_json::json!({
                 "username": user,
                 "last_index_ms": ms,
@@ -9670,8 +6388,8 @@ async fn relay_list(
     Query(q): Query<RelayTelemetryQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
-    let db = state.db.lock().await;
-    let rows = match db.list_relays(limit) {
+    let db = state.db.clone();
+    let rows = match db.list_relays(limit).await {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     };
@@ -9706,8 +6424,8 @@ async fn relay_peers(
             .cloned()
             .collect::<std::collections::HashSet<String>>()
     };
-    let db = state.db.lock().await;
-    let rows = match db.list_peer_directory(&query, limit) {
+    let db = state.db.clone();
+    let rows = match db.list_peer_directory(&query, limit).await {
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
     };
@@ -9773,9 +6491,9 @@ async fn relay_telemetry_post(
     }
 
     // Store incoming relay + its advertised relays.
-    let mut db = state.db.lock().await;
+    let db = state.db.clone();
 
-    if let Ok(Some(existing)) = db.get_relay_pubkey_b64(&input.relay_url) {
+    if let Ok(Some(existing)) = db.get_relay_pubkey_b64(&input.relay_url).await {
         if existing.trim() != provided_pk {
             return (StatusCode::UNAUTHORIZED, "relay pubkey mismatch").into_response();
         }
@@ -9784,16 +6502,50 @@ async fn relay_telemetry_post(
         return (StatusCode::UNAUTHORIZED, "bad telemetry signature").into_response();
     }
 
-    let telemetry_json = serde_json::to_string(&input).ok();
-    let _ = db.upsert_relay(
-        &input.relay_url,
-        input.base_domain.clone(),
-        telemetry_json,
-        Some(provided_pk.clone()),
+    // A self-signed payload alone does not prove control of its claimed origin.
+    let origin = match reqwest::Url::parse(&input.relay_url) {
+        Ok(url)
+            if url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && (url.scheme() == "https" || state.cfg.allow_private_remote_fetch) =>
+        {
+            url
+        }
+        _ => return (StatusCode::BAD_REQUEST, "invalid relay origin").into_response(),
+    };
+    let proof_url = format!(
+        "{}/_fedi3/relay/stats",
+        origin.as_str().trim_end_matches('/')
     );
+    let proof = fetch_peer_json::<RelayTelemetry>(
+        &state,
+        &proof_url,
+        "application/json",
+        MAX_PEER_PAGE_BYTES,
+    )
+    .await;
+    match proof {
+        Ok(proof)
+            if proof.relay_url.trim_end_matches('/') == input.relay_url.trim_end_matches('/')
+                && proof.sign_pubkey_b64.as_deref() == Some(provided_pk.as_str())
+                && verify_telemetry_signature(&proof).is_ok() => {}
+        _ => return (StatusCode::UNAUTHORIZED, "relay origin proof failed").into_response(),
+    }
+
+    let telemetry_json = serde_json::to_string(&input).ok();
+    let _ = db
+        .upsert_relay(
+            &input.relay_url,
+            input.base_domain.clone(),
+            telemetry_json,
+            Some(provided_pk.clone()),
+        )
+        .await;
     for r in &input.relays {
         if r.starts_with("http://") || r.starts_with("https://") {
-            let _ = db.upsert_relay(r, None, None, None);
+            let _ = db.upsert_relay(r, None, None, None).await;
         }
     }
     for u in &input.users {
@@ -9802,7 +6554,9 @@ async fn relay_telemetry_post(
         if username.is_empty() || actor_url.is_empty() {
             continue;
         }
-        let _ = db.upsert_relay_user_directory(username, actor_url, &input.relay_url);
+        let _ = db
+            .upsert_relay_user_directory(username, actor_url, &input.relay_url)
+            .await;
         let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
         let doc = MeiliUserDoc {
             id: meili_doc_id(actor_url),
@@ -9820,7 +6574,7 @@ async fn relay_telemetry_post(
         if peer_id.is_empty() || username.is_empty() || actor_url.is_empty() {
             continue;
         }
-        let _ = db.upsert_peer_directory(peer_id, username, actor_url);
+        let _ = db.upsert_peer_directory(peer_id, username, actor_url).await;
         let stub = actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
         let doc = MeiliUserDoc {
             id: meili_doc_id(actor_url),
@@ -9880,11 +6634,11 @@ async fn relay_move_post(
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
 
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else if let Some(tok) = bearer.as_deref() {
-        db.verify_token(&user, tok).unwrap_or(false)
+        db.verify_token(&user, tok).await.unwrap_or(false)
     } else {
         false
     };
@@ -9893,7 +6647,7 @@ async fn relay_move_post(
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
 
-    if let Err(e) = db.set_user_move(&user, &moved_to) {
+    if let Err(e) = db.set_user_move(&user, &moved_to).await {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
     (StatusCode::OK, "ok").into_response()
@@ -9927,18 +6681,18 @@ async fn relay_move_delete(
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
 
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if is_authorized_admin(&state.cfg, &headers) {
         true
     } else if let Some(tok) = bearer.as_deref() {
-        db.verify_token(&user, tok).unwrap_or(false)
+        db.verify_token(&user, tok).await.unwrap_or(false)
     } else {
         false
     };
     if !authorized {
         return (StatusCode::UNAUTHORIZED, "admin or user token required").into_response();
     }
-    let _ = db.clear_user_move(&user);
+    let _ = db.clear_user_move(&user).await;
     (StatusCode::OK, "ok").into_response()
 }
 
@@ -9998,11 +6752,11 @@ async fn relay_move_notice_post(
         }
     };
 
-    let db = state.db.lock().await;
+    let db = state.db.clone();
     let authorized = if sig_ok || is_authorized_admin(&state.cfg, &headers) {
         true
     } else if let Some(tok) = bearer.as_deref() {
-        db.verify_token(&user, tok).unwrap_or(false)
+        db.verify_token(&user, tok).await.unwrap_or(false)
     } else {
         false
     };
@@ -10015,19 +6769,21 @@ async fn relay_move_notice_post(
     }
 
     let notice_id = notice_id_hex(&notice);
-    if db.has_move_notice(&notice_id).unwrap_or(false) {
+    if db.has_move_notice(&notice_id).await.unwrap_or(false) {
         // Already seen: ensure mapping exists and stop.
-        let _ = db.set_user_move(&user, &moved_to);
+        let _ = db.set_user_move(&user, &moved_to).await;
         return (StatusCode::OK, "ok").into_response();
     }
 
-    if let Err(e) = db.set_user_move(&user, &moved_to) {
+    if let Err(e) = db.set_user_move(&user, &moved_to).await {
         return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
     }
-    let _ = db.upsert_move_notice(
-        &notice_id,
-        &serde_json::to_string(&notice).unwrap_or_default(),
-    );
+    let _ = db
+        .upsert_move_notice(
+            &notice_id,
+            &serde_json::to_string(&notice).unwrap_or_default(),
+        )
+        .await;
     drop(db);
 
     // Fan-out the signed notice to other relays (best-effort).
@@ -10098,8 +6854,8 @@ async fn webrtc_signal_send(
 
     // Backpressure / anti-abuse: cap queued signals per peer.
     {
-        let db = state.db.lock().await;
-        match db.count_webrtc_signals_for_peer(&to_peer_id) {
+        let db = state.db.clone();
+        match db.count_webrtc_signals_for_peer(&to_peer_id).await {
             Ok(n) if n >= state.cfg.webrtc_signal_max_per_peer as u64 => {
                 return (StatusCode::TOO_MANY_REQUESTS, "queue full").into_response();
             }
@@ -10111,15 +6867,18 @@ async fn webrtc_signal_send(
     let signal_id = generate_token();
     let payload_json = serde_json::to_string(&req.payload).unwrap_or_else(|_| "null".to_string());
     {
-        let db = state.db.lock().await;
-        if let Err(e) = db.insert_webrtc_signal(
-            &signal_id,
-            &to_peer_id,
-            &actor,
-            &session_id,
-            &kind,
-            &payload_json,
-        ) {
+        let db = state.db.clone();
+        if let Err(e) = db
+            .insert_webrtc_signal(
+                &signal_id,
+                &to_peer_id,
+                &actor,
+                &session_id,
+                &kind,
+                &payload_json,
+            )
+            .await
+        {
             return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response();
         }
     }
@@ -10172,8 +6931,8 @@ async fn webrtc_signal_poll(
     }
 
     let rows = {
-        let db = state.db.lock().await;
-        match db.list_webrtc_signals(&to_peer_id, limit) {
+        let db = state.db.clone();
+        match db.list_webrtc_signals(&to_peer_id, limit).await {
             Ok(v) => v,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -10247,8 +7006,8 @@ async fn webrtc_signal_ack(
     }
 
     let deleted = {
-        let db = state.db.lock().await;
-        match db.delete_webrtc_signals(&to_peer_id, &req.ids) {
+        let db = state.db.clone();
+        match db.delete_webrtc_signals(&to_peer_id, &req.ids).await {
             Ok(v) => v,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
         }
@@ -10271,45 +7030,94 @@ async fn admin_delete_user(
         return (StatusCode::BAD_REQUEST, "invalid user").into_response();
     }
 
+    // Disable before collecting blobs: new quota reservations are refused.
+    if state.db.set_disabled(&user, true).await.is_err() {
+        return (StatusCode::BAD_GATEWAY, "cannot prepare account deletion").into_response();
+    }
+    loop {
+        let batch = match state.db.list_user_media(&user).await {
+            Ok(batch) => batch,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    "media cleanup pending; retry deletion",
+                )
+                    .into_response()
+            }
+        };
+        if batch.is_empty() {
+            break;
+        }
+        for item in batch {
+            if item
+                .backend
+                .strip_prefix("pending:")
+                .unwrap_or(&item.backend)
+                != state.media_cfg.backend
+            {
+                return (
+                    StatusCode::CONFLICT,
+                    "configure original media backend and retry deletion",
+                )
+                    .into_response();
+            }
+            if state.media_backend.delete(&item.storage_key).await.is_err()
+                || state.db.delete_media_item(&user, &item.id).await.is_err()
+            {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    "media cleanup pending; account disabled; retry deletion",
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // Drop the tunnel sender (best-effort disconnect).
     state.tunnels.write().await.remove(&user);
 
-    let db = state.db.lock().await;
-    match db.delete_user(&user) {
+    let db = state.db.clone();
+    match db.delete_user(&user).await {
         Ok(true) => {
-            let _ = db.insert_admin_audit(
-                "admin_delete_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_delete_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::OK, "deleted").into_response()
         }
         Ok(false) => {
-            let _ = db.insert_admin_audit(
-                "admin_delete_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                false,
-                Some("not found"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_delete_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("not found"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::NOT_FOUND, "not found").into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_delete_user",
-                Some(&user),
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_delete_user",
+                    Some(&user),
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -10334,18 +7142,20 @@ async fn admin_audit_list(
         .get("offset")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    let db = state.db.lock().await;
-    match db.list_admin_audit(limit, offset) {
+    let db = state.db.clone();
+    match db.list_admin_audit(limit, offset).await {
         Ok(rows) => {
-            let _ = db.insert_admin_audit(
-                "admin_audit_list",
-                None,
-                None,
-                Some(&audit.ip),
-                true,
-                None,
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_audit_list",
+                    None,
+                    None,
+                    Some(&audit.ip),
+                    true,
+                    None,
+                    &audit.meta,
+                )
+                .await;
             axum::Json(
                 rows.into_iter()
                     .map(
@@ -10382,15 +7192,17 @@ async fn admin_audit_list(
             .into_response()
         }
         Err(e) => {
-            let _ = db.insert_admin_audit(
-                "admin_audit_list",
-                None,
-                None,
-                Some(&audit.ip),
-                false,
-                Some("db error"),
-                &audit.meta,
-            );
+            let _ = db
+                .insert_admin_audit(
+                    "admin_audit_list",
+                    None,
+                    None,
+                    Some(&audit.ip),
+                    false,
+                    Some("db error"),
+                    &audit.meta,
+                )
+                .await;
             (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response()
         }
     }
@@ -10509,16 +7321,17 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
         search_relays_synced,
         search_relays_last_sync_ms,
     ) = {
-        let db = state.db.lock().await;
-        let total_users = db.count_users_total().unwrap_or(0);
-        let total_peers_seen = db.count_peers_seen_since(cutoff_ms).unwrap_or(0);
+        let db = state.db.clone();
+        let total_users = db.count_users_total().await.unwrap_or(0);
+        let total_peers_seen = db.count_peers_seen_since(cutoff_ms).await.unwrap_or(0);
         let relays = db
             .list_relays(500)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(url, _, _, _, _)| url)
             .collect::<Vec<_>>();
-        let relay_sync = db.list_relay_sync_state().unwrap_or_default();
+        let relay_sync = db.list_relay_sync_state().await.unwrap_or_default();
         let mut relays_total = 0u64;
         let mut relays_synced = 0u64;
         let mut last_sync_ms = None;
@@ -10532,14 +7345,19 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
                 last_sync_ms = Some(last_ms);
             }
         }
-        let search_indexed_users = db.count_outbox_indexed_since(search_cutoff_ms).unwrap_or(0);
+        let search_indexed_users = db
+            .count_outbox_indexed_since(search_cutoff_ms)
+            .await
+            .unwrap_or(0);
         let search_last_index_ms = db
             .relay_meta_get("search_index_last_ms")
+            .await
             .ok()
             .flatten()
             .and_then(|v| v.parse::<i64>().ok());
         let users = db
             .list_users(state.cfg.telemetry_users_limit, 0)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(username, _, _)| RelayUserEntry {
@@ -10553,6 +7371,7 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
             .collect::<Vec<_>>();
         let peers = db
             .list_peer_directory("", state.cfg.telemetry_peers_limit)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(peer_id, username, actor_url)| RelayPeerEntry {
@@ -10606,8 +7425,8 @@ async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
 
     // Sign telemetry with our relay keypair.
     if state.cfg.public_url.is_some() {
-        let db = state.db.lock().await;
-        let (pk_b64, sk_b64) = db.load_or_create_signing_keypair_b64()?;
+        let db = state.db.clone();
+        let (pk_b64, sk_b64) = db.load_or_create_signing_keypair_b64().await?;
         telemetry.sign_pubkey_b64 = Some(pk_b64);
         telemetry.signature_b64 = Some(sign_telemetry_b64(&telemetry, &sk_b64)?);
     }
@@ -10666,7 +7485,7 @@ fn verify_telemetry_signature(t: &RelayTelemetry) -> Result<()> {
 
     // Basic freshness check (best-effort): reject extremely old/future telemetry to reduce replay abuse.
     let now = now_ms();
-    if (t.timestamp_ms - now).abs() > 24 * 3600 * 1000 {
+    if t.timestamp_ms.abs_diff(now) > 24 * 3600 * 1000 {
         return Err(anyhow::anyhow!("telemetry timestamp out of range"));
     }
 
@@ -10682,9 +7501,10 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
     let telemetry = build_self_telemetry(state).await?;
 
     let targets = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         let mut out = db
             .list_relays(500)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(url, _, _, _, _)| url)
@@ -10728,20 +7548,31 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
             }
         };
         if let Ok(remote) = serde_json::from_slice::<RelayTelemetry>(&body) {
-            if verify_telemetry_signature(&remote).is_err() {
+            if remote.relay_url.trim_end_matches('/') != relay_url.trim_end_matches('/')
+                || verify_telemetry_signature(&remote).is_err()
+            {
                 continue;
             }
+            match state.db.get_relay_pubkey_b64(&relay_url).await {
+                Ok(Some(pinned)) if Some(pinned.as_str()) != remote.sign_pubkey_b64.as_deref() => {
+                    continue
+                }
+                Err(_) => continue,
+                _ => {}
+            }
             let telemetry_json = serde_json::to_string(&remote).ok();
-            let mut db = state.db.lock().await;
-            let _ = db.upsert_relay(
-                &remote.relay_url,
-                remote.base_domain.clone(),
-                telemetry_json,
-                remote.sign_pubkey_b64.clone(),
-            );
+            let db = state.db.clone();
+            let _ = db
+                .upsert_relay(
+                    &remote.relay_url,
+                    remote.base_domain.clone(),
+                    telemetry_json,
+                    remote.sign_pubkey_b64.clone(),
+                )
+                .await;
             for r in remote.relays {
                 if r.starts_with("http://") || r.starts_with("https://") {
-                    let _ = db.upsert_relay(&r, None, None, None);
+                    let _ = db.upsert_relay(&r, None, None, None).await;
                 }
             }
             for u in &remote.users {
@@ -10750,7 +7581,9 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                 if username.is_empty() || actor_url.is_empty() {
                     continue;
                 }
-                let _ = db.upsert_relay_user_directory(username, actor_url, &remote.relay_url);
+                let _ = db
+                    .upsert_relay_user_directory(username, actor_url, &remote.relay_url)
+                    .await;
                 let stub =
                     actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
@@ -10769,7 +7602,7 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
                 if peer_id.is_empty() || username.is_empty() || actor_url.is_empty() {
                     continue;
                 }
-                let _ = db.upsert_peer_directory(peer_id, username, actor_url);
+                let _ = db.upsert_peer_directory(peer_id, username, actor_url).await;
                 let stub =
                     actor_stub_from_actor_url(username, actor_url, &user_base_template(&state.cfg));
                 let doc = MeiliUserDoc {
@@ -10789,9 +7622,10 @@ async fn push_telemetry_once(state: &AppState) -> Result<()> {
 async fn sync_relays_once(state: &AppState) -> Result<()> {
     let self_url = state.cfg.public_url.clone();
     let relays = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         let mut out = db
             .list_relays(500)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(url, _, _, _, _)| url)
@@ -10818,8 +7652,9 @@ async fn sync_relays_once(state: &AppState) -> Result<()> {
 async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
     let key = format!("relay_sync_last_ms:{relay_url}");
     let last_seen = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         db.relay_meta_get(&key)
+            .await
             .ok()
             .flatten()
             .and_then(|v| v.parse::<i64>().ok())
@@ -10860,13 +7695,13 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
         if data.items.is_empty() {
             break;
         }
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         for item in data.items {
             if item.created_at_ms > max_seen {
                 max_seen = item.created_at_ms;
             }
             if let Some(indexed) = note_to_index(&item.note) {
-                let _ = db.upsert_relay_note(&indexed);
+                let _ = db.upsert_relay_note(&indexed).await;
             }
         }
         drop(db);
@@ -10880,8 +7715,8 @@ async fn sync_relay_notes(state: &AppState, relay_url: &str) -> Result<()> {
     }
 
     if max_seen > last_seen.unwrap_or(0) {
-        let db = state.db.lock().await;
-        let _ = db.relay_meta_set(&key, &max_seen.to_string());
+        let db = state.db.clone();
+        let _ = db.relay_meta_set(&key, &max_seen.to_string()).await;
     }
     Ok(())
 }
@@ -11253,8 +8088,9 @@ fn notice_id_hex(notice: &RelayMoveNotice) -> String {
 
 async fn fanout_move_notice(state: AppState, notice_id: String, body: Vec<u8>, hop: u32) {
     let relays = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         db.list_relays(200)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(url, _base, _seen, _t, _pk)| url)
@@ -11280,8 +8116,9 @@ async fn fanout_move_notice_to_relay(
 
     // Retry/backoff per (notice_id, relay_url).
     {
-        let db = state.db.lock().await;
-        if let Ok(Some((tries, last_try_ms, sent_ok))) = db.get_fanout_status(notice_id, relay_url)
+        let db = state.db.clone();
+        if let Ok(Some((tries, last_try_ms, sent_ok))) =
+            db.get_fanout_status(notice_id, relay_url).await
         {
             if sent_ok != 0 {
                 return Ok(true);
@@ -11300,8 +8137,8 @@ async fn fanout_move_notice_to_relay(
     );
     if let Err(e) = ensure_fetch_target_allowed(&url, state.cfg.allow_private_remote_fetch).await {
         debug!(relay_url = %relay_url, "move notice fan-out skipped: {e:#}");
-        let db = state.db.lock().await;
-        let _ = db.record_fanout_attempt(notice_id, relay_url, false);
+        let db = state.db.clone();
+        let _ = db.record_fanout_attempt(notice_id, relay_url, false).await;
         return Ok(false);
     }
     let target: http::Uri = url
@@ -11332,24 +8169,27 @@ async fn fanout_move_notice_to_relay(
         Ok(_) => false,
         Err(_) => false,
     };
-    let db = state.db.lock().await;
-    let _ = db.record_fanout_attempt(notice_id, relay_url, ok);
+    let db = state.db.clone();
+    let _ = db.record_fanout_attempt(notice_id, relay_url, ok).await;
     Ok(ok)
 }
 
 async fn fanout_pending_move_notices(state: &AppState) -> Result<()> {
     let cutoff = now_ms().saturating_sub((state.cfg.move_notice_ttl_secs as i64) * 1000);
     let items = {
-        let db = state.db.lock().await;
-        db.list_recent_move_notices(cutoff, 200).unwrap_or_default()
+        let db = state.db.clone();
+        db.list_recent_move_notices(cutoff, 200)
+            .await
+            .unwrap_or_default()
     };
     if items.is_empty() {
         return Ok(());
     }
 
     let relays = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         db.list_relays(200)
+            .await
             .unwrap_or_default()
             .into_iter()
             .map(|(url, _base, _seen, _t, _pk)| url)
@@ -11920,8 +8760,8 @@ async fn signed_relay_headers(
     body: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let (_, sk_b64) = {
-        let db = state.db.lock().await;
-        db.load_or_create_signing_keypair_b64()?
+        let db = state.db.clone();
+        db.load_or_create_signing_keypair_b64().await?
     };
     let date = httpdate::fmt_http_date(std::time::SystemTime::now());
     let digest = format!("SHA-256={}", B64.encode(Sha256::digest(body)));
@@ -12023,8 +8863,8 @@ async fn verify_move_notice_signature(
     if key_path.contains("/_fedi3/relay/") {
         if let Some(origin) = relay_origin_from_key_id(&params.key_id) {
             let pinned = {
-                let db = state.db.lock().await;
-                db.get_relay_pubkey_b64(&origin).ok().flatten()
+                let db = state.db.clone();
+                db.get_relay_pubkey_b64(&origin).await.ok().flatten()
             };
             if let Some(pk) = pinned.filter(|v| !v.trim().is_empty()) {
                 return Ok(verify_signature_ed25519(
@@ -12038,8 +8878,9 @@ async fn verify_move_notice_signature(
 
     // Legacy/actor-signed notices: verify against the cached actor key.
     let mut pem = {
-        let db = state.db.lock().await;
+        let db = state.db.clone();
         db.get_actor_cache(user)
+            .await
             .ok()
             .flatten()
             .and_then(|actor_json| extract_public_key_pem_from_actor_json(&actor_json))
@@ -12196,7 +9037,439 @@ mod tests {
         dir
     }
 
-    fn test_db() -> (Db, PathBuf) {
+    #[tokio::test]
+    async fn telemetry_cannot_pin_another_origins_key() {
+        let (mut state, _dir) = test_state(test_cfg()).await;
+        state.cfg.allow_private_remote_fetch = true;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let claimed = format!("http://{}", listener.local_addr().unwrap());
+        let (mut origin, _dir2) = test_state(test_cfg()).await;
+        origin.cfg.public_url = Some(claimed.clone());
+        let proof = build_self_telemetry(&origin).await.unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/_fedi3/relay/stats",
+                    get(move || {
+                        let proof = proof.clone();
+                        async move { axum::Json(proof) }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let mut forged = build_self_telemetry(&state).await.unwrap();
+        forged.relay_url = claimed.clone();
+        let (_, secret) = state.db.load_or_create_signing_keypair_b64().await.unwrap();
+        forged.signature_b64 = Some(sign_telemetry_b64(&forged, &secret).unwrap());
+        assert!(verify_telemetry_signature(&forged).is_ok());
+        let response = relay_telemetry_post(
+            State(state.clone()),
+            ConnectInfo("127.0.0.1:12345".parse().unwrap()),
+            HeaderMap::new(),
+            axum::Json(forged),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(state
+            .db
+            .get_relay_pubkey_b64(&claimed)
+            .await
+            .unwrap()
+            .is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn mesh_forward_does_not_disclose_credentials_to_peer() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let sent = Arc::new(std::sync::Mutex::new(Some(sent)));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/users/alice",
+                    get(move |headers: HeaderMap| {
+                        let sent = sent.clone();
+                        async move {
+                            if let Some(sender) = sent.lock().unwrap().take() {
+                                let _ = sender.send(headers);
+                            }
+                            ([("Set-Cookie", "peer-secret=1")], "ok")
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        state.db.upsert_remote_user("alice", &url).await.unwrap();
+        let headers = hmap(&[
+            ("Authorization", "Bearer user-secret"),
+            ("Cookie", "sid=user-secret"),
+            ("Connection", "x-private"),
+            ("x-private", "private"),
+            ("Host", "signed-origin.example"),
+        ]);
+        let response = forward_to_peer(
+            &state,
+            "alice",
+            &Method::GET,
+            "/users/alice",
+            "",
+            &headers,
+            &Bytes::new(),
+        )
+        .await
+        .unwrap();
+        let forwarded = received.await.unwrap();
+        assert!(!forwarded.contains_key("authorization"));
+        assert!(!forwarded.contains_key("cookie"));
+        assert!(!forwarded.contains_key("x-private"));
+        assert_eq!(
+            forwarded.get("host").unwrap(),
+            url.trim_start_matches("http://")
+        );
+        assert!(!response.headers().contains_key("set-cookie"));
+        server.abort();
+    }
+
+    #[test]
+    fn uploaded_media_must_match_mime_and_svg_is_disabled() {
+        assert!(!media_type_allowed("image/svg+xml"));
+        assert!(!media_signature_matches(
+            "image/png",
+            b"<html>active</html>"
+        ));
+        assert!(media_signature_matches(
+            "image/png",
+            b"\x89PNG\r\n\x1a\nbytes"
+        ));
+    }
+
+    #[test]
+    fn peer_headers_strip_credentials_and_connection_nominated_fields() {
+        let headers = hmap(&[
+            ("Authorization", "Bearer secret"),
+            ("Cookie", "sid=secret"),
+            ("Connection", "x-secret"),
+            ("x-secret", "secret"),
+            ("Accept", "application/json"),
+        ]);
+        for name in [
+            "authorization",
+            "cookie",
+            "x-secret",
+            "connection",
+            "x-fedi3-internal",
+        ] {
+            assert!(!peer_forward_header_allowed(name, &headers));
+        }
+        assert!(peer_forward_header_allowed("accept", &headers));
+        assert!(!peer_forward_header_allowed("host", &headers));
+    }
+
+    #[test]
+    fn sqlite_media_quota_reservation_is_atomic_under_parallel_writes() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "test-user-token-123456").unwrap();
+        let db = Arc::new(db);
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let jobs: Vec<_> = (0..16)
+            .map(|n| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    db.reserve_media_item(
+                        &MediaItem {
+                            id: format!("{n}.bin"),
+                            username: "alice".into(),
+                            backend: "local".into(),
+                            storage_key: format!("alice/{n}.bin"),
+                            media_type: "application/octet-stream".into(),
+                            size: 7,
+                            created_at_ms: now_ms(),
+                        },
+                        70,
+                    )
+                    .unwrap()
+                })
+            })
+            .collect();
+        let admitted = jobs
+            .into_iter()
+            .filter_map(|job| (job.join().unwrap() == MediaReservation::Reserved).then_some(()))
+            .count();
+        assert_eq!(admitted, 10);
+        assert_eq!(db.user_media_bytes("alice").unwrap(), 70);
+        db.set_disabled("alice", true).unwrap();
+        let item = db.list_user_media("alice").unwrap().remove(0);
+        assert!(!db.finish_media_upload(&item).unwrap());
+        assert!(
+            db.delete_user("alice").is_err(),
+            "must preserve blob retry metadata"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires an isolated FEDI3_TEST_POSTGRES_URL database"]
+    async fn postgres_media_quota_reservation_is_atomic() {
+        let url = std::env::var("FEDI3_TEST_POSTGRES_URL").expect("isolated PostgreSQL URL");
+        let (mut db, _dir) = test_db();
+        db.driver = DbDriver::Postgres;
+        db.db_url = Some(url);
+        db.pg_pool = OnceLock::new();
+        let db = tokio::task::spawn_blocking(move || {
+            db.init().unwrap();
+            db
+        })
+        .await
+        .unwrap();
+        let db = DbDispatch::new(db);
+        db.create_user("quota-test", "postgres-test-token")
+            .await
+            .unwrap();
+        let jobs = (0..20).map(|n| {
+            let db = db.clone();
+            async move {
+                db.reserve_media_item(
+                    &MediaItem {
+                        id: format!("quota-{n}.bin"),
+                        username: "quota-test".into(),
+                        backend: "local".into(),
+                        storage_key: format!("quota-test/{n}.bin"),
+                        media_type: "application/octet-stream".into(),
+                        size: 7,
+                        created_at_ms: now_ms(),
+                    },
+                    70,
+                )
+                .await
+                .unwrap()
+            }
+        });
+        let results = futures_util::future::join_all(jobs).await;
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| **r == MediaReservation::Reserved)
+                .count(),
+            10
+        );
+        assert_eq!(db.user_media_bytes("quota-test").await.unwrap(), 70);
+        db.set_disabled("quota-test", true).await.unwrap();
+        for item in db.list_user_media("quota-test").await.unwrap() {
+            assert!(!db.finish_media_upload(&item).await.unwrap());
+            db.delete_media_item("quota-test", &item.id).await.unwrap();
+        }
+        assert!(db.delete_user("quota-test").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn account_deletion_retries_blobs_before_removing_metadata() {
+        struct RetryBackend {
+            inner: media_store::LocalMediaBackend,
+            fail: std::sync::atomic::AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl media_store::MediaBackend for RetryBackend {
+            async fn save_upload(
+                &self,
+                key: &str,
+                mime: &str,
+                bytes: &Bytes,
+            ) -> Result<media_store::MediaSaved> {
+                media_store::MediaBackend::save_upload(&self.inner, key, mime, bytes).await
+            }
+            async fn load(&self, key: &str, range: Option<(u64, u64)>) -> Result<axum::body::Body> {
+                media_store::MediaBackend::load(&self.inner, key, range).await
+            }
+            async fn delete(&self, key: &str) -> Result<()> {
+                if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                    anyhow::bail!("simulated storage outage");
+                }
+                media_store::MediaBackend::delete(&self.inner, key).await
+            }
+            async fn health_check(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let (mut state, dir) = test_state(test_cfg()).await;
+        let storage = dir.join("retry-media");
+        let backend = Arc::new(RetryBackend {
+            inner: media_store::LocalMediaBackend::new(storage.clone()),
+            fail: std::sync::atomic::AtomicBool::new(true),
+        });
+        state.media_backend = backend.clone();
+        state
+            .db
+            .create_user("alice", "test-user-token-123456")
+            .await
+            .unwrap();
+        let item = MediaItem {
+            id: "retry.bin".into(),
+            username: "alice".into(),
+            backend: "local".into(),
+            storage_key: "alice/retry.bin".into(),
+            media_type: "application/octet-stream".into(),
+            size: 3,
+            created_at_ms: now_ms(),
+        };
+        assert_eq!(
+            state.db.reserve_media_item(&item, 100).await.unwrap(),
+            MediaReservation::Reserved
+        );
+        media_store::MediaBackend::save_upload(
+            &*backend,
+            &item.storage_key,
+            &item.media_type,
+            &Bytes::from_static(b"abc"),
+        )
+        .await
+        .unwrap();
+        let headers = hmap(&[(
+            "Authorization",
+            &format!("Bearer {}", state.cfg.admin_token.as_deref().unwrap()),
+        )]);
+        let peer = ConnectInfo("127.0.0.1:12345".parse().unwrap());
+        let first = admin_delete_user(
+            State(state.clone()),
+            peer,
+            headers.clone(),
+            Path("alice".into()),
+        )
+        .await
+        .into_response();
+        assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+        assert!(state.db.user_exists("alice").await.unwrap());
+        assert!(!state.db.is_user_enabled("alice").await.unwrap());
+        assert_eq!(state.db.list_user_media("alice").await.unwrap().len(), 1);
+        backend
+            .fail
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let retry = admin_delete_user(State(state.clone()), peer, headers, Path("alice".into()))
+            .await
+            .into_response();
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert!(!state.db.user_exists("alice").await.unwrap());
+        assert!(!storage.join(&item.storage_key).exists());
+    }
+
+    #[test]
+    fn postgres_url_escapes_compose_credentials() {
+        let raw = postgres_url_from_parts("test@user", "pass:@/?#$ value", "db/name").unwrap();
+        let parsed: tokio_postgres::Config = raw.parse().unwrap();
+        assert_eq!(parsed.get_user(), Some("test@user"));
+        assert_eq!(parsed.get_password(), Some(b"pass:@/?#$ value".as_slice()));
+        assert_eq!(parsed.get_dbname(), Some("db/name"));
+    }
+
+    #[tokio::test]
+    async fn expired_upload_reservation_releases_quota_without_deleting_finished_media() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        state
+            .db
+            .create_user("alice", "test-user-token-123456")
+            .await
+            .unwrap();
+        for id in ["stale.bin", "finished.bin"] {
+            let item = MediaItem {
+                id: id.into(),
+                username: "alice".into(),
+                backend: "local".into(),
+                storage_key: format!("alice/{id}"),
+                media_type: "application/octet-stream".into(),
+                size: 3,
+                created_at_ms: 0,
+            };
+            assert_eq!(
+                state.db.reserve_media_item(&item, 100).await.unwrap(),
+                MediaReservation::Reserved
+            );
+            state
+                .media_backend
+                .save_upload(
+                    &item.storage_key,
+                    &item.media_type,
+                    &Bytes::from_static(b"abc"),
+                )
+                .await
+                .unwrap();
+            if id == "finished.bin" {
+                assert!(state.db.finish_media_upload(&item).await.unwrap());
+            }
+        }
+        cleanup_pending_media_uploads(&state, now_ms() - 900_000)
+            .await
+            .unwrap();
+        let rows = state.db.list_user_media("alice").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "finished.bin");
+        assert_eq!(rows[0].backend, "local");
+        assert_eq!(state.db.user_media_bytes("alice").await.unwrap(), 3);
+        assert!(state
+            .media_backend
+            .load("alice/stale.bin", None)
+            .await
+            .is_err());
+        assert!(state
+            .media_backend
+            .load("alice/finished.bin", None)
+            .await
+            .is_ok());
+    }
+
+    #[test]
+    fn deleting_user_removes_owned_metadata_and_preserves_other_signals() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "test-user-token-123456").unwrap();
+        let actor = "https://example.test/users/alice";
+        let conn = db.open_sqlite_conn().unwrap();
+        conn.execute("INSERT INTO user_cache(username,actor_json,updated_at_ms,actor_id,actor_url) VALUES ('alice','{}',0,?1,?1)",[actor]).unwrap();
+        conn.execute("INSERT INTO peer_directory(peer_id,username,actor_url,updated_at_ms) VALUES ('alice-peer','alice',?1,0)",[actor]).unwrap();
+        conn.execute_batch("INSERT INTO user_blocks VALUES ('alice','actor','blocked',0); INSERT INTO user_moves VALUES ('alice','https://new.example/users/alice',0); INSERT INTO relay_outbox_index VALUES ('alice',0,1);").unwrap();
+        conn.execute(
+            "INSERT INTO webrtc_signals VALUES ('owned','alice-peer',?1,'call','offer','{}',0)",
+            [actor],
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO webrtc_signals VALUES ('foreign','other-peer','https://else.example/users/bob','call','offer','{}',0)").unwrap();
+        conn.execute("INSERT INTO relay_notes(note_id,actor_id,content_text,content_html,note_json,created_at_ms) VALUES ('alice-note',?1,'text','text','{}',0)",[actor]).unwrap();
+        conn.execute_batch("INSERT INTO relay_note_tags VALUES ('alice-note','tag')")
+            .unwrap();
+        assert!(db.delete_user("alice").unwrap());
+        for table in [
+            "user_cache",
+            "peer_directory",
+            "user_blocks",
+            "user_moves",
+            "relay_outbox_index",
+            "relay_notes",
+            "relay_note_tags",
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{table}");
+        }
+        let signals: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM webrtc_signals WHERE signal_id='foreign'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(signals, 1);
+    }
+
+    pub(super) fn test_db() -> (Db, PathBuf) {
         let dir = temp_dir();
         let path = dir.join("relay.db");
         let db = Db {
@@ -12244,11 +9517,12 @@ mod tests {
             .unwrap();
         let limiter = Arc::new(RateLimiter::new(0, 600, None, "fedi3".to_string(), 1).await);
         let state = AppState {
+            shutdown: CancellationToken::new(),
             tunnels: Arc::new(RwLock::new(HashMap::new())),
             inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
             peer_hello: Arc::new(RwLock::new(HashMap::new())),
             cfg,
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(DbDispatch::new(db)),
             limiter,
             http,
             search: None,
@@ -12833,8 +10107,8 @@ mod tests {
         let cfg = test_cfg();
         let (state, _dir) = test_state(cfg).await;
         {
-            let mut db = state.db.lock().await;
-            db.create_user("alice", &"t".repeat(32)).unwrap();
+            let db = state.db.clone();
+            db.create_user("alice", &"t".repeat(32)).await.unwrap();
         }
         let (tx, _rx) = mpsc::channel::<TunnelRequest>(4);
         let inflight = Arc::new(RwLock::new(HashMap::new()));
@@ -12858,8 +10132,8 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
         assert!(inflight.read().await.is_empty());
-        let db = state.db.lock().await;
-        assert_eq!(db.list_spool("alice", 10).unwrap().len(), 1);
+        let db = state.db.clone();
+        assert_eq!(db.list_spool("alice", 10).await.unwrap().len(), 1);
     }
 
     #[test]

@@ -6,3 +6,11 @@ members = [
   "crates/fedi3_relay",
   "crates/fedi3_p2p_infra",
 ]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+# Required: the FFI boundary uses catch_unwind, so panics must unwind.
+panic = "unwind"

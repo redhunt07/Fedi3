@@ -1,20 +1,28 @@
 services:
   coturn:
-    image: instrumentisto/coturn:latest
+    image: instrumentisto/coturn:4.5.2
     restart: unless-stopped
     network_mode: host
-    env_file:
-      - ../../.env
+    mem_limit: 512m
+    environment:
+      - TURN_PORT=${TURN_PORT:-3478}
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_stunclient -p $$TURN_PORT 127.0.0.1 | grep -q 'UDP reflexive addr' "]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     command:
       - "-n"
       - "--log-file=stdout"
       - "--fingerprint"
       - "--no-cli"
-      - "--realm=${TURN_REALM:-relay.fedi3.com}"
+      - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
+      - "--external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP in .env}"
       - "--min-port=${TURN_MIN_PORT:-49152}"
       - "--max-port=${TURN_MAX_PORT:-65535}"
       - "--lt-cred-mech"
-      - "--user=${TURN_USER:-relay}:${TURN_PASS:-CHANGE_ME}"
+      - "--user=${TURN_USER:-relay}:${TURN_PASS:?set TURN_PASS in .env}"
       - "--no-tlsv1"
       - "--no-tlsv1_1"

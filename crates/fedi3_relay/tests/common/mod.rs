@@ -82,6 +82,7 @@ impl TestRelay {
         let child = cmd.spawn().expect("spawn fedi3_relay");
 
         let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(0)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(20))
             .build()
@@ -115,6 +116,38 @@ impl TestRelay {
             "relay did not become ready on port {}; stderr:\n{log}",
             self.port
         );
+    }
+
+    #[cfg(unix)]
+    pub fn signal_terminate(&self) {
+        assert!(Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .unwrap()
+            .success());
+    }
+    #[cfg(unix)]
+    pub async fn stop_gracefully(&mut self) {
+        self.signal_terminate();
+        self.wait_for_clean_exit().await;
+    }
+    #[cfg(unix)]
+    pub async fn wait_for_clean_exit(&mut self) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "relay did not shut down cleanly: {status}"
+                );
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "relay ignored SIGTERM"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     pub fn base_url(&self) -> String {

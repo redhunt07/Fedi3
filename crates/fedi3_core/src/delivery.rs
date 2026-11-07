@@ -235,7 +235,8 @@ impl Delivery {
                 .await
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
                 .unwrap_or_default();
-            return Err(anyhow!("delivery failed: {} {}", status, text));
+            return Err(anyhow::Error::new(RemoteDeliveryStatus(status.as_u16()))
+                .context(format!("remote delivery rejected: {text}")));
         }
         Ok(())
     }
@@ -274,7 +275,7 @@ impl Delivery {
         if (200..300).contains(&resp.status) || resp.status == 202 {
             return Ok(());
         }
-        Err(anyhow!("p2p delivery failed: status {}", resp.status))
+        Err(anyhow::Error::new(RemoteDeliveryStatus(resp.status)))
     }
 
     pub async fn deliver_json_webrtc(
@@ -305,7 +306,7 @@ impl Delivery {
         if (200..300).contains(&resp.status) || resp.status == 202 {
             return Ok(());
         }
-        Err(anyhow!("webrtc delivery failed: status {}", resp.status))
+        Err(anyhow::Error::new(RemoteDeliveryStatus(resp.status)))
     }
 
     pub async fn store_in_mailboxes(
@@ -342,9 +343,14 @@ impl Delivery {
                 body_b64: B64.encode(put_bytes),
             };
 
-            let resp = match handle.request(&t.peer_id, put_req).await {
-                Ok(r) => r,
-                Err(_) => continue,
+            let resp = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle.request(&t.peer_id, put_req),
+            )
+            .await
+            {
+                Ok(Ok(r)) => r,
+                _ => continue,
             };
             if (200..300).contains(&resp.status) || resp.status == 202 {
                 return Ok(());
@@ -365,14 +371,21 @@ impl Delivery {
         let Some(handle) = self.p2p.read().await.clone() else {
             return Ok(None);
         };
-        handle.kad_get_peer(peer_id).await
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle.kad_get_peer(peer_id),
+        )
+        .await
+        .map_err(|_| anyhow!("p2p peer discovery timeout"))?
     }
 
     pub async fn p2p_resolve_did(&self, did: &str) -> Result<Option<DidDiscoveryRecord>> {
         let Some(handle) = self.p2p.read().await.clone() else {
             return Ok(None);
         };
-        handle.kad_get_did(did).await
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.kad_get_did(did))
+            .await
+            .map_err(|_| anyhow!("p2p DID discovery timeout"))?
     }
 
     pub async fn p2p_request(
@@ -383,7 +396,12 @@ impl Delivery {
         let Some(handle) = self.p2p.read().await.clone() else {
             return Err(anyhow!("p2p not enabled"));
         };
-        handle.request(peer_id, req).await
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            handle.request(peer_id, req),
+        )
+        .await
+        .map_err(|_| anyhow!("p2p request timeout"))?
     }
 }
 
@@ -528,4 +546,32 @@ pub fn build_signed_post_relay_http_request(
         headers: headers_to_vec(&headers),
         body_b64: B64.encode(body),
     })
+}
+
+/// A remote HTTP/P2P status, kept separate from attacker-controlled body text.
+#[derive(Debug)]
+pub(crate) struct RemoteDeliveryStatus(pub u16);
+impl std::fmt::Display for RemoteDeliveryStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "remote delivery status {}", self.0)
+    }
+}
+impl std::error::Error for RemoteDeliveryStatus {}
+
+pub(crate) fn remote_failure_status(error: &anyhow::Error) -> Option<u16> {
+    error.chain().find_map(|source| {
+        source
+            .downcast_ref::<RemoteDeliveryStatus>()
+            .map(|s| s.0)
+            .or_else(|| {
+                source
+                    .downcast_ref::<reqwest::Error>()
+                    .and_then(|e| e.status())
+                    .map(|s| s.as_u16())
+            })
+    })
+}
+
+pub(crate) fn permanent_failure(error: &anyhow::Error) -> bool {
+    matches!(remote_failure_status(error), Some(404 | 410))
 }

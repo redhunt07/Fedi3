@@ -32,7 +32,7 @@ tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"
-libp2p = { version = "0.53", features = ["macros", "tokio", "tcp", "dns", "noise", "yamux", "mdns", "identify", "ping", "request-response", "quic", "kad", "relay", "dcutr", "gossipsub", "autonat", "websocket"] }
+libp2p = { version = "0.53", features = ["macros", "tokio", "tcp", "dns", "rsa", "noise", "yamux", "mdns", "identify", "ping", "request-response", "quic", "kad", "relay", "dcutr", "gossipsub", "autonat", "websocket"] }
 async-trait = "0.1"
 time = { version = "0.3", features = ["formatting"] }
 blurhash = "0.2"
@@ -42,3 +42,5 @@ webrtc = "0.12.0"
 hkdf = "0.12"
 pqcrypto-kyber = "0.7"
 pqcrypto-traits = "0.3"
+subtle = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

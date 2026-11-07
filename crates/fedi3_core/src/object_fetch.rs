@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-use crate::http_retry::send_with_retry;
 use crate::http_sig::sign_request_rsa_sha256;
 use crate::social_db::{ObjectFetchJob, SocialDb};
 use anyhow::Result;
@@ -179,7 +178,7 @@ pub struct SignedFetchConfig {
 }
 
 pub async fn fetch_one(
-    http: &reqwest::Client,
+    _http: &reqwest::Client,
     signed: &Option<SignedFetchConfig>,
     url: &str,
 ) -> Result<Option<(String, Vec<u8>, bool)>> {
@@ -188,38 +187,21 @@ pub async fn fetch_one(
     // H-03: object URLs are announced by remote peers.
     crate::net_policy::check_url_allowed(url).await?;
 
-    let resp = if let Some(s) = signed {
-        if let Ok(uri) = url.parse::<Uri>() {
-            let mut headers = HeaderMap::new();
-            headers.insert("Accept", accept.parse().expect("static header"));
-            if sign_request_rsa_sha256(
-                &s.private_key_pem,
-                &s.key_id,
-                &Method::GET,
-                &uri,
-                &mut headers,
-                &[],
-                &["(request-target)", "host", "date"],
-            )
-            .is_ok()
-            {
-                let mut req = http.get(url).header("Accept", accept);
-                for (k, v) in headers.iter() {
-                    req = req.header(k.as_str(), v.to_str().unwrap_or_default());
-                }
-                match send_with_retry(|| req.try_clone().unwrap(), 3).await {
-                    Ok(r) => r,
-                    Err(_) => send_with_retry(|| http.get(url).header("Accept", accept), 3).await?,
-                }
-            } else {
-                send_with_retry(|| http.get(url).header("Accept", accept), 3).await?
-            }
-        } else {
-            send_with_retry(|| http.get(url).header("Accept", accept), 3).await?
-        }
-    } else {
-        send_with_retry(|| http.get(url).header("Accept", accept), 3).await?
-    };
+    let mut headers = HeaderMap::new();
+    headers.insert("Accept", accept.parse().expect("static header"));
+    if let Some(s) = signed {
+        let uri: Uri = url.parse()?;
+        let _ = sign_request_rsa_sha256(
+            &s.private_key_pem,
+            &s.key_id,
+            &Method::GET,
+            &uri,
+            &mut headers,
+            &[],
+            &["(request-target)", "host", "date"],
+        );
+    }
+    let resp = crate::net_policy::get_checked(url, headers).await?;
     if !resp.status().is_success() {
         return Ok(None);
     }
@@ -235,9 +217,13 @@ pub async fn fetch_one(
         .and_then(|vv| vv.as_str())
         .unwrap_or(url)
         .to_string();
+    anyhow::ensure!(
+        crate::ap::same_origin(url, &id),
+        "fetched object identity origin mismatch"
+    );
     let ty = v.get("type").and_then(|vv| vv.as_str()).unwrap_or("");
     let is_tombstone = ty == "Tombstone";
-    Ok(Some((id, bytes.to_vec(), is_tombstone)))
+    Ok(Some((id, bytes, is_tombstone)))
 }
 
 fn extract_actor_id_from_object_json(bytes: &[u8]) -> Option<String> {
