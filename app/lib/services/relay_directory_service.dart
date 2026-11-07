@@ -55,7 +55,7 @@ class RelayDirectoryService {
   RelayDirectoryService._();
 
   /// Maximum time allowed to download the directory document.
-  static const Duration fetchTimeout = Duration(seconds: 10);
+  static const Duration fetchTimeout = Duration(seconds: 5);
 
   /// Maximum time allowed for a single latency probe.
   static const Duration probeTimeout = Duration(seconds: 4);

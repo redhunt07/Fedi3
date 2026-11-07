@@ -62,7 +62,9 @@ Rules enforced by `scripts/tests/test_relay_directory.py`:
    python3 scripts/tests/test_relay_directory.py
    ```
 
-5. Open a pull request titled `relay: add <hostname>` and include the relay
+5. Copy the updated file to `app/assets/relays.json` (the client bundles it as
+   an offline fallback; CI checks that the two copies match).
+6. Open a pull request titled `relay: add <hostname>` and include the relay
    URL, the operator and a contact where users can request a relay token.
 
 The relay token itself is **not** stored in this list: each relay issues tokens

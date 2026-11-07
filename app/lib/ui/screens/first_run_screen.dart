@@ -49,36 +49,24 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
       _previewError = null;
     });
     try {
-      RelayDirectorySnapshot? snapshot;
+      // Show the local copy immediately (cache or bundled asset), then refresh
+      // from the network so a slow or offline GitHub does not block the screen.
+      var snapshot = await RelayDirectoryService.cached() ??
+          await RelayDirectoryService.bundled();
       Object? fetchError;
+      if (snapshot != null) {
+        await _applySnapshot(snapshot);
+      }
       try {
         snapshot = await RelayDirectoryService.fetch();
       } catch (e) {
         fetchError = e;
-        snapshot = await RelayDirectoryService.cached() ??
-            await RelayDirectoryService.bundled();
       }
-      if (snapshot == null) {
+      if (snapshot != null) {
+        await _applySnapshot(snapshot);
+      } else if (_relayLatencies.isEmpty) {
         throw fetchError ?? StateError('relay directory unavailable');
       }
-      final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
-      final peers = <String>[];
-      RelayLatency? fastest;
-      for (final latency in latencies) {
-        if (latency.reachable) {
-          fastest = latency;
-          break;
-        }
-      }
-      if (fastest != null) {
-        peers.addAll(await _fetchPeers(fastest.entry.url));
-      }
-      if (!mounted) return;
-      setState(() {
-        _relayLatencies = latencies;
-        _peerPreview = peers.take(5).toList(growable: false);
-        _measuredAt = DateTime.now();
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _previewError = e.toString());
@@ -87,6 +75,27 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
         setState(() => _loadingPreview = false);
       }
     }
+  }
+
+  Future<void> _applySnapshot(RelayDirectorySnapshot snapshot) async {
+    final latencies = await RelayDirectoryService.probeAll(snapshot.entries);
+    final peers = <String>[];
+    RelayLatency? fastest;
+    for (final latency in latencies) {
+      if (latency.reachable) {
+        fastest = latency;
+        break;
+      }
+    }
+    if (fastest != null) {
+      peers.addAll(await _fetchPeers(fastest.entry.url));
+    }
+    if (!mounted) return;
+    setState(() {
+      _relayLatencies = latencies;
+      _peerPreview = peers.take(5).toList(growable: false);
+      _measuredAt = DateTime.now();
+    });
   }
 
   Future<List<String>> _fetchPeers(String base) async {
@@ -264,7 +273,7 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
             const SizedBox(height: 2),
             Text(context.l10n.relayDirectoryHint,
                 style: TextStyle(color: muted, fontSize: 12)),
-            if (_loadingPreview)
+            if (_loadingPreview && _relayLatencies.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Row(children: [
@@ -284,7 +293,7 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
                   compact: true,
                 ),
               ),
-            if (_previewError == null && !_loadingPreview) ...[
+            if (_previewError == null) ...[
               const SizedBox(height: 8),
               if (_relayLatencies.isEmpty)
                 Text(context.l10n.relayDirectoryEmpty,
