@@ -13,6 +13,7 @@ counterpart under [`it/`](it/README.md). Historical audit reports are kept under
 
 ## Deployment and operations
 
+- [Server installation, Debian and Arch](deploy_server.md)
 - [Relay deployment](deploy_relay.md)
 - [VPS deployment](deploy_vps.md)
 - [Local core and P2P mode](deploy_core.md)

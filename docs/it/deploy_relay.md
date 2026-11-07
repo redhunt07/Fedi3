@@ -1,3 +1,7 @@
+> Per un'installazione automatica su Debian/Ubuntu o derivate Arch, vedi
+> [installazione del server](deploy_server.md). Questa guida descrive la
+> configurazione manuale del relay.
+
 # Deploy relay (plug & play)
 
 ## 1) Config
@@ -5,6 +9,11 @@
 ```bash
 cp .env.example .env
 ```
+
+Il template imposta `COMPOSE_PROFILES=relay,p2p` (stack completo). Per una
+installazione solo relay rimuovi `p2p`; aggiungi `turn` e/o `search` solo se
+servono coturn o Meilisearch. `scripts/install_server.sh` scrive questo valore
+automaticamente.
 
 Compila i campi essenziali:
 
@@ -17,7 +26,7 @@ Compila i campi essenziali:
   `FEDI3_RELAY_PG_DB`, con escaping dei caratteri speciali. Un URL completo è
   un override avanzato per database esterni; non duplicare la password nel template.
 - Media backend (S3/WebDAV o local).
-- `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (IP pubblico) — obbligatorie per coturn.
+- `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (IP pubblico) — necessarie per coturn. TURN parte solo quando `turn` è aggiunto a `COMPOSE_PROFILES`.
   Il container TURN riceve soltanto il proprio parametro di porta nell’ambiente,
   non le credenziali del DB o del relay; le credenziali TURN sono passate al servizio.
   Healthcheck STUN e limite memoria sono presenti anche nel compose standalone.

@@ -4,6 +4,15 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-07 — One-command server installer
+
+A new installer sets up a Fedi3 server on Debian/Ubuntu derivatives and Arch
+derivatives. It offers three modes: relay + P2P infrastructure, relay only, or
+P2P only, with optional TURN and Meilisearch. The script installs Docker,
+checks DNS/ports, writes `.env` and `relay-secrets.txt` with random secrets,
+selects the Compose profile, starts the stack and verifies the health checks.
+See `docs/deploy_server.md`.
+
 ## 2026-11-07 — Relay directory and latency ranking
 
 Relay discovery no longer depends on a single bootstrap relay:

@@ -4,6 +4,15 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-07 — Installer del server con un comando
+
+Un nuovo installer configura un server Fedi3 su derivate Debian/Ubuntu e Arch.
+Offre tre modalità: relay + infrastruttura P2P, solo relay oppure solo P2P, con
+TURN e Meilisearch opzionali. Lo script installa Docker, controlla DNS e porte,
+scrive `.env` e `relay-secrets.txt` con segreti casuali, seleziona il profilo
+Compose, avvia lo stack e verifica gli health check. Vedi
+`docs/it/deploy_server.md`.
+
 ## 2026-11-07 — Directory relay e classifica per latenza
 
 La scoperta dei relay non dipende più da un singolo relay di bootstrap:
