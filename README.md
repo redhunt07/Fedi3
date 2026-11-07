@@ -42,7 +42,7 @@ flutter analyze
 flutter test
 
 # Configurazione di piattaforma (manifest Android, entitlements macOS, Info.plist iOS)
-scripts/verify_platform_config.sh
+bash scripts/verify_platform_config.sh
 ```
 
 Nessun test richiede Docker o servizi esterni: il relay viene testato su SQLite e i peer remoti sono server HTTP in-process.

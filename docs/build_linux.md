@@ -10,7 +10,7 @@ Su Arch/EndeavourOS:
 sudo pacman -Syu --needed \
   base-devel git curl unzip xz zip \
   clang cmake ninja pkgconf \
-  gtk3 gsettings-desktop-schemas \
+  gtk3 gsettings-desktop-schemas libsecret jsoncpp \
   libxkbcommon libxss libxrandr libxcursor libxinerama libxi \
   mesa libglvnd \
   pango cairo gdk-pixbuf2 glib2 \
@@ -24,8 +24,12 @@ Su Debian/Ubuntu:
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-  libmpv-dev libasound2-dev libpulse-dev curl unzip xz-utils
+  libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev curl unzip xz-utils
 ```
+
+Il salvataggio delle credenziali richiede anche un Secret Service nella sessione
+utente (GNOME Keyring o KWallet), sbloccato. Se non è disponibile, l’app mostra
+la schermata di recupero con **Riprova** e conserva il profilo esistente.
 
 ## Toolchain
 

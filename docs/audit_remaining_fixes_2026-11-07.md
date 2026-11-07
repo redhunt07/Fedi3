@@ -71,8 +71,37 @@ pulizia e consistenza restavano aperti.
 
 ## Evidenze e distribuzione
 
-Gli esiti di CI remota e distribuzione vengono registrati dopo la verifica
-sulla versione finale. I log locali sono in `/home/morpheus/Documenti/` con
+Il codice del commit `90378fff16ab49c4e34026c8f054e9f64e78b5bd` è passato
+su [GitHub Actions, run 175](https://github.com/redhunt07/Fedi3/actions/runs/42355489694):
+otto job verdi (Rust fmt/Clippy/test, Flutter analyze/test, piattaforme,
+script/deploy e PostgreSQL). Il job AppImage, riservato ai tag, è escluso dalla
+PR; l'AppImage è stata compilata e verificata localmente.
+
+[PR #93](https://github.com/redhunt07/Fedi3/pull/93) aperta in bozza, senza merge
+su main. La documentazione operativa e questo resoconto sono completati dopo
+la verifica del codice e la distribuzione.
+
+- Suite workspace: **269 test Rust passati**, zero falliti; due test opzionali
+  ignorati (IPFS pubblico e PostgreSQL isolato). Quest'ultimo è stato eseguito
+  separatamente con successo, per **270 regressioni Rust distinte**.
+- Flutter: **139 test passati**; analyze con fatal infos e formattazione puliti.
+- Clippy con `-D warnings`, ShellCheck, configurazioni piattaforma,
+  backup/restore simulati e contratti Compose/OpenAPI superati.
+- Candidato Docker su PostgreSQL isolato: URL composto da componenti con
+  password speciale, otto upload concorrenti (uno ammesso e sette 413 con quota
+  di 32 byte) ed eliminazione account/blob verificati.
+- Installato sul client Linux e sui container relay, p2p_infra e TURN del VPS:
+  tutti healthy, zero riavvii automatici, health/readiness 200. Trentasei
+  richieste stats concorrenti sul DB PostgreSQL di produzione: tutte 200.
+- Tunnel pubblico connesso; attore Alice risponde con la chiave locale corretta.
+  Chiavi RSA/libp2p e identità dell'infrastruttura preservate; nessun panic nel
+  log del client aggiornato. Config e `.bak` contengono riferimenti al keyring.
+- La produzione usa ora PG_USER/PG_PASSWORD/PG_DB con DB_URL vuoto, dopo avere
+  trasferito le stesse credenziali funzionanti dall'override precedente.
+  Indirizzi pubblici e limiti P2P conservati. TURN non contiene più segreti del
+  DB o token admin nell'ambiente.
+
+ I log locali sono in `/home/morpheus/Documenti/` con
 prefisso `fedi3-residual-`. Il test PostgreSQL aggiuntivo usa un container
 PostgreSQL 16 isolato, rimosso insieme al forward SSH dopo la prova; non usa
 il database di produzione.
@@ -80,3 +109,24 @@ il database di produzione.
 Non sono state eseguite chiamate audio/video con Peppenamir. Le verifiche sui
 trasporti, sui servizi e sulla coda non sostituiscono una prova audio/video fra
 quei due PC. La rimozione dei vecchi file non riscrive la storia Git.
+
+
+## Ripristino e artefatti
+
+VPS: `/home/rocky/fedi3-backups/audit-residual-20261107/` (0700), dump PostgreSQL
+verificato con pg_restore, Compose/dotenv e sorgenti precedenti, manifest e
+risultati del candidato. Immagini precedenti conservate con tag
+`before-residual-20261107`; rollback automatico previsto se le verifiche falliscono.
+
+Client: backup consistente SQLite/profilo/preferenze cifrato in
+`/home/morpheus/.cache/fedi3-audit/alice-before-residual-20261107.aesgcm`, chiave
+nel keyring con attributi `application=fedi3`, `backup=fedi3-residual-20261107`.
+AppDir precedente in `client-before-residual.AppDir` nella stessa directory
+protetta. Nessun reset del profilo o cancellazione delle dead-letter storiche.
+
+| Artefatto installato | SHA256 |
+| --- | --- |
+| fedi3_relay | `cfe69f7cb217b3e2c275ba9ae5e5318f463463b63d7d06a943f8ca631606dc2f` |
+| fedi3_p2p_infra | `8c574a609db5f9700df6965cb619adfe8dce8649ef9f22e8941718f6da0c3d63` |
+| Core Linux | `cf0e789177e381ce1d565371ff60809677e0c24a0d94e6195184afd9e58044e7` |
+| AppImage Linux | `6e8e2921ad62066653d80713961a8d500737bc36d9d27d0c09041d8ff4709249` |
