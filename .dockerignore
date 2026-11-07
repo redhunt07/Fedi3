@@ -8,6 +8,11 @@
 .env
 .env.*
 backups/
+tools/
+dist/
+AppDir/
+*.AppImage
+deploy/p2p_infra/data/
 app/windows/
 app/linux/
 app/macos/

@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Hardening — 2026-11-07
+
+Security:
+- Relay inbox binds the declared sender to the verified actor; forged `actor` and `object.id` are rejected.
+- Outbound federation fetches re-validate every redirect, strip authorization/signature headers on cross-origin hops and stream bodies with hard caps.
+- P2P frames are length-capped (4 MiB) before allocation; mailbox writes use `INSERT OR IGNORE` so a peer cannot overwrite another sender's message.
+- Tunnel tokens travel in `Authorization` and no longer appear in logged URLs; `X-Forwarded-For` is trusted only from the authenticated relay tunnel.
+- Chat edit/delete and receipts are bound to the thread and the original author; device signatures require target, host, date and digest.
+- Media quota reservations are atomic (SQLite `IMMEDIATE`, PostgreSQL row lock) and account deletion removes blobs before metadata.
+- Sensitive client settings live in the OS keyring; exports use encrypted backup v2 (AES-256-GCM, PBKDF2-SHA256 600k, AAD) with a recovery screen when the keyring is unavailable.
+
+Reliability:
+- Relay database access moved to `db.rs` with a bounded async `DbDispatch` (no global mutex); readiness uses a separate probe and timeout.
+- Relay media is streamed with `Range`/`ETag`/`206`/`304`; graceful `SIGTERM` drains tunnels and in-flight requests.
+- `markCoreDead` stops the core on a separate isolate, so the UI no longer freezes; startup waits for the cleanup future.
+- Chat drafts survive send failures; stale search responses are discarded; translation and chat-status caches are bounded.
+- Legacy sync caps actor/collection/page fetches before parsing; dead-letter classification uses typed HTTP/P2P status instead of string matching.
+- CI adds ShellCheck, backup/deploy contract tests and an ephemeral PostgreSQL quota job.
+
+Repository:
+- Documentation is English-first, with Italian counterparts under `docs/it/`; README, CONTRIBUTING, SECURITY and templates were revised.
+- Removed unused libp2p mesh prototypes (`relay_mesh.rs`, `relay_notes.rs`), `nat.rs`, the unused P2P entrypoint and the stale `docs/linux error` file.
+- Runtime P2P identity/mailbox files and generated `AppDir` files are no longer tracked.
+
 ### Added
 - Identity anchor (`anchor_actor_url`): the canonical actor id/key can live on a static domain while inbox/outbox stay on the relay; the relay redirects to the anchor and WebFinger resolves to it. Anchor documents are exported to `<data_dir>/anchor/` and `GET /_fedi3/anchor`.
 - Blind spool: the relay encrypts pending activities with the user's public key (AES-256-GCM + RSA-OAEP) and forwards ciphertext envelopes to `POST /_fedi3/spool/envelope`, where the core decrypts and verifies the original signature.

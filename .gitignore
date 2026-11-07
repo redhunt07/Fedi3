@@ -55,3 +55,7 @@ backups/
 
 # Relay media store (default path when the relay runs from the repo root)
 fedi3_relay_media/
+
+# P2P infra runtime data (identity and mailbox are generated per deployment)
+deploy/p2p_infra/data/*
+!deploy/p2p_infra/data/.gitkeep

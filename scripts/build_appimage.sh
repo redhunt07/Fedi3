@@ -28,7 +28,13 @@ if [[ ! -x "$repo_root/scripts/build_core.sh" ]]; then
   exit 1
 fi
 
-"$repo_root/scripts/build_core.sh" "$profile"
+prebuilt_core="${FEDI3_CORE_PREBUILT:-}"
+if [[ -n "$prebuilt_core" ]]; then
+  [[ -f "$prebuilt_core" ]] || { echo "Missing prebuilt core: $prebuilt_core"; exit 1; }
+  cp -f "$prebuilt_core" "$app_dir/libfedi3_core.so"
+else
+  "$repo_root/scripts/build_core.sh" "$profile"
+fi
 
 (cd "$app_dir" && flutter build linux --"$profile")
 
@@ -42,7 +48,9 @@ mkdir -p "$appdir/usr"
 cp -a "$bundle_dir/." "$appdir/usr/"
 
 mkdir -p "$appdir/usr/lib"
-if [[ -f "$repo_root/target/$profile/libfedi3_core.so" ]]; then
+if [[ -n "$prebuilt_core" ]]; then
+  cp -f "$prebuilt_core" "$appdir/usr/lib/libfedi3_core.so"
+elif [[ -f "$repo_root/target/$profile/libfedi3_core.so" ]]; then
   cp -f "$repo_root/target/$profile/libfedi3_core.so" "$appdir/usr/lib/libfedi3_core.so"
 elif [[ -f "$app_dir/libfedi3_core.so" ]]; then
   cp -f "$app_dir/libfedi3_core.so" "$appdir/usr/lib/libfedi3_core.so"
@@ -83,6 +91,10 @@ export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
 export LIBGL_DRI3_DISABLE="${LIBGL_DRI3_DISABLE:-1}"
 export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-llvmpipe}"
+export GTK_MODULES="${GTK_MODULES:-}"
+export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
+export GTK_IM_MODULE="${GTK_IM_MODULE:-gtk-im-context-simple}"
+export GIO_USE_VFS="${GIO_USE_VFS:-local}"
 args=()
 if [[ "${FEDI3_SOFTWARE_RENDERING:-1}" == "1" ]]; then
   args+=(--enable-software-rendering)
@@ -112,7 +124,7 @@ resolve_lib_path() {
 
 skip_lib() {
   case "$1" in
-    libEGL.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libdrm.so.*|libwayland-client.so.*|libwayland-egl.so.*|libxshmfence.so.*)
+    libEGL.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libdrm.so.*|libwayland-client.so.*|libwayland-egl.so.*|libxshmfence.so.*|libstdc++.so.*|libgcc_s.so.*|libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*|libgmodule-2.0.so.*)
       return 0
       ;;
   esac
@@ -129,7 +141,7 @@ bundle_all_deps() {
       while read -r name path; do
         [[ -z "$name" ]] && continue
         case "$name" in
-          ld-linux*|libc.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libgcc_s.so.*) continue ;;
+          ld-linux*|libc.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libgcc_s.so.*|libstdc++.so.*|libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*|libgmodule-2.0.so.*) continue ;;
         esac
         if skip_lib "$name"; then
           continue
@@ -188,5 +200,9 @@ if [[ ! -x "$appimagetool_bin" ]] || head -n 1 "$appimagetool_bin" | grep -qi "n
 fi
 
 mkdir -p "$repo_root/dist"
-APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool_bin" "$appdir" "$appimage_out"
+# Replace atomically: the previous AppImage may still be running.
+appimage_tmp="${appimage_out}.tmp.$$"
+trap 'rm -f "$appimage_tmp"' EXIT
+APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool_bin" "$appdir" "$appimage_tmp"
+mv -f "$appimage_tmp" "$appimage_out"
 echo "AppImage created: $appimage_out"

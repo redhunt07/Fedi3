@@ -1,75 +1,75 @@
-# Interoperabilità reale: Fedi3 ↔ Mastodon ↔ Misskey
+# Real interoperability: Fedi3 ↔ Mastodon ↔ Misskey
 
-Questo documento descrive il test di interoperabilità eseguito contro due implementazioni
-ActivityPub reali e indipendenti: **Mastodon 4.7.4** e **Misskey 2026.10.1**. Lo scopo è
-verificare che un'identità Fedi3 con ancoraggio (`anchor_actor_url`) possa essere seguita,
-verificata e scambiare attività con software federato di terze parti, sia in ingresso sia in
-uscita.
+This document describes the interoperability test performed against two real and independent
+ActivityPub implementations: **Mastodon 4.7.4** and **Misskey 2026.10.1**. The goal is
+to verify that a Fedi3 identity with an anchor (`anchor_actor_url`) can be followed,
+verified and exchange activities with third-party federated software, both inbound and
+outbound.
 
-> Esito: **test superato in entrambe le direzioni** con entrambe le implementazioni.
-> Il test ha inoltre individuato un bug reale nella firma HTTP in uscita, corretto in
+> Result: **test passed in both directions** with both implementations.
+> The test also found a real bug in the outbound HTTP signature, fixed in
 > `crates/fedi3_core/src/delivery.rs`.
 
-## Topologia usata
+## Topology used
 
-Nessun Docker: i servizi sono stati eseguiti nativamente su Arch Linux con PostgreSQL 18 e
-Redis/Valkey locali.
+No Docker: the services were run natively on Arch Linux with PostgreSQL 18 and
+local Redis/Valkey.
 
-| Host | Ruolo | Porta interna |
+| Host | Role | Internal port |
 |------|-------|---------------|
-| `https://fedi3.test` | identità Fedi3 ancorata + relay AP | core 8788 (actor, webfinger), relay 8787 (inbox, outbox, tunnel) |
-| `https://misskey.test` | istanza Misskey reale | 3000 |
-| `https://mastodon.test` | istanza Mastodon reale | 3001 (web) + Sidekiq |
+| `https://fedi3.test` | anchored Fedi3 identity + AP relay | core 8788 (actor, webfinger), relay 8787 (inbox, outbox, tunnel) |
+| `https://misskey.test` | real Misskey instance | 3000 |
+| `https://mastodon.test` | real Mastodon instance | 3001 (web) + Sidekiq |
 
-Nginx fa da reverse proxy TLS per tutti e tre gli host e instrada `fedi3.test` in modo che:
+Nginx acts as a TLS reverse proxy for all three hosts and routes `fedi3.test` so that:
 
-- `/.well-known/webfinger` e `GET /users/alice` siano serviti dal core (documento attore ancorato);
-- tutto il resto (`/users/alice/inbox`, `/users/alice/outbox`, `/_fedi3/tunnel`, …) sia servito dal relay.
+- `/.well-known/webfinger` and `GET /users/alice` are served by the core (anchored actor document);
+- everything else (`/users/alice/inbox`, `/users/alice/outbox`, `/_fedi3/tunnel`, …) is served by the relay.
 
-Questo è il punto architetturale importante emerso dal test: **Misskey rifiuta un attore il cui
-`inbox` non è sullo stesso host dell'`id`** (`invalid Actor: inbox has different host`). In
-produzione l'host di ancoraggio deve quindi fare da proxy verso il relay per gli endpoint AP,
-oppure relay e anchor devono condividere lo stesso hostname. Un anchor statico su un dominio
-diverso dal relay non è compatibile con Misskey.
+This is the important architectural point that emerged from the test: **Misskey rejects an actor whose
+`inbox` is not on the same host as the `id`** (`invalid Actor: inbox has different host`). In
+production the anchor host must therefore proxy to the relay for the AP endpoints,
+or relay and anchor must share the same hostname. A static anchor on a domain
+different from the relay is not compatible with Misskey.
 
-## Perché serve TLS
+## Why TLS is needed
 
-Mastodon costruisce l'URL WebFinger come `https://<domain>/.well-known/webfinger` (unica
-eccezione: i domini `.onion`). Per il test locale è stata quindi generata una CA locale,
-installata nel trust store di sistema (`/etc/ca-certificates/trust-source/anchors/` +
-`update-ca-trust`), e un certificato con SAN per `fedi3.test`, `misskey.test`, `mastodon.test`.
-Il core e il relay usano `rustls-tls-native-roots`, così rispettano il trust store di sistema
-(necessario per CA interne/enterprise; in produzione si usano normali CA pubbliche).
+Mastodon builds the WebFinger URL as `https://<domain>/.well-known/webfinger` (only
+exception: `.onion` domains). For the local test a local CA was therefore generated,
+installed in the system trust store (`/etc/ca-certificates/trust-source/anchors/` +
+`update-ca-trust`), and a certificate with SAN for `fedi3.test`, `misskey.test`, `mastodon.test`.
+The core and the relay use `rustls-tls-native-roots`, so they respect the system trust store
+(necessary for internal/enterprise CAs; in production normal public CAs are used).
 
-Per far accettare i certificati locali ai runtime:
+To make the local certificates accepted by the runtimes:
 
 - Node/Misskey: `NODE_EXTRA_CA_CERTS=/path/ca.crt`;
-- Ruby/Mastodon: trust store di sistema aggiornato;
-- Mastodon: `ALLOWED_PRIVATE_ADDRESSES=127.0.0.0/8,::1/128` per consentire la risoluzione di
-  host loopback;
+- Ruby/Mastodon: updated system trust store;
+- Mastodon: `ALLOWED_PRIVATE_ADDRESSES=127.0.0.0/8,::1/128` to allow resolution of
+  loopback hosts;
 - Misskey: `allowedPrivateNetworks: ['127.0.0.1/32', '::1/128']`.
 
-## Preparazione delle istanze
+## Instance preparation
 
 ### Misskey
 
 ```bash
-# PostgreSQL e Redis locali (porte 5433 e 6380 nel test)
+# Local PostgreSQL and Redis (ports 5433 and 6380 in the test)
 psql -c "CREATE USER misskey WITH PASSWORD 'misskey';" -c "CREATE DATABASE misskey OWNER misskey;"
 
-# build da sorgente (pnpm) e migrazioni
+# build from source (pnpm) and migrations
 pnpm install --frozen-lockfile
 pnpm build
 pnpm migrate
 
-# .config/default.yml: url https://misskey.test/, db su 127.0.0.1:5433, redis su 127.0.0.1:6380
+# .config/default.yml: url https://misskey.test/, db on 127.0.0.1:5433, redis on 127.0.0.1:6380
 NODE_EXTRA_CA_CERTS=/path/ca.crt pnpm start
 ```
 
-Alla prima installazione Misskey disabilita la registrazione (`disableRegistration: true`) e
-richiede un primo utente amministratore: nel test è stato abilitato via DB
-(`UPDATE meta SET "disableRegistration" = false; UPDATE meta SET federation = 'all';`) e
-l'utente è stato creato con `POST /api/signup` (la risposta contiene già un token).
+On first installation Misskey disables registration (`disableRegistration: true`) and
+requires a first administrator user: in the test it was enabled via DB
+(`UPDATE meta SET "disableRegistration" = false; UPDATE meta SET federation = 'all';`) and
+the user was created with `POST /api/signup` (the response already contains a token).
 
 ### Mastodon
 
@@ -86,9 +86,9 @@ RAILS_ENV=production bundle exec sidekiq
 ```
 
 In `.env.production`: `LOCAL_DOMAIN=mastodon.test`, `WEB_DOMAIN=mastodon.test`,
-`LOCAL_HTTPS=true`, `ALLOWED_PRIVATE_ADDRESSES=127.0.0.0/8,::1/128`, più
-`SECRET_KEY_BASE`, `OTP_SECRET`, chiavi `ACTIVE_RECORD_ENCRYPTION_*` e `VAPID_*`.
-L'account va approvato (`account.user.approve!`) prima di poter seguire account remoti.
+`LOCAL_HTTPS=true`, `ALLOWED_PRIVATE_ADDRESSES=127.0.0.0/8,::1/128`, plus
+`SECRET_KEY_BASE`, `OTP_SECRET`, `ACTIVE_RECORD_ENCRYPTION_*` and `VAPID_*` keys.
+The account must be approved (`account.user.approve!`) before it can follow remote accounts.
 
 ### Fedi3
 
@@ -100,15 +100,15 @@ FEDI3_RELAY_BASE_DOMAIN=fedi3.test \
 FEDI3_RELAY_ALLOW_SELF_REGISTER=true \
 FEDI3_RELAY_ALLOW_PRIVATE_ACTOR_FETCH=true \
 FEDI3_ALLOW_PRIVATE_REMOTE_FETCH=true \
-FEDI3_RELAY_ADMIN_TOKEN=<token 32+ caratteri> \
+FEDI3_RELAY_ADMIN_TOKEN=<token 32+ characters> \
 ./target/debug/fedi3_relay
 
-# registrazione utente
+# user registration
 curl -X POST http://127.0.0.1:8787/register \
   -H 'Content-Type: application/json' \
   -d '{"username":"alice","token":"alice-token-0123456789abcdef"}'
 
-# core con identità ancorata
+# core with anchored identity
 XDG_DATA_HOME=/tmp/fedi3/data \
 FEDI3_USER=alice FEDI3_DOMAIN=fedi3.test \
 FEDI3_BASE_URL=https://fedi3.test \
@@ -120,142 +120,142 @@ FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true \
 ./target/debug/dev_client
 ```
 
-## Verifiche eseguite
+## Checks performed
 
-1. **Risoluzione dell'identità Fedi3 da Misskey**: `POST /api/ap/show` con
-   `https://fedi3.test/users/alice` → utente `alice@fedi3.test` creato correttamente.
-2. **Follow Misskey → Fedi3**: `POST /api/following/create` → il core accetta e consegna
-   `Accept`; `GET /users/alice/followers` riporta `totalItems: 1` (poi `2` con Mastodon).
-3. **Nota Fedi3 → Misskey**: `Create` pubblicata dal core, consegnata e firmata; la nota
-   compare nella timeline di Misskey come `alice@fedi3.test`.
-4. **Nota Misskey → Fedi3**: dopo che alice segue l'utente Misskey, una nota pubblica viene
-   consegnata all'inbox Fedi3, verificata (202) e salvata in `objects`; compare nella home
-   timeline Fedi3.
-5. **Follow Mastodon → Fedi3**: risoluzione via WebFinger `https`, follow accettato
-   (`following: true`), `Accept` consegnato e verificato da Mastodon.
-6. **Nota Fedi3 → Mastodon**: `Create` consegnata all'inbox Mastodon, firma verificata,
-   visibile nella home timeline Mastodon come `alice@fedi3.test`.
-7. **Nota Mastodon → Fedi3**: nota con menzione consegnata all'inbox Fedi3, verificata (202) e
-   salvata in `objects`.
-8. **Moderazione e spool** non sono stati ri-testati in questa sessione: coperti dagli e2e
-   esistenti (`e2e_anchor_spool`, `mesh_moderation`).
+1. **Resolution of the Fedi3 identity from Misskey**: `POST /api/ap/show` with
+   `https://fedi3.test/users/alice` → user `alice@fedi3.test` created correctly.
+2. **Misskey → Fedi3 follow**: `POST /api/following/create` → the core accepts and delivers
+   `Accept`; `GET /users/alice/followers` reports `totalItems: 1` (then `2` with Mastodon).
+3. **Fedi3 → Misskey note**: `Create` published by the core, delivered and signed; the note
+   appears in the Misskey timeline as `alice@fedi3.test`.
+4. **Misskey → Fedi3 note**: after alice follows the Misskey user, a public note is
+   delivered to the Fedi3 inbox, verified (202) and saved in `objects`; it appears in the Fedi3 home
+   timeline.
+5. **Mastodon → Fedi3 follow**: resolution via `https` WebFinger, follow accepted
+   (`following: true`), `Accept` delivered and verified by Mastodon.
+6. **Fedi3 → Mastodon note**: `Create` delivered to the Mastodon inbox, signature verified,
+   visible in the Mastodon home timeline as `alice@fedi3.test`.
+7. **Mastodon → Fedi3 note**: note with mention delivered to the Fedi3 inbox, verified (202) and
+   saved in `objects`.
+8. **Moderation and spool** were not re-tested in this session: covered by the existing
+   e2e tests (`e2e_anchor_spool`, `mesh_moderation`).
 
-## Bug trovato e corretto
+## Bug found and fixed
 
-Durante il primo follow da Mastodon, l'`Accept` veniva rifiutato con:
+During the first follow from Mastodon, the `Accept` was rejected with:
 
 ```
 401 Unauthorized {"error":"Verification failed for alice@fedi3.test
 https://fedi3.test/users/alice https://fedi3.test/users/alice#main-key"}
 ```
 
-Causa: `Delivery::deliver_json` inseriva `Content-Type` nell'`HeaderMap` firmata e poi lo
-aggiungeva una seconda volta alla richiesta reqwest. Il server riceveva due header
-`Content-Type`, che Rack unisce in un unico valore
-(`application/activity+json, application/activity+json`), diverso da quello firmato; la firma
-risultava quindi invalida. La firma era matematicamente corretta: verificata offline con la
-chiave pubblica dell'attore, ma il valore dell'header ricevuto era diverso.
+Cause: `Delivery::deliver_json` inserted `Content-Type` into the signed `HeaderMap` and then
+added it a second time to the reqwest request. The server received two
+`Content-Type` headers, which Rack merges into a single value
+(`application/activity+json, application/activity+json`), different from the signed one; the signature
+was therefore invalid. The signature was mathematically correct: verified offline with the actor's
+public key, but the value of the received header was different.
 
-Fix: rimossa l'aggiunta duplicata in `crates/fedi3_core/src/delivery.rs`; il `Content-Type`
-viene inviato una sola volta, dal set di header firmati. Dopo il fix Mastodon accetta sia
-`Accept` sia le note in uscita.
+Fix: removed the duplicated addition in `crates/fedi3_core/src/delivery.rs`; the `Content-Type`
+is sent only once, from the signed header set. After the fix Mastodon accepts both
+`Accept` and outbound notes.
 
-Il fix è coperto indirettamente dai test di consegna esistenti; non è stato aggiunto un test
-automatico contro un server reale perché richiederebbe Mastodon/Misskey in CI. Il test manuale
-è documentato qui ed è riproducibile con i passi sopra.
+The fix is covered indirectly by the existing delivery tests; no automatic test against a real
+server was added because it would require Mastodon/Misskey in CI. The manual test
+is documented here and is reproducible with the steps above.
 
 
-## Proxy degli endpoint AP: identità separata dal relay
+## AP endpoint proxy: identity separated from the relay
 
-Il limite "Misskey rifiuta un attore con `inbox` su un host diverso dall'`id`" si risolve
-**senza cambiare il modello**: l'host di identità fa da reverse proxy per gli endpoint AP
-(`/users/<u>/inbox`, `/users/<u>/outbox`, `/users/<u>/media/...`, `/_fedi3/tunnel`) verso il
-relay, mentre il relay resta su un hostname separato. Le istanze classiche vedono un solo host
-(quello dell'identità) e accettano l'attore.
+The limit "Misskey rejects an actor with `inbox` on a host different from the `id`" is solved
+**without changing the model**: the identity host acts as a reverse proxy for the AP endpoints
+(`/users/<u>/inbox`, `/users/<u>/outbox`, `/users/<u>/media/...`, `/_fedi3/tunnel`) toward the
+relay, while the relay stays on a separate hostname. Classic instances see a single host
+(the identity one) and accept the actor.
 
-Configurazione verificata nel test:
+Configuration verified in the test:
 
-- identità: `https://fedi3.test` (documento attore e WebFinger serviti dal core);
-- relay: `https://relay.fedi3.test` (trasporto, media, tunnel), raggiungibile pubblicamente;
-- nginx su `fedi3.test`: `/.well-known/webfinger` e `GET /users/alice` → core (8788); tutto il
-  resto → relay (8787);
-- il documento attore continua a pubblicare `id`, `inbox`, `outbox` e `media` sull'host di
-  identità, quindi la divisione identità/trasporto è mantenuta e l'host del relay non compare
-  nelle URL dell'attore.
+- identity: `https://fedi3.test` (actor document and WebFinger served by the core);
+- relay: `https://relay.fedi3.test` (transport, media, tunnel), publicly reachable;
+- nginx on `fedi3.test`: `/.well-known/webfinger` and `GET /users/alice` → core (8788); everything
+  else → relay (8787);
+- the actor document keeps publishing `id`, `inbox`, `outbox` and `media` on the identity
+  host, so the identity/transport split is maintained and the relay host does not appear
+  in the actor URLs.
 
-Con questa configurazione, dopo il riavvio del relay su `relay.fedi3.test`:
+With this configuration, after restarting the relay on `relay.fedi3.test`:
 
-- la risoluzione di `alice@fedi3.test` da Misskey e Mastodon continua a funzionare;
-- follow, `Accept`, note e media sono consegnati attraverso l'host di identità (proxy) e
-  verificati dalle due istanze;
-- la home timeline di Misskey e Mastodon mostra le note pubblicate da Fedi3.
+- the resolution of `alice@fedi3.test` from Misskey and Mastodon keeps working;
+- follow, `Accept`, notes and media are delivered through the identity host (proxy) and
+  verified by the two instances;
+- the Misskey and Mastodon home timeline shows the notes published by Fedi3.
 
-Nota: i media caricati dal core vengono specchiati sul relay e la URL restituita usa l'host del
-relay (`https://relay.fedi3.test/users/alice/media/...`). Le stesse URL sono raggiungibili anche
-tramite il proxy dell'host di identità (`https://fedi3.test/users/alice/media/...`), quindi un
-deployment può scegliere di riscrivere le URL sull'host di identità se vuole un solo host
-pubblico.
+Note: media uploaded by the core is mirrored to the relay and the returned URL uses the relay
+host (`https://relay.fedi3.test/users/alice/media/...`). The same URLs are also reachable
+through the identity host proxy (`https://fedi3.test/users/alice/media/...`), so a
+deployment can choose to rewrite the URLs onto the identity host if it wants a single
+public host.
 
-## Media: foto, video e audio
+## Media: photos, videos and audio
 
-Sono stati testati tutti i tipi richiesti, in entrambe le direzioni.
+All requested types were tested, in both directions.
 
 ### Fedi3 → Misskey / Mastodon
 
-Caricamento su `POST /users/alice/media` (token interno), poi `Create` con `attachment`:
+Upload to `POST /users/alice/media` (internal token), then `Create` with `attachment`:
 
-| Tipo | MIME | Esito Misskey | Esito Mastodon |
-|------|------|---------------|----------------|
-| Foto | `image/png` | importata e visualizzata (`image/png`) | importata e visualizzata (`image`) |
-| Video | `video/mp4` | importato e visualizzato (`video/mp4`) | importato e visualizzato (`gifv`) |
-| Audio | `audio/mpeg` | importato e visualizzato (`audio/mpeg`) | importato e visualizzato (`audio`) |
+| Type | MIME | Misskey result | Mastodon result |
+|------|------|----------------|-----------------|
+| Photo | `image/png` | imported and displayed (`image/png`) | imported and displayed (`image`) |
+| Video | `video/mp4` | imported and displayed (`video/mp4`) | imported and displayed (`gifv`) |
+| Audio | `audio/mpeg` | imported and displayed (`audio/mpeg`) | imported and displayed (`audio`) |
 
-Le URL dei media restituite dal core sono servite con il content-type corretto e i byte
-corrispondono al file caricato (`200`, `image/png` / `video/mp4` / `audio/mpeg`), sia via
-`relay.fedi3.test` sia via il proxy `fedi3.test`.
+The media URLs returned by the core are served with the correct content-type and the bytes
+match the uploaded file (`200`, `image/png` / `video/mp4` / `audio/mpeg`), both via
+`relay.fedi3.test` and via the `fedi3.test` proxy.
 
 ### Misskey / Mastodon → Fedi3
 
-Upload tramite le API delle istanze e pubblicazione con media:
+Upload through the instance APIs and publication with media:
 
-| Origine | Tipo | Esito Fedi3 |
-|---------|------|-------------|
-| Misskey | foto `image/png` | `objects` contiene `attachment` con `mediaType=image/png`, `width/height` |
-| Misskey | video `video/mp4` | `attachment` con `mediaType=video/mp4` |
-| Misskey | audio `audio/mpeg` | `attachment` con `mediaType=audio/mpeg` |
-| Mastodon | foto `image/png` | `attachment` con `mediaType=image/png`, `blurhash`, dimensioni |
-| Mastodon | video `video/mp4` | `attachment` con `mediaType=video/mp4`, `duration` |
-| Mastodon | audio `audio/mpeg` | `attachment` con `mediaType=audio/mpeg`, `duration` |
+| Origin | Type | Fedi3 result |
+|--------|------|--------------|
+| Misskey | photo `image/png` | `objects` contains `attachment` with `mediaType=image/png`, `width/height` |
+| Misskey | video `video/mp4` | `attachment` with `mediaType=video/mp4` |
+| Misskey | audio `audio/mpeg` | `attachment` with `mediaType=audio/mpeg` |
+| Mastodon | photo `image/png` | `attachment` with `mediaType=image/png`, `blurhash`, dimensions |
+| Mastodon | video `video/mp4` | `attachment` with `mediaType=video/mp4`, `duration` |
+| Mastodon | audio `audio/mpeg` | `attachment` with `mediaType=audio/mpeg`, `duration` |
 
-Tutte le 9 URL di media presenti nella timeline Fedi3 (3 Fedi3, 3 Misskey, 3 Mastodon) sono
-state scaricate con successo (`200`) e con il content-type atteso.
+All 9 media URLs present in the Fedi3 timeline (3 Fedi3, 3 Misskey, 3 Mastodon) were
+downloaded successfully (`200`) and with the expected content-type.
 
-Nota di deployment: Mastodon serve i media da `/system/` con un alias statico nel reverse proxy
-(non da Rails). Nel test nginx è stato configurato con
-`location /system/ { alias .../public/system/; }` e con `include mime.types;`, altrimenti le URL
-dei media Mastodon rispondono `404` o con content-type errato. Questo non riguarda Fedi3 ma va
-previsto nel proxy che ospita Mastodon.
+Deployment note: Mastodon serves media from `/system/` with a static alias in the reverse proxy
+(not from Rails). In the test nginx was configured with
+`location /system/ { alias .../public/system/; }` and with `include mime.types;`, otherwise the Mastodon media URLs
+respond `404` or with the wrong content-type. This does not concern Fedi3 but must be
+provided for in the proxy hosting Mastodon.
 
-## Coerenza delle federazioni
+## Federation consistency
 
-Verifica di coerenza "vista da client" (timeline e thread delle tre implementazioni):
+"Seen from the client" consistency check (timelines and threads of the three implementations):
 
-- la timeline federata Fedi3 contiene le note pubbliche di Misskey e Mastodon (8 elementi
-  osservati), con autore e contenuto corretti;
-- la home timeline Fedi3 contiene tutte le 9 note con media (3 Fedi3, 3 Misskey, 3 Mastodon),
-  con `mediaType` corretti;
-- la timeline Misskey mostra le note di `alice@fedi3.test` con i media re-hostati da Misskey;
-- la home timeline Mastodon mostra le note di `alice@fedi3.test` con i media cachati da Mastodon;
-- thread: una risposta Misskey a una nota Fedi3 arriva a Fedi3 con `inReplyTo` corretto; una
-  risposta Fedi3 a una nota Mastodon compare nel thread Mastodon con `in_reply_to_id` corretto e
-  nel thread Fedi3 (`/_fedi3/note/replies`).
+- the Fedi3 federated timeline contains the public notes of Misskey and Mastodon (8 items
+  observed), with correct author and content;
+- the Fedi3 home timeline contains all 9 notes with media (3 Fedi3, 3 Misskey, 3 Mastodon),
+  with correct `mediaType`;
+- the Misskey timeline shows the notes of `alice@fedi3.test` with media re-hosted by Misskey;
+- the Mastodon home timeline shows the notes of `alice@fedi3.test` with media cached by Mastodon;
+- threads: a Misskey reply to a Fedi3 note arrives at Fedi3 with correct `inReplyTo`; a
+  Fedi3 reply to a Mastodon note appears in the Mastodon thread with correct `in_reply_to_id` and
+  in the Fedi3 thread (`/_fedi3/note/replies`).
 
-Non sono state osservate duplicazioni, note mancanti o media non risolti nei tre client.
+No duplications, missing notes or unresolved media were observed in the three clients.
 
-## Client Flutter: verifica end-to-end
+## Flutter client: end-to-end check
 
-Il client Fedi3 è stato avviato contro lo stack federato reale (relay, core, Misskey,
-Mastodon) con la stessa identità `alice` usata dal dev client:
+The Fedi3 client was started against the real federated stack (relay, core, Misskey,
+Mastodon) with the same `alice` identity used by the dev client:
 
 ```bash
 FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true \
@@ -264,55 +264,55 @@ DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 \
 ./app/build/linux/x64/debug/bundle/fedi3
 ```
 
-Nota: `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` serve solo nei test locali, dove
-`fedi3.test`/`misskey.test`/`mastodon.test` risolvono su loopback e la guardia SSRF
-del core rifiuterebbe gli host (`resolves to non-public address ::1`). In produzione
-gli host pubblici non richiedono la variabile. Il tunnel WebSocket usa ora i root CA
-di sistema (`rustls-tls-native-roots`), quindi `wss://fedi3.test` funziona anche con
-una CA privata installata nel trust store.
+Note: `FEDI3_ALLOW_PRIVATE_ACTOR_FETCH=true` is needed only in local tests, where
+`fedi3.test`/`misskey.test`/`mastodon.test` resolve to loopback and the core's SSRF
+guard would reject the hosts (`resolves to non-public address ::1`). In production
+public hosts do not require the variable. The WebSocket tunnel now uses the system
+root CAs (`rustls-tls-native-roots`), so `wss://fedi3.test` works even with
+a private CA installed in the trust store.
 
-Verifiche eseguite dal client:
+Checks performed by the client:
 
-- **Timeline**: le quattro viste (Home, Locale, Sociale, Federata) si aprono; Home e
-  Locale mostrano le note federate e le interazioni, Federata le note pubbliche di
-  Misskey/Mastodon. Sociale resta vuota con P2P disattivato (comportamento atteso).
-- **Pubblicazione**: una nota scritta dal client compare nella timeline Mastodon
-  (`alice@fedi3.test`) e in quella Misskey, senza duplicazioni.
-- **Nidificazione**: il thread apre padre e risposta annidata; una risposta inviata
-  dal client arriva a Mastodon con `in_reply_to_id` corretto e compare nel thread.
-- **Reazioni**: Like, Announce e EmojiReact dal client sono persistiti e federati;
-  i conteggi si aggiornano nella UI.
-- **Follow/unfollow**: funzionano sia dalla lista follower/following sia dal profilo;
-  lo stato è coerente sul lato Mastodon (`followed_by`/`following`). Le liste
-  follower e seguiti sono raggiungibili dai contatori del profilo e mostrano
-  handle, avatar e azione follow/unfollow.
-- **Media**: immagini e video federati vengono renderizzati; il player audio
-  (media_kit/mpv) viene istanziato per gli MP3.
-- **Schede**: Cerca (post e utenti), Chat, Notifiche, Relay e Configurazioni si
-  aprono senza errori; la ricerca post/utenti restituisce risultati.
+- **Timeline**: the four views (Home, Local, Social, Federated) open; Home and
+  Local show federated notes and interactions, Federated the public notes of
+  Misskey/Mastodon. Social stays empty with P2P disabled (expected behavior).
+- **Publishing**: a note written by the client appears in the Mastodon timeline
+  (`alice@fedi3.test`) and in the Misskey one, without duplications.
+- **Nesting**: the thread opens parent and nested reply; a reply sent
+  by the client arrives at Mastodon with correct `in_reply_to_id` and appears in the thread.
+- **Reactions**: Like, Announce and EmojiReact from the client are persisted and federated;
+  the counts update in the UI.
+- **Follow/unfollow**: they work both from the follower/following list and from the profile;
+  the state is consistent on the Mastodon side (`followed_by`/`following`). The
+  follower and following lists are reachable from the profile counters and show
+  handle, avatar and follow/unfollow action.
+- **Media**: federated images and videos are rendered; the audio player
+  (media_kit/mpv) is instantiated for MP3s.
+- **Tabs**: Search (posts and users), Chat, Notifications, Relay and Settings
+  open without errors; post/user search returns results.
 
-Due correzioni emerse da questa verifica sono incluse nel codice:
+Two fixes that emerged from this check are included in the code:
 
-- la ricerca rispondeva sempre `503 search coverage incomplete` su relay standalone
-  senza relay peer o con indice utenti vuoto: la copertura ora è considerata
-  vacua in quei casi (test unitari in `crates/fedi3_core/src/ap.rs`);
-- la ricerca utenti lato client non trovava gli attori perché l'indice del core
-  contiene solo oggetti attività: il client ora integra gli attori già visti e,
-  come fallback, la rete follow/follower locale.
+- search always responded `503 search coverage incomplete` on a standalone relay
+  without relay peers or with an empty user index: coverage is now considered
+  vacuous in those cases (unit tests in `crates/fedi3_core/src/ap.rs`);
+- client-side user search did not find actors because the core index
+  contains only activity objects: the client now integrates already seen actors and,
+  as a fallback, the local follow/follower network.
 
-## Limiti noti emersi
+## Known limits that emerged
 
-- **Host con porta**: Misskey usa `domainToASCII` sul dominio e ottiene stringa vuota se il
-  dominio contiene una porta; per questo gli host federati devono essere raggiungibili sulla
-  porta standard (443). In produzione è normale; nei test locali serve un reverse proxy TLS.
-- **Stesso host per id e inbox**: risolto con il proxy degli endpoint AP descritto sopra.
-  L'host di identità deve esporre e inoltrare al relay `inbox`, `outbox`, `media` e il tunnel.
-- **HTTPS obbligatorio**: Mastodon assume `https` per WebFinger; il supporto `http` esiste solo
-  per `.onion`. Il test locale usa una CA dedicata.
-- **Media Mastodon**: il reverse proxy dell'istanza Mastodon deve servire `/system/` come alias
-  statico e includere i MIME type, altrimenti i media federati risultano non raggiungibili.
-- **Node 26**: Misskey è stato eseguito con Node 26.12 (oltre la versione consigliata); nessun
-  problema osservato nel test, ma per produzione conviene la versione LTS supportata.
-- **URL media sul relay**: il core specchia i media sul relay e restituisce URL sull'host del
-  relay; se serve un solo host pubblico, riscrivere l'host delle URL o servire i media tramite
-  il proxy dell'identità (entrambe le strade sono state verificate).
+- **Host with port**: Misskey uses `domainToASCII` on the domain and gets an empty string if the
+  domain contains a port; for this reason federated hosts must be reachable on the
+  standard port (443). In production this is normal; in local tests a TLS reverse proxy is needed.
+- **Same host for id and inbox**: solved with the AP endpoint proxy described above.
+  The identity host must expose and forward to the relay `inbox`, `outbox`, `media` and the tunnel.
+- **HTTPS mandatory**: Mastodon assumes `https` for WebFinger; `http` support exists only
+  for `.onion`. The local test uses a dedicated CA.
+- **Mastodon media**: the reverse proxy of the Mastodon instance must serve `/system/` as a static
+  alias and include the MIME types, otherwise federated media are unreachable.
+- **Node 26**: Misskey was run with Node 26.12 (above the recommended version); no
+  problem observed in the test, but for production the supported LTS version is preferable.
+- **Media URLs on the relay**: the core mirrors media to the relay and returns URLs on the
+  relay host; if a single public host is needed, rewrite the host of the URLs or serve the media through
+  the identity proxy (both paths were verified).

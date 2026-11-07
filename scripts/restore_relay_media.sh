@@ -28,16 +28,12 @@ fi
 
 cd "$ROOT_DIR" || exit 1
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
+# shellcheck source=lib/dotenv.sh
+source "$ROOT_DIR/scripts/lib/dotenv.sh"
+load_dotenv "$ROOT_DIR/.env"
 
 MEDIA_DIR="${FEDI3_RELAY_MEDIA_DIR:-/data/media}"
 MEDIA_PARENT="$(dirname "$MEDIA_DIR")"
-MEDIA_BASENAME="$(basename "$MEDIA_DIR")"
 
 if [[ -z "$(docker compose ps -q relay 2>/dev/null)" ]]; then
   echo "restore_relay_media: the relay service is not running" >&2
