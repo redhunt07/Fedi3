@@ -2,7 +2,8 @@
 #
 # Components are grouped into Compose profiles so one checkout can serve three
 # installation modes:
-#   relay   relay + PostgreSQL + Dragonfly + Caddy (ActivityPub federation)
+#   relay   relay + PostgreSQL + Dragonfly (ActivityPub federation)
+#   caddy   TLS termination and reverse proxy (not used behind YunoHost)
 #   p2p     libp2p infrastructure node (circuit relay, Kademlia, mailbox)
 #   turn    coturn for WebRTC audio/video calls
 #   search  Meilisearch (optional; the default search backend is PostgreSQL)
@@ -14,8 +15,9 @@
 # search explicitly when running Compose by hand.
 #
 # P2P-only example:  COMPOSE_PROFILES=p2p
-# Relay-only example: COMPOSE_PROFILES=relay
-# Full stack:         COMPOSE_PROFILES=relay,p2p (add turn/search if wanted)
+# Relay-only example: COMPOSE_PROFILES=relay,caddy
+# Full stack:         COMPOSE_PROFILES=relay,p2p,caddy (add turn/search if wanted)
+# External TLS proxy: COMPOSE_PROFILES=relay,p2p (YunoHost/nginx terminates TLS)
 
 x-logging: &default-logging
   driver: json-file
@@ -186,7 +188,7 @@ services:
     logging: *default-logging
 
   caddy:
-    profiles: ["relay"]
+    profiles: ["caddy"]
     image: caddy:2
     restart: unless-stopped
     environment:
@@ -207,6 +209,9 @@ services:
     depends_on:
       relay:
         condition: service_healthy
+        # Allows validating the caddy profile on its own; the installer always
+        # enables relay together with caddy.
+        required: false
 
   p2p_infra:
     profiles: ["p2p"]
@@ -228,6 +233,7 @@ services:
       - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
       - FEDI3_P2P_EXTERNAL_ADDR=${FEDI3_P2P_EXTERNAL_ADDR:-}
+      - FEDI3_P2P_BOOTSTRAP=${FEDI3_P2P_BOOTSTRAP:-}
       - FEDI3_P2P_ENABLE_KAD_SERVER=true
       - FEDI3_P2P_RELAY_MAX_CIRCUITS=${FEDI3_P2P_RELAY_MAX_CIRCUITS:-64}
       - FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER=${FEDI3_P2P_RELAY_MAX_CIRCUITS_PER_PEER:-8}

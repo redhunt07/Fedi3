@@ -4,6 +4,16 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-07 — YunoHost relay installation
+
+`scripts/install_yunohost.sh` installs a full Fedi3 node on YunoHost without
+conflicting with the existing nginx on ports 80/443. It runs the server
+installer with an external TLS proxy, writes a YunoHost nginx location with
+WebSocket support and SSO bypass, opens 4001/tcp and 4001/udp in the YunoHost
+firewall, and verifies the public HTTPS endpoint. A full node contributes the
+relay to the HTTP relay mesh and runs the libp2p mailbox/circuit-relay
+infrastructure. See `docs/deploy_yunohost.md`.
+
 ## 2026-11-07 — One-command server installer
 
 A new installer sets up a Fedi3 server on Debian/Ubuntu derivatives and Arch

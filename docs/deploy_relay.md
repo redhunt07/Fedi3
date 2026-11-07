@@ -10,9 +10,9 @@
 cp .env.example .env
 ```
 
-The template sets `COMPOSE_PROFILES=relay,p2p` (full stack). For a relay-only
-install remove `p2p`; add `turn` and/or `search` only if you need coturn or
-Meilisearch. `scripts/install_server.sh` writes this value automatically.
+The template sets `COMPOSE_PROFILES=relay,p2p,caddy` (full stack). For a
+relay-only install remove `p2p`; behind YunoHost remove `caddy` as well; add
+`turn` and/or `search` only if you need coturn or Meilisearch. `scripts/install_server.sh` writes this value automatically.
 
 Fill in the essential fields:
 

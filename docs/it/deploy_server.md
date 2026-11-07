@@ -5,8 +5,8 @@ permette di scegliere cosa eseguire:
 
 | Modalità | Servizi | Federazione ActivityPub | Dominio pubblico e TLS | Porte pubbliche |
 | :--- | :--- | :--- | :--- | :--- |
-| `full` | relay, PostgreSQL, Dragonfly, Caddy, infrastruttura P2P | sì | obbligatorio | 80/tcp, 443/tcp, 4001/tcp, 4001/udp |
-| `relay` | relay, PostgreSQL, Dragonfly, Caddy | sì | obbligatorio | 80/tcp, 443/tcp |
+| `full` | relay, PostgreSQL, Dragonfly, infrastruttura P2P (Caddy opzionale) | sì | obbligatorio | 80/tcp, 443/tcp, 4001/tcp, 4001/udp |
+| `relay` | relay, PostgreSQL, Dragonfly (Caddy opzionale) | sì | obbligatorio | 80/tcp, 443/tcp |
 | `p2p` | solo infrastruttura P2P (mailbox, Kademlia, circuit relay) | no | non necessario | 4001/tcp, 4001/udp |
 
 Componenti opzionali:
@@ -50,13 +50,14 @@ identità P2P) e avvia la nuova selezione.
 - Per `full` e `relay`: un dominio reale con un record A/AAAA che punta al
   server, le porte 80 e 443 raggiungibili da Internet e nessun altro web server
   in ascolto su quelle porte. Caddy ottiene e rinnova il certificato tramite
-  ACME.
+  ACME, oppure un proxy TLS esistente come nginx di YunoHost può terminare TLS.
 - Per `p2p`: un indirizzo IPv4 pubblico e le porte 4001/tcp e 4001/udp
   raggiungibili.
 - Aprire le stesse porte nel security group o nel firewall del provider cloud.
 
 Il DNS deve essere configurato **prima** di avviare una modalità relay;
-altrimenti Caddy non può completare la sfida ACME. L'installer avvisa se il
+altrimenti Caddy non può completare la sfida ACME. Lo stesso vale per il
+certificato di un proxy TLS esterno. L'installer avvisa se il
 dominio non risolve sull'indirizzo pubblico rilevato, ma non blocca
 l'installazione.
 
@@ -87,6 +88,10 @@ L'installer chiede, nell'ordine:
 5. **Relay seed**: URL di relay separati da virgola, opzionali, per la mesh HTTP.
 6. **Conferma** del piano.
 
+Caddy è abilitato per impostazione predefinita. Su un host dove nginx/YunoHost
+gestisce già le porte 80/443, esegui l'installer con `--no-caddy` (oppure usa
+`scripts/install_yunohost.sh`).
+
 Poi:
 
 - aggiunge il repository Docker ufficiale e installa Docker Engine, Buildx e il
@@ -94,8 +99,8 @@ Poi:
 - avvia Docker e aggiunge l'utente che esegue l'installer al gruppo `docker`;
 - rileva l'IPv4 pubblico e controlla DNS, porte, RAM e disco;
 - scrive `.env` e `relay-secrets.txt` con permessi `600` e segreti casuali;
-- seleziona i profili Compose in `.env`, così `docker compose up -d` avvia
-  esattamente la modalità scelta;
+- seleziona i profili Compose in `.env` (incluso `caddy` salvo `--no-caddy`),
+  così `docker compose up -d` avvia esattamente la modalità scelta;
 - consente le porte necessarie se `ufw` o `firewalld` sono già attivi;
 - compila le immagini, avvia lo stack e attende gli health check;
 - stampa l'URL del relay, il peer id e i multiaddr P2P e le impostazioni per il
@@ -119,6 +124,26 @@ sudo bash scripts/install_server.sh
 
 Le domande e lo stack risultante sono identici al percorso Debian. L'installer
 usa `pacman` per Docker, Docker Compose e Buildx e abilita `docker.service`.
+
+## YunoHost o un altro proxy TLS esistente
+
+Se nginx (ad esempio YunoHost) gestisce già le porte 80/443, non avviare Caddy.
+Usa `--no-caddy` ed esponi il relay in loopback attraverso il proxy esistente:
+
+```bash
+sudo bash scripts/install_server.sh \
+  --mode full --domain relay.example.org --no-caddy \
+  --non-interactive --yes
+```
+
+Il relay ascolta su `127.0.0.1:8787`; il proxy deve inoltrare
+`https://relay.example.org` a quella porta, preservare gli header
+`Host`/`X-Forwarded-*`, supportare l'upgrade WebSocket e consentire body di
+almeno 64 MB. Le porte P2P 4001/tcp e 4001/udp devono comunque essere aperte.
+
+Su YunoHost, `scripts/install_yunohost.sh` automatizza la location nginx, il
+bypass SSO, il firewall di YunoHost e la verifica HTTPS. Vedi
+[installazione su YunoHost](deploy_yunohost.md).
 
 ## Installazione non interattiva
 
@@ -197,7 +222,9 @@ sudo grep FEDI3_P2P_MULTIADDRS relay-secrets.txt
 
 Se Caddy non ottiene il certificato, controlla DNS, porte 80/443 e
 `docker compose logs --tail=200 caddy`. Per un test locale con dominio
-`localhost`, Caddy usa una CA interna: usare `curl -k`.
+`localhost`, Caddy usa una CA interna: usare `curl -k`. Con `--no-caddy`, TLS e
+le porte 80/443 sono gestiti dal proxy esterno; controlla la sua configurazione
+e il suo certificato.
 
 ## Collegare l'app
 
@@ -344,11 +371,11 @@ Per la diagnostica specifica del relay vedi [deploy_relay.md](deploy_relay.md) e
 - La registrazione autonoma è disabilitata per impostazione predefinita
   (`FEDI3_RELAY_ALLOW_SELF_REGISTER=false`): un amministratore registra gli
   utenti dall'app.
-- Il relay è raggiungibile solo tramite Caddy; PostgreSQL, Dragonfly e
-  Meilisearch restano sulla rete Docker interna.
+- Il relay è raggiungibile solo tramite Caddy o il proxy TLS esterno;
+  PostgreSQL, Dragonfly e Meilisearch restano sulla rete Docker interna.
 - Mantieni il sistema aggiornato e ricompila dopo un `git pull`.
-- TLS, HSTS e limiti sul body sono applicati da Caddy; per impostazione
-  predefinita non c'è un WAF/CDN a monte.
+- TLS, HSTS e limiti sul body sono applicati da Caddy o dal proxy esterno; per
+  impostazione predefinita non c'è un WAF/CDN a monte.
 
 ## Riferimento dell'installer
 
@@ -368,5 +395,8 @@ Per la diagnostica specifica del relay vedi [deploy_relay.md](deploy_relay.md) e
 | `--skip-docker-install` | Non installare Docker; fallisce se manca. |
 | `--skip-firewall` | Non modificare il firewall dell'host. |
 | `--enable-firewall` | Abilita `ufw`/`firewalld` se installato ma inattivo. |
+| `--no-caddy` / `--external-proxy` | Non avviare Caddy; un proxy TLS esistente gestisce 80/443. |
+| `--caddy` | Avvia Caddy (predefinito per le modalità relay; ignorato con `--mode p2p`). |
+| `--p2p-bootstrap LIST` | Multiaddr di nodi P2P esistenti; scoperti automaticamente dai relay seed se omessi. |
 | `--skip-dns-check` | Ignora gli avvisi di mismatch DNS. |
 | `--dry-run` | Scrive `.env`/segreti e valida Compose senza avviare. |

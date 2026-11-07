@@ -79,14 +79,16 @@ cd /opt/fedi3
 sudo bash scripts/install_server.sh
 ```
 
-See [server installation](docs/deploy_server.md) for the step-by-step guide.
-The manual configuration follows.
+See [server installation](docs/deploy_server.md) for the step-by-step guide,
+or [YunoHost installation](docs/deploy_yunohost.md) when nginx already owns
+ports 80/443. The manual configuration follows.
 
 ```bash
 cp .env.example .env
 # Edit .env: at least FEDI3_DOMAIN, FEDI3_RELAY_ADMIN_TOKEN (>= 32 chars)
-# and FEDI3_RELAY_PG_PASSWORD. The template starts relay,p2p; add turn to
-# COMPOSE_PROFILES (and set TURN_*) for calls, search for Meilisearch.
+# and FEDI3_RELAY_PG_PASSWORD. The template starts relay,p2p,caddy; add turn
+# to COMPOSE_PROFILES (and set TURN_*) for calls, search for Meilisearch.
+# Behind YunoHost use COMPOSE_PROFILES=relay,p2p (no caddy).
 # Leave FEDI3_RELAY_DB_URL empty: PostgreSQL credentials are composed automatically.
 docker compose up -d --build
 scripts/relay_smoke_test.sh https://relay.example.com <ADMIN_TOKEN>
@@ -159,6 +161,7 @@ English (default):
 
 - [Getting started](docs/getting_started.md)
 - [Server installation, Debian and Arch](docs/deploy_server.md)
+- [Fedi3 relay on YunoHost](docs/deploy_yunohost.md)
 - [Relay deployment](docs/deploy_relay.md)
 - [Relay directory](docs/relay_directory.md)
 - [Local core and P2P mode](docs/deploy_core.md)

@@ -8,7 +8,9 @@
 #   full   relay + P2P infrastructure
 #   relay  relay only
 #   p2p    P2P infrastructure only
-# TURN (coturn) and Meilisearch are optional add-ons.
+# TURN (coturn) and Meilisearch are optional add-ons. Caddy terminates TLS by
+# default; use --no-caddy when an existing reverse proxy (YunoHost, nginx)
+# already owns ports 80/443.
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 set -euo pipefail
@@ -34,6 +36,9 @@ ROTATE_SECRETS=0
 DRY_RUN=0
 ADMIN_TOKEN_OVERRIDE=""
 PUBLIC_IP_OVERRIDE=""
+CADDY_ENABLED=1
+CADDY_SET=0
+P2P_BOOTSTRAP=""
 
 usage() {
   cat <<'EOF'
@@ -45,6 +50,8 @@ Installation mode (required in non-interactive runs):
   --turn / --no-turn      install coturn for WebRTC calls (default: ask; no when non-interactive)
   --search db|meili       search backend (default: db)
   --seed-relays LIST      comma-separated relay URLs for the HTTP relay mesh
+  --p2p-bootstrap LIST    comma-separated P2P multiaddrs of existing nodes
+                          (auto-discovered from --seed-relays when omitted)
   --public-ip IP          public IPv4 (auto-detected when omitted)
 
 Other options:
@@ -57,6 +64,8 @@ Other options:
   --skip-firewall         do not touch the host firewall
   --enable-firewall       enable ufw/firewalld if installed but inactive
   --skip-dns-check        ignore DNS mismatch warnings
+  --no-caddy              do not run Caddy; use an external TLS proxy
+  --caddy                 run Caddy (default; ignored for --mode p2p)
   --dry-run               write .env/secrets and validate Compose, do not start
   -h, --help              show this help
 
@@ -64,6 +73,10 @@ Examples:
   sudo bash scripts/install_server.sh
   sudo bash scripts/install_server.sh --mode full --domain relay.example.org --turn --non-interactive --yes
   sudo bash scripts/install_server.sh --mode p2p --non-interactive --yes
+
+  # YunoHost or another host with nginx on 80/443:
+  sudo bash scripts/install_server.sh --mode full --domain relay.example.org \
+    --no-caddy --non-interactive --yes
 EOF
 }
 
@@ -97,6 +110,10 @@ while [[ $# -gt 0 ]]; do
     --meili) SEARCH_CHOICE=meili; SEARCH_SET=1; shift ;;
     --seed-relays) need_arg "$@"; SEED_RELAYS="$2"; shift 2 ;;
     --seed-relays=*) SEED_RELAYS="${1#*=}"; shift ;;
+    --p2p-bootstrap) need_arg "$@"; P2P_BOOTSTRAP="$2"; shift 2 ;;
+    --p2p-bootstrap=*) P2P_BOOTSTRAP="${1#*=}"; shift ;;
+    --no-caddy|--external-proxy) CADDY_ENABLED=0; CADDY_SET=1; shift ;;
+    --caddy) CADDY_ENABLED=1; CADDY_SET=1; shift ;;
     --public-ip) need_arg "$@"; PUBLIC_IP_OVERRIDE="$2"; shift 2 ;;
     --public-ip=*) PUBLIC_IP_OVERRIDE="${1#*=}"; shift ;;
     --dir) need_arg "$@"; DEPLOY_DIR_ARG="$2"; shift 2 ;;
@@ -129,6 +146,11 @@ case "$SEARCH_CHOICE" in
   meili|meilisearch) SEARCH_CHOICE=meili ;;
   *) die "Invalid --search '$SEARCH_CHOICE' (expected db or meili)" ;;
 esac
+
+# P2P-only has no TLS edge; ignore Caddy there.
+if [[ "$MODE" == "p2p" ]]; then
+  CADDY_ENABLED=0
+fi
 
 # --------------------------------------------------------------------------- host
 [[ -r /etc/os-release ]] || die "/etc/os-release not found; unsupported host"
@@ -549,6 +571,39 @@ EOF
   tty_read SEED_RELAYS "Seed relays (optional): " ""
 }
 
+discover_p2p_bootstraps() {
+  local seeds="$1" relay url json addr existing
+  local -a relays=() found=()
+  IFS=, read -r -a relays <<< "$seeds"
+
+  for relay in "${relays[@]}"; do
+    relay="$(printf '%s' "$relay" | tr -d '[:space:]')"
+    [[ -n "$relay" ]] || continue
+    url="${relay%/}"
+    case "$url" in
+      http://*|https://*) ;;
+      *) url="https://$url" ;;
+    esac
+    json="$(curl -fsS --max-time 6 "$url/_fedi3/relay/p2p_infra" 2>/dev/null || true)"
+    [[ -n "$json" ]] || continue
+    while IFS= read -r addr; do
+      [[ "$addr" == */p2p/* ]] || continue
+      existing=0
+      local item
+      for item in "${found[@]}"; do
+        [[ "$item" == "$addr" ]] && existing=1 && break
+      done
+      [[ $existing -eq 1 ]] && continue
+      found+=("$addr")
+      (( ${#found[@]} >= 32 )) && break 2
+    done < <(grep -oE '"/[^"]+"' <<< "$json" | tr -d '"')
+  done
+
+  [[ ${#found[@]} -gt 0 ]] || return 1
+  local IFS=,
+  printf '%s' "${found[*]}"
+}
+
 confirm_plan() {
   if [[ $INTERACTIVE -eq 1 && $ASSUME_YES -eq 0 ]]; then
     cat > /dev/tty <<EOF
@@ -559,9 +614,11 @@ Installation plan
   Mode:          $MODE
   Domain:        ${DOMAIN:-none (P2P only)}
   Public IPv4:   ${PUBLIC_IP:-unknown}
+  TLS proxy:     $([[ $CADDY_ENABLED -eq 1 ]] && echo "Caddy" || echo "external (no Caddy)")
   TURN:          $([[ $TURN_ENABLED -eq 1 ]] && echo enabled || echo disabled)
   Search:        $SEARCH_CHOICE
   Seed relays:   ${SEED_RELAYS:-none}
+  P2P bootstrap: ${P2P_BOOTSTRAP:-auto from seed relays}
 
 EOF
     ask_yes_no "Proceed? [Y/n] " "yes" || die "Installation cancelled"
@@ -598,7 +655,7 @@ port_in_use() {
 preflight() {
   local ports=()
 
-  [[ "$MODE" != "p2p" ]] && ports+=("80/tcp" "443/tcp")
+  [[ "$MODE" != "p2p" && $CADDY_ENABLED -eq 1 ]] && ports+=("80/tcp" "443/tcp")
   [[ "$MODE" != "relay" ]] && ports+=("4001/tcp" "4001/udp")
   [[ $TURN_ENABLED -eq 1 ]] && ports+=("3478/tcp" "3478/udp" "49152:65535/udp")
 
@@ -744,6 +801,7 @@ write_env() {
   local profiles=()
   [[ "$MODE" != "p2p" ]] && profiles+=("relay")
   [[ "$MODE" != "relay" ]] && profiles+=("p2p")
+  [[ "$MODE" != "p2p" && $CADDY_ENABLED -eq 1 ]] && profiles+=("caddy")
   [[ $TURN_ENABLED -eq 1 ]] && profiles+=("turn")
   [[ "$SEARCH_CHOICE" == "meili" ]] && profiles+=("search")
   local IFS=,
@@ -782,11 +840,25 @@ write_env() {
   else
     set_env FEDI3_P2P_EXTERNAL_ADDR ""
   fi
+  if [[ -z "$P2P_BOOTSTRAP" && -n "$SEED_RELAYS" && "$MODE" != "relay" ]]; then
+    P2P_BOOTSTRAP="$(discover_p2p_bootstraps "$SEED_RELAYS" || true)"
+    if [[ -n "$P2P_BOOTSTRAP" ]]; then
+      info "Discovered P2P bootstrap multiaddrs from the seed relays"
+    fi
+  fi
   set_env FEDI3_RELAY_SEED_RELAYS "$SEED_RELAYS"
+  set_env FEDI3_P2P_BOOTSTRAP "$P2P_BOOTSTRAP"
+  set_env FEDI3_EDGE_PROXY "$([[ $CADDY_ENABLED -eq 1 ]] && echo caddy || echo external)"
   set_env COMPOSE_PROFILES "$PROFILES"
 
   if [[ $DRY_RUN -eq 1 ]]; then
     return 0
+  fi
+
+  # A pre-profile install (or a previous Caddy-enabled install) may still have
+  # Caddy running even when the new profile list no longer includes it.
+  if [[ $CADDY_ENABLED -eq 0 ]]; then
+    "${DOCKER_CMD[@]}" compose --profile caddy stop caddy >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$OLD_PROFILES" && "$OLD_PROFILES" != "$PROFILES" ]]; then
@@ -797,7 +869,7 @@ write_env() {
     # Upgrade from a Compose file without profiles: the previous `up` started
     # every service. Stop them before applying the selected profile.
     info "Stopping containers from the previous installation"
-    COMPOSE_PROFILES=relay,p2p,turn,search "${DOCKER_CMD[@]}" compose down --remove-orphans || \
+    COMPOSE_PROFILES=relay,p2p,caddy,turn,search "${DOCKER_CMD[@]}" compose down --remove-orphans || \
       warn "Could not stop the previous stack cleanly"
   fi
 }
@@ -805,7 +877,7 @@ write_env() {
 # --------------------------------------------------------------------------- firewall
 firewall_ports() {
   local ports=()
-  [[ "$MODE" != "p2p" ]] && ports+=("80/tcp" "443/tcp")
+  [[ "$MODE" != "p2p" && $CADDY_ENABLED -eq 1 ]] && ports+=("80/tcp" "443/tcp")
   [[ "$MODE" != "relay" ]] && ports+=("4001/tcp" "4001/udp")
   [[ $TURN_ENABLED -eq 1 ]] && ports+=("3478/tcp" "3478/udp" "49152:65535/udp")
   printf '%s\n' "${ports[@]}"
@@ -816,10 +888,11 @@ print_firewall_ports() {
   ports="$(firewall_ports | tr '\n' ' ')"
   cat <<EOF
 Required ports for this mode: $ports
+$(if [[ $CADDY_ENABLED -eq 0 && "$MODE" != "p2p" ]]; then echo "Ports 80/443 are owned by the external TLS proxy (YunoHost/nginx)."; fi)
 
 If a host firewall is active, allow them, for example:
-  ufw:       sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && ...
-  firewalld: sudo firewall-cmd --permanent --add-port=80/tcp && sudo firewall-cmd --reload
+  ufw:       sudo ufw allow 4001/tcp && sudo ufw allow 4001/udp && ...
+  firewalld: sudo firewall-cmd --permanent --add-port=4001/tcp && sudo firewall-cmd --reload
 Also allow the same ports in the cloud provider's security group/firewall.
 EOF
 }
@@ -963,11 +1036,15 @@ verify_stack() {
     info "Waiting for the relay health check"
     if wait_for_relay; then
       info "Relay is healthy on 127.0.0.1:8787"
-      info "Waiting for HTTPS/TLS on $DOMAIN (ACME can take a minute)"
-      if wait_for_https "$DOMAIN"; then
-        info "TLS is working on https://$DOMAIN"
+      if [[ $CADDY_ENABLED -eq 1 ]]; then
+        info "Waiting for HTTPS/TLS on $DOMAIN (ACME can take a minute)"
+        if wait_for_https "$DOMAIN"; then
+          info "TLS is working on https://$DOMAIN"
+        else
+          warn "HTTPS not ready yet; check DNS and: docker compose logs --tail=200 caddy"
+        fi
       else
-        warn "HTTPS not ready yet; check DNS and: docker compose logs --tail=200 caddy"
+        info "TLS is handled by the external proxy; verify https://$DOMAIN/healthz after configuring it"
       fi
     else
       warn "Relay did not become healthy within 240 s"
@@ -1036,8 +1113,10 @@ Fedi3 server installation complete.
   Mode:            $mode_label
   Deployment:      $DEPLOY_DIR
   Relay URL:       ${relay_url:-none (P2P only)}
+  TLS proxy:       $([[ $CADDY_ENABLED -eq 1 ]] && echo "Caddy" || echo "external (no Caddy)")
   Public IPv4:     ${PUBLIC_IP:-unknown}
   TURN:            $turn_label
+  P2P bootstrap:   ${P2P_BOOTSTRAP:-none}
   Credentials:     $SECRETS_FILE (mode 600)
 
 Useful commands (run from $DEPLOY_DIR):
@@ -1091,20 +1170,29 @@ Verification:
 EOF
 
   if [[ "$MODE" != "p2p" ]]; then
-    case "$DOMAIN" in
-      localhost|*.localhost|127.*)
-        cat <<EOF
+    if [[ $CADDY_ENABLED -eq 0 ]]; then
+      cat <<EOF
+  curl -fsS $relay_url/healthz    # through the external TLS proxy
+  curl -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" $relay_url/_fedi3/relay/stats
+  # direct loopback check:
+  curl -fsS http://127.0.0.1:8787/healthz
+EOF
+    else
+      case "$DOMAIN" in
+        localhost|*.localhost|127.*)
+          cat <<EOF
   curl -k -fsS $relay_url/healthz   # local Caddy uses an internal CA
   curl -k -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" $relay_url/_fedi3/relay/stats
 EOF
-        ;;
-      *)
-        cat <<EOF
+          ;;
+        *)
+          cat <<EOF
   curl -fsS $relay_url/healthz
   scripts/relay_smoke_test.sh $relay_url <ADMIN_TOKEN>
 EOF
-        ;;
-    esac
+          ;;
+      esac
+    fi
   fi
   if [[ "$MODE" != "relay" ]]; then
     cat <<EOF
@@ -1165,6 +1253,20 @@ fi
 if [[ -z "$DOMAIN" && -n "${FEDI3_DOMAIN:-}" ]]; then
   DOMAIN="$(normalize_domain "$FEDI3_DOMAIN")"
 fi
+if [[ -z "$SEED_RELAYS" && -n "${FEDI3_RELAY_SEED_RELAYS:-}" ]]; then
+  SEED_RELAYS="$FEDI3_RELAY_SEED_RELAYS"
+fi
+if [[ -z "$P2P_BOOTSTRAP" && -n "${FEDI3_P2P_BOOTSTRAP:-}" ]]; then
+  P2P_BOOTSTRAP="$FEDI3_P2P_BOOTSTRAP"
+fi
+OLD_EDGE_PROXY="$(env_get FEDI3_EDGE_PROXY || true)"
+if [[ $CADDY_SET -eq 0 && -n "$OLD_EDGE_PROXY" ]]; then
+  if [[ "$OLD_EDGE_PROXY" == "external" ]]; then
+    CADDY_ENABLED=0
+  else
+    CADDY_ENABLED=1
+  fi
+fi
 if [[ -z "$PUBLIC_IP" && -n "${TURN_EXTERNAL_IP:-}" ]] && is_ipv4 "$TURN_EXTERNAL_IP"; then
   PUBLIC_IP="$TURN_EXTERNAL_IP"
 fi
@@ -1185,6 +1287,10 @@ if [[ $SEARCH_SET -eq 0 && -n "$OLD_PROFILES" ]]; then
 fi
 
 choose_mode
+[[ "$MODE" == "p2p" ]] && CADDY_ENABLED=0
+if [[ $CADDY_SET -eq 0 && $CADDY_ENABLED -eq 1 ]] && command -v yunohost >/dev/null 2>&1; then
+  warn "YunoHost detected: nginx already owns ports 80/443. Use --no-caddy or scripts/install_yunohost.sh."
+fi
 choose_domain
 choose_turn
 choose_search

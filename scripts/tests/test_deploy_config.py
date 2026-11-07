@@ -25,7 +25,7 @@ def main():
         # Contract checks need every service visible regardless of the mode
         # selected in the template.
         values = re.sub(r'(?m)^COMPOSE_PROFILES=.*$',
-                        'COMPOSE_PROFILES=relay,p2p,turn,search', values)
+                        'COMPOSE_PROFILES=relay,p2p,caddy,turn,search', values)
         values += '\nFEDI3_DOMAIN=relay.example.invalid\nTURN_EXTERNAL_IP=198.51.100.1\n'
         (stage / '.env').write_text(values)
         env = {k: v for k, v in os.environ.items()
@@ -43,7 +43,10 @@ def main():
             return json.loads(result.stdout)['services']
 
         assert set(config(files[0], 'p2p')) == {'p2p_infra'}
-        assert set(config(files[0], 'relay')) == {'relay', 'postgres', 'dragonfly', 'caddy'}
+        assert set(config(files[0], 'relay')) == {'relay', 'postgres', 'dragonfly'}
+        assert set(config(files[0], 'caddy')) == {'caddy'}
+        assert set(config(files[0], 'relay,p2p,caddy')) == {
+            'relay', 'postgres', 'dragonfly', 'p2p_infra', 'caddy'}
         root = config(files[0])
         relay = root['relay']['environment']
         pg = root['postgres']['environment']
