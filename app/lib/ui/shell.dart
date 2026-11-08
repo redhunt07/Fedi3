@@ -175,6 +175,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         return;
       }
       _notifiedUpdate = update.version.toString();
+      // A call screen owns the bottom area; the banner would cover its controls.
+      if (CallScreen.active > 0) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
             context.l10n.clientUpdatesAvailable(update.version.toString())),
