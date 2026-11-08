@@ -43,6 +43,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - On Android the settings backup is written to a temporary JSON file and handed
   to the system share sheet (Files, Drive, mail); the clipboard stays as a
   fallback when sharing is unavailable.
+- Chat envelopes for a member that is offline are queued in the sender core and
+  retried while it runs (bounded backoff); the recipient dedupes by message id.
 - Decorative animations (presence glow, selection ring, brand mark) run for a
   few cycles and then settle: a static screen does not render at 60fps, so
   idle CPU stays near zero and battery use is minimal.

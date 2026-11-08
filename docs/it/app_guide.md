@@ -43,6 +43,8 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Su Android il backup delle impostazioni viene scritto in un file JSON temporaneo
   e passato al pannello di condivisione di sistema (File, Drive, mail); gli appunti
   restano come fallback quando la condivisione non è disponibile.
+- Gli envelope di chat per un membro offline vengono accodati nel core del mittente
+  e ritentati finché gira (backoff limitato); il destinatario deduplica per message id.
 - Le animazioni decorative (alone di presenza, anello di selezione, marchio)
   girano per pochi cicli e poi si fermano: una schermata statica non viene
   ridisegnata a 60fps, quindi la CPU in idle resta vicina a zero.
