@@ -278,6 +278,7 @@ services:
       - "--no-cli"
       - "--realm=${TURN_REALM:?set TURN_REALM in .env}"
       - "--listening-port=${TURN_PORT:-3478}"
+      - "--listening-ip=0.0.0.0"
       # Empty is accepted by coturn, but a public IP is required for clients
       # behind NAT. scripts/install_server.sh detects and validates it.
       - "--external-ip=${TURN_EXTERNAL_IP:-}"
