@@ -213,6 +213,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         if (CallScreen.active > 0) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
+            // Floating keeps the banner clear of the compose FAB; a fixed
+            // banner overlapped it and stole the "open" tap.
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 84),
             content: Text(context.l10n.announcementsNewAlert),
             action: SnackBarAction(
               label: context.l10n.announcementsOpen,
