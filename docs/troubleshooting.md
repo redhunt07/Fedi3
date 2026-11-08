@@ -147,7 +147,7 @@ after the remote description.
 `libmount.so.1: version MOUNT_2_40 not found` or
 `libsystemd.so.0: version LIBSYSTEMD_251 not found` indicates a packaging conflict,
 not profile corruption or a missing executable permission. Version 0.10.0 bundled
-older copies of dependencies used by the host GLib. The fix is prepared for
-0.10.1; install the replacement when published. Keep all existing data and keyring
+older copies of dependencies used by the host GLib. The fix is published in
+[0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1); install the replacement. Keep all existing data and keyring
 credentials. Rebuilding with the corrected `scripts/build_appimage.sh` also
 applies the fix. SHA256 integrity checks alone cannot detect this ABI mismatch.

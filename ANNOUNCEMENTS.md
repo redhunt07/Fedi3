@@ -4,15 +4,21 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
-## 2026-11-08 — Preparing 0.10.1: Linux AppImage startup fix
+## 2026-11-08 — 0.10.1 released: Linux AppImage startup fix
 
-The Linux AppImage in 0.10.0 can fail before opening its window on newer desktops
-because older bundled system libraries shadow the host's GLib dependencies.
-The fix is prepared for 0.10.1: system and font libraries follow one consistent
-host-library policy. The release pipeline now requires the packaged GUI to
-render its first frame on Ubuntu 22.04 and 24.04. Profiles and messages are
-unchanged. Download the replacement once 0.10.1 is published; there is no need
-to delete profiles, keys or credentials.
+[Version 0.10.1 is published](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1)
+for Linux x86_64 and Windows x64. It fixes the 0.10.0 AppImage startup failure on
+newer desktops, caused by older bundled system libraries shadowing host GLib
+requirements (`MOUNT_2_40` / `LIBSYSTEMD_251`). Fontconfig uses the host's font
+libraries and configuration together.
+
+The packaged GUI now passes required first-frame startup checks on Ubuntu 22.04
+and 24.04 before publication, in addition to the existing tests and audit. Linux
+0.10.0 users affected by the failure should download 0.10.1 manually, since their
+old client cannot start its updater. Profiles, keys, credentials and messages
+remain in their existing data directories; no reset or migration is needed.
+
+[Publication verification](docs/audit/release_0.10.1_2026-11-08.md).
 
 ## 2026-11-08 — 0.10.0 released: client updates and compatible security fixes
 

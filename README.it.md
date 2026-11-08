@@ -10,12 +10,12 @@ FEDI3 è un social federato con componente P2P: privacy-first, interoperabile co
 il fediverso e resiliente senza rinunciare alla compatibilità con le istanze
 ActivityPub classiche.
 
-> **Stato: pre-1.0; [0.10.0 pubblicata](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.0).** Le verifiche
+> **Stato: pre-1.0; [0.10.1 pubblicata](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1).** Le verifiche
 > correnti sono nell’[audit client/aggiornamenti](docs/it/audit/client_updates_2026-11-07.md)
 > e nella [correzione compatibile RSA/WebRTC](docs/it/audit/crypto_compatibility_2026-11-08.md).
 > L’[audit di production readiness](docs/it/audit/production_readiness_audit.md) e il
 > [piano di rimedio](docs/it/audit/remediation_plan.md) restano riferimenti storici;
-> la [verifica di pubblicazione](docs/it/audit/release_0.10.0_2026-11-08.md) registra
+> la [verifica di pubblicazione](docs/it/audit/release_0.10.1_2026-11-08.md) registra
 > build release Linux e Windows e CI remota superate. I pacchetti Apple/mobile
 > restano fuori da questa pipeline di release.
 

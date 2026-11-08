@@ -47,4 +47,4 @@ A subsequent launch on a newer Arch desktop failed with `MOUNT_2_40` and then
 `LIBSYSTEMD_251`: bundled older dependencies shadowed the host GLib stack. The
 checks above validated the packages and core FFI, but did not test the complete
 GUI startup. The corrected packaging policy and required two-distribution GUI
-startup gate are prepared for 0.10.1. Existing profile data is unaffected.
+startup gate are published in 0.10.1. Existing profile data is unaffected.

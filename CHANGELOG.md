@@ -5,7 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Preparing 0.10.1 — 2026-11-08
+## [0.10.1] - 2026-11-08
+
+### Linux AppImage startup
 
 - Fixed Linux AppImage startup on newer desktops: bundled Ubuntu 22.04
   `libmount`/`libsystemd` and PCRE2 libraries could shadow the host GLib's required

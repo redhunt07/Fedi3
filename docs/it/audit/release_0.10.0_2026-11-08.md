@@ -48,5 +48,5 @@ L’avvio su un desktop Arch recente ha rilevato `MOUNT_2_40` e poi
 `LIBSYSTEMD_251`: vecchie dipendenze incluse nascondevano quelle della GLib di
 sistema. I controlli precedenti verificavano pacchetti e FFI del core, ma non
 l’avvio della GUI completa. Politica di packaging corretta e controllo GUI
-obbligatorio su due distribuzioni sono preparati per la 0.10.1. I dati dei profili
+obbligatorio su due distribuzioni sono pubblicati nella 0.10.1. I dati dei profili
 restano invariati.

@@ -147,7 +147,7 @@ dopo la descrizione remota.
 `libmount.so.1: version MOUNT_2_40 not found` o
 `libsystemd.so.0: version LIBSYSTEMD_251 not found` indica un conflitto del
 pacchetto, non un profilo corrotto o permessi di esecuzione mancanti. La 0.10.0
-includeva vecchie dipendenze usate dalla GLib di sistema. La correzione è pronta
-per la 0.10.1: installa il pacchetto sostitutivo quando pubblicato e conserva dati
+includeva vecchie dipendenze usate dalla GLib di sistema. La correzione è pubblicata
+nella [0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1): installa il pacchetto sostitutivo e conserva dati
 e credenziali nel portachiavi. Anche una build con `scripts/build_appimage.sh`
 corretto applica la soluzione. Il controllo SHA256 non rileva questo conflitto ABI.
