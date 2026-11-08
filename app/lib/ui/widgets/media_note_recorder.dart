@@ -67,7 +67,21 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
               }
             : false,
       });
-      if (_renderer != null) _renderer!.srcObject = _stream;
+      if (_renderer != null) {
+        // Starting the muxer before the camera delivers a frame produces a
+        // zero-byte file on some devices, so wait for the first frame first.
+        final firstFrame = Completer<void>();
+        _renderer!.onFirstFrameRendered = () {
+          if (!firstFrame.isCompleted) firstFrame.complete();
+        };
+        _renderer!.srcObject = _stream;
+        if (widget.video) {
+          await firstFrame.future.timeout(
+            const Duration(seconds: 8),
+            onTimeout: () {},
+          );
+        }
+      }
       final dir = await getTemporaryDirectory();
       _path =
           '${dir.path}/fedi3_note_${DateTime.now().microsecondsSinceEpoch}.${widget.video ? 'mp4' : 'm4a'}';
@@ -77,7 +91,10 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
         videoTrack: widget.video && _stream!.getVideoTracks().isNotEmpty
             ? _stream!.getVideoTracks().first
             : null,
-        audioChannel: _stream!.getAudioTracks().isNotEmpty
+        // The plugin's muxer only starts once the audio encoder reports its
+        // format. On Android that never happens for camera+mic recordings, so a
+        // video note is recorded video-only; voice is covered by audio notes.
+        audioChannel: !widget.video && _stream!.getAudioTracks().isNotEmpty
             ? RecorderAudioChannel.INPUT
             : null,
       );
@@ -105,12 +122,22 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
     _stream?.getTracks().forEach((t) => t.stop());
     _renderer?.dispose();
     final path = _path;
-    if (cancel && path != null) {
+    var size = 0;
+    if (path != null) {
       try {
-        await File(path).delete();
+        size = await File(path).length();
       } catch (_) {}
     }
-    if (mounted) Navigator.of(context).pop(cancel ? null : path);
+    if (cancel || size == 0) {
+      if (path != null) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
+      if (mounted) Navigator.of(context).pop(null);
+      return;
+    }
+    if (mounted) Navigator.of(context).pop(path);
   }
 
   String get _timer {

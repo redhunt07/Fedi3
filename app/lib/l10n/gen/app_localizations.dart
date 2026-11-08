@@ -920,6 +920,12 @@ abstract class AppLocalizations {
   /// **'edited'**
   String get chatEdited;
 
+  /// No description provided for @chatRecordingEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing was recorded. Try again.'**
+  String get chatRecordingEmpty;
+
   /// No description provided for @chatStatusPending.
   ///
   /// In en, this message translates to:

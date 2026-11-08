@@ -437,6 +437,9 @@ class AppLocalizationsIt extends AppLocalizations {
   String get chatEdited => 'modificato';
 
   @override
+  String get chatRecordingEmpty => 'Non è stato registrato nulla. Riprova.';
+
+  @override
   String get chatStatusPending => 'In attesa';
 
   @override

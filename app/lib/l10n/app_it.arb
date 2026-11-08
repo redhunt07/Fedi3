@@ -172,6 +172,7 @@
   "chatGifEmpty": "Nessuna GIF trovata",
   "chatGifMissingKey": "Aggiungi una API key GIF nelle impostazioni per abilitare la ricerca.",
   "chatEdited": "modificato",
+  "chatRecordingEmpty": "Non è stato registrato nulla. Riprova.",
   "chatStatusPending": "In attesa",
   "chatStatusQueued": "In coda",
   "chatStatusSent": "Inviato",

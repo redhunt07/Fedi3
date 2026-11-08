@@ -925,7 +925,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           ? const MediaNoteRecorder(video: true)
           : const AudioNoteRecorder(),
     );
-    if (path == null || path.trim().isEmpty) return;
+    if (path == null || path.trim().isEmpty) {
+      if (mounted) setState(() => _error = context.l10n.chatRecordingEmpty);
+      return;
+    }
     try {
       final bytes = await File(path).readAsBytes();
       if (!mounted) return;
