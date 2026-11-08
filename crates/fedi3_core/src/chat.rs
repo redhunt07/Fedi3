@@ -390,11 +390,16 @@ pub fn store_incoming_payload_db(
             }
         }
     } else if payload.op == "call" {
-        if now_ms().saturating_sub(env.created_at_ms) > 60_000 {
-            return Ok(());
-        }
         let call_id = payload.message_id.as_deref().unwrap_or_default();
         let action = payload.action.as_deref().unwrap_or("signal");
+        // An invite that arrives late must not ring a finished call, but an
+        // offer/answer/ICE delivered from the relay spool after a retry is
+        // still useful. Dropping those after a minute left calls connected on
+        // signaling yet without media.
+        let max_age_ms = if action == "invite" { 60_000 } else { 600_000 };
+        if now_ms().saturating_sub(env.created_at_ms) > max_age_ms {
+            return Ok(());
+        }
         let to = payload.targets.as_ref().and_then(|t| t.first());
         // Calls, like messages, require an existing thread and a member sender.
         if to.is_some_and(|to| to.trim_end_matches('/') != local_actor.trim_end_matches('/')) {

@@ -1196,5 +1196,22 @@
         "type": "String"
       }
     }
-  }
+  },
+  "audioSettingsTitle": "Audio",
+  "audioSettingsHint": "Choose the microphone and audio output used by calls on this PC, then test them.",
+  "audioInputTitle": "Microphone",
+  "audioInputHint": "Audio source for calls.",
+  "audioOutputTitle": "Audio output",
+  "audioOutputHint": "Headphones or speakers for calls.",
+  "audioSystemDefault": "System default",
+  "audioDeviceMissing": "Device unavailable (the default will be used)",
+  "audioNoDevices": "No devices detected.",
+  "audioRefresh": "Refresh list",
+  "audioTestMic": "Test microphone",
+  "audioStopTest": "Stop",
+  "audioTestMicHint": "Records 5 seconds with the chosen microphone and plays it back on the chosen output.",
+  "audioDefaultMicHint": "The recorder cannot reach the chosen device: using the default.",
+  "audioTestOutput": "Play test tone",
+  "audioTestOutputHint": "Plays a sound on the chosen output without changing the system audio.",
+  "audioAppliedHint": "Changes apply to the next calls. When a device is unavailable, the call uses the default."
 }

@@ -1188,5 +1188,22 @@
         "type": "String"
       }
     }
-  }
+  },
+  "audioSettingsTitle": "Audio",
+  "audioSettingsHint": "Scegli il microfono e l’uscita audio usati dalle chiamate su questo PC, poi provali.",
+  "audioInputTitle": "Microfono",
+  "audioInputHint": "Sorgente audio per le chiamate.",
+  "audioOutputTitle": "Uscita audio",
+  "audioOutputHint": "Cuffie o altoparlanti per le chiamate.",
+  "audioSystemDefault": "Predefinito di sistema",
+  "audioDeviceMissing": "Dispositivo non disponibile (verrà usato il predefinito)",
+  "audioNoDevices": "Nessun dispositivo rilevato.",
+  "audioRefresh": "Aggiorna elenco",
+  "audioTestMic": "Testa microfono",
+  "audioStopTest": "Ferma",
+  "audioTestMicHint": "Registra 5 secondi con il microfono scelto e riproduce la registrazione sull’uscita scelta.",
+  "audioDefaultMicHint": "Il dispositivo scelto non è raggiungibile dal registratore: uso il predefinito.",
+  "audioTestOutput": "Riproduci tono di prova",
+  "audioTestOutputHint": "Riproduce un suono sull’uscita scelta senza cambiare l’audio di sistema.",
+  "audioAppliedHint": "Le modifiche valgono per le prossime chiamate. Se un dispositivo non è disponibile, la chiamata usa il predefinito."
 }

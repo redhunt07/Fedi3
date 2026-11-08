@@ -3887,14 +3887,19 @@ async fn dispatch_chat_payload_to_members(
         .unwrap_or_default();
     let mut outcome = ChatDispatch::default();
     for (actor, _role) in members {
-        if actor == self_actor {
+        // Actor URLs are stored with inconsistent trailing slashes across
+        // federation paths; compare them normalized or call signals silently
+        // skip their only target.
+        let actor_key = actor.trim_end_matches('/');
+        if actor_key == self_actor.trim_end_matches('/') {
             continue;
         }
         if payload.op == "call"
-            && payload
-                .targets
-                .as_ref()
-                .is_some_and(|targets| !targets.contains(&actor))
+            && payload.targets.as_ref().is_some_and(|targets| {
+                !targets
+                    .iter()
+                    .any(|target| target.trim_end_matches('/') == actor_key)
+            })
         {
             continue;
         }

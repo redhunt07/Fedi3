@@ -381,6 +381,69 @@ fn validate_pool(pool: &[IceServer]) -> bool {
         })
 }
 
+/// Builds a single-operator ICE pool from a relay host and credentials.
+fn build_turn_pool(
+    host: &str,
+    port: u16,
+    username: String,
+    credential: String,
+    explicit: Vec<String>,
+) -> Option<Vec<IceServer>> {
+    if host.is_empty() || username.is_empty() || credential.is_empty() {
+        return None;
+    }
+    let urls = if explicit.is_empty() {
+        vec![
+            format!("turn:{host}:{port}?transport=udp"),
+            format!("turn:{host}:{port}?transport=tcp"),
+        ]
+    } else {
+        explicit
+    };
+    let pool = vec![IceServer {
+        urls,
+        username,
+        credential,
+    }];
+    validate_pool(&pool).then_some(pool)
+}
+
+/// Builds the ICE pool from relay environment variables when no pool file is
+/// mounted. Operators already configure coturn credentials for the `turn`
+/// compose profile, so publishing them here lets clients provision TURN without
+/// hand-typed URLs — which is what makes calls work across NAT/VPN.
+fn turn_pool_from_env(cfg: &RelayConfig) -> Option<Vec<IceServer>> {
+    let username = std::env::var("FEDI3_RELAY_TURN_USERNAME")
+        .ok()?
+        .trim()
+        .to_string();
+    let credential = std::env::var("FEDI3_RELAY_TURN_CREDENTIAL")
+        .ok()?
+        .trim()
+        .to_string();
+    if username.is_empty() || credential.is_empty() {
+        return None;
+    }
+    let explicit = std::env::var("FEDI3_RELAY_TURN_URLS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let public_url = cfg.public_url.as_deref()?;
+    let uri = http::Uri::try_from(public_url).ok()?;
+    let host = uri.host()?.to_string();
+    let port = std::env::var("FEDI3_RELAY_TURN_PORT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .unwrap_or(3478);
+    build_turn_pool(&host, port, username, credential, explicit)
+}
+
 pub(super) async fn turn_pool(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -390,7 +453,10 @@ pub(super) async fn turn_pool(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some(path) = std::env::var_os("FEDI3_RELAY_TURN_POOL_FILE") else {
-        return StatusCode::NO_CONTENT.into_response();
+        return match turn_pool_from_env(&state.cfg) {
+            Some(pool) => ([(header::CACHE_CONTROL, "no-store")], Json(pool)).into_response(),
+            None => StatusCode::NO_CONTENT.into_response(),
+        };
     };
     let pool = async {
         // Bounded even for a misconfigured file (do not read it all first).
@@ -467,6 +533,57 @@ mod tests {
         assert!(authorized(&state, "alice", &headers).await);
         state.db.set_disabled("alice", true).await.unwrap();
         assert!(!authorized(&state, "alice", &headers).await);
+    }
+
+    #[test]
+    fn automatic_pool_derives_udp_and_tcp_turn_for_the_relay_host() {
+        let pool = build_turn_pool(
+            "relay.example",
+            3478,
+            "relay".into(),
+            "secret".into(),
+            Vec::new(),
+        )
+        .expect("derived pool");
+        assert_eq!(pool.len(), 1);
+        assert_eq!(
+            pool[0].urls,
+            vec![
+                "turn:relay.example:3478?transport=udp".to_string(),
+                "turn:relay.example:3478?transport=tcp".to_string()
+            ]
+        );
+        assert_eq!(pool[0].username, "relay");
+        assert_eq!(pool[0].credential, "secret");
+    }
+
+    #[test]
+    fn automatic_pool_needs_host_and_credentials() {
+        assert!(build_turn_pool(
+            "",
+            3478,
+            "relay".into(),
+            "secret".into(),
+            Vec::new()
+        )
+        .is_none());
+        assert!(build_turn_pool(
+            "relay.example",
+            3478,
+            "relay".into(),
+            String::new(),
+            Vec::new()
+        )
+        .is_none());
+        let explicit = build_turn_pool(
+            "relay.example",
+            3478,
+            "relay".into(),
+            "secret".into(),
+            vec!["turns:turn.example:5349".into()],
+        )
+        .expect("explicit pool");
+        assert_eq!(explicit[0].urls, vec!["turns:turn.example:5349"]);
     }
 
     #[test]

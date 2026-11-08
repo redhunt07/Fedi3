@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 
 import '../../l10n/l10n_ext.dart';
@@ -12,6 +14,7 @@ import '../../state/peer_presence_store.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/presence_selector.dart';
+import 'audio_settings_screen.dart';
 import 'backup_screen.dart';
 import 'client_updates_screen.dart';
 import 'dev_core_screen.dart';
@@ -179,6 +182,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => _push(context,
                     TranslationSettingsScreen(appState: widget.appState)),
               ),
+              // Audio routing is a desktop concern: Android picks the route
+              // through the system audio policy during a call.
+              if (defaultTargetPlatform == TargetPlatform.linux ||
+                  defaultTargetPlatform == TargetPlatform.windows ||
+                  defaultTargetPlatform == TargetPlatform.macOS)
+                _tile(
+                  context,
+                  icon: Icons.headphones_rounded,
+                  title: context.l10n.audioSettingsTitle,
+                  subtitle: context.l10n.audioSettingsHint,
+                  onTap: () => _push(
+                      context, AudioSettingsScreen(appState: widget.appState)),
+                ),
               _section(context, context.l10n.backupTitle),
               _tile(
                 context,

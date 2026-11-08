@@ -16,6 +16,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/audio_devices.dart';
 import '../../services/call_ice_config.dart';
 import '../../services/relay_capabilities.dart';
 import '../../services/screen_share_service.dart';
@@ -89,6 +90,12 @@ class _CallScreenState extends State<CallScreen> {
   bool _collectingMediaStats = false;
   DateTime? _startedAt;
   bool _fetching = false;
+  final Map<String, int> _iceRestarts = {};
+  Timer? _connectWatchdog;
+
+  /// Two fresh ICE generations usually repair a path that broke after the
+  /// first candidate exchange; further attempts only delay the error message.
+  static const int _maxIceRestarts = 2;
 
   String get _selfActor {
     final cfg = widget.appState.config;
@@ -120,6 +127,7 @@ class _CallScreenState extends State<CallScreen> {
     _streamSub?.cancel();
     _durationTimer?.cancel();
     _mediaStatsTimer?.cancel();
+    _connectWatchdog?.cancel();
     for (final r in _remoteRenderers.values) {
       r.dispose();
     }
@@ -150,8 +158,53 @@ class _CallScreenState extends State<CallScreen> {
         return;
       }
       _localRenderer = renderer;
+      // The desktop audio settings persist the operator's chosen microphone
+      // and speaker. Selecting them before capture makes the call use the
+      // devices the user tested instead of the system defaults.
+      final desktop = defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS;
+      final prefs = widget.appState.prefs;
+      final inputId = prefs.audioInputDeviceId;
+      final outputId = prefs.audioOutputDeviceId;
+      String? effectiveInput;
+      if (desktop) {
+        try {
+          // An empty preference means the system default. Resolve it explicitly
+          // because the native bridge keeps the device selected by an earlier
+          // call or by the audio settings screen.
+          final effectiveOutput = outputId.isNotEmpty
+              ? outputId
+              : await AudioDevices.defaultOutputId();
+          if (effectiveOutput != null) {
+            await Helper.selectAudioOutput(effectiveOutput);
+          }
+        } catch (_) {
+          // A removed device falls back to the system default.
+        }
+        try {
+          effectiveInput = inputId.isNotEmpty
+              ? inputId
+              : await AudioDevices.defaultInputId();
+          if (effectiveInput != null) {
+            await Helper.selectAudioInput(effectiveInput);
+          }
+        } catch (_) {
+          // A removed device falls back to the system default.
+        }
+      }
+      final audioConstraints = desktop && effectiveInput != null
+          ? <String, dynamic>{
+              'optional': [
+                {'sourceId': effectiveInput},
+              ],
+              'echoCancellation': true,
+              'noiseSuppression': true,
+              'autoGainControl': true,
+            }
+          : true;
       final stream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
+        'audio': audioConstraints,
         'video': widget.mediaType == 'video'
             ? {
                 'facingMode': 'user',
@@ -276,9 +329,11 @@ class _CallScreenState extends State<CallScreen> {
         afterId: _lastSignalId,
       );
       for (final s in items) {
+        // Advance the cursor for every signal, not only this call's: the
+        // thread may carry other calls, and a stale cursor replays them.
         if (s.id > _lastSignalId) _lastSignalId = s.id;
-        if (s.callId != _callId) continue;
         if (s.createdAtMs > _lastSignalMs) _lastSignalMs = s.createdAtMs;
+        if (s.callId != _callId) continue;
         await _handleSignal(s);
       }
     } catch (_) {
@@ -379,16 +434,31 @@ class _CallScreenState extends State<CallScreen> {
     if (existing != null) return existing;
     final cfg = widget.appState.config;
     final iceUrls = cfg?.webrtcIceUrls ?? const <String>[];
+    // The relay host also serves coturn. Passing it makes configured TURN
+    // credentials effective even when the user never typed a turn: URL.
+    final relayHost =
+        cfg == null ? null : callRelayHost(cfg.relayWs, cfg.publicBaseUrl);
     final servers = [
       ...buildCallIceServers(
         iceUrls,
         username: cfg?.webrtcIceUsername,
         credential: cfg?.webrtcIceCredential,
+        relayHost: relayHost,
       )
     ];
     if (cfg != null) {
       _communityIce ??= RelayCapabilities.turnPool(cfg);
-      servers.addAll(await _communityIce!);
+      final pool = await _communityIce!;
+      final known = servers
+          .map((server) => server['urls']?.toString() ?? '')
+          .where((url) => url.isNotEmpty)
+          .toSet();
+      for (final server in pool) {
+        final url = server['urls']?.toString() ?? '';
+        if (url.isEmpty || known.contains(url)) continue;
+        servers.add(server);
+        known.add(url);
+      }
     }
     if (_ended || !mounted) throw StateError('call ended during ICE setup');
     final pc = await createPeerConnection({
@@ -403,6 +473,7 @@ class _CallScreenState extends State<CallScreen> {
     _mediaStatsTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
       _logMediaStats();
     });
+    _armConnectWatchdog();
     pc.onIceCandidate = (candidate) {
       if (candidate.candidate == null) return;
       _signal('ice', to: actor, data: {
@@ -423,18 +494,21 @@ class _CallScreenState extends State<CallScreen> {
         _connected.add(actor);
         _connecting = false;
         _error = null;
+        _iceRestarts.remove(actor);
+        _connectWatchdog?.cancel();
         _startedAt ??= DateTime.now();
         _mediaStatsTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
           _logMediaStats();
         });
-      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
         _connected.remove(actor);
         _connecting = false;
-        if (mounted &&
-            state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-          _error = context.l10n.networkErrorTitle;
-        }
+        // A failed candidate pair can be repaired by a fresh ICE generation;
+        // only surface the network error after the automatic retries.
+        unawaited(_restartIce(actor));
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        _connected.remove(actor);
+        _connecting = false;
       }
       if (mounted) setState(() {});
     };
@@ -446,6 +520,77 @@ class _CallScreenState extends State<CallScreen> {
       }
     }
     return pc;
+  }
+
+  void _armConnectWatchdog() {
+    _connectWatchdog?.cancel();
+    _connectWatchdog = Timer(const Duration(seconds: 25), () {
+      if (_ended || !mounted) return;
+      final pending =
+          _pcs.keys.where((actor) => !_connected.contains(actor)).toList();
+      if (pending.isEmpty) return;
+      var retried = false;
+      for (final actor in pending) {
+        final attempts = _iceRestarts[actor] ?? 0;
+        if (attempts < _maxIceRestarts) {
+          unawaited(_restartIce(actor));
+          retried = true;
+        }
+      }
+      if (!retried) setState(() => _error = context.l10n.networkErrorTitle);
+    });
+  }
+
+  final Set<String> _restarting = {};
+
+  /// Starts a fresh ICE generation for one peer.
+  ///
+  /// Media that never flows after signaling completed is almost always a
+  /// failed candidate pair (symmetric NAT, VPN, UDP blocked). A new offer with
+  /// fresh credentials and relayed candidates repairs it without a new call.
+  Future<void> _restartIce(String actor) async {
+    if (_ended || !mounted || _restarting.contains(actor)) return;
+    final attempts = _iceRestarts[actor] ?? 0;
+    if (attempts >= _maxIceRestarts) {
+      if (mounted) setState(() => _error = context.l10n.networkErrorTitle);
+      return;
+    }
+    _iceRestarts[actor] = attempts + 1;
+    _restarting.add(actor);
+    try {
+      await _createOffer(actor, iceRestart: true);
+    } catch (_) {
+      // The watchdog makes one more attempt before reporting the failure.
+    } finally {
+      _restarting.remove(actor);
+    }
+    if (!_ended && mounted && !_connected.contains(actor)) {
+      _armConnectWatchdog();
+    }
+  }
+
+  /// Manual retry from the error banner.
+  Future<void> _retryConnection() async {
+    if (_ended || !mounted) return;
+    setState(() {
+      _error = null;
+      _iceRestarts.clear();
+    });
+    final actors = _pcs.keys.toList();
+    if (actors.isEmpty) {
+      if (widget.incoming && widget.remoteActor != null) {
+        await _signal('accept');
+      } else {
+        await _signal('invite', data: {
+          'media': widget.mediaType,
+          'title': widget.title,
+        });
+      }
+      return;
+    }
+    for (final actor in actors) {
+      await _restartIce(actor);
+    }
   }
 
   Future<void> _logMediaStats() async {
@@ -469,6 +614,29 @@ class _CallScreenState extends State<CallScreen> {
               'connected': _connected.contains(entry.key),
               'connection_state': entry.value.connectionState?.name,
               'ice_state': entry.value.iceConnectionState?.name,
+              'gathering_state': entry.value.iceGatheringState?.name,
+              'ice_restarts': _iceRestarts[entry.key] ?? 0,
+              'local_candidates': reports
+                  .where((r) => r.type == 'local-candidate')
+                  .map((r) => {
+                        'type': r.values['candidateType'],
+                        'protocol': r.values['protocol'],
+                        'address': r.values['address'],
+                        'port': r.values['port'],
+                      })
+                  .toList(),
+              'selected_pair': reports
+                  .where((r) =>
+                      r.type == 'candidate-pair' &&
+                      (r.values['nominated'] == true ||
+                          r.values['state'] == 'succeeded'))
+                  .map((r) => {
+                        'state': r.values['state'],
+                        'nominated': r.values['nominated'],
+                        'requests_sent': r.values['requestsSent'],
+                        'responses_received': r.values['responsesReceived'],
+                      })
+                  .toList(),
               'candidate_pairs': reports
                   .where((r) => r.type == 'candidate-pair')
                   .take(8)
@@ -505,14 +673,54 @@ class _CallScreenState extends State<CallScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _createOffer(String actor) async {
+  Future<void> _createOffer(String actor, {bool iceRestart = false}) async {
     final pc = await _peer(actor);
-    final offer = await pc.createOffer();
+    if (iceRestart) {
+      try {
+        await pc.restartIce();
+      } catch (_) {
+        // Older native builds can reject restartIce; createOffer still runs.
+      }
+    }
+    final offer = await pc.createOffer(iceRestart
+        ? <String, dynamic>{'iceRestart': true}
+        : <String, dynamic>{});
     await pc.setLocalDescription(offer);
+    final local = await _settledLocalDescription(pc, offer);
     await _signal('offer', to: actor, data: {
-      'sdp': offer.sdp,
-      'type': offer.type,
+      'sdp': local.sdp,
+      'type': local.type,
     });
+  }
+
+  /// Waits for ICE gathering and returns the local description with the
+  /// gathered candidates embedded in its SDP.
+  ///
+  /// Chat signaling is asynchronous and may queue or drop individual messages.
+  /// Trickle candidates alone leave a call stuck when one message is lost, so
+  /// the offer/answer carries every candidate gathered within a short window.
+  /// Gathering continues afterwards and trickle still sends the rest.
+  Future<RTCSessionDescription> _settledLocalDescription(
+    RTCPeerConnection pc,
+    RTCSessionDescription fallback,
+  ) async {
+    // Iteration-bounded so widget tests that advance a fake clock still reach
+    // the timeout; 25 * 100 ms caps the wait at 2.5 s in real time too.
+    for (var i = 0; i < 25; i++) {
+      if (pc.iceGatheringState ==
+          RTCIceGatheringState.RTCIceGatheringStateComplete) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (_ended || !mounted) break;
+    }
+    try {
+      final local = await pc.getLocalDescription();
+      if (local != null && (local.sdp ?? '').isNotEmpty) return local;
+    } catch (_) {
+      // Keep the original description when the bridge cannot read it back.
+    }
+    return fallback;
   }
 
   Future<void> _handleOffer(ChatCallSignal s, String from) async {
@@ -525,9 +733,10 @@ class _CallScreenState extends State<CallScreen> {
     await _flushIce(from);
     final answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    final local = await _settledLocalDescription(pc, answer);
     await _signal('answer', to: from, data: {
-      'sdp': answer.sdp,
-      'type': answer.type,
+      'sdp': local.sdp,
+      'type': local.type,
     });
     _participants.add(from);
     if (mounted) setState(() {});
@@ -699,6 +908,7 @@ class _CallScreenState extends State<CallScreen> {
     _retrySignal?.cancel();
     _durationTimer?.cancel();
     _mediaStatsTimer?.cancel();
+    _connectWatchdog?.cancel();
     // Stop capture immediately, even when signaling is offline or queued.
     if (notify) unawaited(_signal('leave'));
     final peers = _pcs.keys.toList();
@@ -872,11 +1082,13 @@ class _CallScreenState extends State<CallScreen> {
           children: [
             Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             Text(
-              _connected.isEmpty
-                  ? (_connecting
+              _connected.isNotEmpty
+                  ? '${_connected.length + 1} · ${_durationLabel()}'
+                  : _pcs.isNotEmpty
                       ? context.l10n.callConnecting
-                      : context.l10n.callNoAnswer)
-                  : '${_connected.length + 1} · ${_durationLabel()}',
+                      : (_connecting
+                          ? context.l10n.callWaiting
+                          : context.l10n.callNoAnswer),
               style: const TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
@@ -894,8 +1106,19 @@ class _CallScreenState extends State<CallScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(_error!,
-                  style: const TextStyle(color: Colors.redAccent)),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(_error!,
+                        style: const TextStyle(color: Colors.redAccent)),
+                  ),
+                  TextButton.icon(
+                    onPressed: _retryConnection,
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(context.l10n.networkErrorRetry),
+                  ),
+                ],
+              ),
             ),
           Expanded(
             child: Padding(
@@ -921,8 +1144,8 @@ class _CallScreenState extends State<CallScreen> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            _connecting
-                                ? context.l10n.callWaiting
+                            _pcs.isNotEmpty || _connecting
+                                ? context.l10n.callConnecting
                                 : context.l10n.callNoAnswer,
                             style: const TextStyle(color: Colors.white70),
                           ),

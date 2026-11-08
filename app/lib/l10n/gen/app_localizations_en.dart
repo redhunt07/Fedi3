@@ -2588,4 +2588,61 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get retry => 'Retry';
+
+  @override
+  String get audioSettingsTitle => 'Audio';
+
+  @override
+  String get audioSettingsHint =>
+      'Choose the microphone and audio output used by calls on this PC, then test them.';
+
+  @override
+  String get audioInputTitle => 'Microphone';
+
+  @override
+  String get audioInputHint => 'Audio source for calls.';
+
+  @override
+  String get audioOutputTitle => 'Audio output';
+
+  @override
+  String get audioOutputHint => 'Headphones or speakers for calls.';
+
+  @override
+  String get audioSystemDefault => 'System default';
+
+  @override
+  String get audioDeviceMissing =>
+      'Device unavailable (the default will be used)';
+
+  @override
+  String get audioNoDevices => 'No devices detected.';
+
+  @override
+  String get audioRefresh => 'Refresh list';
+
+  @override
+  String get audioTestMic => 'Test microphone';
+
+  @override
+  String get audioStopTest => 'Stop';
+
+  @override
+  String get audioTestMicHint =>
+      'Records 5 seconds with the chosen microphone and plays it back on the chosen output.';
+
+  @override
+  String get audioDefaultMicHint =>
+      'The recorder cannot reach the chosen device: using the default.';
+
+  @override
+  String get audioTestOutput => 'Play test tone';
+
+  @override
+  String get audioTestOutputHint =>
+      'Plays a sound on the chosen output without changing the system audio.';
+
+  @override
+  String get audioAppliedHint =>
+      'Changes apply to the next calls. When a device is unavailable, the call uses the default.';
 }

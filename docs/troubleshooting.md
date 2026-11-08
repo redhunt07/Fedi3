@@ -142,6 +142,16 @@ The caller generates the SDP offer after acceptance;
 ICE candidates that arrived before the offer are kept and applied
 after the remote description.
 
+If signaling completes but `candidate_pairs` stay `in-progress` with
+`responses_received: 0`, the peers cannot reach each other directly: a VPN,
+symmetric NAT or a UDP-blocking network is involved and TURN is required. Check
+`local_candidates` in the same log line for a `relay` candidate. The client
+derives coturn endpoints from the relay host when ICE credentials are set, and
+the relay can publish its pool (`FEDI3_RELAY_TURN_*`). A relayed candidate must
+appear on at least one side; without it only STUN addresses are exchanged.
+Desktop **Settings > Audio** shows the microphone and output actually used by
+the call; a test recording with a flat level meter points at the wrong input.
+
 ## Linux AppImage 0.10.0 closes before opening a window
 
 `libmount.so.1: version MOUNT_2_40 not found` or

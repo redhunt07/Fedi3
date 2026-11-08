@@ -4,6 +4,20 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-08 — Calls: automatic TURN and desktop audio settings
+
+Calls could ring, be accepted and hang up correctly while no audio or video
+ever flowed. The cause was ICE: configured TURN credentials were ignored unless
+a `turn:` URL was typed by hand, so STUN-only calls failed whenever a peer sat
+behind a VPN or carrier-grade NAT. The client now derives coturn endpoints from
+the relay host, offers and answers carry the candidates gathered in a short
+window, and a failed media path triggers up to two automatic ICE restarts plus
+a Retry action. Relays can publish the coturn pool to authenticated accounts
+(`FEDI3_RELAY_TURN_*`), and late call signals are no longer dropped after one
+minute. Desktop **Settings > Audio** selects and tests the microphone and output
+used by calls, without changing the system-wide default. Linux playback and routing use the host GStreamer and PulseAudio/PipeWire stack.
+[Docs](docs/app_guide.md).
+
 ## 2026-11-08 — Android fix release 0.11.1
 
 [0.11.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.1) fixes the

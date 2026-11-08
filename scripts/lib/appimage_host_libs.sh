@@ -14,6 +14,11 @@ appimage_uses_host_library() {
       return 0 ;;
     libfontconfig.so.*|libfreetype.so.*|libharfbuzz.so.*|libexpat.so.*|libz.so.*)
       return 0 ;;
+    # GStreamer plugins live on the host in /usr/lib/gstreamer-1.0 and must be
+    # loaded by the same libgstreamer they were built against. Bundling the
+    # core libraries makes audioplayers fail to create its playbin elements.
+    libgst*.so.*)
+      return 0 ;;
   esac
   return 1
 }

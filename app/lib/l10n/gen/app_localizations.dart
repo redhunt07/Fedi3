@@ -4831,6 +4831,108 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Retry'**
   String get retry;
+
+  /// No description provided for @audioSettingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio'**
+  String get audioSettingsTitle;
+
+  /// No description provided for @audioSettingsHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the microphone and audio output used by calls on this PC, then test them.'**
+  String get audioSettingsHint;
+
+  /// No description provided for @audioInputTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone'**
+  String get audioInputTitle;
+
+  /// No description provided for @audioInputHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio source for calls.'**
+  String get audioInputHint;
+
+  /// No description provided for @audioOutputTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio output'**
+  String get audioOutputTitle;
+
+  /// No description provided for @audioOutputHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Headphones or speakers for calls.'**
+  String get audioOutputHint;
+
+  /// No description provided for @audioSystemDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'System default'**
+  String get audioSystemDefault;
+
+  /// No description provided for @audioDeviceMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Device unavailable (the default will be used)'**
+  String get audioDeviceMissing;
+
+  /// No description provided for @audioNoDevices.
+  ///
+  /// In en, this message translates to:
+  /// **'No devices detected.'**
+  String get audioNoDevices;
+
+  /// No description provided for @audioRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh list'**
+  String get audioRefresh;
+
+  /// No description provided for @audioTestMic.
+  ///
+  /// In en, this message translates to:
+  /// **'Test microphone'**
+  String get audioTestMic;
+
+  /// No description provided for @audioStopTest.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get audioStopTest;
+
+  /// No description provided for @audioTestMicHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Records 5 seconds with the chosen microphone and plays it back on the chosen output.'**
+  String get audioTestMicHint;
+
+  /// No description provided for @audioDefaultMicHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The recorder cannot reach the chosen device: using the default.'**
+  String get audioDefaultMicHint;
+
+  /// No description provided for @audioTestOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'Play test tone'**
+  String get audioTestOutput;
+
+  /// No description provided for @audioTestOutputHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Plays a sound on the chosen output without changing the system audio.'**
+  String get audioTestOutputHint;
+
+  /// No description provided for @audioAppliedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes apply to the next calls. When a device is unavailable, the call uses the default.'**
+  String get audioAppliedHint;
 }
 
 class _AppLocalizationsDelegate

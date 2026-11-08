@@ -2601,4 +2601,61 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get retry => 'Riprova';
+
+  @override
+  String get audioSettingsTitle => 'Audio';
+
+  @override
+  String get audioSettingsHint =>
+      'Scegli il microfono e l’uscita audio usati dalle chiamate su questo PC, poi provali.';
+
+  @override
+  String get audioInputTitle => 'Microfono';
+
+  @override
+  String get audioInputHint => 'Sorgente audio per le chiamate.';
+
+  @override
+  String get audioOutputTitle => 'Uscita audio';
+
+  @override
+  String get audioOutputHint => 'Cuffie o altoparlanti per le chiamate.';
+
+  @override
+  String get audioSystemDefault => 'Predefinito di sistema';
+
+  @override
+  String get audioDeviceMissing =>
+      'Dispositivo non disponibile (verrà usato il predefinito)';
+
+  @override
+  String get audioNoDevices => 'Nessun dispositivo rilevato.';
+
+  @override
+  String get audioRefresh => 'Aggiorna elenco';
+
+  @override
+  String get audioTestMic => 'Testa microfono';
+
+  @override
+  String get audioStopTest => 'Ferma';
+
+  @override
+  String get audioTestMicHint =>
+      'Registra 5 secondi con il microfono scelto e riproduce la registrazione sull’uscita scelta.';
+
+  @override
+  String get audioDefaultMicHint =>
+      'Il dispositivo scelto non è raggiungibile dal registratore: uso il predefinito.';
+
+  @override
+  String get audioTestOutput => 'Riproduci tono di prova';
+
+  @override
+  String get audioTestOutputHint =>
+      'Riproduce un suono sull’uscita scelta senza cambiare l’audio di sistema.';
+
+  @override
+  String get audioAppliedHint =>
+      'Le modifiche valgono per le prossime chiamate. Se un dispositivo non è disponibile, la chiamata usa il predefinito.';
 }

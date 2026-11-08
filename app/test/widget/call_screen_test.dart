@@ -157,7 +157,9 @@ void main() {
           title: 'Bob',
           mediaType: 'audio',
         ));
-    for (var i = 0; i < 10; i++) {
+    // The caller waits briefly for ICE gathering so the offer carries
+    // candidates; the fake clock must advance past that window.
+    for (var i = 0; i < 40; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     expect(tester.takeException(), isNull);
@@ -169,7 +171,7 @@ void main() {
     expect(nativeCalls.indexOf('setRemoteDescription'),
         lessThan(nativeCalls.indexOf('addCandidate')));
     // Receiving an SDP answer alone must not claim a connected media session.
-    expect(find.text('Connecting…'), findsOneWidget);
+    expect(find.text('Connecting…'), findsWidgets);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });

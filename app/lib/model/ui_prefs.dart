@@ -44,6 +44,8 @@ class UiPrefs {
     required this.clientMonitoringEnabled,
     required this.relayAdminToken,
     required this.presenceStatus,
+    required this.audioInputDeviceId,
+    required this.audioOutputDeviceId,
   });
 
   final UiThemeMode themeMode;
@@ -72,6 +74,10 @@ class UiPrefs {
   final String relayAdminToken;
   final String presenceStatus;
 
+  /// Desktop call device selection. Empty means the system default.
+  final String audioInputDeviceId;
+  final String audioOutputDeviceId;
+
   static UiPrefs defaults() => const UiPrefs(
         themeMode: UiThemeMode.system,
         density: UiDensity.normal,
@@ -98,6 +104,8 @@ class UiPrefs {
         clientMonitoringEnabled: false,
         relayAdminToken: '',
         presenceStatus: 'online',
+        audioInputDeviceId: '',
+        audioOutputDeviceId: '',
       );
 
   UiPrefs copyWith({
@@ -126,6 +134,8 @@ class UiPrefs {
     bool? clientMonitoringEnabled,
     String? relayAdminToken,
     String? presenceStatus,
+    String? audioInputDeviceId,
+    String? audioOutputDeviceId,
   }) {
     return UiPrefs(
       themeMode: themeMode ?? this.themeMode,
@@ -155,6 +165,8 @@ class UiPrefs {
           clientMonitoringEnabled ?? this.clientMonitoringEnabled,
       relayAdminToken: relayAdminToken ?? this.relayAdminToken,
       presenceStatus: presenceStatus ?? this.presenceStatus,
+      audioInputDeviceId: audioInputDeviceId ?? this.audioInputDeviceId,
+      audioOutputDeviceId: audioOutputDeviceId ?? this.audioOutputDeviceId,
     );
   }
 
@@ -184,6 +196,8 @@ class UiPrefs {
         'clientMonitoringEnabled': clientMonitoringEnabled,
         'relayAdminToken': relayAdminToken,
         'presenceStatus': presenceStatus,
+        'audioInputDeviceId': audioInputDeviceId,
+        'audioOutputDeviceId': audioOutputDeviceId,
       };
 
   Map<String, dynamic> get json => toJson();
@@ -309,6 +323,8 @@ class UiPrefs {
       clientMonitoringEnabled: raw['clientMonitoringEnabled'] == true,
       relayAdminToken: (raw['relayAdminToken'] as String? ?? '').trim(),
       presenceStatus: _parsePresence(raw['presenceStatus']?.toString()),
+      audioInputDeviceId: (raw['audioInputDeviceId'] as String? ?? '').trim(),
+      audioOutputDeviceId: (raw['audioOutputDeviceId'] as String? ?? '').trim(),
     );
   }
 

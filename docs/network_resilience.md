@@ -78,16 +78,27 @@ Set `FEDI3_RELAY_TURN_POOL_FILE` to its container path (restrict file permission
 At most eight operators, four URLs each, file limit 64 KiB. Credentials are
 returned only to enabled accounts authenticated using their own relay token,
 through `GET /_fedi3/relay/turn/{username}` with `Cache-Control: no-store`.
+
+When no pool file is mounted, the relay derives a single-operator pool from
+`FEDI3_RELAY_TURN_USERNAME`, `FEDI3_RELAY_TURN_CREDENTIAL`, an optional
+`FEDI3_RELAY_TURN_URLS` list and `FEDI3_RELAY_TURN_PORT` (default 3478), using
+the public relay host. Compose wires these from the `TURN_USER`, `TURN_PASS`
+and `TURN_PORT` values used by the `turn` profile, so enabling coturn also
+publishes it to clients. An empty credential disables automatic provisioning.
 Rotation and allocation quotas remain the operator's responsibility; use scoped
 credentials, never a TURN administrative secret. There is no automatic commercial
 or community account creation and no implied service availability guarantee.
 
 The Flutter call screen loads the pool once per call and adds each server with its
-own credentials to ICE. The native Linux bridge receives one URL per entry.
-Explicit local ICE configuration remains supported, and provisioning failure
-leaves STUN/direct paths usable. WebRTC ICE chooses working candidates; an
-established call does not currently restart ICE automatically when an operator
-fails. Rust WebRTC data channels retain their existing separate ICE configuration.
+own credentials to ICE. When ICE credentials are configured but no `turn:` URL was
+entered, the client also derives `turn:<relay-host>:<port>` UDP and TCP endpoints,
+so a coturn instance deployed next to the relay is used without hand-typed URLs.
+The native Linux bridge receives one URL per entry. Explicit local ICE
+configuration remains supported, and provisioning failure leaves STUN/direct
+paths usable. Offers and answers carry the candidates gathered within a short
+window, and a failed candidate pair triggers up to two automatic ICE restarts
+with a manual Retry action afterwards. Rust WebRTC data channels retain their
+existing separate ICE configuration.
 
 Reference: [WebRTC TURN configuration](https://webrtc.org/getting-started/turn-server).
 

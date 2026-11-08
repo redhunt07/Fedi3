@@ -26,6 +26,13 @@ Fill in the essential fields:
   advanced override for external databases; do not duplicate the password in the template.
 - Media backend (S3/WebDAV or local).
 - `TURN_REALM`, `TURN_PASS`, `TURN_EXTERNAL_IP` (public IP) — needed by coturn. TURN starts only when `turn` is added to `COMPOSE_PROFILES`.
+  When the `turn` profile is enabled, the relay also publishes the coturn
+  credentials to authenticated clients (`GET /_fedi3/relay/turn/{username}`),
+  deriving the URLs from `FEDI3_DOMAIN` and `TURN_PORT`. Override them with
+  `FEDI3_RELAY_TURN_URLS`/`FEDI3_RELAY_TURN_PORT`/`FEDI3_RELAY_TURN_USERNAME`/
+  `FEDI3_RELAY_TURN_CREDENTIAL`, or mount a multi-operator pool with
+  `FEDI3_RELAY_TURN_POOL_FILE`. Without TURN, calls fail whenever both peers
+  sit behind symmetric NAT or a VPN.
   The TURN container receives only its own port parameter in the environment,
   not the DB or relay credentials; the TURN credentials are passed to the service.
   STUN healthcheck and memory limit are also present in the standalone compose.

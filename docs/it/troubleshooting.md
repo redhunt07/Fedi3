@@ -142,6 +142,17 @@ contenuto audio/video. Il chiamante genera l'offerta SDP dopo l'accettazione;
 i candidati ICE arrivati prima dell'offerta vengono conservati e applicati
 dopo la descrizione remota.
 
+Se il signaling si conclude ma i `candidate_pairs` restano `in-progress` con
+`responses_received: 0`, gli interlocutori non riescono a raggiungersi
+direttamente: c’è una VPN, un NAT simmetrico o una rete che blocca UDP, quindi
+serve TURN. Controlla `local_candidates` nella stessa riga di log: deve
+comparire un candidato `relay`. Il client ricava gli endpoint coturn dall’host
+del relay quando sono impostate le credenziali ICE, e il relay può pubblicare il
+proprio pool (`FEDI3_RELAY_TURN_*`). Senza un candidato relay vengono scambiati
+solo indirizzi STUN. Su desktop **Impostazioni > Audio** mostra microfono e
+uscita realmente usati dalla chiamata; una registrazione di prova con
+l’indicatore fermo a zero indica l’ingresso sbagliato.
+
 ## AppImage Linux 0.10.0 si chiude prima di aprire la finestra
 
 `libmount.so.1: version MOUNT_2_40 not found` o

@@ -95,6 +95,13 @@ services:
       - FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_CONNECT_TIMEOUT_SECS:-10}
       - FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS=${FEDI3_RELAY_HTTP_POOL_IDLE_TIMEOUT_SECS:-90}
       - FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST=${FEDI3_RELAY_HTTP_POOL_MAX_IDLE_PER_HOST:-8}
+      # TURN provisioning for calls: when no pool file is mounted, the relay
+      # publishes coturn credentials to authenticated clients. Empty credential
+      # disables automatic provisioning.
+      - FEDI3_RELAY_TURN_URLS=${FEDI3_RELAY_TURN_URLS:-}
+      - FEDI3_RELAY_TURN_PORT=${TURN_PORT:-3478}
+      - FEDI3_RELAY_TURN_USERNAME=${TURN_USER:-relay}
+      - FEDI3_RELAY_TURN_CREDENTIAL=${TURN_PASS:-}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}
