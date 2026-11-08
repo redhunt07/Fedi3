@@ -110,8 +110,17 @@ class _CallScreenState extends State<CallScreen> {
     for (final pc in _pcs.values) {
       pc.close();
     }
-    _localStream?.getTracks().forEach((t) => t.stop());
-    _screenStream?.getTracks().forEach((t) => t.stop());
+    final stream = _localStream;
+    for (final track in [
+      ...?_localStream?.getTracks(),
+      ...?_screenStream?.getTracks(),
+    ]) {
+      unawaited(track.stop());
+    }
+    if (stream != null) unawaited(stream.dispose());
+    _localStream = null;
+    _screenStream = null;
+    unawaited(Helper.setSpeakerphoneOn(false));
     super.dispose();
   }
 
@@ -475,7 +484,32 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _closePeer(String actor) async {
     final pc = _pcs.remove(actor);
-    await pc?.close();
+    if (pc != null) {
+      // Detach the senders before closing: an audio sender still attached to a
+      // live connection keeps WebRTC's audio device recording after the call,
+      // which costs CPU and holds the microphone.
+      final senders = <RTCRtpSender>[];
+      for (final map in [
+        _audioSenders,
+        _videoSenders,
+        _addedScreenAudio,
+        _addedScreenVideo,
+      ]) {
+        final sender = map.remove(actor);
+        if (sender != null) senders.add(sender);
+      }
+      for (final sender in senders) {
+        try {
+          await pc.removeTrack(sender);
+        } catch (_) {
+          // A sender can already be gone when the connection failed early.
+        }
+      }
+      await pc.close();
+      // Dispose releases the native peer connection; without it the shared
+      // audio device keeps its playout thread running after the call.
+      await pc.dispose();
+    }
     final renderer = _remoteRenderers.remove(actor);
     renderer?.dispose();
   }
