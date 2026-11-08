@@ -718,7 +718,16 @@ async fn media_upload(state: &ApState, req: Request<Body>) -> Response<Body> {
         return simple(StatusCode::BAD_REQUEST, "empty body");
     }
     if let Some(ip) = client_ip_from_request(&parts) {
-        if let Err(resp) = inbox_rate_limit(state, &format!("ip:{ip}"), bytes.len() as u64).await {
+        let limits = state.inbox_limits.clone();
+        if let Err(resp) = rate_limit_with(
+            state,
+            &format!("media:ip:{ip}"),
+            bytes.len() as u64,
+            limits.max_reqs_per_min,
+            limits.max_bytes_per_min.saturating_mul(32),
+        )
+        .await
+        {
             state.net.rate_limit_hit();
             let _ = state.social.insert_audit_event(
                 "rate_limit",
@@ -8226,6 +8235,26 @@ fn domain_matches(host: &str, pattern: &str) -> bool {
 
 async fn inbox_rate_limit(state: &ApState, key_id: &str, bytes: u64) -> Result<(), Response<Body>> {
     let limits = state.inbox_limits.clone();
+    rate_limit_with(
+        state,
+        key_id,
+        bytes,
+        limits.max_reqs_per_min,
+        limits.max_bytes_per_min,
+    )
+    .await
+}
+
+/// Shared fixed-window limiter. Media uploads are single, large requests from the
+/// local app, so they get their own key namespace and a much bigger byte budget
+/// than small federated inbox activities.
+async fn rate_limit_with(
+    state: &ApState,
+    key_id: &str,
+    bytes: u64,
+    max_reqs_per_min: u32,
+    max_bytes_per_min: u64,
+) -> Result<(), Response<Body>> {
     let now = now_ms();
     let mut guard = state.inbox_limiter.lock().await;
     let st = guard.entry(key_id.to_string()).or_default();
@@ -8234,10 +8263,10 @@ async fn inbox_rate_limit(state: &ApState, key_id: &str, bytes: u64) -> Result<(
         st.reqs = 0;
         st.bytes = 0;
     }
-    if st.reqs.saturating_add(1) > limits.max_reqs_per_min.max(1) {
+    if st.reqs.saturating_add(1) > max_reqs_per_min.max(1) {
         return Err(simple(StatusCode::TOO_MANY_REQUESTS, "rate limited"));
     }
-    if st.bytes.saturating_add(bytes) > limits.max_bytes_per_min.max(1024) {
+    if st.bytes.saturating_add(bytes) > max_bytes_per_min.max(1024) {
         return Err(simple(StatusCode::TOO_MANY_REQUESTS, "rate limited"));
     }
     st.reqs = st.reqs.saturating_add(1);
