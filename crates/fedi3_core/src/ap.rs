@@ -5154,6 +5154,11 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
             notify_targets.push(a.clone());
         }
     }
+    let thread_title = state
+        .social
+        .get_chat_thread_title(&input.thread_id)
+        .ok()
+        .flatten();
     let text = if !add.is_empty() {
         format!("Added: {}", add.join(", "))
     } else if !remove.is_empty() {
@@ -5171,7 +5176,7 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
             "remove_member"
         },
         Some(if !add.is_empty() { add } else { remove }),
-        None,
+        thread_title,
         Some(text),
         Some(new_members),
     )

@@ -4372,6 +4372,18 @@ impl SocialDb {
         .map_err(Into::into)
     }
 
+    pub fn get_chat_thread_title(&self, thread_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT title FROM chat_threads WHERE thread_id=?1",
+            params![thread_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(|row| row.flatten())
+        .map_err(Into::into)
+    }
+
     pub fn get_chat_thread_kind(&self, thread_id: &str) -> Result<Option<String>> {
         let conn = self.connect()?;
         conn.query_row(
