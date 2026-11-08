@@ -88,6 +88,12 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final pending = NotificationService.pendingThread;
       if (pending != null) _openNotifiedThread(pending);
+      // The startup request can run before the plugin has an activity and is
+      // then dropped silently; ask again once the UI is attached so Android 13+
+      // actually shows the grant dialog.
+      if (Platform.isAndroid) {
+        unawaited(NotificationService.requestPermission());
+      }
     });
     _pages = <Widget>[
       TimelinesScreen(appState: widget.appState),

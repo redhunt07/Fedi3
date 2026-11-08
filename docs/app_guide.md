@@ -38,6 +38,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - Chats are 1:1 or group. Delivery prefers the P2P circuit; when that is unavailable the envelope is posted over HTTPS to the peer's relay path (`/users/<name>/_fedi3/chat/inbox`), so chat works in relay-only deployments too. The message body stays end-to-end encrypted either way.
 - Chat messages use AES-256-GCM with per-message keys derived from Kyber768 through HKDF-SHA256 and RSA-SHA256 signatures. The relay does not see the chat content. RSA-OAEP is used separately for compatibility/spool envelopes.
 - It supports reactions, files, GIFs and read status.
+- The notification service declares `remoteMessaging` on Android 14+ (falling back to
+  `dataSync` below): Android 15 caps `dataSync` foreground services at six hours per day.
 - Screen sharing needs a `mediaProjection` foreground service on Android; the app starts
   `ScreenShareService` before requesting the projection and stops it when sharing ends.
 - Calls use WebRTC between clients. Android needs `ACCESS_NETWORK_STATE` and `ACCESS_WIFI_STATE`: without them the WebRTC network monitor throws and aborts the process on the first call.
