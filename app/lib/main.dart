@@ -36,6 +36,14 @@ Future<void> main(List<String> args) async {
     if (kDebugMode) debugPrint('[startup] media_kit done');
     await NotificationService.init();
     if (kDebugMode) debugPrint('[startup] notifications done');
+    // Android 13+ requires a runtime grant before any notification is shown,
+    // including the foreground keep-alive service. Ask once at startup instead
+    // of waiting for the user to enable a push provider.
+    if (!headlessPush && Platform.isAndroid) {
+      try {
+        await NotificationService.requestPermission();
+      } catch (_) {}
+    }
     if (!Platform.isLinux && runWebViewTitleBarWidget(args)) return;
     // Android exposes no HOME directory, so both the config store and the Rust
     // core must be pointed at the app support directory explicitly.

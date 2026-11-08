@@ -9,7 +9,9 @@ import 'package:flutter/services.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
+import '../../services/background_service.dart';
 import '../../services/mobile_push_service.dart';
+import '../widgets/background_service_settings.dart';
 import '../widgets/mobile_push_settings.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
@@ -57,6 +59,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
           if (MobilePushService.supported) const MobilePushSettings(),
+          if (BackgroundService.supported) const BackgroundServiceSettings(),
           if (_status != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),

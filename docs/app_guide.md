@@ -43,7 +43,9 @@ The configuration is saved atomically in the app data directory, with `600` perm
 ## Notifications
 
 - Notifications are local; no external push service is needed.
-- On Android the `POST_NOTIFICATIONS` permission is needed (requested on first use) and the `INTERNET` permission.
+- On Android the `POST_NOTIFICATIONS` permission is needed (requested on startup) and the `INTERNET` permission.
+- Android keeps a foreground service running while the app is in the background so the local core and its event streams keep delivering notifications. It is controlled in **Settings > Security > Background notifications**; a small persistent notification is shown while it runs.
+- UnifiedPush (when the relay exposes a push provider) covers the case where Android reclaims the process.
 - The notification list updates at the top without clearing those already read.
 
 ## Settings

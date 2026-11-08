@@ -1856,6 +1856,36 @@ abstract class AppLocalizations {
   /// **'If off: followers-only'**
   String get composePublicHint;
 
+  /// No description provided for @backgroundServiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Background notifications'**
+  String get backgroundServiceTitle;
+
+  /// No description provided for @backgroundServiceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep Fedi3 running while the app is in the background so new activity still reaches you. A small persistent notification is shown.'**
+  String get backgroundServiceHint;
+
+  /// No description provided for @backgroundServiceRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Service active'**
+  String get backgroundServiceRunning;
+
+  /// No description provided for @backgroundServiceIdle.
+  ///
+  /// In en, this message translates to:
+  /// **'Service paused (app in foreground)'**
+  String get backgroundServiceIdle;
+
+  /// No description provided for @backgroundServiceNotificationBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected for notifications'**
+  String get backgroundServiceNotificationBody;
+
   /// No description provided for @composeAddMediaTitle.
   ///
   /// In en, this message translates to:

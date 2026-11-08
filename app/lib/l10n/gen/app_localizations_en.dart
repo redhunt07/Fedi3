@@ -982,6 +982,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get composePublicHint => 'If off: followers-only';
 
   @override
+  String get backgroundServiceTitle => 'Background notifications';
+
+  @override
+  String get backgroundServiceHint =>
+      'Keep Fedi3 running while the app is in the background so new activity still reaches you. A small persistent notification is shown.';
+
+  @override
+  String get backgroundServiceRunning => 'Service active';
+
+  @override
+  String get backgroundServiceIdle => 'Service paused (app in foreground)';
+
+  @override
+  String get backgroundServiceNotificationBody => 'Connected for notifications';
+
+  @override
   String get composeAddMediaTitle => 'Add media';
 
   @override
