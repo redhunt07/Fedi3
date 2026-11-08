@@ -2587,4 +2587,12 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get chatThreadDeleted => 'Chat eliminata';
+
+  @override
+  String chatSendFailed(String error) {
+    return 'Invio non riuscito: $error';
+  }
+
+  @override
+  String get retry => 'Riprova';
 }

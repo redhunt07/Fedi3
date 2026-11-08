@@ -1185,5 +1185,14 @@
   "chatMemberAdded": "Member added",
   "chatMemberRemoved": "Member removed",
   "chatMemberLeft": "Member left",
-  "chatThreadDeleted": "Chat deleted"
+  "chatThreadDeleted": "Chat deleted",
+  "chatSendFailed": "Could not send: {error}",
+  "retry": "Retry",
+  "@chatSendFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  }
 }

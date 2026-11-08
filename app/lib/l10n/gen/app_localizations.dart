@@ -4807,6 +4807,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Chat deleted'**
   String get chatThreadDeleted;
+
+  /// No description provided for @chatSendFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not send: {error}'**
+  String chatSendFailed(String error);
+
+  /// No description provided for @retry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get retry;
 }
 
 class _AppLocalizationsDelegate

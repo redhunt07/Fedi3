@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mime/mime.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -894,7 +895,18 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       await _loadMessages(reset: true);
     } catch (e) {
       if (mounted) {
+        // The draft and the attachments stay so the send can be retried; the
+        // error must be visible even when the thread already has messages.
         setState(() => _error = e.toString());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.l10n.chatSendFailed(e.toString())),
+            action: SnackBarAction(
+              label: context.l10n.retry,
+              onPressed: _sendMessage,
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -2085,7 +2097,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             ),
                             if (attachments.isNotEmpty) ...[
                               const SizedBox(height: 8),
-                              _buildAttachments(attachments),
+                              _buildAttachments(attachments,
+                                  isSelf: isSelf),
                             ],
                             const SizedBox(height: 4),
                             Row(
@@ -2440,14 +2453,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     return null;
   }
 
-  Widget _buildAttachments(List<ChatAttachment> attachments) {
-    final media =
-        attachments.where((a) => _isMedia(a.mediaType, a.url)).toList();
+  Widget _buildAttachments(List<ChatAttachment> attachments,
+      {bool isSelf = false}) {
+    final audio = attachments.where((a) => _isAudio(a.mediaType, a.url)).toList();
+    final media = attachments
+        .where((a) => _isMedia(a.mediaType, a.url) && !_isAudio(a.mediaType, a.url))
+        .toList();
     final docs =
         attachments.where((a) => !_isMedia(a.mediaType, a.url)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        for (final a in audio)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: _ChatAudioTile(
+              url: _resolveMediaUrl(a.url),
+              isSelf: isSelf,
+            ),
+          ),
         if (media.isNotEmpty)
           Wrap(
             spacing: 8,
@@ -2491,6 +2515,18 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         n.endsWith('.jpeg') ||
         n.endsWith('.gif') ||
         n.endsWith('.webp');
+  }
+
+  bool _isAudio(String mediaType, String url) {
+    final mt = mediaType.toLowerCase();
+    if (mt.startsWith('audio/')) return true;
+    final u = url.toLowerCase();
+    return u.endsWith('.m4a') ||
+        u.endsWith('.mp3') ||
+        u.endsWith('.ogg') ||
+        u.endsWith('.opus') ||
+        u.endsWith('.wav') ||
+        u.endsWith('.aac');
   }
 
   bool _isMedia(String mediaType, String url) {
@@ -2871,6 +2907,177 @@ class _AttachOption extends StatelessWidget {
       leading: Icon(icon),
       title: Text(label),
       onTap: () => Navigator.of(context).pop(value),
+    );
+  }
+}
+
+/// Voice note bubble: play/pause, progress and duration for audio attachments.
+class _ChatAudioTile extends StatefulWidget {
+  const _ChatAudioTile({required this.url, this.isSelf = false});
+
+  final String url;
+  final bool isSelf;
+
+  @override
+  State<_ChatAudioTile> createState() => _ChatAudioTileState();
+}
+
+class _ChatAudioTileState extends State<_ChatAudioTile> {
+  final AudioPlayer _player = AudioPlayer();
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  bool _playing = false;
+  bool _loading = false;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Load the source up front so the duration is visible before playback.
+    unawaited(_prepare());
+    _player.onDurationChanged.listen((d) {
+      if (mounted) setState(() => _duration = d);
+    });
+    _player.onPositionChanged.listen((p) {
+      if (mounted) setState(() => _position = p);
+    });
+    _player.onPlayerStateChanged.listen((state) {
+      if (!mounted) return;
+      setState(() => _playing = state == PlayerState.playing);
+    });
+    _player.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _playing = false;
+        _position = Duration.zero;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _prepare() async {
+    try {
+      await _player.setSourceUrl(widget.url);
+      final duration = await _player.getDuration();
+      if (mounted && duration != null && duration > Duration.zero) {
+        setState(() => _duration = duration);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  Future<void> _toggle() async {
+    if (_failed) return;
+    try {
+      if (_playing) {
+        await _player.pause();
+        return;
+      }
+      if (_duration > Duration.zero && _position >= _duration) {
+        await _player.seek(Duration.zero);
+      }
+      setState(() => _loading = true);
+      await _player.resume();
+      if (mounted) setState(() => _loading = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  String _label(Duration d) {
+    final total = d.inSeconds;
+    final m = (total ~/ 60).toString().padLeft(2, '0');
+    final s = (total % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = widget.isSelf ? Colors.white : scheme.onSurface;
+    final track = widget.isSelf
+        ? Colors.white.withAlpha(70)
+        : scheme.outlineVariant;
+    final total = _duration.inMilliseconds;
+    final progress = total <= 0
+        ? 0.0
+        : (_position.inMilliseconds / total).clamp(0.0, 1.0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: widget.isSelf
+            ? Colors.white.withAlpha(28)
+            : scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 40,
+            height: 40,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              tooltip: _playing ? 'Pause' : 'Play',
+              onPressed: _loading ? null : _toggle,
+              icon: _loading
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: fg,
+                      ),
+                    )
+                  : Icon(
+                      _failed
+                          ? Icons.error_outline_rounded
+                          : _playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                      color: fg,
+                      size: 26,
+                    ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 150,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 4,
+                    backgroundColor: track,
+                    color: fg,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _duration == Duration.zero
+                    ? 'Audio'
+                    : '${_label(_position)} / ${_label(_duration)}',
+                style: TextStyle(fontSize: 10, color: fg.withAlpha(190)),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
