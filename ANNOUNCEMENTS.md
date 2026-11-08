@@ -4,6 +4,27 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-08 — Android chat media, notifications and relay update
+
+The Android client was hardened end to end on two real devices against the
+public relay.
+
+- Chat accepts photos, files, voice notes and video messages, including messages
+  that carry only an attachment. Empty recordings are discarded instead of
+  uploading an empty body, and media uploads no longer hit the small inbox rate
+  limit.
+- Video messages record real files and show a poster frame; group member rows
+  keep names readable.
+- Notification rows no longer duplicate, and activity, chat and call alerts keep
+  their three distinct sounds while the app is closed.
+- Followed Fedi3 peers are polled and backfilled into the home timeline, so posts
+  from people you follow appear without a manual refresh.
+- The public relay was redeployed from the current main branch; it now exposes
+  `/_fedi3/relay/push-config`. UnifiedPush stays optional until an operator
+  configures a gateway; the foreground service covers notifications meanwhile.
+- Validation: 51 Rust tests and 189 Flutter tests passed; idle CPU stays under
+  1% of a core and memory stays flat around 200 MB.
+
 ## 2026-11-08 — Preparing 0.10.0: client updates and compatible security fixes
 
 Version `0.10.0` is being prepared and has not been published yet. Existing

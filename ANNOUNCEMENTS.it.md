@@ -4,6 +4,26 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-08 — Media in chat, notifiche e aggiornamento del relay su Android
+
+Il client Android è stato consolidato end-to-end su due device reali contro il
+relay pubblico.
+
+- La chat accetta foto, file, note vocali e videomessaggi, anche senza testo.
+  Le registrazioni vuote vengono scartate invece di caricare un body vuoto e gli
+  upload media non incappano più nel limite pensato per le attività federate.
+- I videomessaggi producono file reali e mostrano un poster; le righe dei membri
+  di gruppo mantengono i nomi leggibili.
+- Le notifiche non si duplicano più e attività, chat e chiamate mantengono i tre
+  suoni distinti anche con l'app chiusa.
+- I peer Fedi3 seguiti vengono interrogati e riportati nel timeline home, così i
+  post delle persone che segui compaiono senza aggiornamento manuale.
+- Il relay pubblico è stato ri-deployato dal main corrente ed espone
+  `/_fedi3/relay/push-config`. UnifiedPush resta opzionale finché un operatore non
+  configura un gateway; nel frattempo il servizio in foreground copre le notifiche.
+- Validazione: 51 test Rust e 189 test Flutter superati; la CPU in idle resta sotto
+  l'1% di un core e la memoria stabile intorno ai 200 MB.
+
 ## 2026-11-08 — Preparazione 0.10.0: aggiornamenti client e sicurezza compatibile
 
 La versione `0.10.0` è in preparazione e non è ancora pubblicata. I client
