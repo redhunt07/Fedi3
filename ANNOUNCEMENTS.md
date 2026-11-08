@@ -4,6 +4,23 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-08 — Android fix release 0.11.1
+
+[0.11.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.1) fixes the
+Android call and notification failures reported after 0.11.0. The release
+resource shrinker had removed the bundled notification sounds, so Android
+rejected every alert with `invalid_sound`; calls and messages produced no
+notification at all while the app was closed. The keep-alive engine also
+registered plugins twice and lost the Keystore-backed configuration, so it
+stopped polling. Both are fixed, with an app-private config fallback for the
+headless engine. Incoming calls now ring in foreground and background, invite
+and accept signals are retried, chat retries run every five seconds, and the
+chat composer and call controls stay above the Android navigation bar. Android
+calls no longer expose screen sharing, so audio/video calls do not start the
+MediaProjection service; desktop calls keep it. Unanswered incoming-call prompts
+expire after one minute and close when the caller hangs up.
+[Verification and limits](docs/audit/release_0.11.1_2026-11-08.md).
+
 ## 2026-11-08 — Linux and Android release 0.11.0
 
 [0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0) combines the updated

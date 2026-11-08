@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-08
+
+### Android calls, notifications and chat
+
+- Keep the bundled notification sounds in release APKs. Resource shrinking
+  removed `res/raw`, so Android rejected every notification with
+  `invalid_sound` and calls/messages never surfaced while the app was closed.
+- Stop registering plugins twice in the keep-alive engine; the duplicate
+  registration broke `flutter_secure_storage` and left the headless engine
+  without a configuration. The engine now falls back to an app-private config
+  cache when the Keystore is unavailable.
+- Ring incoming calls reliably: poll every 3 s, retry invite/accept signals
+  while connecting, and clear stale errors when a retry succeeds.
+- Retry queued chat and call envelopes every 5 s with a one-minute backoff cap
+  instead of waiting 20 s per attempt.
+- Keep the chat composer and call controls above the Android navigation bar
+  and system gestures.
+- Avoid duplicate default Hero tags when pages with floating action buttons stay
+  mounted in the shell.
+- Remove the screen-share control from Android calls; audio/video calls no longer
+  start the MediaProjection foreground service. Desktop calls keep screen sharing.
+- Incoming-call prompts expire after 60 s and close when the caller hangs up, so
+  an unanswered call no longer leaves a stale dialog on the callee.
+
 ## [0.11.0] - 2026-11-08
 
 ### Linux and Android client

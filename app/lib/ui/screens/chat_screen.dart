@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import '../../services/app_activity.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,8 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   bool _loading = false;
+  Timer? _poll;
+  StreamSubscription<bool>? _activity;
   String? _error;
   String? _next;
   List<ChatThreadItem> _threads = const [];
@@ -50,6 +53,10 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _loadThreads(reset: true));
     _markSeen();
+    _poll = AppActivity.periodic(const Duration(seconds: 10), (_) => _loadThreads(reset: true));
+    _activity = AppActivity.changes.listen((foreground) {
+      if (foreground && mounted) _loadThreads(reset: true);
+    });
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
@@ -73,6 +80,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _poll?.cancel();
+    _activity?.cancel();
     _streamSub?.cancel();
     _streamDebounce?.cancel();
     _streamRetry?.cancel();
@@ -126,6 +135,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadThreads({required bool reset}) async {
+    if (!mounted || _loading) return;
     final cfg = widget.appState.config;
     if (cfg == null || !widget.appState.isRunning) return;
     setState(() {

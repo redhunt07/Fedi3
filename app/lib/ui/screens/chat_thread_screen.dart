@@ -21,6 +21,8 @@ import '../../model/note_models.dart';
 import '../../model/ui_prefs.dart';
 import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/incoming_call_notifications.dart';
+import '../../services/sound_service.dart';
 import '../../services/gif_service.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
@@ -76,9 +78,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Map<String, dynamic>? _pin;
   String _myRole = 'member';
   Timer? _callPollTimer;
+  Timer? _messagePoll;
+  StreamSubscription<bool>? _activity;
+  bool _pendingMessageRefresh = false;
   int _lastCallSignalMs = 0;
+  int _lastCallSignalId = 0;
   String? _incomingCallId;
   bool _callPromptOpen = false;
+  Timer? _incomingCallTimer;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -125,6 +132,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _callPollTimer = AppActivity.periodic(const Duration(seconds: 2), (_) {
       _pollCallSignals();
     });
+    _messagePoll = AppActivity.periodic(
+        const Duration(seconds: 5), (_) => _loadMessages(reset: true));
+    _activity = AppActivity.changes.listen((foreground) {
+      if (foreground && mounted) {
+        _loadMessages(reset: true);
+        _pollCallSignals();
+      }
+    });
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
@@ -155,10 +170,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.title != oldWidget.title) {
       _title = widget.title;
-      _composerFocus = FocusNode(
-        debugLabel: 'chat-composer',
-        onKeyEvent: _handleComposerKey,
-      );
     }
   }
 
@@ -171,6 +182,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _typingDebounce?.cancel();
     _searchDebounce?.cancel();
     _callPollTimer?.cancel();
+    _messagePoll?.cancel();
+    _activity?.cancel();
     _composerFocus.dispose();
     _composerCtrl.dispose();
     _searchCtrl.dispose();
@@ -443,14 +456,31 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _pollCallSignals() async {
+    if (!mounted || CallScreen.active > 0 || !AppActivity.foreground) return;
     final cfg = widget.appState.config;
-    if (cfg == null || _callPromptOpen) return;
+    if (cfg == null) return;
     try {
       final items = await CoreApi(config: cfg).fetchChatCallSignals(
         threadId: widget.threadId,
         afterMs: _lastCallSignalMs,
+        afterId: _lastCallSignalId,
       );
+      final ended = items
+          .where((s) =>
+              s.action == 'leave' ||
+              s.action == 'reject' ||
+              s.action == 'decline')
+          .map((s) => s.callId)
+          .toSet();
+      if (_callPromptOpen &&
+          _incomingCallId != null &&
+          ended.contains(_incomingCallId) &&
+          mounted) {
+        Navigator.of(context, rootNavigator: true).pop(false);
+      }
+      if (_callPromptOpen) return;
       for (final s in items) {
+        if (s.id > _lastCallSignalId) _lastCallSignalId = s.id;
         if (s.createdAtMs > _lastCallSignalMs) {
           _lastCallSignalMs = s.createdAtMs;
         }
@@ -466,8 +496,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _showIncomingCall(ChatCallSignal signal, String media) async {
-    if (_callPromptOpen || !mounted) return;
+    if (_callPromptOpen || !mounted || !IncomingCallGate.claim(signal.callId)) {
+      return;
+    }
     _callPromptOpen = true;
+    unawaited(SoundService.playCallLoop());
+    _incomingCallTimer?.cancel();
+    _incomingCallTimer = Timer(const Duration(seconds: 60), () {
+      if (!mounted || !_callPromptOpen) return;
+      Navigator.of(context, rootNavigator: true).pop(false);
+    });
     final from = signal.fromActor;
     final accepted = await showDialog<bool>(
       context: context,
@@ -515,6 +553,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ],
       ),
     );
+    _incomingCallTimer?.cancel();
+    _incomingCallTimer = null;
+    await SoundService.stopCall();
     _callPromptOpen = false;
     if (accepted != true) {
       _incomingCallId = null;
@@ -632,12 +673,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   Future<void> _loadMessages({required bool reset}) async {
+    if (!mounted) return;
+    if (_loading) {
+      _pendingMessageRefresh |= reset;
+      return;
+    }
     final cfg = widget.appState.config;
     if (cfg == null || !widget.appState.isRunning) return;
     setState(() {
       _loading = true;
       _error = null;
-      if (reset) _next = null;
     });
     try {
       final api = CoreApi(config: cfg);
@@ -669,8 +714,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       final next = resp['next'];
       if (mounted) {
         setState(() {
+          if (reset && items.length == 60 && _messages.isNotEmpty) {
+            final oldest = items.last.createdAtMs;
+            final freshIds = items.map((item) => item.messageId).toSet();
+            items.addAll(_messages.where((item) =>
+                item.createdAtMs < oldest &&
+                !freshIds.contains(item.messageId)));
+          }
           _messages = items;
-          _next = next is String && next.trim().isNotEmpty ? next : null;
+          if (!reset || _messages.length <= 60) {
+            _next = next is String && next.trim().isNotEmpty ? next : null;
+          }
           if (titleFromSystem != null && titleFromSystem != _title) {
             _title = titleFromSystem;
           }
@@ -713,7 +767,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       if (mounted) setState(() => _error = msg);
       _scheduleRetryIfOffline(msg);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        if (_pendingMessageRefresh) {
+          _pendingMessageRefresh = false;
+          unawaited(_loadMessages(reset: true));
+        }
+      }
     }
   }
 
@@ -1847,7 +1907,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 ),
               ),
             ),
-          _buildComposer(),
+          SafeArea(top: false, child: _buildComposer()),
         ],
       ),
     );

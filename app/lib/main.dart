@@ -20,6 +20,7 @@ import 'ui/app_root.dart';
 import 'core/core_api.dart';
 import 'l10n/gen/app_localizations.dart';
 import 'services/core_event_stream.dart';
+import 'services/incoming_call_notifications.dart';
 import 'services/notification_service.dart';
 import 'services/mobile_push_service.dart';
 import 'services/telemetry_service.dart';
@@ -116,15 +117,34 @@ Future<void> backgroundMain() async {
     appState.useCoreDataDirBase('${support.path}${sep}core');
     await appState.startCore();
     final cfg = appState.config;
+    debugPrint('[bg] cfg=${cfg != null} running=${appState.isRunning}');
     if (cfg == null) return;
     final lastChatSeen = appState.prefs.lastChatSeenMs;
     final l10n = lookupAppLocalizations(PlatformDispatcher.instance.locale);
-    CoreEventStream(config: cfg).stream().listen((ev) async {
+    final calls = IncomingCallNotifications(
+      api: CoreApi(config: cfg),
+      selfActor:
+          '${cfg.publicBaseUrl.replaceFirst(RegExp(r'/$'), '')}/users/${cfg.username}',
+      onInvite: (signal) => NotificationService.showCallNotification(
+        title: l10n.callIncoming,
+        body: signal.threadTitle.isNotEmpty
+            ? signal.threadTitle
+            : signal.fromActor.split('/').last,
+        threadId: signal.threadId,
+      ),
+      onEnded: NotificationService.cancelCallNotification,
+    )..start();
+    debugPrint('[bg] call poller started');
+    CoreEventStream(config: cfg)
+        .stream(background: true, reconnect: true)
+        .listen((ev) async {
       if (ev.kind == 'notification' || ev.kind == 'inbox') {
         await NotificationService.showActivityNotification(
           title: l10n.activityNotificationTitle,
           body: l10n.activityNotificationBody,
         );
+      } else if (ev.kind == 'chat' && ev.activityType == 'call') {
+        await calls.poll();
       } else if (ev.kind == 'chat' &&
           (ev.activityType == 'message' || ev.activityType == 'system') &&
           ev.tsMs > lastChatSeen) {

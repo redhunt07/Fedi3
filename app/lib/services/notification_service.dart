@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class NotificationService {
@@ -129,6 +130,7 @@ class NotificationService {
         importance: Importance.max,
         priority: Priority.max,
         category: AndroidNotificationCategory.call,
+        timeoutAfter: 60000,
         fullScreenIntent: true,
         sound: RawResourceAndroidNotificationSound('fedi3_call'),
       ),
@@ -144,14 +146,16 @@ class NotificationService {
             ?.areNotificationsEnabled();
         if (allowed == false) return;
       }
-      await _plugin.show(1002, title, body, details, payload: threadId);
-    } catch (_) {/* Notification service may disappear after initialization. */}
+      await _plugin.show(1004, title, body, details, payload: threadId);
+    } catch (e) {
+      debugPrint('[bg] showCall error: $e');
+    }
   }
 
   static Future<void> cancelCallNotification() async {
     if (!_ready) return;
     try {
-      await _plugin.cancel(1002);
+      await _plugin.cancel(1004);
     } catch (_) {}
   }
 }

@@ -7,6 +7,7 @@ import 'dart:convert';
 
 import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
+import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/ui/screens/notifications_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,6 +40,34 @@ Map<String, dynamic> _like(String actor, String noteId) => {
     };
 
 void main() {
+  testWidgets(
+      'hidden notifications recover missed events without marking them read',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    var items = [_follow('https://poll.test/users/first')];
+    final client = FakeHttpClient();
+    client.handler = (request) => FakeHttpResponse(
+        body: request.url.path == '/_fedi3/notifications'
+            ? jsonEncode({'items': items})
+            : (request.url.path == '/_fedi3/stream' ? '' : '{}'));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime(),
+        prefs: UiPrefs.defaults().copyWith(lastNotificationsSeenMs: 1760000000000));
+    await app.startCore();
+    final seen = app.prefs.lastNotificationsSeenMs;
+    await pumpScreen(tester, NotificationsScreen(appState: app, active: false));
+    await tester.pumpAndSettle();
+    expect(app.prefs.lastNotificationsSeenMs, seen);
+    items = [{..._follow('https://poll.test/users/second'), 'ts': 1760000000001}, ...items];
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pumpAndSettle();
+    expect(find.text('second'), findsOneWidget);
+    expect(app.unreadNotifications, 1);
+    expect(app.prefs.lastNotificationsSeenMs, seen);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
       'AW-11 new notification is merged at the head without clearing the list',
       (tester) async {

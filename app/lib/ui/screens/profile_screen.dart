@@ -53,16 +53,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int? _followingCount;
   int _profileTab = 0;
   Timer? _followPoll;
+  Timer? _relationsPoll;
+  StreamSubscription<bool>? _activity;
+  bool _refreshingRelations = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _relationsPoll = AppActivity.periodic(
+        const Duration(seconds: 15), (_) => _refreshRelations());
+    _activity = AppActivity.changes.listen((active) {
+      if (active && mounted) _refreshRelations();
+    });
   }
 
   @override
   void dispose() {
     _followPoll?.cancel();
+    _relationsPoll?.cancel();
+    _activity?.cancel();
     super.dispose();
   }
 
@@ -75,21 +85,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final p = await ActorRepository.instance.getActor(widget.actorUrl);
       if (!mounted) return;
       setState(() => _profile = p);
-      await _refreshFollowingStatus();
-      if (p != null) {
-        final followers = p.followers;
-        final following = p.following;
-        if (followers.isNotEmpty) {
-          _followersCount =
-              await ActorRepository.instance.fetchCollectionCount(followers);
-        }
-        if (following.isNotEmpty) {
-          _followingCount =
-              await ActorRepository.instance.fetchCollectionCount(following);
-        }
-        if (!mounted) return;
-        setState(() {});
-      }
+      unawaited(_refreshRelations());
       if (p?.outbox.isNotEmpty ?? false) {
         final page = await ActorRepository.instance
             .fetchOutboxPage(p!.outbox, limit: 20);
@@ -107,6 +103,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _refreshRelations() async {
+    final p = _profile;
+    if (p == null || _refreshingRelations || !widget.appState.isRunning) return;
+    _refreshingRelations = true;
+    Future<void> count(String url, bool followers) async {
+      if (url.isEmpty) return;
+      try {
+        final value = await ActorRepository.instance.fetchCollectionCount(url, config: widget.appState.config);
+        if (!mounted) return;
+        setState(() {
+          if (followers) {
+            _followersCount = value;
+          } else {
+            _followingCount = value;
+          }
+        });
+      } catch (_) {/* A remote count must not block the profile. */}
+    }
+
+    try {
+      await Future.wait([
+        _refreshFollowingStatus(),
+        count(p.followers, true),
+        count(p.following, false)
+      ]);
+    } finally {
+      _refreshingRelations = false;
+    }
+  }
+
   Future<void> _refreshFollowingStatus() async {
     final p = _profile;
     final cfg = widget.appState.config;
@@ -116,10 +142,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final s = await api.fetchFollowingStatus(p.id);
       if (!mounted) return;
       setState(() {
-        if (s == 'none' &&
-            (_followingStatus == 'pending' || _followingStatus == 'accepted')) {
-          return;
-        }
         _followingStatus = s;
       });
       if (_followingStatus == 'pending') {

@@ -51,29 +51,39 @@ class CoreEventStream {
   ///
   /// H-50/AN-08..10: the connection has a bounded timeout, malformed frames are
   /// dropped without killing the stream, and network errors propagate so the
-  /// caller can reconnect with backoff.
-  Stream<CoreEvent> stream({String? kind}) async* {
+  /// caller can reconnect with backoff. Notification workers opt into
+  /// [background] and [reconnect] so lifecycle changes and transient failures
+  /// cannot permanently silence them. A missing 15 s heartbeat times out.
+  Stream<CoreEvent> stream({
+    String? kind,
+    bool background = false,
+    bool reconnect = false,
+  }) async* {
     while (true) {
-      await AppActivity.waitForForeground();
+      if (!background) await AppActivity.waitForForeground();
       final client = _client ?? CoreHttp.streamClient();
       final lifecycle = AppActivity.changes.listen((foreground) {
-        if (!foreground &&
+        if (!background &&
+            !foreground &&
             _client == null &&
             CoreHttp.ownsStreamClient(client)) {
           client.close();
         }
       });
       try {
-        yield* _connection(client, kind: kind);
+        await for (final event in _connection(client, kind: kind)) {
+          yield event;
+        }
       } catch (_) {
-        if (AppActivity.foreground) rethrow;
+        if (!reconnect && (background || AppActivity.foreground)) rethrow;
       } finally {
         await lifecycle.cancel();
         if (_client == null && CoreHttp.ownsStreamClient(client)) {
           client.close();
         }
       }
-      if (AppActivity.foreground) return;
+      if (!reconnect && (background || AppActivity.foreground)) return;
+      if (reconnect) await Future<void>.delayed(const Duration(seconds: 2));
     }
   }
 
@@ -99,6 +109,7 @@ class CoreEventStream {
 
     var dataBuf = '';
     await for (final line in resp.stream
+        .timeout(const Duration(seconds: 45))
         .transform(utf8.decoder)
         .transform(const LineSplitter())) {
       if (line.startsWith('data:')) {

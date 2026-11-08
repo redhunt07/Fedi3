@@ -57,7 +57,7 @@ class _TimelinesScreenState extends State<TimelinesScreen>
     final scheme = Theme.of(context).colorScheme;
     final labelStyle = Theme.of(context).textTheme.labelLarge;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
       child: TabBar(
         controller: _tabs,
         isScrollable: MediaQuery.sizeOf(context).width < 720,
@@ -143,10 +143,10 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                 ? (useColumns
                     ? null
                     : PreferredSize(
-                        preferredSize: const Size.fromHeight(58),
+                        preferredSize: Size.fromHeight(48 * MediaQuery.textScalerOf(context).scale(1) + 4),
                         child: _timelineTabs(context)))
                 : PreferredSize(
-                    preferredSize: const Size.fromHeight(58),
+                    preferredSize: Size.fromHeight(48 * MediaQuery.textScalerOf(context).scale(1) + 4),
                     child: _timelineTabs(context)),
             actions: [
               IconButton(
@@ -699,6 +699,8 @@ class _TimelineListState extends State<_TimelineList>
   final _pending = <Map<String, dynamic>>[];
   final _scroll = ScrollController();
   Timer? _poll;
+  bool _polling = false;
+  StreamSubscription<bool>? _activity;
   Timer? _retry;
   bool _showScrollTop = false;
   bool _filterMedia = false;
@@ -735,6 +737,9 @@ class _TimelineListState extends State<_TimelineList>
     // only a safety net, so keep it slow to spare battery and CPU.
     _poll =
         AppActivity.periodic(const Duration(seconds: 20), (_) => _pollNew());
+    _activity = AppActivity.changes.listen((active) {
+      if (active && mounted) _pollNew();
+    });
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -750,6 +755,7 @@ class _TimelineListState extends State<_TimelineList>
   @override
   void dispose() {
     _poll?.cancel();
+    _activity?.cancel();
     _retry?.cancel();
     widget.appState.removeListener(_appStateListener);
     _scroll.removeListener(_onScroll);
@@ -766,6 +772,7 @@ class _TimelineListState extends State<_TimelineList>
   }
 
   Future<void> _refresh() async {
+    if (_loading) return;
     setState(() {
       _cursor = null;
       _items.clear();
@@ -784,7 +791,7 @@ class _TimelineListState extends State<_TimelineList>
     try {
       await widget.api.triggerLegacySync(pages: 10, itemsPerActor: 400);
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -805,6 +812,7 @@ class _TimelineListState extends State<_TimelineList>
           .map((m) => m.cast<String, dynamic>())
           .where(_isTimelineItem)
           .toList();
+      if (!mounted) return;
       setState(() {
         for (final it in items) {
           final id = _activityId(it);
@@ -817,18 +825,19 @@ class _TimelineListState extends State<_TimelineList>
       });
     } catch (e) {
       final msg = e.toString();
+      if (!mounted) return;
       setState(() => _error = msg);
       _scheduleRetryIfOffline(msg);
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _pollNew() async {
     if (!mounted) return;
-    if (_loading) return;
+    if (_loading || _polling) return;
     if (!widget.appState.isRunning) return;
-    if (_items.isEmpty) return;
+    _polling = true;
     try {
       final resp = await widget.api.fetchTimeline(widget.kind, limit: 20);
       final items = (resp['items'] as List<dynamic>? ?? [])
@@ -836,7 +845,7 @@ class _TimelineListState extends State<_TimelineList>
           .map((m) => m.cast<String, dynamic>())
           .where(_isTimelineItem)
           .toList();
-      if (items.isEmpty) return;
+      if (!mounted || items.isEmpty) return;
 
       final fresh = <Map<String, dynamic>>[];
       for (final it in items) {
@@ -861,6 +870,8 @@ class _TimelineListState extends State<_TimelineList>
       });
     } catch (_) {
       // best-effort auto refresh: ignore transient failures
+    } finally {
+      _polling = false;
     }
   }
 

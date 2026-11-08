@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../../services/app_activity.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -40,52 +44,90 @@ class _RelationsScreenState extends State<RelationsScreen> {
   final Map<String, ActorProfile?> _profiles = {};
   final Map<String, String> _status = {};
   final Set<String> _busy = {};
+  int _generation = 0;
+  Timer? _poll;
+  StreamSubscription<bool>? _activity;
+
+  @override
+  void dispose() {
+    _generation++;
+    _poll?.cancel();
+    _activity?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
     _load();
+    _poll = AppActivity.periodic(const Duration(seconds: 20), (_) => _load());
+    _activity = AppActivity.changes.listen((active) {
+      if (active && mounted) _load();
+    });
   }
 
   Future<void> _load() async {
+    if (_loading) return;
+    final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final ids = await ActorRepository.instance
-          .fetchCollectionItems(widget.collectionUrl);
-      final profiles = <String, ActorProfile?>{};
-      for (final id in ids) {
-        profiles[id] = await ActorRepository.instance.getActor(id);
-      }
-      final cfg = widget.appState.config;
-      final status = <String, String>{};
-      if (cfg != null) {
-        final api = CoreApi(config: cfg);
-        for (final id in ids) {
-          try {
-            status[id] = await api.fetchFollowingStatus(id);
-          } catch (_) {
-            status[id] = 'none';
-          }
-        }
-      }
-      if (!mounted) return;
+      final ids = await ActorRepository.instance.fetchCollectionItems(
+        widget.collectionUrl,
+        config: widget.appState.config,
+      );
+      if (!mounted || generation != _generation) return;
       setState(() {
         _actorIds = ids;
-        _profiles
-          ..clear()
-          ..addAll(profiles);
-        _status
-          ..clear()
-          ..addAll(status);
       });
+      // Show IDs immediately; bounded workers hydrate each row independently.
+      var next = 0;
+      final cfg = widget.appState.config;
+      final api = cfg == null ? null : CoreApi(config: cfg);
+      Future<void> worker() async {
+        while (mounted && generation == _generation && next < ids.length) {
+          final id = ids[next++];
+          await Future.wait<void>([
+            () async {
+              try {
+                final profile = await ActorRepository.instance.getActor(id);
+                if (mounted && generation == _generation) {
+                  setState(() => _profiles[id] = profile);
+                }
+              } catch (_) {
+                /* Keep the row available if its server is offline. */
+              }
+            }(),
+            () async {
+              if (api == null || _busy.contains(id)) return;
+              try {
+                final status = await api.fetchFollowingStatus(id);
+                if (mounted &&
+                    generation == _generation &&
+                    !_busy.contains(id)) {
+                  setState(() => _status[id] = status);
+                }
+              } catch (_) {
+                if (mounted && generation == _generation) {
+                  setState(() => _status.putIfAbsent(id, () => 'none'));
+                }
+              }
+            }(),
+          ]);
+        }
+      }
+
+      await Future.wait(List.generate(4, (_) => worker()));
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = e.toString());
+      if (mounted && generation == _generation) {
+        setState(() => _error = e.toString());
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _generation) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -110,7 +152,8 @@ class _RelationsScreenState extends State<RelationsScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
+        SnackBar(content: Text(context.l10n.settingsErr(e.toString()))),
+      );
     } finally {
       if (mounted) setState(() => _busy.remove(actorUrl));
     }
@@ -123,18 +166,22 @@ class _RelationsScreenState extends State<RelationsScreen> {
         title: Text(widget.title),
         actions: [
           IconButton(
-              onPressed: _loading ? null : _load,
-              icon: const Icon(Icons.refresh)),
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
         ],
       ),
-      body: _loading
+      body: _loading && _actorIds.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
                     NetworkErrorCard(
-                        message: _error, onRetry: _load, compact: true),
+                      message: _error,
+                      onRetry: _load,
+                      compact: true,
+                    ),
                   ],
                 )
               : _actorIds.isEmpty
@@ -155,33 +202,57 @@ class _RelationsScreenState extends State<RelationsScreen> {
                                 ? context.l10n.chatStatusPending
                                 : context.l10n.settingsUnfollow)
                             : context.l10n.settingsFollow;
-                        final busy = _busy.contains(id);
+                        final busy =
+                            _busy.contains(id) || !_status.containsKey(id);
                         return Card(
-                          child: ListTile(
-                            leading: StatusAvatar(
-                              imageUrl: profile?.iconUrl ?? '',
-                              size: 40,
-                            ),
-                            title: Text(profile?.displayName ?? handle),
-                            subtitle: Text(handle),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => ProfileScreen(
-                                  appState: widget.appState,
-                                  actorUrl: id,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              ListTile(
+                                leading: StatusAvatar(
+                                  imageUrl: profile?.iconUrl ?? '',
+                                  size: 40,
+                                ),
+                                title: Text(
+                                  profile?.displayName ?? handle,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  handle,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => ProfileScreen(
+                                      appState: widget.appState,
+                                      actorUrl: id,
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                            trailing: FilledButton.tonal(
-                              onPressed: busy ? null : () => _toggleFollow(id),
-                              child: busy
-                                  ? const SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2))
-                                  : Text(label),
-                            ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: FilledButton.tonal(
+                                    onPressed:
+                                        busy ? null : () => _toggleFollow(id),
+                                    child: busy
+                                        ? const SizedBox(
+                                            width: 14,
+                                            height: 14,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : Text(label),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         );
                       },

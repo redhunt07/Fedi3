@@ -11,6 +11,53 @@ import '../support/pump_app.dart';
 import '../support/test_config.dart';
 
 void main() {
+  testWidgets('a call in another chat rings while a pushed screen is open',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    var ready = false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final client = FakeHttpClient();
+    client.handler = (request) => FakeHttpResponse(
+            body: jsonEncode({
+          'items': ready && request.url.path == '/_fedi3/chat/call/signals'
+              ? [
+                  {
+                    'id': 99,
+                    'thread_id': 'other-chat',
+                    'thread_title': 'Other caller',
+                    'from_actor': 'https://remote.test/users/bob',
+                    'call_id': 'while-settings',
+                    'action': 'invite',
+                    'data': {'media': 'audio'},
+                    'created_at_ms': now,
+                  }
+                ]
+              : []
+        }));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app =
+        buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime());
+    await app.startCore();
+    await pumpScreen(tester, Shell(appState: app));
+    await tester.pumpAndSettle();
+    Navigator.of(tester.element(find.byType(Shell))).push(
+        MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('Another screen'))));
+    await tester.pumpAndSettle();
+    ready = true;
+    // The shell polls every 3 s. Pump past a couple of cadences so the invite
+    // is fetched after [ready] flips, independent of when the previous timer
+    // tick happened during the route transition.
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(seconds: 1));
+      if (find.byType(AlertDialog).evaluate().isNotEmpty) break;
+    }
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.text('Other caller'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('global incoming call polling makes one request across chats',
       (tester) async {
     await setUpPumpEnv(tester);

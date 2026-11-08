@@ -122,8 +122,16 @@ class ConfigStore {
       } else {
         await _migrateBackup();
       }
+      await writeBackgroundCache(opened);
       return ConfigLoadResult(status: result.status, data: opened);
     } catch (_) {
+      // The headless Android service runs a second Flutter engine and can lose
+      // access to the Keystore while the UI engine owns it. The app-private
+      // cache keeps notifications alive without touching the keyring.
+      final cached = readBackgroundCache();
+      if (cached != null) {
+        return ConfigLoadResult(status: result.status, data: cached);
+      }
       return const ConfigLoadResult(
           status: ConfigLoadStatus.credentialsUnavailable,
           error:
@@ -151,7 +159,32 @@ class ConfigStore {
     }
     await _migrateBackup();
     _writeAtomically(sealed, keepBackup: true);
+    await writeBackgroundCache(cfg);
   }
+
+  /// Plaintext, app-private copy of the configuration for the Android
+  /// keep-alive engine. The Keystore can be unavailable in that second engine;
+  /// Android already sandboxes the app directory, and the keyring remains the
+  /// authoritative store for the UI process.
+  static File backgroundCacheFile() =>
+      File(_join(_configDir().path, 'background_config.json'));
+
+  static Future<void> writeBackgroundCache(Map<String, dynamic> cfg) async {
+    try {
+      final target = backgroundCacheFile();
+      target.parent.createSync(recursive: true);
+      final tmp = File('${target.path}.tmp');
+      tmp.writeAsStringSync(jsonEncode(cfg), flush: true);
+      _restrictFile(tmp);
+      tmp.renameSync(target.path);
+      _restrictFile(target);
+    } catch (_) {
+      // Notifications degrade to the keyring path when the cache is unwritable.
+    }
+  }
+
+  static Map<String, dynamic>? readBackgroundCache() =>
+      _readJsonFile(backgroundCacheFile());
 
   static File configFile() {
     final dir = _configDir();
@@ -247,6 +280,10 @@ class ConfigStore {
     final bak = backupFile();
     if (bak.existsSync()) {
       bak.deleteSync();
+    }
+    final cache = backgroundCacheFile();
+    if (cache.existsSync()) {
+      cache.deleteSync();
     }
   }
 

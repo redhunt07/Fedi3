@@ -758,10 +758,12 @@ class CoreApi {
   Future<List<ChatCallSignal>> fetchChatCallSignals({
     required String threadId,
     required int afterMs,
+    int afterId = 0,
     int limit = 100,
   }) async {
     final uri = _internal('/_fedi3/chat/call/signals', {
       'thread_id': threadId,
+      if (afterId > 0) 'after_id': '$afterId',
       'after_ms': '$afterMs',
       'limit': '$limit',
     });

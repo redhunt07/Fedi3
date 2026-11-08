@@ -40,6 +40,13 @@ fn envelope(thread_id: &str, sender: &str, message_id: &str) -> ChatEnvelope {
     }
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn message_payload(text: &str) -> ChatPayload {
     ChatPayload {
         op: "message".to_string(),
@@ -249,7 +256,9 @@ fn h17_first_dm_call_invite_creates_thread_and_stores_signal() {
     payload.targets = Some(vec![local.to_string()]);
     payload.text = Some(json!({"media": "audio", "data": {"sdp": "offer"}}).to_string());
 
-    let env = envelope(&thread, sender, "call-msg-1");
+    let mut env = envelope(&thread, sender, "call-msg-1");
+    // Call invites are dropped when the sender's timestamp is stale.
+    env.created_at_ms = now_ms();
     fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
 
     assert!(
@@ -860,7 +869,9 @@ fn call_signaling_requires_existing_thread_and_member_and_unwraps_data() {
     payload.message_id = Some("call1".into());
     payload.targets = Some(vec![local.into()]);
     payload.text = Some(json!({"data": {"sdp": "test-sdp", "type": "offer"}}).to_string());
-    let env = envelope("thread", sender, "signal1");
+    let mut env = envelope("thread", sender, "signal1");
+    // Call signals are dropped when the sender's timestamp is stale.
+    env.created_at_ms = now_ms();
     fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
     assert!(!db.chat_thread_exists("thread").unwrap());
     assert!(db

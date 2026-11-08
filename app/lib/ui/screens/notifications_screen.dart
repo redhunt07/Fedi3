@@ -11,8 +11,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
-import '../../services/notification_service.dart';
-import '../../services/sound_service.dart';
+import '../../services/app_activity.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
 import '../screens/profile_screen.dart';
@@ -23,9 +22,11 @@ import '../widgets/network_error_card.dart';
 import '../theme/ui_tokens.dart';
 
 class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key, required this.appState});
+  const NotificationsScreen(
+      {super.key, required this.appState, this.active = true});
 
   final AppState appState;
+  final bool active;
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -33,6 +34,9 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _loading = false;
+  bool _incrementalLoading = false;
+  Timer? _poll;
+  StreamSubscription<bool>? _activity;
   bool _pendingIncremental = false;
   String? _error;
   String? _cursor;
@@ -50,7 +54,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void initState() {
     super.initState();
-    widget.appState.clearUnreadNotifications();
+    if (widget.active) widget.appState.clearUnreadNotifications();
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
       final running = widget.appState.isRunning;
@@ -75,6 +79,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       _lastRunning = running;
     };
     widget.appState.addListener(_appStateListener);
+    _poll = AppActivity.periodic(
+        const Duration(seconds: 15), (_) => _refreshIncremental());
+    _activity = AppActivity.changes.listen((active) {
+      if (active && mounted) _refreshIncremental();
+    });
 
     if (widget.appState.isRunning) {
       _refresh();
@@ -83,7 +92,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant NotificationsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) {
+      unawaited(_refreshIncremental());
+      widget.appState.clearUnreadNotifications();
+      unawaited(_markSeenNow());
+    }
+  }
+
+  @override
   void dispose() {
+    _poll?.cancel();
+    _activity?.cancel();
     _streamDebounce?.cancel();
     _streamRetry?.cancel();
     _loadRetry?.cancel();
@@ -107,18 +128,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       _streamDebounce = Timer(const Duration(milliseconds: 350), () {
         if (!mounted) return;
         if (widget.appState.isRunning) _refreshIncremental();
-        widget.appState.incrementUnreadNotifications();
-        final lifecycle = WidgetsBinding.instance.lifecycleState;
-        final background = lifecycle == AppLifecycleState.paused ||
-            lifecycle == AppLifecycleState.hidden;
-        if (background) {
-          NotificationService.showActivityNotification(
-            title: context.l10n.activityNotificationTitle,
-            body: context.l10n.activityNotificationBody,
-          );
-        } else {
-          unawaited(SoundService.playActivity());
-        }
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
   }
@@ -165,19 +174,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _refresh() async {
+    if (_loading || _incrementalLoading) return;
     setState(() {
       _items.clear();
       _cursor = null;
       _coreUnreachable = false;
     });
     await _loadMore();
-    await _markSeenNow();
-    widget.appState.clearUnreadNotifications();
+    if (mounted && widget.active && AppActivity.foreground) {
+      await _markSeenNow();
+      widget.appState.clearUnreadNotifications();
+    }
   }
 
   /// H-53/AW-11: fetch page 1 and merge unseen items at the head without
   /// clearing the existing list or resetting the pagination cursor.
   Future<void> _refreshIncremental() async {
+    if (_incrementalLoading) return;
     if (_loading) {
       // H-53/AW-11: a notification can arrive while the first page is loading;
       // remember it so the merge is not silently dropped.
@@ -188,6 +201,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
+    _incrementalLoading = true;
     try {
       final resp = await api.fetchNotifications(limit: 50);
       final items = (resp['items'] as List<dynamic>? ?? const [])
@@ -195,21 +209,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .map((m) => m.cast<String, dynamic>())
           .toList();
       if (!mounted) return;
+      var freshCount = 0;
       setState(() {
+        _coreUnreachable = false;
+        _error = null;
         final known = _items.map(_notificationKey).toSet();
         final fresh =
             items.where((m) => !known.contains(_notificationKey(m))).toList();
+        freshCount = fresh.length;
         _items.insertAll(0, fresh);
         final next = (resp['next'] as String?)?.trim();
         if (_cursor == null && next != null && next.isNotEmpty) {
           _cursor = next;
         }
       });
-      if (_items.isEmpty) {
+      if (widget.active && AppActivity.foreground) {
         widget.appState.clearUnreadNotifications();
+        if (freshCount > 0) await _markSeenNow();
+      } else if (freshCount > 0) {
+        widget.appState.incrementUnreadNotifications(freshCount);
       }
     } catch (_) {
       // Best-effort: keep showing the current list on transient failures.
+    } finally {
+      _incrementalLoading = false;
     }
   }
 
@@ -223,6 +246,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (_loading) return;
     if (!widget.appState.isRunning) return;
     final cfg = widget.appState.config!;
+    final firstPage = _cursor == null;
     final api = CoreApi(config: cfg);
     setState(() {
       _loading = true;
@@ -241,6 +265,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         _items.addAll(items.where((m) => !known.contains(_notificationKey(m))));
         _cursor = (next != null && next.isNotEmpty) ? next : null;
       });
+      if (firstPage && (!widget.active || !AppActivity.foreground)) {
+        final seen = widget.appState.prefs.lastNotificationsSeenMs;
+        final unread = items.where((item) {
+          final ts = item['ts'];
+          return (ts is num ? ts.toInt() : int.tryParse('$ts') ?? 0) > seen;
+        }).length;
+        final delta = unread - widget.appState.unreadNotifications;
+        if (delta > 0) widget.appState.incrementUnreadNotifications(delta);
+      }
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('SocketException') ||
@@ -455,6 +488,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           body: RefreshIndicator(
             onRefresh: _refresh,
             child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(12),
               children: [
                 SingleChildScrollView(

@@ -233,13 +233,19 @@ class ActorRepository {
   Future<ActorProfile?> _fetchActor(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty) return null;
-    final resp = await _client
-        .get(uri, headers: _acceptHeaders)
-        .timeout(CoreHttp.totalTimeout);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-    final json = jsonDecode(resp.body);
-    if (json is! Map) return null;
-    return ActorProfile.tryParse(json.cast<String, dynamic>());
+    try {
+      final resp = await _client
+          .get(uri, headers: _acceptHeaders)
+          .timeout(CoreHttp.totalTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final json = jsonDecode(resp.body);
+      if (json is! Map) return null;
+      return ActorProfile.tryParse(json.cast<String, dynamic>());
+    } catch (_) {
+      // Actor lookups decorate already available content. An offline server or
+      // an HTML error page must not raise an unhandled UI exception.
+      return null;
+    }
   }
 
   Future<List<Map<String, dynamic>>> fetchOutbox(String outboxUrl,
@@ -308,19 +314,24 @@ class ActorRepository {
 
   /// Reads the actor URLs of a followers/following collection (first page).
   Future<List<String>> fetchCollectionItems(String collectionUrl,
-      {int limit = 80}) async {
-    final first = await _fetchJson(collectionUrl);
+      {int limit = 80, CoreConfig? config}) async {
+    final first = await _fetchJson(_localCollectionUrl(collectionUrl, config));
     if (first == null) return const [];
 
     Map<String, dynamic>? page = first;
     final firstLink = first['first'];
-    if (firstLink is String && firstLink.trim().isNotEmpty) {
-      page = await _fetchJson(firstLink.trim());
+    if (first['items'] is List || first['orderedItems'] is List) {
+      page = first;
+    } else if (firstLink is String && firstLink.trim().isNotEmpty) {
+      page = await _fetchJson(_localCollectionUrl(firstLink.trim(), config));
+    } else if (firstLink is Map &&
+        (firstLink['items'] is List || firstLink['orderedItems'] is List)) {
+      page = firstLink.cast<String, dynamic>();
     } else if (firstLink is Map) {
       final href = (firstLink['id'] as String?)?.trim() ??
           (firstLink['href'] as String?)?.trim() ??
           '';
-      if (href.isNotEmpty) page = await _fetchJson(href);
+      if (href.isNotEmpty) page = await _fetchJson(_localCollectionUrl(href, config));
     }
 
     final raw = (page?['orderedItems'] as List<dynamic>? ??
@@ -342,13 +353,31 @@ class ActorRepository {
     return out;
   }
 
-  Future<int?> fetchCollectionCount(String collectionUrl) async {
-    final data = await _fetchJson(collectionUrl);
+  Future<int?> fetchCollectionCount(String collectionUrl, {CoreConfig? config}) async {
+    final data = await _fetchJson(_localCollectionUrl(collectionUrl, config));
     if (data == null) return null;
     final total = data['totalItems'];
     if (total is int) return total;
     if (total is num) return total.toInt();
     return null;
+  }
+
+  // Own relationship collections live in the local core database. Avoid a
+  // round trip through the public relay tunnel just to read our own state.
+  String _localCollectionUrl(String url, CoreConfig? config) {
+    if (config == null) return url;
+    final public = Uri.tryParse(config.publicBaseUrl);
+    final uri = Uri.tryParse(url);
+    if (public == null || uri == null ||
+        !const ['http', 'https'].contains(public.scheme) ||
+        !const ['http', 'https'].contains(uri.scheme) ||
+        public.host.isEmpty || uri.host.isEmpty || uri.origin != public.origin) {
+      return url;
+    }
+    final basePath = public.path.replaceFirst(RegExp(r'/$'), '');
+    final actor = '$basePath/users/${Uri.encodeComponent(config.username)}';
+    if (uri.path != '$actor/followers' && uri.path != '$actor/following') return url;
+    return config.localBaseUri.replace(path: uri.path.substring(basePath.length), query: uri.query).toString();
   }
 
   Future<Map<String, dynamic>?> _fetchJson(String url) async {

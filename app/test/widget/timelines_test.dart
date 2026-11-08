@@ -47,6 +47,24 @@ void _routeTimelines(FakeHttpClient client,
 }
 
 void main() {
+  testWidgets('an initially empty timeline still polls for new posts',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client = FakeHttpClient();
+    _routeTimelines(client, statusCode: 200, body: '{"items":[]}');
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, TimelinesScreen(appState: app));
+    await tester.pumpAndSettle();
+    final before = client.requestsFor('GET', '/_fedi3/timeline/unified').length;
+    await tester.pump(const Duration(seconds: 20));
+    await tester.pumpAndSettle();
+    expect(client.requestsFor('GET', '/_fedi3/timeline/unified').length,
+        greaterThan(before));
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('AW-03 timeline shows the loading skeleton, not an error',
       (tester) async {
     await setUpPumpEnv(tester);

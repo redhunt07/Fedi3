@@ -3748,7 +3748,9 @@ pub fn start_chat_retry_worker(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
+        // Chat and call signaling are latency-sensitive: a queued envelope
+        // must be retried within seconds, not tens of seconds.
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tokio::select! {
                 _ = tick.tick() => {
@@ -3778,7 +3780,9 @@ async fn retry_pending_chat(state: &ApState) {
             continue;
         };
         // Give up on envelopes older than a day: the recipient may be gone.
-        if now.saturating_sub(row.created_at_ms) > 24 * 60 * 60 * 1000 {
+        if now.saturating_sub(row.created_at_ms) > 24 * 60 * 60 * 1000
+            || (payload.op == "call" && now.saturating_sub(row.created_at_ms) > 60_000)
+        {
             let _ = state.social.finish_chat_delivery(row.id);
             continue;
         }
@@ -3841,9 +3845,10 @@ async fn retry_pending_chat(state: &ApState) {
 
 fn retry_backoff_ms(attempts: u32) -> i64 {
     // Chat should reach a peer that just reconnected promptly, so the backoff
-    // tops out at five minutes instead of growing to half an hour.
+    // starts at five seconds and tops out at one minute instead of growing to
+    // half an hour.
     let exp = 2i64.saturating_pow(attempts.min(4));
-    (20_000i64 * exp).min(5 * 60 * 1000)
+    (5_000i64 * exp).min(60 * 1000)
 }
 
 /// Remember a payload for a member we could not reach. The retry worker resolves
@@ -4711,11 +4716,11 @@ async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<
     let limit = chat_query_value(query, "limit")
         .parse::<u32>()
         .unwrap_or(100);
+    let after_id = chat_query_value(query, "after_id")
+        .parse::<i64>()
+        .unwrap_or(0)
+        .max(0);
     if thread_id.trim().is_empty() {
-        let after_id = chat_query_value(query, "after_id")
-            .parse::<i64>()
-            .unwrap_or(0)
-            .max(0);
         return match state.social.list_global_chat_call_signals(
             &local_actor(state),
             after_id,
@@ -4737,10 +4742,13 @@ async fn chat_call_signals_get(state: &ApState, req: Request<Body>) -> Response<
     {
         return simple(StatusCode::FORBIDDEN, "not a member");
     }
-    match state
-        .social
-        .list_chat_call_signals(&thread_id, &self_actor, after_ms, limit)
-    {
+    match state.social.list_chat_call_signals_after(
+        &thread_id,
+        &self_actor,
+        after_id,
+        after_ms,
+        limit,
+    ) {
         Ok(rows) => {
             let items = rows
                 .into_iter()
@@ -5523,6 +5531,18 @@ async fn fetch_chat_bundle(
     peer_id: &str,
     actor_url: &str,
 ) -> anyhow::Result<Option<chat::ChatBundle>> {
+    // Discovery already fetched an origin-bound actor document. Its signed
+    // bundle avoids another P2P timeout before every message and call signal.
+    if let Ok(doc) = fetch_chat_actor(state, actor_url).await {
+        if let Some(bundle) = doc
+            .get("fedi3ChatBundle")
+            .or_else(|| doc.get("endpoints").and_then(|e| e.get("fedi3ChatBundle")))
+            .and_then(|v| serde_json::from_value::<chat::ChatBundle>(v.clone()).ok())
+            .filter(|bundle| bundle.peer_id == peer_id && bundle.actor == actor_url)
+        {
+            return Ok(Some(bundle));
+        }
+    }
     let req = RelayHttpRequest {
         id: format!("chat-bundle-{}", chat::random_id()),
         method: "GET".to_string(),
@@ -5685,7 +5705,12 @@ async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<
                 .find(|s| s.starts_with("did:fedi3:"))
         });
     if let Some(did) = did {
-        if let Ok(Some(rec)) = state.delivery.p2p_resolve_did(did).await {
+        if let Ok(Ok(Some(rec))) = tokio::time::timeout(
+            Duration::from_millis(300),
+            state.delivery.p2p_resolve_did(did),
+        )
+        .await
+        {
             if rec.did == did && rec.actor == actor_id {
                 for p in rec.peers {
                     if p.peer_id.parse::<libp2p::PeerId>().is_err() {

@@ -4,6 +4,8 @@
  */
 
 import 'dart:convert';
+import 'package:flutter/widgets.dart';
+import 'package:fedi3/services/app_activity.dart';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -165,6 +167,31 @@ void main() {
           config: buildTestConfig(),
           client: client,
         );
+
+    test('background stream connects while the UI is paused', () async {
+      AppActivity.update(AppLifecycleState.paused);
+      addTearDown(() => AppActivity.update(AppLifecycleState.resumed));
+      client.route(
+          'GET',
+          '/_fedi3/stream',
+          FakeHttpResponse(
+              body: 'data: {"kind":"notification","ts_ms":5}\n\n'));
+      final events = await stream().stream(background: true).toList();
+      expect(events.single.tsMs, 5);
+    });
+
+    test('background stream reconnects after a transport failure', () async {
+      var attempts = 0;
+      client.handler = (_) {
+        if (++attempts == 1) throw const SocketException('disconnected');
+        return FakeHttpResponse(
+            body: 'data: {"kind":"notification","ts_ms":6}\n\n');
+      };
+      final event =
+          await stream().stream(background: true, reconnect: true).first;
+      expect(event.tsMs, 6);
+      expect(attempts, 2);
+    });
 
     test('AN-08 valid frame is emitted', () async {
       client.route(

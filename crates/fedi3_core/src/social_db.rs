@@ -4574,7 +4574,10 @@ impl SocialDb {
     ) -> Result<()> {
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO chat_call_signals (thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO chat_call_signals (thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+             WHERE NOT EXISTS (SELECT 1 FROM chat_call_signals WHERE thread_id=?1 AND from_actor=?2
+               AND to_actor IS ?3 AND call_id=?4 AND action=?5 AND data_json=?6)",
             rusqlite::params![thread_id, from_actor, to_actor, call_id, action, data_json, now_ms()],
         )?;
         Ok(())
@@ -4615,18 +4618,35 @@ impl SocialDb {
         after_ms: i64,
         limit: u32,
     ) -> Result<Vec<(i64, String, Option<String>, String, String, String, i64)>> {
+        self.list_chat_call_signals_after(thread_id, self_actor, 0, after_ms, limit)
+    }
+
+    pub fn list_chat_call_signals_after(
+        &self,
+        thread_id: &str,
+        self_actor: &str,
+        after_id: i64,
+        after_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(i64, String, Option<String>, String, String, String, i64)>> {
         let conn = self.connect()?;
         let limit = limit.clamp(1, 200);
         let mut stmt = conn.prepare(
             "SELECT id, from_actor, to_actor, call_id, action, data_json, created_at_ms
              FROM chat_call_signals
-             WHERE thread_id=?1 AND created_at_ms > ?2
+             WHERE thread_id=?1 AND ((?5 > 0 AND id > ?5) OR (?5 = 0 AND created_at_ms > ?2))
                AND (to_actor IS NULL OR to_actor=?3)
-             ORDER BY created_at_ms ASC, id ASC
+             ORDER BY id ASC
              LIMIT ?4",
         )?;
         let rows = stmt.query_map(
-            rusqlite::params![thread_id, after_ms, self_actor, limit as i64],
+            rusqlite::params![
+                thread_id,
+                after_ms,
+                self_actor,
+                limit as i64,
+                after_id.max(0)
+            ],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -5392,6 +5412,27 @@ mod chat_pin_search_tests {
             .unwrap();
         assert_eq!(next.len(), 1);
         assert_eq!(next[0]["call_id"], "d");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn call_signals_deduplicate_routes_and_keep_same_millisecond_candidates() {
+        let (db, path) = setup();
+        for candidate in ["one", "one", "two"] {
+            db.insert_chat_call_signal("t1", "bob", None, "call", "ice", candidate)
+                .unwrap();
+        }
+        let rows = db.list_chat_call_signals("t1", "alice", 0, 100).unwrap();
+        assert_eq!(rows.len(), 2);
+        let first_id = rows[0].0;
+        let conn = db.connect().unwrap();
+        conn.execute("UPDATE chat_call_signals SET created_at_ms=1000", [])
+            .unwrap();
+        let next = db
+            .list_chat_call_signals_after("t1", "alice", first_id, 1000, 100)
+            .unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].5, "two");
         let _ = std::fs::remove_file(path);
     }
 

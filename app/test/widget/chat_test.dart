@@ -26,6 +26,39 @@ Future<AppState> _runningApp() async {
 }
 
 void main() {
+  testWidgets(
+      'composer stays above Android navigation and recovers missed messages',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 760);
+    tester.view.padding = const FakeViewPadding(bottom: 48);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 48);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
+      tester.view.resetViewPadding();
+    });
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{"items":[]}'));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester,
+        ChatThreadScreen(appState: app, threadId: 'safe-chat', title: 'Chat'));
+    await tester.pumpAndSettle();
+    expect(tester.getBottomRight(find.byIcon(Icons.send_rounded)).dy,
+        lessThanOrEqualTo(712));
+    final before =
+        client.requestsFor('GET', '/_fedi3/chat/threads/safe-chat').length;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(client.requestsFor('GET', '/_fedi3/chat/threads/safe-chat').length,
+        greaterThan(before));
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('failed chat delivery preserves the complete draft for retry',
       (tester) async {
     await setUpPumpEnv(tester);

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification sounds are referenced by name at runtime, so the release
+     resource shrinker cannot see them and would strip every raw asset. Without
+     this file Android rejects the notification with invalid_sound and no
+     notification is posted at all. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/fedi3_activity,@raw/fedi3_call,@raw/fedi3_chat" />

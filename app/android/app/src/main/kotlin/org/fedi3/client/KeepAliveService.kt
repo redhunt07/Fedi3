@@ -14,7 +14,6 @@ import android.os.IBinder
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
-import io.flutter.plugins.GeneratedPluginRegistrant
 
 /**
  * Keeps the app process (and therefore the local core plus its event streams)
@@ -36,8 +35,10 @@ class KeepAliveService : Service() {
         val loader = FlutterInjector.instance().flutterLoader()
         loader.startInitialization(applicationContext)
         loader.ensureInitializationComplete(applicationContext, null)
+        // FlutterEngine registers generated plugins itself; registering them a
+        // second time replaced plugin instances and made flutter_secure_storage
+        // lose its Keystore key in the headless engine.
         val flutterEngine = FlutterEngine(applicationContext)
-        GeneratedPluginRegistrant.registerWith(flutterEngine)
         val entrypoint = DartExecutor.DartEntrypoint(
             loader.findAppBundlePath(),
             "backgroundMain"

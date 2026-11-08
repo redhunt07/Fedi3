@@ -19,6 +19,7 @@ import '../l10n/l10n_ext.dart';
 import '../model/core_config.dart';
 import '../model/chat_models.dart';
 import '../services/core_event_stream.dart';
+import '../services/incoming_call_notifications.dart';
 import '../services/client_update_service.dart';
 import 'screens/client_updates_screen.dart';
 import '../services/announcements_service.dart';
@@ -75,10 +76,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   StreamSubscription<bool>? _activitySub;
   int _lastCallSignalMs = 0;
   int _lastCallSignalId = 0;
-  int _idleCallPolls = 0;
-  int _callPollTicks = 0;
   bool _pollingCalls = false;
   String? _incomingCallId;
+  Timer? _incomingCallTimer;
   bool _callPromptOpen = false;
   late final AnimationController _sectionFade = AnimationController(
     vsync: this,
@@ -124,7 +124,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       TimelinesScreen(appState: widget.appState),
       SearchScreen(key: _searchScreenKey, appState: widget.appState),
       ChatScreen(appState: widget.appState),
-      NotificationsScreen(appState: widget.appState),
+      NotificationsScreen(appState: widget.appState, active: false),
       RelaysScreen(appState: widget.appState),
       SettingsScreen(appState: widget.appState),
       if (widget.appState.config != null)
@@ -141,6 +141,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       final configChanged = !identical(_chatStreamConfig, cfg);
       if (!running) {
         _stopChatStream();
+        _activityStream?.cancel();
+        _activityStream = null;
+        _activityDebounce?.cancel();
         _stopCallPolling();
       } else if (running && (!_lastRunning || configChanged)) {
         _startChatStream();
@@ -241,6 +244,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
 
   @override
   void dispose() {
+    _incomingCallTimer?.cancel();
     _notificationTaps?.cancel();
     _activitySub?.cancel();
     unawaited(SoundService.stopCall());
@@ -289,12 +293,21 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     }
     _activityStreamConfig = cfg;
     _activityStream?.cancel();
-    _activityStream =
-        CoreEventStream(config: cfg).stream(kind: 'inbox').listen((ev) {
-      if (!mounted || ev.kind != 'inbox') return;
+    _activityStream = CoreEventStream(config: cfg)
+        .stream(background: !Platform.isAndroid, reconnect: true)
+        .listen((ev) {
+      if (!mounted || (ev.kind != 'inbox' && ev.kind != 'notification')) return;
       _activityDebounce?.cancel();
       _activityDebounce = Timer(const Duration(milliseconds: 350), () {
-        if (!mounted || AppActivity.foreground) return;
+        if (!mounted) return;
+        if (_index == 3 && AppActivity.foreground) {
+          widget.appState.clearUnreadNotifications();
+          return;
+        }
+        if (AppActivity.foreground) {
+          unawaited(SoundService.playActivity());
+          return;
+        }
         unawaited(NotificationService.showActivityNotification(
           title: context.l10n.activityNotificationTitle,
           body: context.l10n.activityNotificationBody,
@@ -310,8 +323,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (identical(_chatStreamConfig, cfg) && _chatStream != null) return;
     _chatStreamConfig = cfg;
     _chatStream?.cancel();
-    _chatStream =
-        CoreEventStream(config: cfg).stream(kind: 'chat').listen((ev) {
+    _chatStream = CoreEventStream(config: cfg)
+        .stream(kind: 'chat', background: !Platform.isAndroid)
+        .listen((ev) {
       if (!mounted) return;
       if (ev.kind != 'chat') return;
       if (ev.activityType == 'call') {
@@ -325,10 +339,12 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       _chatDebounce = Timer(const Duration(milliseconds: 350), () {
         if (!mounted) return;
         final onChatTab = _index == 2;
-        if (!onChatTab) {
+        if (!onChatTab || !AppActivity.foreground) {
           widget.appState.incrementUnreadChats();
-          _showChatSnack();
-          unawaited(SoundService.playChat());
+          if (AppActivity.foreground) {
+            _showChatSnack();
+            unawaited(SoundService.playChat());
+          }
           // A visible app already shows the banner and the sound: a system
           // notification would duplicate it as a heads-up.
           if (!AppActivity.foreground) {
@@ -365,14 +381,14 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (!widget.appState.isRunning || _callPollTimer != null) return;
     if (_lastCallSignalMs == 0) {
       _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch -
-          const Duration(seconds: 30).inMilliseconds;
+          const Duration(seconds: 60).inMilliseconds;
     }
     // Plain periodic timer: calls must ring while the app is backgrounded too,
-    // where AppActivity.periodic deliberately stays silent.
+    // where AppActivity.periodic deliberately stays silent. The local core
+    // answers on loopback, so a constant 3 s cadence costs almost nothing and
+    // keeps an invite from sitting unnoticed behind an idle backoff.
     _callPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (++_callPollTicks % (_idleCallPolls >= 3 ? 5 : 1) == 0) {
-        _pollIncomingCall();
-      }
+      _pollIncomingCall();
     });
     // ModalRoute is an inherited dependency and cannot be read in initState.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -385,7 +401,6 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _callPollTimer = null;
     _lastCallSignalMs = 0;
     _lastCallSignalId = 0;
-    _idleCallPolls = 0;
   }
 
   Future<void> _pollIncomingCall() async {
@@ -395,10 +410,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         _pollingCalls) {
       return;
     }
-    // When a pushed route (e.g. the chat thread) is active, that screen owns
-    // incoming-call polling; avoid showing two prompts for the same call.
-    final route = ModalRoute.of(context);
-    if (route != null && !route.isCurrent) return;
+    // Calls for other chats must still ring while a pushed route is visible.
+    if (CallScreen.active > 0 ||
+        (!AppActivity.foreground && Platform.isAndroid)) {
+      return;
+    }
     final cfg = widget.appState.config;
     if (cfg == null) return;
     final api = CoreApi(config: cfg);
@@ -407,11 +423,20 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     try {
       final signals = await api.fetchGlobalChatCallSignals(
           afterId: _lastCallSignalId, afterMs: _lastCallSignalMs, limit: 200);
-      _idleCallPolls = signals.isEmpty ? _idleCallPolls + 1 : 0;
       final ended = signals
-          .where((s) => s.action == 'leave' || s.action == 'reject')
+          .where((s) =>
+              s.action == 'leave' ||
+              s.action == 'reject' ||
+              s.action == 'decline')
           .map((s) => s.callId)
           .toSet();
+      // Close a prompt that is already open when the caller hangs up.
+      if (_callPromptOpen &&
+          _incomingCallId != null &&
+          ended.contains(_incomingCallId) &&
+          mounted) {
+        Navigator.of(context, rootNavigator: true).pop(false);
+      }
       // Advance in ID order: two events in the same millisecond are distinct.
       // Several calls can be ringing at once (a group where members invite each
       // other); the newest one wins, otherwise a stale invite steals the prompt.
@@ -469,10 +494,17 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     required String media,
     required ChatCallSignal signal,
   }) async {
-    if (_callPromptOpen || !mounted) return;
+    if (_callPromptOpen || !mounted || !IncomingCallGate.claim(signal.callId)) {
+      return;
+    }
     _callPromptOpen = true;
     // Loop the dedicated ringtone while the incoming-call prompt is open.
     unawaited(SoundService.playCallLoop());
+    _incomingCallTimer?.cancel();
+    _incomingCallTimer = Timer(const Duration(seconds: 60), () {
+      if (!mounted || !_callPromptOpen) return;
+      Navigator.of(context, rootNavigator: true).pop(false);
+    });
     final from = signal.fromActor;
     final accepted = await showDialog<bool>(
       context: context,
@@ -520,6 +552,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         ],
       ),
     );
+    _incomingCallTimer?.cancel();
+    _incomingCallTimer = null;
     await SoundService.stopCall();
     _callPromptOpen = false;
     if (accepted != true) {
@@ -598,7 +632,12 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (_index == index) return;
     // A pending "new message" banner must not linger over the chat list.
     ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
-    setState(() => _index = index);
+    setState(() {
+      _index = index;
+      _pages[3] =
+          NotificationsScreen(appState: widget.appState, active: index == 3);
+    });
+    if (index == 3) widget.appState.clearUnreadNotifications();
     if (!MediaQuery.of(context).disableAnimations) {
       _sectionFade.forward(from: 0.35);
     }
@@ -684,6 +723,18 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     );
   }
 
+  /// Every page stays mounted inside the IndexedStack, so their floating
+  /// action buttons would otherwise expose duplicate default Hero tags to the
+  /// navigator whenever a route is pushed (a debug assertion and a wrong hero
+  /// source in release). HeroMode limits hero collection to the visible page.
+  List<Widget> _shellPages() => [
+        for (var i = 0; i < _pages.length; i++)
+          HeroMode(
+            enabled: i == _index,
+            child: PrimaryScrollController.none(child: _pages[i]),
+          ),
+      ];
+
   @override
   Widget build(BuildContext context) {
     final isWide =
@@ -704,7 +755,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
             child: IndexedStack(
               key: const ValueKey('shell-pages'),
               index: _index,
-              children: _pages,
+              children: _shellPages(),
             ),
           ),
           bottomNavigationBar: Builder(builder: (context) {
@@ -757,7 +808,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
                       child: IndexedStack(
                         key: const ValueKey('shell-pages'),
                         index: _index,
-                        children: _pages,
+                        children: _shellPages(),
                       ),
                     ),
                   ),

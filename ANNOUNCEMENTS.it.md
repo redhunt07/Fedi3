@@ -4,6 +4,25 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-08 — Release di correzione Android 0.11.1
+
+La [0.11.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.1) corregge i
+guasti di chiamate e notifiche Android segnalati dopo la 0.11.0. Il resource
+shrinker della release rimuoveva i suoni delle notifiche, quindi Android
+rifiutava ogni avviso con `invalid_sound`: chiamate e messaggi non producevano
+alcuna notifica con l'app chiusa. Inoltre il motore keep-alive registrava i
+plugin due volte e perdeva la configurazione nel Keystore, smettendo di
+interrogare il core. Entrambi i problemi sono risolti, con un fallback di
+configurazione privata dell'app per il motore headless. Le chiamate in arrivo
+suonano in primo piano e in background, i segnali invite/accept vengono
+ritentati, i retry della chat partono ogni cinque secondi e il composer della
+chat e i controlli di chiamata restano sopra la barra di navigazione Android.
+Le chiamate Android non espongono più la condivisione schermo, quindi le
+chiamate audio/video non avviano il servizio MediaProjection; le chiamate
+desktop la mantengono. Le finestre di chiamata in arrivo senza risposta scadono
+dopo un minuto e si chiudono quando il chiamante riaggancia.
+[Verifiche e limiti](docs/it/audit/release_0.11.1_2026-11-08.md).
+
 ## 2026-11-08 — Release 0.11.0 Linux e Android
 
 La [0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0) unisce il client

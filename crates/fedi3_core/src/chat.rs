@@ -390,6 +390,9 @@ pub fn store_incoming_payload_db(
             }
         }
     } else if payload.op == "call" {
+        if now_ms().saturating_sub(env.created_at_ms) > 60_000 {
+            return Ok(());
+        }
         let call_id = payload.message_id.as_deref().unwrap_or_default();
         let action = payload.action.as_deref().unwrap_or("signal");
         let to = payload.targets.as_ref().and_then(|t| t.first());
@@ -530,6 +533,35 @@ pub async fn send_envelope_to_peer(
     env: &ChatEnvelope,
 ) -> Result<ChatSendOutcome> {
     let bytes = serde_json::to_vec(env)?;
+    let direct = async {
+        anyhow::ensure!(!peer_id.is_empty(), "chat peer missing");
+        let req = RelayHttpRequest {
+            id: format!("chat-{}", random_id()),
+            method: "POST".to_string(),
+            path: "/_fedi3/chat/inbox".to_string(),
+            query: "".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body_b64: B64.encode(&bytes),
+        };
+        let resp = state.delivery.p2p_request(peer_id, req).await?;
+        anyhow::ensure!(
+            (200..300).contains(&resp.status),
+            "chat P2P status {}",
+            resp.status
+        );
+        Ok(ChatSendOutcome::Sent)
+    };
+    let relay = async {
+        // Give a healthy direct connection a short head start. A stale circuit
+        // must not hold messages, invites and ICE behind its ten-second timeout.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        send_envelope_over_http(state, actor_id, &bytes).await
+    };
+    let outcome = first_chat_route(direct, relay).await;
+    if outcome.is_ok() {
+        return outcome;
+    }
+    // Mailboxes are a durability fallback, not a prerequisite for live delivery.
     if !peer_id.is_empty() {
         let req = RelayHttpRequest {
             id: format!("chat-{}", random_id()),
@@ -537,60 +569,61 @@ pub async fn send_envelope_to_peer(
             path: "/_fedi3/chat/inbox".to_string(),
             query: "".to_string(),
             headers: vec![("content-type".to_string(), "application/json".to_string())],
-            body_b64: B64.encode(bytes.clone()),
+            body_b64: B64.encode(&bytes),
         };
-        let ttl = state.cfg.p2p_cache_ttl_secs;
-        match state.delivery.p2p_request(peer_id, req.clone()).await {
-            Ok(resp) if (200..300).contains(&resp.status) => {
-                return Ok(ChatSendOutcome::Sent);
-            }
-            Ok(resp) => match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
-                Ok(()) => {
-                    warn!(peer=%peer_id, msg_id=%env.message_id, status=resp.status, "chat queued in mailbox after non-2xx response");
-                    return Ok(ChatSendOutcome::Queued);
-                }
-                Err(mailbox_err) => {
-                    warn!(peer=%peer_id, msg_id=%env.message_id, "chat mailbox failed after non-2xx response: {mailbox_err}");
-                }
-            },
-            Err(e) => match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
-                Ok(()) => {
-                    warn!(peer=%peer_id, msg_id=%env.message_id, "chat queued in mailbox after p2p failure: {e}");
-                    return Ok(ChatSendOutcome::Queued);
-                }
-                Err(mailbox_err) => {
-                    warn!(peer=%peer_id, msg_id=%env.message_id, "chat mailbox failed after p2p error: {mailbox_err}");
-                }
-            },
+        if state
+            .delivery
+            .store_in_mailboxes(peer_id, req, state.cfg.p2p_cache_ttl_secs)
+            .await
+            .is_ok()
+        {
+            return Ok(ChatSendOutcome::Queued);
         }
     }
-    // Relay HTTP fallback: the public actor path proxies to the recipient core,
-    // so chat keeps working when the P2P circuit or mailboxes are unavailable.
+    outcome
+}
+
+async fn first_chat_route<P, H>(direct: P, relay: H) -> Result<ChatSendOutcome>
+where
+    P: std::future::Future<Output = Result<ChatSendOutcome>>,
+    H: std::future::Future<Output = Result<ChatSendOutcome>>,
+{
+    tokio::pin!(direct, relay);
+    tokio::select! {
+        result = &mut direct => match result {
+            Ok(outcome) => Ok(outcome),
+            Err(direct_error) => relay.await.with_context(|| format!("chat P2P failed: {direct_error}")),
+        },
+        result = &mut relay => match result {
+            Ok(outcome) => Ok(outcome),
+            Err(relay_error) => direct.await.with_context(|| format!("chat relay failed: {relay_error}")),
+        },
+    }
+}
+
+async fn send_envelope_over_http(
+    state: &ApState,
+    actor_id: &str,
+    bytes: &[u8],
+) -> Result<ChatSendOutcome> {
     let url = format!("{}/_fedi3/chat/inbox", actor_id.trim_end_matches('/'));
     crate::net_policy::check_url_allowed(&url).await?;
     let resp = state
         .http
         .post(&url)
-        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(8))
         .header("content-type", "application/json")
-        .body(bytes)
+        .body(bytes.to_vec())
         .send()
         .await?;
     if resp.status().is_success() {
-        debug!(actor=%actor_id, msg_id=%env.message_id, "chat delivered over relay HTTP");
+        debug!(actor=%actor_id, "chat delivered over relay HTTP");
         Ok(ChatSendOutcome::RelayAccepted)
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(200).collect();
-        warn!(
-            actor=%actor_id,
-            msg_id=%env.message_id,
-            %status,
-            body=%snippet,
-            "chat relay HTTP delivery failed"
-        );
-        Err(anyhow::anyhow!("chat http delivery failed: {status}"))
+        Err(anyhow::anyhow!(
+            "chat http delivery failed: {}",
+            resp.status()
+        ))
     }
 }
 
@@ -695,4 +728,44 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    #[tokio::test]
+    async fn stalled_direct_route_does_not_delay_live_relay() {
+        let direct = std::future::pending::<Result<ChatSendOutcome>>();
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(100),
+            first_chat_route(direct, async { Ok(ChatSendOutcome::RelayAccepted) }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(outcome, ChatSendOutcome::RelayAccepted);
+    }
+    #[tokio::test]
+    async fn failed_relay_keeps_waiting_for_direct_delivery() {
+        let direct = async {
+            tokio::task::yield_now().await;
+            Ok(ChatSendOutcome::Sent)
+        };
+        assert_eq!(
+            first_chat_route(direct, async { Err(anyhow::anyhow!("relay offline")) })
+                .await
+                .unwrap(),
+            ChatSendOutcome::Sent
+        );
+    }
+    #[tokio::test]
+    async fn both_routes_failing_is_not_reported_as_delivered() {
+        assert!(
+            first_chat_route(async { Err(anyhow::anyhow!("P2P offline")) }, async {
+                Err(anyhow::anyhow!("relay offline"))
+            })
+            .await
+            .is_err()
+        );
+    }
 }

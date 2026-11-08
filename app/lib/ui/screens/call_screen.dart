@@ -7,6 +7,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -76,7 +78,11 @@ class _CallScreenState extends State<CallScreen> {
   bool _connecting = true;
   String? _error;
   int _lastSignalMs = 0;
+  int _lastSignalId = 0;
   Timer? _signalTimer;
+  Timer? _retrySignal;
+  Map<String, dynamic>? _retryData;
+  int _retryCount = 0;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _durationTimer;
   Timer? _mediaStatsTimer;
@@ -110,6 +116,7 @@ class _CallScreenState extends State<CallScreen> {
     _ended = true;
     CallScreen.active = (CallScreen.active - 1).clamp(0, 1 << 30);
     _signalTimer?.cancel();
+    _retrySignal?.cancel();
     _streamSub?.cancel();
     _durationTimer?.cancel();
     _mediaStatsTimer?.cancel();
@@ -174,11 +181,18 @@ class _CallScreenState extends State<CallScreen> {
       if (widget.incoming && widget.remoteActor != null) {
         _participants.add(widget.remoteActor!);
         await _signal('accept');
+        // A lost accept leaves both peers waiting forever: keep re-announcing
+        // it until the caller's offer arrives.
+        _startSignalRetry('accept');
       } else {
-        await _signal('invite', data: {
+        final inviteData = {
           'media': widget.mediaType,
           'title': widget.title,
-        });
+        };
+        await _signal('invite', data: inviteData);
+        // Re-send the invite while ringing. The receiver deduplicates identical
+        // invites, but a copy that was dropped as stale is stored on retry.
+        _startSignalRetry('invite', data: inviteData);
       }
       if (_ended || !mounted) return;
       _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -201,6 +215,34 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  void _startSignalRetry(String action, {Map<String, dynamic>? data}) {
+    _retrySignal?.cancel();
+    _retryData = data;
+    _retryCount = 0;
+    _retrySignal = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (_ended || !mounted) {
+        _retrySignal?.cancel();
+        return;
+      }
+      _retryCount++;
+      // 20 attempts cover a full minute of ringing without flooding the peer.
+      if (_retryCount > 20) {
+        _retrySignal?.cancel();
+        // Nobody answered within a minute: leave so the peer can stop ringing.
+        unawaited(_end());
+        return;
+      }
+      await _signal(action, data: _retryData);
+    });
+  }
+
+  void _cancelSignalRetry() {
+    _retrySignal?.cancel();
+    _retrySignal = null;
+    _retryData = null;
+    _retryCount = 0;
+  }
+
   Future<void> _signal(
     String action, {
     String? to,
@@ -216,6 +258,8 @@ class _CallScreenState extends State<CallScreen> {
         to: to,
         data: data,
       );
+      // A later retry can repair a transient delivery failure.
+      if (mounted && !_ended && _error != null) setState(() => _error = null);
     } catch (e) {
       if (mounted && !_ended) setState(() => _error = e.toString());
     }
@@ -229,8 +273,10 @@ class _CallScreenState extends State<CallScreen> {
       final items = await CoreApi(config: cfg).fetchChatCallSignals(
         threadId: widget.threadId,
         afterMs: _lastSignalMs,
+        afterId: _lastSignalId,
       );
       for (final s in items) {
+        if (s.id > _lastSignalId) _lastSignalId = s.id;
         if (s.callId != _callId) continue;
         if (s.createdAtMs > _lastSignalMs) _lastSignalMs = s.createdAtMs;
         await _handleSignal(s);
@@ -248,6 +294,7 @@ class _CallScreenState extends State<CallScreen> {
       case 'invite':
         break;
       case 'accept':
+        _cancelSignalRetry();
         final newlyAccepted = _participants.add(from);
         if (!widget.incoming && newlyAccepted) {
           // The caller creates the first offer. A two-person roster is empty,
@@ -261,6 +308,7 @@ class _CallScreenState extends State<CallScreen> {
         }
         break;
       case 'roster':
+        _cancelSignalRetry();
         final raw = s.data['participants'];
         final list = raw is List
             ? raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
@@ -273,6 +321,7 @@ class _CallScreenState extends State<CallScreen> {
         }
         break;
       case 'offer':
+        _cancelSignalRetry();
         await _handleOffer(s, from);
         break;
       case 'answer':
@@ -302,6 +351,7 @@ class _CallScreenState extends State<CallScreen> {
         }
         break;
       case 'decline':
+        _cancelSignalRetry();
         _participants.remove(from);
         _connected.remove(from);
         await _closePeer(from);
@@ -309,6 +359,7 @@ class _CallScreenState extends State<CallScreen> {
         if (!widget.isGroup && _participants.isEmpty) _end(notify: false);
         break;
       case 'leave':
+        _cancelSignalRetry();
         _participants.remove(from);
         _connected.remove(from);
         await _closePeer(from);
@@ -645,6 +696,7 @@ class _CallScreenState extends State<CallScreen> {
     if (_ended) return;
     _ended = true;
     _signalTimer?.cancel();
+    _retrySignal?.cancel();
     _durationTimer?.cancel();
     _mediaStatsTimer?.cancel();
     // Stop capture immediately, even when signaling is offline or queued.
@@ -732,8 +784,10 @@ class _CallScreenState extends State<CallScreen> {
         ),
         border: Border.all(color: const Color(UiTokens.darkBorder)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      child: Wrap(
+        alignment: WrapAlignment.spaceEvenly,
+        spacing: 20,
+        runSpacing: 12,
         children: [
           _controlButton(
             icon: _micOn ? Icons.mic_rounded : Icons.mic_off_rounded,
@@ -750,12 +804,15 @@ class _CallScreenState extends State<CallScreen> {
               active: _cameraOn,
               onTap: _toggleCamera,
             ),
-          _controlButton(
-            icon: Icons.screen_share_rounded,
-            label: context.l10n.callScreenShare,
-            active: _screenSharing,
-            onTap: _toggleScreenShare,
-          ),
+          // Screen sharing is a desktop affordance for now; Android calls stay
+          // focused on audio/video and avoid the MediaProjection service.
+          if (defaultTargetPlatform != TargetPlatform.android)
+            _controlButton(
+              icon: Icons.screen_share_rounded,
+              label: context.l10n.callScreenShare,
+              active: _screenSharing,
+              onTap: _toggleScreenShare,
+            ),
           _controlButton(
             icon: Icons.call_end_rounded,
             label: context.l10n.callEnd,
@@ -902,7 +959,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
             ),
-          _controls(),
+          SafeArea(top: false, child: _controls()),
         ],
       ),
     );
