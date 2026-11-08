@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../services/client_update_service.dart';
+import '../widgets/markdown_view.dart';
 
 String get clientArchitecture => Abi.current().toString().split('_').last;
 
@@ -151,7 +152,7 @@ class _ClientUpdatesScreenState extends State<ClientUpdatesScreen> {
         ],
         if (update?.available == true) ...[
           const SizedBox(height: 12),
-          if (update!.notes.isNotEmpty) SelectableText(update.notes),
+          if (update!.notes.isNotEmpty) MarkdownView(text: update.notes),
           TextButton(
               onPressed: () => _open(update.releaseUrl),
               child: Text(l10n.clientUpdatesRelease)),
