@@ -106,12 +106,10 @@ async fn run_once_with_limits(
     }
 
     for actor_url in following {
-        // Skip Fedi3 peers (they have p2p sync + direct delivery mechanisms already).
-        if let Ok(Some(meta)) = social.get_actor_meta(&actor_url) {
-            if meta.is_fedi3 {
-                continue;
-            }
-        }
+        // Fedi3 peers used to be skipped here because they have p2p sync and direct
+        // delivery. That left a fresh follow with an empty timeline until the peer
+        // posted again, so we poll every followed actor. Ingest dedupes by activity
+        // id, so p2p deliveries and this poll never create duplicates.
         if let Err(e) = poll_actor_outbox(
             state,
             delivery,
