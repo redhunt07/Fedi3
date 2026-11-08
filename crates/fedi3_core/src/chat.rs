@@ -14,7 +14,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::warn;
+use std::time::Duration;
+use tracing::{debug, warn};
 
 use crate::ap::ApState;
 use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
@@ -517,51 +518,64 @@ pub fn store_incoming_payload_db(
 pub async fn send_envelope_to_peer(
     state: &ApState,
     peer_id: &str,
+    actor_id: &str,
     env: &ChatEnvelope,
 ) -> Result<ChatSendOutcome> {
     let bytes = serde_json::to_vec(env)?;
-    let req = RelayHttpRequest {
-        id: format!("chat-{}", random_id()),
-        method: "POST".to_string(),
-        path: "/_fedi3/chat/inbox".to_string(),
-        query: "".to_string(),
-        headers: vec![("content-type".to_string(), "application/json".to_string())],
-        body_b64: B64.encode(bytes),
-    };
-    let resp = match state.delivery.p2p_request(peer_id, req.clone()).await {
-        Ok(v) => v,
-        Err(e) => {
-            let ttl = state.cfg.p2p_cache_ttl_secs;
-            return match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
+    if !peer_id.is_empty() {
+        let req = RelayHttpRequest {
+            id: format!("chat-{}", random_id()),
+            method: "POST".to_string(),
+            path: "/_fedi3/chat/inbox".to_string(),
+            query: "".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body_b64: B64.encode(bytes.clone()),
+        };
+        let ttl = state.cfg.p2p_cache_ttl_secs;
+        match state.delivery.p2p_request(peer_id, req.clone()).await {
+            Ok(resp) if (200..300).contains(&resp.status) => {
+                return Ok(ChatSendOutcome::Sent);
+            }
+            Ok(resp) => match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
+                Ok(()) => {
+                    warn!(peer=%peer_id, msg_id=%env.message_id, status=resp.status, "chat queued in mailbox after non-2xx response");
+                    return Ok(ChatSendOutcome::Queued);
+                }
+                Err(mailbox_err) => {
+                    warn!(peer=%peer_id, msg_id=%env.message_id, "chat mailbox failed after non-2xx response: {mailbox_err}");
+                }
+            },
+            Err(e) => match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
                 Ok(()) => {
                     warn!(peer=%peer_id, msg_id=%env.message_id, "chat queued in mailbox after p2p failure: {e}");
-                    Ok(ChatSendOutcome::Queued)
+                    return Ok(ChatSendOutcome::Queued);
                 }
                 Err(mailbox_err) => {
                     warn!(peer=%peer_id, msg_id=%env.message_id, "chat mailbox failed after p2p error: {mailbox_err}");
-                    Err(anyhow::anyhow!(
-                        "chat send failed: {e}; mailbox failed: {mailbox_err}"
-                    ))
                 }
-            };
+            },
         }
-    };
-    if (200..300).contains(&resp.status) {
-        return Ok(ChatSendOutcome::Sent);
     }
-    let ttl = state.cfg.p2p_cache_ttl_secs;
-    match state.delivery.store_in_mailboxes(peer_id, req, ttl).await {
-        Ok(()) => {
-            warn!(peer=%peer_id, msg_id=%env.message_id, status=resp.status, "chat queued in mailbox after non-2xx response");
-            Ok(ChatSendOutcome::Queued)
-        }
-        Err(mailbox_err) => {
-            warn!(peer=%peer_id, msg_id=%env.message_id, "chat mailbox failed after non-2xx response: {mailbox_err}");
-            Err(anyhow::anyhow!(
-                "chat send failed: {}; mailbox failed: {mailbox_err}",
-                resp.status
-            ))
-        }
+    // Relay HTTP fallback: the public actor path proxies to the recipient core,
+    // so chat keeps working when the P2P circuit or mailboxes are unavailable.
+    let url = format!("{}/_fedi3/chat/inbox", actor_id.trim_end_matches('/'));
+    crate::net_policy::check_url_allowed(&url).await?;
+    let resp = state
+        .http
+        .post(&url)
+        .timeout(Duration::from_secs(20))
+        .header("content-type", "application/json")
+        .body(bytes)
+        .send()
+        .await?;
+    if resp.status().is_success() {
+        debug!(actor=%actor_id, msg_id=%env.message_id, "chat delivered over relay HTTP");
+        Ok(ChatSendOutcome::Sent)
+    } else {
+        Err(anyhow::anyhow!(
+            "chat http delivery failed: {}",
+            resp.status()
+        ))
     }
 }
 

@@ -182,7 +182,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.search_rounded));
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search messages'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, 'seconda');
     await tester.pumpAndSettle();

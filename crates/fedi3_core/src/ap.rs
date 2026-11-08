@@ -3622,39 +3622,60 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         if actor == self_actor {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
-            for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
-                    if chat::verify_bundle(state, &bundle).await.is_err() {
-                        continue;
-                    }
-                    if let Ok(env) = chat::encrypt_payload_for_bundle(
-                        state,
-                        &bundle,
-                        &thread_id,
-                        &message_id,
-                        &payload,
-                    ) {
-                        match chat::send_envelope_to_peer(state, &peer_id, &env).await {
-                            Ok(chat::ChatSendOutcome::Sent) => {
-                                let _ = state.social.upsert_chat_message_status(
-                                    &message_id,
-                                    &actor,
-                                    "sent",
-                                );
-                                sent = sent.saturating_add(1);
-                            }
-                            Ok(chat::ChatSendOutcome::Queued) => {
-                                let _ = state.social.upsert_chat_message_status(
-                                    &message_id,
-                                    &actor,
-                                    "queued",
-                                );
-                                queued = queued.saturating_add(1);
-                            }
-                            Err(_) => {}
-                        }
-                    }
+        let peers = match resolve_actor_peers(state, &actor).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                warn!(actor=%actor, msg_id=%message_id, "chat peer resolution failed: {e}");
+                continue;
+            }
+        };
+        if peers.is_empty() {
+            warn!(actor=%actor, msg_id=%message_id, "chat send skipped: no peer advertised");
+        }
+        for peer_id in peers {
+            let bundle = match fetch_chat_bundle(state, &peer_id, &actor).await {
+                Ok(Some(bundle)) => bundle,
+                Ok(None) => {
+                    warn!(actor=%actor, peer=%peer_id, "chat bundle not found");
+                    continue;
+                }
+                Err(e) => {
+                    warn!(actor=%actor, peer=%peer_id, "chat bundle fetch failed: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = chat::verify_bundle(state, &bundle).await {
+                warn!(actor=%actor, peer=%peer_id, "chat bundle verification failed: {e}");
+                continue;
+            }
+            let env = match chat::encrypt_payload_for_bundle(
+                state,
+                &bundle,
+                &thread_id,
+                &message_id,
+                &payload,
+            ) {
+                Ok(env) => env,
+                Err(e) => {
+                    warn!(actor=%actor, peer=%peer_id, "chat encryption failed: {e}");
+                    continue;
+                }
+            };
+            match chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await {
+                Ok(chat::ChatSendOutcome::Sent) => {
+                    let _ = state
+                        .social
+                        .upsert_chat_message_status(&message_id, &actor, "sent");
+                    sent = sent.saturating_add(1);
+                }
+                Ok(chat::ChatSendOutcome::Queued) => {
+                    let _ = state
+                        .social
+                        .upsert_chat_message_status(&message_id, &actor, "queued");
+                    queued = queued.saturating_add(1);
+                }
+                Err(e) => {
+                    warn!(actor=%actor, peer=%peer_id, msg_id=%message_id, "chat delivery failed: {e}");
                 }
             }
         }
@@ -3728,7 +3749,7 @@ async fn dispatch_chat_payload_to_members(
                         envelope_message_id,
                         payload,
                     ) {
-                        match chat::send_envelope_to_peer(state, &peer_id, &env).await {
+                        match chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await {
                             Ok(chat::ChatSendOutcome::Sent) => {
                                 let _ = state.social.upsert_chat_message_status(
                                     envelope_message_id,
@@ -3837,7 +3858,7 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
                         &payload,
                     ) {
                         if matches!(
-                            chat::send_envelope_to_peer(state, &peer_id, &env).await,
+                            chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await,
                             Ok(_)
                         ) {
                             sent = sent.saturating_add(1);
@@ -4102,7 +4123,7 @@ async fn chat_seen_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                         &input.message_id,
                         &payload,
                     ) {
-                        let _ = chat::send_envelope_to_peer(state, &peer_id, &env).await;
+                        let _ = chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await;
                     }
                 }
             }
@@ -4262,7 +4283,7 @@ async fn broadcast_presence(state: &ApState, self_actor: &str, status: &str) -> 
             ) else {
                 continue;
             };
-            let _ = chat::send_envelope_to_peer(state, &peer_id, &env).await;
+            let _ = chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await;
         }
     }
     Ok(())
@@ -5131,7 +5152,7 @@ async fn send_chat_receipt(
         &env.message_id,
         &payload,
     )?;
-    chat::send_envelope_to_peer(state, peer_id, &receipt_env)
+    chat::send_envelope_to_peer(state, peer_id, &env.sender_actor, &receipt_env)
         .await
         .map(|_| ())?;
     Ok(())
@@ -5209,7 +5230,7 @@ async fn send_chat_system(
                         &message_id,
                         &payload,
                     ) {
-                        match chat::send_envelope_to_peer(state, &peer_id, &env).await {
+                        match chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await {
                             Ok(chat::ChatSendOutcome::Sent) => {
                                 let _ = state.social.upsert_chat_message_status(
                                     &message_id,
@@ -5274,6 +5295,14 @@ async fn fetch_chat_bundle(
 }
 
 async fn fetch_chat_actor(state: &ApState, actor_url: &str) -> anyhow::Result<Value> {
+    fetch_chat_actor_with(state, actor_url, false).await
+}
+
+async fn fetch_chat_actor_with(
+    state: &ApState,
+    actor_url: &str,
+    force_refresh: bool,
+) -> anyhow::Result<Value> {
     // Remember the actor-to-peer binding obtained from the actor's HTTP origin.
     // PEX alone never grants authority to claim somebody else's actor URL.
     let cached = state
@@ -5287,9 +5316,11 @@ async fn fetch_chat_actor(state: &ApState, actor_url: &str) -> anyhow::Result<Va
                 .map(|doc| (doc, fetched))
         })
         .filter(|(doc, _)| doc.get("id").and_then(Value::as_str) == Some(actor_url));
-    if let Some((doc, fetched)) = &cached {
-        if now_ms() - fetched < 3600 * 1000 {
-            return Ok(doc.clone());
+    if !force_refresh {
+        if let Some((doc, fetched)) = &cached {
+            if now_ms() - fetched < 3600 * 1000 {
+                return Ok(doc.clone());
+            }
         }
     }
     crate::net_policy::check_url_allowed(actor_url).await?;
@@ -5331,13 +5362,34 @@ async fn fetch_chat_actor(state: &ApState, actor_url: &str) -> anyhow::Result<Va
     Ok(doc)
 }
 
-async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<Vec<String>> {
-    let actor_json = fetch_chat_actor(state, actor_id).await?;
+/// Peer id advertised by an actor document, either at the top level/endpoints
+/// or inside the chat bundle (relay deployments may only publish the bundle).
+fn chat_peer_id_from(actor_json: &Value) -> Option<&str> {
     let endpoints = actor_json.get("endpoints");
-    let peer_id = endpoints
-        .and_then(|e| e.get("fedi3PeerId"))
-        .or_else(|| actor_json.get("fedi3PeerId"))
-        .and_then(Value::as_str);
+    actor_json
+        .get("fedi3PeerId")
+        .or_else(|| endpoints.and_then(|e| e.get("fedi3PeerId")))
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            actor_json
+                .get("fedi3ChatBundle")
+                .or_else(|| endpoints.and_then(|e| e.get("fedi3ChatBundle")))
+                .and_then(|b| b.get("peer_id"))
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())
+        })
+}
+
+async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<Vec<String>> {
+    let mut actor_json = fetch_chat_actor(state, actor_id).await?;
+    // A cached document may predate the peer advertising its chat bundle (for
+    // example right after P2P is enabled); refetch once when it yields no peer.
+    if chat_peer_id_from(&actor_json).is_none() {
+        actor_json = fetch_chat_actor_with(state, actor_id, true).await?;
+    }
+    let endpoints = actor_json.get("endpoints");
+    let peer_id = chat_peer_id_from(&actor_json);
     let mut out = Vec::new();
     if let Some(peer_id) = peer_id {
         if peer_id.parse::<libp2p::PeerId>().is_ok() {
@@ -5355,7 +5407,11 @@ async fn resolve_actor_peers(state: &ApState, actor_id: &str) -> anyhow::Result<
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            state.delivery.p2p_add_peer_addrs(peer_id, addrs).await?;
+            // Address hints are best-effort: a peer without a live P2P runtime
+            // can still be reached through the relay HTTP path.
+            if let Err(e) = state.delivery.p2p_add_peer_addrs(peer_id, addrs).await {
+                tracing::debug!(peer=%peer_id, "p2p add_peer_addrs failed: {e}");
+            }
             out.push(peer_id.to_string());
         }
     }

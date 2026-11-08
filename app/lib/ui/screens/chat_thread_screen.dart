@@ -1608,7 +1608,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_title),
+                  Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1675,13 +1675,18 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           color:
                               Theme.of(context).colorScheme.onSurfaceVariant),
                       const SizedBox(width: 3),
-                      Text(
-                        context.l10n.chatE2eBadge,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
+                      Flexible(
+                        child: Text(
+                          context.l10n.chatE2eBadge,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                        ),
                       ),
                     ],
                   ),
@@ -1701,30 +1706,21 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             onPressed: () => _startCall('video'),
             icon: const Icon(Icons.videocam_outlined),
           ),
-          IconButton(
-            tooltip: context.l10n.chatSearchTooltip,
-            onPressed: () => setState(() {
-              _searchOpen = !_searchOpen;
-              if (!_searchOpen) {
-                _searchCtrl.clear();
-                _searchQuery = '';
-              }
-            }),
-            icon: Icon(
-                _searchOpen ? Icons.search_off_rounded : Icons.search_rounded),
-          ),
-          IconButton(
-            tooltip: context.l10n.chatRefresh,
-            onPressed: _loading
-                ? null
-                : () {
-                    _loadMessages(reset: true);
-                    _loadThreadMeta();
-                  },
-            icon: const Icon(Icons.refresh),
-          ),
           PopupMenuButton<String>(
+            tooltip: context.l10n.noteActions,
             onSelected: (value) {
+              if (value == 'search') {
+                setState(() {
+                  _searchOpen = !_searchOpen;
+                  if (!_searchOpen) {
+                    _searchCtrl.clear();
+                    _searchQuery = '';
+                  }
+                });
+              } else if (value == 'refresh') {
+                _loadMessages(reset: true);
+                _loadThreadMeta();
+              }
               if (value == 'rename') {
                 _openRenameDialog();
               } else if (value == 'members') {
@@ -1742,6 +1738,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               }
             },
             itemBuilder: (context) => [
+              PopupMenuItem(
+                  value: 'search',
+                  child: Text(context.l10n.chatSearchTooltip)),
+              PopupMenuItem(
+                  value: 'refresh', child: Text(context.l10n.chatRefresh)),
               PopupMenuItem(
                   value: 'members', child: Text(context.l10n.chatMembers)),
               if (widget.isGroup)

@@ -35,7 +35,7 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 ## Chat
 
-- Le chat sono 1:1 o di gruppo, con trasporto P2P quando possibile.
+- Le chat sono 1:1 o di gruppo. La consegna preferisce il circuito P2P; quando non è disponibile l'envelope viene inviato via HTTPS al percorso del peer sul relay (`/users/<nome>/_fedi3/chat/inbox`), così la chat funziona anche nelle installazioni solo-relay. In entrambi i casi il contenuto resta cifrato end-to-end.
 - I messaggi della chat usano AES-256-GCM con chiavi per messaggio derivate da Kyber768 tramite HKDF-SHA256 e firme RSA-SHA256. Il relay non vede il contenuto della chat. RSA-OAEP è usato separatamente per envelope di compatibilità/spool.
 - Supporta reazioni, file, GIF e stato di lettura.
 - Limite noto: non c'è *forward secrecy*. Se una chiave privata viene compromessa, i messaggi passati diventano leggibili.
@@ -75,6 +75,9 @@ Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se i
 | Nessuna federazione in ingresso | dominio pubblico non risolve verso il relay | controlla DNS e il tunnel |
 | Spinner infinito | il core non risponde | l'app rileva il guasto entro pochi secondi e tenta il riavvio |
 | Media non visibili | backend media del relay non configurato | controlla `FEDI3_RELAY_MEDIA_BACKEND` |
+| Messaggio di chat fermo sull'orologio | peer irraggiungibile sia via P2P sia via relay | controlla il tunnel del peer e `fedi3.log` nella directory dati del core |
+
+La diagnostica nativa del core viene aggiunta a `fedi3.log` nella directory dati del core (accanto a `fedi3.db`); su Android è l'unico posto dove i log del core sono visibili.
 
 Per il relay vedi [deploy_relay.md](deploy_relay.md) e [troubleshooting.md](troubleshooting.md). Per compilare l'app da sorgente vedi [build_linux.md](build_linux.md).
 

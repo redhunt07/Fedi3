@@ -204,15 +204,46 @@ fn data_dir_for(cfg: &CoreStartConfig) -> Result<std::path::PathBuf> {
 
 /// Start the core. This function returns `Ok(handle)` only after the local server is
 /// actually bound to `cfg.bind` and the database has been opened successfully.
+/// Appends tracing output to a file; Android drops native stdout, so the core
+/// keeps a log next to its database for diagnostics.
+struct FileWriter(Arc<std::fs::File>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriter {
+    type Writer = &'a std::fs::File;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        &self.0
+    }
+}
+
+fn init_tracing(data_dir: Option<&std::path::Path>) {
+    let filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("info".parse().unwrap());
+    let file_writer = data_dir
+        .map(|dir| dir.join("fedi3.log"))
+        .and_then(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+        })
+        .map(|file| FileWriter(Arc::new(file)));
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    match file_writer {
+        Some(writer) => {
+            builder.with_writer(writer).try_init().ok();
+        }
+        None => {
+            builder.try_init().ok();
+        }
+    }
+}
+
 pub fn start(cfg: CoreStartConfig) -> Result<u64> {
     crate::init_tls_provider();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("info".parse().unwrap()),
-        )
-        .try_init()
-        .ok();
+    let log_dir = data_dir_for(&cfg).ok();
+    init_tracing(log_dir.as_deref());
 
     // Fail-fast config validation (H-43/M-33).
     if !validate_username(&cfg.username) {
