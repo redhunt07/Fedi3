@@ -148,7 +148,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             IconButton(
                 tooltip: context.l10n.navSettings,
                 onPressed: widget.onOpenSettings,
-                icon: const Icon(Icons.tune_rounded)),
+                icon: const Icon(Icons.settings_outlined)),
         ],
       ),
       body: ListView(

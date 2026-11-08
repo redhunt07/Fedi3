@@ -369,13 +369,15 @@ class _SearchScreenState extends State<SearchScreen>
     );
   }
 
-  TextSpan _highlightQuery(BuildContext context, String text) {
+  TextSpan _highlightQuery(BuildContext context, String text,
+      {TextStyle? base}) {
     final q = _query.trim();
-    if (q.isEmpty) return TextSpan(text: text);
+    if (q.isEmpty) return TextSpan(text: text, style: base);
     final lower = text.toLowerCase();
     final idx = lower.indexOf(q.toLowerCase());
-    if (idx < 0) return TextSpan(text: text);
+    if (idx < 0) return TextSpan(text: text, style: base);
     return TextSpan(
+      style: base,
       children: [
         TextSpan(text: text.substring(0, idx)),
         TextSpan(
@@ -629,7 +631,8 @@ class _SearchScreenState extends State<SearchScreen>
             statusKey: user.profile.statusKey,
           ),
           title: RichText(
-            text: _highlightQuery(context, user.profile.displayName),
+            text: _highlightQuery(context, user.profile.displayName,
+                base: Theme.of(context).textTheme.titleMedium),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -638,7 +641,8 @@ class _SearchScreenState extends State<SearchScreen>
                 context,
                 user.profile.preferredUsername.isNotEmpty
                     ? user.profile.preferredUsername
-                    : user.profile.id),
+                    : user.profile.id,
+                base: Theme.of(context).textTheme.bodySmall),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
