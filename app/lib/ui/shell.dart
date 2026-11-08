@@ -67,6 +67,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   bool _announcementsUnread = false;
   bool _announcementsChecking = false;
   StreamSubscription<String>? _notificationTaps;
+  StreamSubscription<CoreEvent>? _activityStream;
+  CoreConfig? _activityStreamConfig;
+  Timer? _activityDebounce;
   Timer? _callPollTimer;
   ChatCallSignal? _pendingCallSignal;
   StreamSubscription<bool>? _activitySub;
@@ -141,6 +144,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         _stopCallPolling();
       } else if (running && (!_lastRunning || configChanged)) {
         _startChatStream();
+        _startActivityStream();
         _startCallPolling();
       }
       _lastRunning = running;
@@ -148,6 +152,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     widget.appState.addListener(_appStateListener);
     if (widget.appState.isRunning) {
       _startChatStream();
+      _startActivityStream();
       _startCallPolling();
     }
     if (kReleaseMode) {
@@ -236,6 +241,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _activitySub?.cancel();
     unawaited(SoundService.stopCall());
     _chatStream?.cancel();
+    _activityStream?.cancel();
+    _activityDebounce?.cancel();
     _chatDebounce?.cancel();
     _chatRetry?.cancel();
     _updatesTimer?.cancel();
@@ -264,6 +271,30 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
               threadId: threadId,
               title: context.l10n.chatTitle)));
     } catch (_) {}
+  }
+
+  /// Inbox activity (reactions, follows, mentions) must reach the notification
+  /// shade even when the user is on another tab: the notifications screen only
+  /// reacts while it is mounted.
+  void _startActivityStream() {
+    if (!widget.appState.isRunning) return;
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    if (identical(_activityStreamConfig, cfg) && _activityStream != null) return;
+    _activityStreamConfig = cfg;
+    _activityStream?.cancel();
+    _activityStream =
+        CoreEventStream(config: cfg).stream(kind: 'inbox').listen((ev) {
+      if (!mounted || ev.kind != 'inbox') return;
+      _activityDebounce?.cancel();
+      _activityDebounce = Timer(const Duration(milliseconds: 350), () {
+        if (!mounted || AppActivity.foreground) return;
+        unawaited(NotificationService.showActivityNotification(
+          title: context.l10n.activityNotificationTitle,
+          body: context.l10n.activityNotificationBody,
+        ));
+      });
+    }, onError: (_) {}, onDone: () {});
   }
 
   void _startChatStream() {
@@ -320,6 +351,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _chatRetry = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       _startChatStream();
+      _startActivityStream();
     });
   }
 

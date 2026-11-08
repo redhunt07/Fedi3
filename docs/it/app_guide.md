@@ -40,7 +40,9 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Supporta reazioni, file, GIF e stato di lettura.
 - Il servizio notifiche dichiara `remoteMessaging` su Android 14+ (con fallback a `dataSync`
   sotto): Android 15 limita i foreground service `dataSync` a sei ore al giorno.
-- Le notifiche di attività, chat e chiamata usano tre suoni distinti inclusi nell'app
+- Le notifiche di attività, chat e chiamata usano tre suoni distinti inclusi nell'app.
+  Le notifiche di attività sono emesse anche dalla shell, così arrivano nel
+  pannello di notifica mentre l'utente è su un'altra scheda.
   (`res/raw/fedi3_activity`, `fedi3_chat`, `fedi3_call`).
 - Le chiamate in arrivo suonano con una notifica di sistema mentre l'app è in background;
   il prompt di chiamata si apre appena l'app torna in primo piano.
