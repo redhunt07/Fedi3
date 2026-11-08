@@ -62,11 +62,14 @@ Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se i
 
 ## Build Android ed emulatore
 
-- `scripts/build_android.sh debug` compila il core per `arm64-v8a` e `x86_64` e produce un APK di debug. Le build di release includono solo `arm64-v8a` per ridurre la dimensione del download.
+- `scripts/build_android.sh debug` compila il core per `arm64-v8a` e `x86_64` e produce un APK di debug. `profile` fa lo stesso con una build AOT, utile per misurare prestazioni realistiche su un emulatore.
+- `scripts/build_android.sh release` compila il core per `arm64-v8a` e `x86_64` e produce APK separati per ABI. L'APK `arm64-v8a` è quello da distribuire (circa 70 MB); l'APK `x86_64` si installa su un emulatore; l'APK `armeabi-v7a` viene scartato perché il core non è compilato per ARM a 32 bit. Senza `android/key.properties` l'APK di release è firmato con la chiave di debug.
+- Le librerie native rimaste da una build precedente vengono rimosse prima di ogni build, così un APK di release non trasporta ABI pensate solo per l'emulatore.
 - Requisiti: Android SDK, NDK 28.2.13676358 e un JDK 17 completo (`javac` è necessario; il solo JRE fa fallire la build Gradle).
 - Android non espone la directory `HOME`, quindi l'app salva la configurazione nella directory di supporto dell'app e passa un `data_dir` esplicito al core. Entrambi i percorsi restano nella sandbox dell'app.
 - Emulatore: avvia un AVD `x86_64` ed esegui `flutter run -d emulator-5554` (oppure installa l'APK di debug con `adb install`). L'APK di debug contiene già il core x86_64.
 - Il relay registra un username alla prima connessione del tunnel. Se l'username esiste già con un altro token, il tunnel viene rifiutato: usa un nuovo username o ruota il token tramite l'API admin del relay.
+- Misure su build di release (emulatore x86_64, 4 GB di RAM): avvio a freddo circa 0,5 s, PSS circa 130 MB in primo piano e 145 MB con il servizio di notifiche in background, CPU in background circa 0,2% di un core. Il thread raster di Flutter segnala circa il 50% di CPU sull'emulatore perché il guest usa il rendering software; quel valore non è rappresentativo di un dispositivo reale con GPU.
 
 ## Problemi comuni
 

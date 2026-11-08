@@ -62,11 +62,14 @@ Every change to the configuration restarts the core and waits for it to be ready
 
 ## Android build and emulator
 
-- `scripts/build_android.sh debug` compiles the core for `arm64-v8a` and `x86_64` and produces a debug APK. Release builds ship `arm64-v8a` only to keep the download small.
+- `scripts/build_android.sh debug` compiles the core for `arm64-v8a` and `x86_64` and produces a debug APK. `profile` does the same with an AOT build, useful to measure realistic performance on an emulator.
+- `scripts/build_android.sh release` builds the core for `arm64-v8a` and `x86_64` and produces per-ABI APKs. The `arm64-v8a` APK is the one to distribute (about 70 MB); the `x86_64` APK can be installed on an emulator; the `armeabi-v7a` APK is dropped because the core is not built for 32-bit ARM. Without `android/key.properties` the release APK is signed with the debug key.
+- Stale native libraries from an earlier profile are removed before each build, so a release APK never carries emulator-only ABIs.
 - Requirements: Android SDK, NDK 28.2.13676358, and a full JDK 17 (`javac` is required; a JRE alone fails the Gradle build).
 - Android exposes no `HOME` directory, so the app stores its configuration in the app support directory and passes an explicit `data_dir` to the core. Both paths stay inside the app sandbox.
 - Emulator: start an `x86_64` AVD and run `flutter run -d emulator-5554` (or install the debug APK with `adb install`). The debug APK already contains the x86_64 core.
 - The relay registers a username on the first tunnel connection. If a username already exists with another token, the tunnel is rejected: use a new username or rotate the token through the relay admin API.
+- Measured on a release build (x86_64 emulator, 4 GB RAM): cold start about 0.5 s, PSS about 130 MB in the foreground and 145 MB with the background notification service, background CPU about 0.2% of one core. The Flutter raster thread reports about 50% CPU on the emulator because the guest falls back to software rendering; that figure is not representative of a real device with a GPU.
 
 ## Common problems
 

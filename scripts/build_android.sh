@@ -2,27 +2,26 @@
 # Build the native core and Flutter client together; avoid APKs missing the core.
 set -euo pipefail
 profile="${1:-debug}"
-case "$profile" in debug|release) ;; *) echo 'Usage: scripts/build_android.sh [debug|release]' >&2; exit 2;; esac
+case "$profile" in debug|profile|release) ;; *) echo 'Usage: scripts/build_android.sh [debug|profile|release]' >&2; exit 2;; esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 ndk_root="${FEDI3_ANDROID_NDK:-$sdk_root/ndk/28.2.13676358}"
 ndk_bin="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"
 [[ -x "$ndk_bin/aarch64-linux-android24-clang" ]] || { echo 'Install Android NDK 28.2.13676358 or set FEDI3_ANDROID_NDK' >&2; exit 2; }
 if [[ "$profile" == release && ! -f "$repo_root/app/android/key.properties" ]]; then
-  echo 'Configure app/android/key.properties for a signed release; use debug for local validation.' >&2
-  exit 2
+  echo 'warning: app/android/key.properties is missing; the release APK uses the debug key.' >&2
 fi
 
-# Debug builds also ship x86_64 so the app can run on Android emulators; release
-# APKs stay arm64-only to keep the download small.
+# Every profile also ships x86_64 so the app can run on Android emulators.
+# Release builds are split per ABI: phones take the arm64 APK and emulators can
+# install the x86_64 one for realistic performance checks. The armeabi-v7a APK
+# is dropped because the Rust core is not built for 32-bit ARM.
 targets=("aarch64-linux-android")
 abis=("arm64-v8a")
 platforms=("android-arm64")
-if [[ "$profile" == debug ]]; then
-  targets+=("x86_64-linux-android")
-  abis+=("x86_64")
-  platforms+=("android-x64")
-fi
+targets+=("x86_64-linux-android")
+abis+=("x86_64")
+platforms+=("android-x64")
 
 build_core() {
   local triple="$1"
@@ -40,9 +39,17 @@ build_core() {
     "$repo_root/app/android/app/src/main/jniLibs/$abi/libfedi3_core.so"
 }
 
+# Stale ABIs from an earlier profile would otherwise be packaged as well, so a
+# release APK could carry emulator-only libraries.
+rm -rf "$repo_root/app/android/app/src/main/jniLibs"
 for i in "${!targets[@]}"; do
   build_core "${targets[$i]}" "${abis[$i]}"
 done
 
 platform_list="$(IFS=,; echo "${platforms[*]}")"
-(cd "$repo_root/app" && flutter build apk --"$profile" --target-platform "$platform_list")
+if [[ "$profile" == release ]]; then
+  (cd "$repo_root/app" && flutter build apk --release --split-per-abi)
+  rm -f "$repo_root/app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk"
+else
+  (cd "$repo_root/app" && flutter build apk --"$profile" --target-platform "$platform_list")
+fi
