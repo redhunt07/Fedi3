@@ -2516,6 +2516,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     cacheWidth: 320,
                     autoplay: false,
                     muted: true,
+                    poster: true,
                     onOpen: () => _openMediaViewer(attachments, a),
                   ),
                 ),

@@ -19,6 +19,7 @@ class InlineMediaTile extends StatefulWidget {
     this.borderRadius = 12,
     this.autoplay = false,
     this.muted = false,
+    this.poster = false,
   });
 
   final String url;
@@ -28,6 +29,11 @@ class InlineMediaTile extends StatefulWidget {
   final double borderRadius;
   final bool autoplay;
   final bool muted;
+
+  /// Renders the first video frame behind the play overlay so a video message
+  /// shows a real poster instead of a black rectangle. Opt-in because every
+  /// poster keeps a player instance alive.
+  final bool poster;
 
   @override
   State<InlineMediaTile> createState() => _InlineMediaTileState();
@@ -119,16 +125,31 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
                 muted: widget.muted,
               )
             else
-              InkWell(
-                onTap: () => setState(() => _showPlayer = true),
-                child: Container(
-                  color: Colors.black.withAlpha(210),
-                  alignment: Alignment.center,
-                  child: Icon(
-                      isAudio ? Icons.audiotrack : Icons.play_circle_fill,
-                      color: Colors.white,
-                      size: 46),
-                ),
+              Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (widget.poster && !isAudio)
+                    FediMediaPlayer(
+                      url: url,
+                      autoplay: false,
+                      fit: BoxFit.cover,
+                      showControls: false,
+                      muted: true,
+                    ),
+                  InkWell(
+                    onTap: () => setState(() => _showPlayer = true),
+                    child: Container(
+                      color: widget.poster && !isAudio
+                          ? Colors.black.withAlpha(60)
+                          : Colors.black.withAlpha(210),
+                      alignment: Alignment.center,
+                      child: Icon(
+                          isAudio ? Icons.audiotrack : Icons.play_circle_fill,
+                          color: Colors.white,
+                          size: 46),
+                    ),
+                  ),
+                ],
               ),
             Align(
               alignment: Alignment.topRight,

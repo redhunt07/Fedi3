@@ -66,6 +66,16 @@ class _FediMediaPlayerState extends State<FediMediaPlayer> {
       await _player.setPlaylistMode(
           widget.loop ? PlaylistMode.single : PlaylistMode.none);
       await _player.open(Media(u), play: widget.autoplay);
+      if (!widget.autoplay) {
+        // Decode the first frame and stop again so the widget can act as a
+        // poster instead of showing a black rectangle.
+        await _applyVolume();
+        await _player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await _player.pause();
+        await _player.seek(const Duration(milliseconds: 100));
+        return;
+      }
       await _applyVolume();
     } catch (_) {
       // Best-effort: errors will reflect as no playback.
