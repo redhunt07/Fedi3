@@ -4939,6 +4939,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'During screen sharing, system audio is captured from the default output. If no call output is chosen, the app moves the call to another device so the other side does not hear its own voice.'**
   String get audioScreenShareHint;
+
+  /// No description provided for @callSwitchCamera.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch camera'**
+  String get callSwitchCamera;
+
+  /// No description provided for @callSwitchCameraFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not switch the camera.'**
+  String get callSwitchCameraFailed;
 }
 
 class _AppLocalizationsDelegate

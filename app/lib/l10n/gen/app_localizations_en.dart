@@ -2649,4 +2649,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get audioScreenShareHint =>
       'During screen sharing, system audio is captured from the default output. If no call output is chosen, the app moves the call to another device so the other side does not hear its own voice.';
+
+  @override
+  String get callSwitchCamera => 'Switch camera';
+
+  @override
+  String get callSwitchCameraFailed => 'Could not switch the camera.';
 }

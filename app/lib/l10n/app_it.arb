@@ -1206,5 +1206,7 @@
   "audioTestOutput": "Riproduci tono di prova",
   "audioTestOutputHint": "Riproduce un suono sull’uscita scelta senza cambiare l’audio di sistema.",
   "audioAppliedHint": "Le modifiche valgono per le prossime chiamate. Se un dispositivo non è disponibile, la chiamata usa il predefinito.",
-  "audioScreenShareHint": "Durante la condivisione schermo l’audio di sistema viene preso dall’uscita predefinita. Se non hai scelto un’uscita della chiamata, l’app la sposta su un altro dispositivo così l’interlocutore non risente la propria voce."
+  "audioScreenShareHint": "Durante la condivisione schermo l’audio di sistema viene preso dall’uscita predefinita. Se non hai scelto un’uscita della chiamata, l’app la sposta su un altro dispositivo così l’interlocutore non risente la propria voce.",
+  "callSwitchCamera": "Cambia fotocamera",
+  "callSwitchCameraFailed": "Impossibile cambiare fotocamera."
 }

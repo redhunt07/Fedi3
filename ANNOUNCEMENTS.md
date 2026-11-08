@@ -12,8 +12,9 @@ both. The system audio comes from the default output on Linux; when no call
 output is chosen, the app moves the call to another device for the duration of
 the share, so the other side does not hear its own voice through the loopback. Camera frames are now
 shown with their native aspect ratio instead of being cropped to the tile, and
-one-to-one calls fit the available area. Desktop **Settings > Audio** shows the
-same routing hint.
+one-to-one calls fit the available area. On Android and iOS, video calls have a
+button to switch between the front and back camera. Desktop **Settings > Audio**
+shows the same routing hint.
 [Docs](docs/app_guide.md).
 
 ## 2026-11-08 — Calls: automatic TURN and desktop audio settings

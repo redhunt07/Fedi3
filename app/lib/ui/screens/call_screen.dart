@@ -74,6 +74,7 @@ class _CallScreenState extends State<CallScreen> {
   MediaStreamTrack? _micTrack;
   bool _micOn = true;
   bool _cameraOn = true;
+  bool _frontCamera = true;
   bool _screenSharing = false;
   String? _screenShareOutputBackup;
   bool _screenShareOutputChanged = false;
@@ -798,6 +799,26 @@ class _CallScreenState extends State<CallScreen> {
     setState(() {});
   }
 
+  /// Switches between the front and back camera on mobile devices.
+  ///
+  /// The desktop plugin returns NotImplemented for this call, so the button is
+  /// only shown on Android and iOS.
+  Future<void> _switchCamera() async {
+    final track = _cameraTrack;
+    if (track == null) return;
+    try {
+      final switched = await Helper.switchCamera(track);
+      if (!mounted) return;
+      if (switched) {
+        setState(() => _frontCamera = !_frontCamera);
+      } else if (_error == null) {
+        setState(() => _error = context.l10n.callSwitchCameraFailed);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
   Future<void> _toggleScreenShare() async {
     if (_screenSharing) {
       await _stopScreenShare();
@@ -1100,6 +1121,15 @@ class _CallScreenState extends State<CallScreen> {
               active: _cameraOn,
               onTap: _toggleCamera,
             ),
+          if (widget.mediaType == 'video' &&
+              (defaultTargetPlatform == TargetPlatform.android ||
+                  defaultTargetPlatform == TargetPlatform.iOS))
+            _controlButton(
+              icon: Icons.cameraswitch_rounded,
+              label: context.l10n.callSwitchCamera,
+              active: true,
+              onTap: _switchCamera,
+            ),
           // Screen sharing is a desktop affordance for now; Android calls stay
           // focused on audio/video and avoid the MediaProjection service.
           if (defaultTargetPlatform != TargetPlatform.android)
@@ -1262,7 +1292,7 @@ class _CallScreenState extends State<CallScreen> {
                     height: 74,
                     child: _localRenderer != null
                         ? RTCVideoView(_localRenderer!,
-                            mirror: true,
+                            mirror: _frontCamera,
                             objectFit: RTCVideoViewObjectFit
                                 .RTCVideoViewObjectFitContain)
                         : const SizedBox.shrink(),
