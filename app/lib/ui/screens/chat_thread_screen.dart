@@ -1520,7 +1520,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       ),
     );
     if (ok != true) return;
-    await CoreApi(config: cfg).deleteChatMessage(messageId: message.messageId);
+    try {
+      await CoreApi(config: cfg).deleteChatMessage(messageId: message.messageId);
+    } on CoreApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
     await _loadMessages(reset: true);
   }
 

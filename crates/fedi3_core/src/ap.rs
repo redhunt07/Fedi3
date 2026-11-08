@@ -3630,9 +3630,14 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 continue;
             }
         };
-        if peers.is_empty() {
-            warn!(actor=%actor, msg_id=%message_id, "chat send skipped: no peer advertised");
-        }
+        // A recipient core can run without P2P and still accept chat over the relay
+        // HTTP proxy. Use an empty peer id so the bundle fetch and envelope send take
+        // their HTTP fallback paths instead of skipping delivery entirely.
+        let peers = if peers.is_empty() {
+            vec![String::new()]
+        } else {
+            peers
+        };
         for peer_id in peers {
             let bundle = match fetch_chat_bundle(state, &peer_id, &actor).await {
                 Ok(Some(bundle)) => bundle,
@@ -4218,13 +4223,8 @@ async fn chat_delete_post(state: &ApState, req: Request<Body>) -> Response<Body>
     if deleted {
         return simple(StatusCode::CONFLICT, "message deleted");
     }
-    if state
-        .social
-        .chat_message_seen_by_others(&input.message_id, &self_actor)
-        .unwrap_or(false)
-    {
-        return simple(StatusCode::CONFLICT, "message already seen");
-    }
+    // Delete-for-everyone stays available after the message was read: the
+    // recipients already render it, and the delete payload removes it there.
     let _ = state.social.mark_chat_message_deleted(&input.message_id);
     if let Ok(Some(thread_id)) = state.social.get_chat_message_thread_id(&input.message_id) {
         let payload = chat::ChatPayload {
