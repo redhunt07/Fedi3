@@ -1856,6 +1856,18 @@ abstract class AppLocalizations {
   /// **'If off: followers-only'**
   String get composePublicHint;
 
+  /// No description provided for @composeAddMediaTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add media'**
+  String get composeAddMediaTitle;
+
+  /// No description provided for @composeAddMediaHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Images, videos or audio'**
+  String get composeAddMediaHint;
+
   /// No description provided for @composeDropMediaTitle.
   ///
   /// In en, this message translates to:

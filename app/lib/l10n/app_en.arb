@@ -439,6 +439,8 @@
   "composeWhatsHappening": "Write what you think.",
   "composePublic": "Public",
   "composePublicHint": "If off: followers-only",
+  "composeAddMediaTitle": "Add media",
+  "composeAddMediaHint": "Images, videos or audio",
   "composeDropMediaTitle": "Drop your media here",
   "composeDropMediaHint": "Images, videos or audio — or choose files",
   "composeChooseFiles": "Choose files",

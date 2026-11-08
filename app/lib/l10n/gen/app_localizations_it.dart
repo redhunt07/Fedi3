@@ -983,6 +983,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get composePublicHint => 'Se off: solo follower';
 
   @override
+  String get composeAddMediaTitle => 'Aggiungi media';
+
+  @override
+  String get composeAddMediaHint => 'Immagini, video o audio';
+
+  @override
   String get composeDropMediaTitle => 'Trascina qui i tuoi media';
 
   @override

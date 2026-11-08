@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -71,6 +72,16 @@ class _ComposeScreenState extends State<ComposeScreen> {
     if (!mounted) return;
     setState(() => _directRecent = recent);
   }
+
+  bool get _touchPlatform => Platform.isAndroid || Platform.isIOS;
+
+  String _mediaTitle(BuildContext context) => _touchPlatform
+      ? context.l10n.composeAddMediaTitle
+      : context.l10n.composeDropMediaTitle;
+
+  String _mediaHint(BuildContext context) => _touchPlatform
+      ? context.l10n.composeAddMediaHint
+      : context.l10n.composeDropMediaHint;
 
   @override
   Widget build(BuildContext context) {
@@ -302,14 +313,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  context.l10n.composeDropMediaTitle,
+                                  _mediaTitle(context),
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w700,
                                       fontSize: 13),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  context.l10n.composeDropMediaHint,
+                                  _mediaHint(context),
                                   style: TextStyle(
                                     fontSize: 11.5,
                                     color: Theme.of(context)
@@ -411,7 +422,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
                                   size: 40,
                                   color: Theme.of(context).colorScheme.primary),
                               const SizedBox(height: 8),
-                              Text(context.l10n.composeDropMediaTitle,
+                              Text(_mediaTitle(context),
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w800)),
                             ],
