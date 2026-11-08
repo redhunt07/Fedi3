@@ -10,12 +10,14 @@ FEDI3 is a federated social platform with a peer-to-peer layer: privacy-first,
 interoperable with the fediverse and resilient without giving up compatibility
 with classic ActivityPub instances.
 
-> **Status: pre-1.0; 0.10.0 is in preparation, not published.** Current local
+> **Status: pre-1.0; [0.10.0 is published](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.0).** Current
 > verification is in the [client/update audit](docs/audit/client_updates_2026-11-07.md)
 > and [compatible RSA/WebRTC remediation](docs/audit/crypto_compatibility_2026-11-08.md).
 > The [production readiness audit](docs/audit/production_readiness_audit.md) and
 > [remediation plan](docs/audit/remediation_plan.md) are historical background;
-> native Windows/Apple runners and remote release CI remain part of publication.
+> [Publication verification](docs/audit/release_0.10.0_2026-11-08.md) records the passing
+> Linux and Windows release builds and remote CI. Apple/mobile packages
+> are outside this release pipeline.
 
 ## Contents
 
@@ -134,7 +136,7 @@ Android and iOS builds are available, but the mobile release pipeline and
 signing are not final yet; the primary production target is relay + Linux
 desktop.
 
-Prepared in 0.10.0: Settings → Client updates checks stable releases and verifies
+Available since 0.10.0: Settings → Client updates checks stable releases and verifies
 SHA256 downloads. Linux x86_64 AppImages can replace themselves with a backup;
 Windows x64 uses a verified ZIP and guided installation. Earlier clients need a
 manual first upgrade. See [client updates](docs/updates.md).

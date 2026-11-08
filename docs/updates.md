@@ -9,7 +9,7 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
 foreign download URLs and incompatible architectures are rejected. The first
-version containing this updater is prepared as `0.10.0+1`, above the historical
+version containing this updater is published as `0.10.0+1`, above the historical
 `0.9.19` release. Older clients require a manual first upgrade.
 
 ## Installation

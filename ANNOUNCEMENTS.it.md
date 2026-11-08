@@ -4,9 +4,9 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
-## 2026-11-08 — Preparazione 0.10.0: aggiornamenti client e sicurezza compatibile
+## 2026-11-08 — Pubblicata la 0.10.0: aggiornamenti client e sicurezza compatibile
 
-La versione `0.10.0` è in preparazione e non è ancora pubblicata. I client
+[La versione `0.10.0` è pubblicata](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.0) per Linux x86_64 e Windows x64, con checksum SHA256. I client
 precedenti richiedono un primo aggiornamento manuale per ricevere il nuovo updater.
 
 - Il client controlla le release stabili dalle impostazioni, segnala nuove
@@ -17,10 +17,10 @@ precedenti richiedono un primo aggiornamento manuale per ricevere il nuovo updat
 - Le operazioni RSA usano AWS-LC e il trasporto Rust WebRTC usa lo stack attuale.
   Chiavi dei profili, chiavi pubbliche, DID, firme e messaggi cifrati restano
   compatibili; l’interoperabilità tra vecchie e nuove implementazioni è verificata.
-- Verifiche locali: 307 test Rust e 184 Flutter superati, build release Linux
-  riuscite e audit delle dipendenze con zero vulnerabilità e nessun advisory
-  ignorato. Restano cinque avvisi di manutenzione; runner nativi Windows/Apple
-  e workflow remoto fanno ancora parte della pubblicazione.
+- Verifiche: 304 test Rust standard e 184 Flutter superati, insieme alle prove
+  di interoperabilità RSA e WebRTC tra vecchie e nuove implementazioni. CI GitHub
+  e build release native Linux/Windows superate. L’audit riporta zero vulnerabilità
+  e nessun advisory ignorato; restano cinque avvisi di manutenzione.
 - La diagnostica del client resta sul dispositivo, con log limitati ed
   esportazione manuale. Nessun invio automatico di telemetria o push Git.
 - Corretti fallback della directory relay, messaggi di autenticazione del core

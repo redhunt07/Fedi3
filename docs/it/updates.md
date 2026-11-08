@@ -9,7 +9,7 @@ Le richieste HTTPS sono in sola lettura: non inviano token, log o telemetria.
 La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
-La prima versione preparata con questo sistema è `0.10.0+1`, successiva alla
+La prima versione pubblicata con questo sistema è `0.10.0+1`, successiva alla
 release storica `0.9.19`. I vecchi client richiedono un primo aggiornamento manuale.
 
 ## Installazione
