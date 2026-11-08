@@ -100,6 +100,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         ProfileScreen(
           appState: widget.appState,
           actorUrl: _selfActorUrl(widget.appState.config!),
+          onOpenSettings: _openSettings,
         ),
     ];
     _lastRunning = widget.appState.isRunning;
@@ -461,8 +462,38 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     return '$base/users/$user';
   }
 
+  void _openSettings() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsScreen(appState: widget.appState),
+      ),
+    );
+  }
+
+  void _openRelays() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RelaysScreen(appState: widget.appState),
+      ),
+    );
+  }
+
   void _selectSection(int index) {
     if (!mounted || index < 0 || index >= _pages.length) return;
+    // Phones expose five labelled primary sections; relay management and
+    // settings open as full pages instead of crowding the bottom bar.
+    final isWide = MediaQuery.of(context).size.width >=
+        UiTokens.desktopBreakpoint;
+    if (!isWide && index >= 4 && index < 6) {
+      if (index == 4) {
+        _openRelays();
+      } else {
+        _openSettings();
+      }
+      return;
+    }
     if (_index == index) return;
     setState(() => _index = index);
     if (!MediaQuery.of(context).disableAnimations) {
@@ -573,23 +604,28 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
               children: _pages,
             ),
           ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: _selectSection,
-            destinations: [
-              for (final it in items)
-                NavigationDestination(
-                  tooltip: '${it.label} (${it.shortcut})',
-                  icon: it.badge > 0
-                      ? Badge(
-                          label: Text('${it.badge}'),
-                          child: Icon(it.icon),
-                        )
-                      : Icon(it.icon),
-                  label: it.label,
-                ),
-            ],
-          ),
+          bottomNavigationBar: Builder(builder: (context) {
+            final sections = <int>[0, 1, 2, 3, if (_pages.length > 6) 6];
+            final selected = sections.indexOf(_index);
+            return NavigationBar(
+              selectedIndex: selected < 0 ? 0 : selected,
+              onDestinationSelected: (i) => _selectSection(sections[i]),
+              destinations: [
+                for (final s in sections)
+                  NavigationDestination(
+                    tooltip:
+                        '${items[s].label} (${items[s].shortcut})',
+                    icon: items[s].badge > 0
+                        ? Badge(
+                            label: Text('${items[s].badge}'),
+                            child: Icon(items[s].icon),
+                          )
+                        : Icon(items[s].icon),
+                    label: items[s].label,
+                  ),
+              ],
+            );
+          }),
         ),
       );
     }

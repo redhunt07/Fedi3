@@ -6,6 +6,7 @@
   "navNotifications": "Notifiche",
   "navSearch": "Cerca",
   "navChat": "Chat",
+  "settingsRelaysHint": "Scegli i relay, scopri i peer e controlla la connettività.",
   "navRelays": "Relay",
   "navSettings": "Configurazioni",
   "save": "Salva",
@@ -782,8 +783,15 @@
   },
   "relaysTitle": "Relay",
   "relaysCurrent": "Relay attuale",
+  "relaysOnlineUsers": "Utenti online",
+  "relaysOnlinePeers": "Peer online",
+  "relaysTotalUsers": "Utenti conosciuti",
+  "relaysPeersSeen": "Peer visti",
+  "relaysRelayCount": "Relay nella mesh",
+  "relaysViewRaw": "Mostra telemetria grezza",
   "relaysTelemetry": "Telemetria",
   "relaysKnown": "Relay conosciuti",
+  "relaysLastSeenLabel": "Visto l'ultima volta {time}",
   "relaysLastSeen": "last_seen={ms}",
   "@relaysLastSeen": {
     "placeholders": {

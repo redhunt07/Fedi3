@@ -60,7 +60,8 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('AW-41 rail items expose accessible labels with shortcut hints',
+  testWidgets(
+      'AW-41 desktop rail items expose accessible labels with shortcut hints',
       (tester) async {
     final semantics = tester.ensureSemantics();
     await setUpPumpEnv(tester);
@@ -68,9 +69,13 @@ void main() {
         defaultResponse: FakeHttpResponse(body: '{"items":[],"next":null}')));
     addTearDown(CoreHttp.reset);
 
-    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1400, 900);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-    addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = await _runningApp();
     await pumpScreen(tester, Shell(appState: app));
     await tester.pump();
@@ -78,10 +83,42 @@ void main() {
 
     expect(find.byTooltip('Timeline (Ctrl+1)'), findsWidgets);
     expect(find.byTooltip('Search (Ctrl+2)'), findsWidgets);
+    expect(find.byTooltip('Relays (Ctrl+5)'), findsWidgets);
     expect(find.byTooltip('Settings (Ctrl+6)'), findsWidgets);
+    expect(find.byType(NavigationBar), findsNothing);
 
     semantics.dispose();
     debugDefaultTargetPlatformOverride = null;
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('AW-41b phone bottom bar keeps five readable sections',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    CoreHttp.useTestClient(FakeHttpClient(
+        defaultResponse: FakeHttpResponse(body: '{"items":[],"next":null}')));
+    addTearDown(CoreHttp.reset);
+
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(400, 900);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final app = await _runningApp();
+    await pumpScreen(tester, Shell(appState: app));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byTooltip('Timeline (Ctrl+1)'), findsWidgets);
+    expect(find.byTooltip('Search (Ctrl+2)'), findsWidgets);
+    expect(find.byTooltip('Chat (Ctrl+3)'), findsWidgets);
+    expect(find.byTooltip('Notifications (Ctrl+4)'), findsWidgets);
+    expect(find.byTooltip('Account (Ctrl+7)'), findsWidgets);
+    // Relay management and settings are reachable from the account tab, so the
+    // phone bar must not crowd them in.
+    expect(find.byTooltip('Relays (Ctrl+5)'), findsNothing);
+    expect(find.byTooltip('Settings (Ctrl+6)'), findsNothing);
   });
 }

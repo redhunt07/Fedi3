@@ -728,7 +728,9 @@ class _TimelineListState extends State<_TimelineList>
   void initState() {
     super.initState();
     _refresh();
-    _poll = AppActivity.periodic(const Duration(seconds: 8), (_) => _pollNew());
+    // Live updates arrive through the core event stream; this periodic poll is
+    // only a safety net, so keep it slow to spare battery and CPU.
+    _poll = AppActivity.periodic(const Duration(seconds: 20), (_) => _pollNew());
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {

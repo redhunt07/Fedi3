@@ -48,10 +48,19 @@ class ConfigStore {
 
   static Directory? _dirOverride;
 
+  /// Mobile platforms expose no HOME directory, so the runner points the store
+  /// at the app support directory, the only writable location there.
+  static Directory? _baseDirectory;
+
   /// Tests point the store at a temp directory.
   @visibleForTesting
   static void useDirectoryForTesting(Directory? dir) {
     _dirOverride = dir;
+  }
+
+  /// Production override for platforms without a usable home directory.
+  static void useBaseDirectory(Directory? dir) {
+    _baseDirectory = dir;
   }
 
   static const _vault = FlutterSecureStorage(
@@ -271,6 +280,7 @@ class ConfigStore {
 
   static Directory _configDir() {
     if (_dirOverride != null) return _dirOverride!;
+    if (_baseDirectory != null) return _baseDirectory!;
     if (Platform.isWindows) {
       final base = Platform.environment['APPDATA'] ??
           Platform.environment['USERPROFILE'] ??

@@ -304,6 +304,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<_RelayOption>(
+                  // Long relay labels must ellipsize inside the row instead of
+                  // forcing the field to its intrinsic (overflowing) width.
+                  isExpanded: true,
                   initialValue: _selectedRelay,
                   items: _relayOptions
                       .map((r) => DropdownMenuItem(

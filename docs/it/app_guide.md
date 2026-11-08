@@ -56,6 +56,14 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se il nuovo valore non funziona, l'app ripristina la configurazione precedente.
 
+## Build Android ed emulatore
+
+- `scripts/build_android.sh debug` compila il core per `arm64-v8a` e `x86_64` e produce un APK di debug. Le build di release includono solo `arm64-v8a` per ridurre la dimensione del download.
+- Requisiti: Android SDK, NDK 28.2.13676358 e un JDK 17 completo (`javac` è necessario; il solo JRE fa fallire la build Gradle).
+- Android non espone la directory `HOME`, quindi l'app salva la configurazione nella directory di supporto dell'app e passa un `data_dir` esplicito al core. Entrambi i percorsi restano nella sandbox dell'app.
+- Emulatore: avvia un AVD `x86_64` ed esegui `flutter run -d emulator-5554` (oppure installa l'APK di debug con `adb install`). L'APK di debug contiene già il core x86_64.
+- Il relay registra un username alla prima connessione del tunnel. Se l'username esiste già con un altro token, il tunnel viene rifiutato: usa un nuovo username o ruota il token tramite l'API admin del relay.
+
 ## Problemi comuni
 
 | Sintomo | Causa probabile | Rimedio |

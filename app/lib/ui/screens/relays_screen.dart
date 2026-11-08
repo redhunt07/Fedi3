@@ -5,6 +5,7 @@ import '../../services/app_activity.dart';
  */
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -12,6 +13,8 @@ import 'package:http/http.dart' as http;
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
+import '../utils/time_ago.dart';
 import '../widgets/network_error_card.dart';
 
 class RelaysScreen extends StatefulWidget {
@@ -35,6 +38,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
   String? _recommendedRelay;
   Timer? _peerRefresh;
   bool _loadingPeers = false;
+  bool _rawTelemetryOpen = false;
 
   @override
   void initState() {
@@ -139,12 +143,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
             ),
           if (_stats != null) ...[
             const SizedBox(height: 10),
-            Card(
-              child: ListTile(
-                title: Text(context.l10n.relaysTelemetry),
-                subtitle: Text(_stats.toString()),
-              ),
-            ),
+            _telemetryCard(context, _stats!),
           ],
           if (_coverage != null) ...[
             const SizedBox(height: 10),
@@ -214,7 +213,11 @@ class _RelaysScreenState extends State<RelaysScreen> {
 
   Widget _relayTile(BuildContext context, Map relay) {
     final url = relay['relay_url']?.toString() ?? '';
-    final lastSeen = relay['last_seen_ms']?.toString() ?? '';
+    final lastSeenMs = (relay['last_seen_ms'] as num?)?.toInt();
+    final lastSeen = lastSeenMs == null
+        ? null
+        : formatTimeAgo(
+            context, DateTime.fromMillisecondsSinceEpoch(lastSeenMs));
     final telemetry = relay['telemetry'];
     final latency = _relayLatencyMs[url];
     final coverageText = _coverageFromTelemetry(context, telemetry);
@@ -234,7 +237,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(context.l10n.relaysLastSeen(lastSeen)),
+            if (lastSeen != null)
+              Text(context.l10n.relaysLastSeenLabel(lastSeen)),
             if (latency != null) Text(context.l10n.relaysLatency(latency)),
             if (coverageText != null) Text(coverageText),
           ],
@@ -273,6 +277,123 @@ class _RelaysScreenState extends State<RelaysScreen> {
     );
   }
 
+
+  Widget _telemetryCard(BuildContext context, Map<String, dynamic> stats) {
+    // The core returns the telemetry object at the top level; older payloads
+    // nested it under "telemetry".
+    final telemetry = stats['telemetry'] is Map
+        ? (stats['telemetry'] as Map).cast<String, dynamic>()
+        : stats;
+    int? count(String key) => (telemetry[key] as num?)?.toInt();
+    final relays = telemetry['relays'];
+    final relayCount = relays is List ? relays.length : null;
+    final measured = count('timestamp_ms');
+    final scheme = Theme.of(context).colorScheme;
+
+    final metrics = <(String, String)>[
+      if (count('online_users') != null)
+        (context.l10n.relaysOnlineUsers, '${count('online_users')}'),
+      if (count('online_peers') != null)
+        (context.l10n.relaysOnlinePeers, '${count('online_peers')}'),
+      if (count('total_users') != null)
+        (context.l10n.relaysTotalUsers, '${count('total_users')}'),
+      if (count('total_peers_seen') != null)
+        (context.l10n.relaysPeersSeen, '${count('total_peers_seen')}'),
+      if (relayCount != null)
+        (context.l10n.relaysRelayCount, '$relayCount'),
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.monitor_heart_outlined, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    context.l10n.relaysTelemetry,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (measured != null)
+                  Text(
+                    DateTime.fromMillisecondsSinceEpoch(measured)
+                        .toLocal()
+                        .toString()
+                        .substring(11, 16),
+                    style: TextStyle(
+                      color: scheme.onSurface.withAlpha(150),
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+            if (metrics.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              for (final m in metrics)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          m.$1,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: scheme.onSurface.withAlpha(190),
+                          ),
+                        ),
+                      ),
+                      Text(
+                        m.$2,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () =>
+                    setState(() => _rawTelemetryOpen = !_rawTelemetryOpen),
+                child: Text(context.l10n.relaysViewRaw),
+              ),
+            ),
+            if (_rawTelemetryOpen)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
+                ),
+                child: SelectableText(
+                  const JsonEncoder.withIndent('  ').convert(telemetry),
+                  style: const TextStyle(fontSize: 11, height: 1.35),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _relativeMs(BuildContext context, Object? raw) {
+    final ms = (raw as num?)?.toInt();
+    if (ms == null || ms <= 0) return '-';
+    return formatTimeAgo(context, DateTime.fromMillisecondsSinceEpoch(ms));
+  }
+
   String? _coverageFromTelemetry(BuildContext context, Object? telemetry) {
     if (telemetry is! Map) return null;
     final indexed = (telemetry['search_indexed_users'] as num?)?.toInt();
@@ -301,7 +422,8 @@ class _RelaysScreenState extends State<RelaysScreen> {
             const SizedBox(height: 6),
             Text(
               context.l10n.relaysCoverageLast(
-                  coverage['last_index_ms']?.toString() ?? '-'),
+                _relativeMs(context, coverage['last_index_ms']),
+              ),
               style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
                   fontSize: 12),

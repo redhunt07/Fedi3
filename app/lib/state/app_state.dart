@@ -64,6 +64,10 @@ class AppState extends ChangeNotifier {
   bool _credentialsUnavailable;
   bool _prefsCorrupt;
 
+  /// Mobile platforms have no HOME, so the core cannot derive a writable data
+  /// directory. The runner supplies the app support directory here.
+  String? _coreDataDirBase;
+
   Timer? _watchdog;
   Future<void>? _starting;
   bool _restarting = false;
@@ -244,6 +248,10 @@ class AppState extends ChangeNotifier {
   // Core lifecycle (AP-01..06, P0-12/D3).
   // ---------------------------------------------------------------------------
 
+  /// Points the core data directory at a writable app-private path.
+  /// Only needed on platforms that expose no HOME (Android).
+  void useCoreDataDirBase(String? path) => _coreDataDirBase = path;
+
   /// Starts the core. The FFI contract guarantees that a normal return means
   /// the server is listening, so the handle is stored only after that.
   Future<void> startCore() async {
@@ -316,8 +324,13 @@ class AppState extends ChangeNotifier {
         await saveConfig(effective);
       }
 
-      final handle =
-          _runtime.startJson(jsonEncode(effective.toCoreStartJson()));
+      final payload = effective.toCoreStartJson();
+      final dataDirBase = _coreDataDirBase?.trim();
+      if (dataDirBase != null && dataDirBase.isNotEmpty) {
+        payload['data_dir'] =
+            '${dataDirBase.replaceAll(RegExp(r'/+$'), '')}/${effective.username}';
+      }
+      final handle = _runtime.startJson(jsonEncode(payload));
       if (handle <= 0) {
         throw StateError('core start returned invalid handle ($handle)');
       }

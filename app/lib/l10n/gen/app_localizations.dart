@@ -134,6 +134,12 @@ abstract class AppLocalizations {
   /// **'Chat'**
   String get navChat;
 
+  /// No description provided for @settingsRelaysHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose relays, discover peers, and check connectivity.'**
+  String get settingsRelaysHint;
+
   /// No description provided for @navRelays.
   ///
   /// In en, this message translates to:
@@ -3116,6 +3122,42 @@ abstract class AppLocalizations {
   /// **'Current relay'**
   String get relaysCurrent;
 
+  /// No description provided for @relaysOnlineUsers.
+  ///
+  /// In en, this message translates to:
+  /// **'Online users'**
+  String get relaysOnlineUsers;
+
+  /// No description provided for @relaysOnlinePeers.
+  ///
+  /// In en, this message translates to:
+  /// **'Online peers'**
+  String get relaysOnlinePeers;
+
+  /// No description provided for @relaysTotalUsers.
+  ///
+  /// In en, this message translates to:
+  /// **'Known users'**
+  String get relaysTotalUsers;
+
+  /// No description provided for @relaysPeersSeen.
+  ///
+  /// In en, this message translates to:
+  /// **'Peers seen'**
+  String get relaysPeersSeen;
+
+  /// No description provided for @relaysRelayCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Relays in mesh'**
+  String get relaysRelayCount;
+
+  /// No description provided for @relaysViewRaw.
+  ///
+  /// In en, this message translates to:
+  /// **'View raw telemetry'**
+  String get relaysViewRaw;
+
   /// No description provided for @relaysTelemetry.
   ///
   /// In en, this message translates to:
@@ -3127,6 +3169,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Known relays'**
   String get relaysKnown;
+
+  /// Relative time of the last contact with a relay
+  ///
+  /// In en, this message translates to:
+  /// **'Last seen {time}'**
+  String relaysLastSeenLabel(String time);
 
   /// No description provided for @relaysLastSeen.
   ///

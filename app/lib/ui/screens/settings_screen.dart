@@ -20,6 +20,7 @@ import 'follow_requests_screen.dart';
 import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
 import 'privacy_settings_screen.dart';
+import 'relays_screen.dart';
 import 'profile_edit_screen.dart';
 import 'saved_screen.dart';
 import 'security_settings_screen.dart';
@@ -152,6 +153,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: context.l10n.networkingHintTitle,
                 onTap: () => _push(context,
                     NetworkingSettingsScreen(appState: widget.appState)),
+              ),
+              _tile(
+                context,
+                icon: Icons.hub_rounded,
+                title: context.l10n.navRelays,
+                subtitle: context.l10n.settingsRelaysHint,
+                onTap: () =>
+                    _push(context, RelaysScreen(appState: widget.appState)),
               ),
               _section(context, context.l10n.uiSettingsTitle),
               _tile(

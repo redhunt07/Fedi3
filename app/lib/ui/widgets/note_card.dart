@@ -2499,24 +2499,20 @@ class _InlineReplies extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                show
-                    ? context.l10n.noteHideReplies
-                    : context.l10n.noteShowReplies,
-                style:
-                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-              ),
-            ),
-            TextButton(
-              onPressed: onToggle,
-              child: Text(show
-                  ? context.l10n.noteHideReplies
-                  : context.l10n.noteShowReplies),
-            ),
-          ],
+        // The toggle is the only control: the old duplicated label rendered the
+        // same string twice side by side.
+        TextButton(
+          onPressed: onToggle,
+          style: TextButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle:
+                const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+          child: Text(show
+              ? context.l10n.noteHideReplies
+              : context.l10n.noteShowReplies),
         ),
         if (show) ...[
           if (loading)

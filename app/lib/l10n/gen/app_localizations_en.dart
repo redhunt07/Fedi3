@@ -27,6 +27,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get navChat => 'Chat';
 
   @override
+  String get settingsRelaysHint =>
+      'Choose relays, discover peers, and check connectivity.';
+
+  @override
   String get navRelays => 'Relays';
 
   @override
@@ -1670,10 +1674,33 @@ class AppLocalizationsEn extends AppLocalizations {
   String get relaysCurrent => 'Current relay';
 
   @override
+  String get relaysOnlineUsers => 'Online users';
+
+  @override
+  String get relaysOnlinePeers => 'Online peers';
+
+  @override
+  String get relaysTotalUsers => 'Known users';
+
+  @override
+  String get relaysPeersSeen => 'Peers seen';
+
+  @override
+  String get relaysRelayCount => 'Relays in mesh';
+
+  @override
+  String get relaysViewRaw => 'View raw telemetry';
+
+  @override
   String get relaysTelemetry => 'Telemetry';
 
   @override
   String get relaysKnown => 'Known relays';
+
+  @override
+  String relaysLastSeenLabel(String time) {
+    return 'Last seen $time';
+  }
 
   @override
   String relaysLastSeen(String ms) {

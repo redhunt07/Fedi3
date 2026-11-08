@@ -6,6 +6,7 @@
   "navNotifications": "Notifications",
   "navSearch": "Search",
   "navChat": "Chat",
+  "settingsRelaysHint": "Choose relays, discover peers, and check connectivity.",
   "navRelays": "Relays",
   "navSettings": "Settings",
   "save": "Save",
@@ -782,8 +783,19 @@
   },
   "relaysTitle": "Relays",
   "relaysCurrent": "Current relay",
+  "relaysOnlineUsers": "Online users",
+  "relaysOnlinePeers": "Online peers",
+  "relaysTotalUsers": "Known users",
+  "relaysPeersSeen": "Peers seen",
+  "relaysRelayCount": "Relays in mesh",
+  "relaysViewRaw": "View raw telemetry",
   "relaysTelemetry": "Telemetry",
   "relaysKnown": "Known relays",
+  "relaysLastSeenLabel": "Last seen {time}",
+  "@relaysLastSeenLabel": {
+    "description": "Relative time of the last contact with a relay",
+    "placeholders": { "time": { "type": "String" } }
+  },
   "relaysLastSeen": "last_seen={ms}",
   "@relaysLastSeen": {
     "placeholders": {

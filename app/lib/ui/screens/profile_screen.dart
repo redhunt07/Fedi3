@@ -25,10 +25,16 @@ import 'relations_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen(
-      {super.key, required this.appState, required this.actorUrl});
+      {super.key,
+      required this.appState,
+      required this.actorUrl,
+      this.onOpenSettings});
 
   final AppState appState;
   final String actorUrl;
+
+  /// Present only for the signed-in account: opens the settings page.
+  final VoidCallback? onOpenSettings;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -138,6 +144,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           IconButton(
               onPressed: _loading ? null : _load,
               icon: const Icon(Icons.refresh)),
+          if (widget.onOpenSettings != null)
+            IconButton(
+                tooltip: context.l10n.navSettings,
+                onPressed: widget.onOpenSettings,
+                icon: const Icon(Icons.tune_rounded)),
         ],
       ),
       body: ListView(
