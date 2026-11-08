@@ -60,6 +60,10 @@ class _TimelinesScreenState extends State<TimelinesScreen>
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: TabBar(
         controller: _tabs,
+        isScrollable: MediaQuery.sizeOf(context).width < 720,
+        tabAlignment: MediaQuery.sizeOf(context).width < 720
+            ? TabAlignment.start
+            : null,
         dividerColor: Colors.transparent,
         indicatorSize: TabBarIndicatorSize.tab,
         indicatorPadding:
