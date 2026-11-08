@@ -4,6 +4,16 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-08 — Preparazione 0.10.1: avvio AppImage Linux
+
+L’AppImage Linux della 0.10.0 può chiudersi prima di aprire la finestra sui desktop
+recenti: vecchie librerie incluse nel pacchetto nascondono le dipendenze GLib del
+sistema. La correzione è pronta per la 0.10.1: librerie di sistema e font seguono
+una politica coerente. La pipeline richiede ora che la GUI del pacchetto mostri
+il primo frame su Ubuntu 22.04 e 24.04. Profili e messaggi restano invariati.
+Scarica la nuova versione quando sarà pubblicata; non cancellare profili,
+chiavi o credenziali.
+
 ## 2026-11-08 — Pubblicata la 0.10.0: aggiornamenti client e sicurezza compatibile
 
 [La versione `0.10.0` è pubblicata](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.0) per Linux x86_64 e Windows x64, con checksum SHA256. I client

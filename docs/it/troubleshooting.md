@@ -141,3 +141,13 @@ i contatori devono aumentare sui due dispositivi. Non viene registrato il
 contenuto audio/video. Il chiamante genera l'offerta SDP dopo l'accettazione;
 i candidati ICE arrivati prima dell'offerta vengono conservati e applicati
 dopo la descrizione remota.
+
+## AppImage Linux 0.10.0 si chiude prima di aprire la finestra
+
+`libmount.so.1: version MOUNT_2_40 not found` o
+`libsystemd.so.0: version LIBSYSTEMD_251 not found` indica un conflitto del
+pacchetto, non un profilo corrotto o permessi di esecuzione mancanti. La 0.10.0
+includeva vecchie dipendenze usate dalla GLib di sistema. La correzione è pronta
+per la 0.10.1: installa il pacchetto sostitutivo quando pubblicato e conserva dati
+e credenziali nel portachiavi. Anche una build con `scripts/build_appimage.sh`
+corretto applica la soluzione. Il controllo SHA256 non rileva questo conflitto ABI.

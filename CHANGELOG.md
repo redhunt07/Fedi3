@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Preparing 0.10.1 — 2026-11-08
+
+- Fixed Linux AppImage startup on newer desktops: bundled Ubuntu 22.04
+  `libmount`/`libsystemd` and PCRE2 libraries could shadow the host GLib's required
+  ABI. Host GLib dependencies now remain on the host, including files already
+  present in the Flutter bundle.
+- Use the host Fontconfig, font libraries and configuration together, avoiding
+  invalid-font-configuration errors on newer distributions.
+- Added an actual versioned-library regression reproducing `MOUNT_2_40` and
+  required GUI startup tests of the packaged AppImage on Ubuntu 22.04 and 24.04.
+  Publication now requires a visible first Flutter frame on both systems.
+- Profile databases, keyring credentials and cryptographic formats are unchanged.
+
 ## [0.10.0] - 2026-11-08
 
 ### Client updates and compatible security fixes

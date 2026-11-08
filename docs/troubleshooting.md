@@ -141,3 +141,13 @@ the counters must increase on both devices. The audio/video content is not recor
 The caller generates the SDP offer after acceptance;
 ICE candidates that arrived before the offer are kept and applied
 after the remote description.
+
+## Linux AppImage 0.10.0 closes before opening a window
+
+`libmount.so.1: version MOUNT_2_40 not found` or
+`libsystemd.so.0: version LIBSYSTEMD_251 not found` indicates a packaging conflict,
+not profile corruption or a missing executable permission. Version 0.10.0 bundled
+older copies of dependencies used by the host GLib. The fix is prepared for
+0.10.1; install the replacement when published. Keep all existing data and keyring
+credentials. Rebuilding with the corrected `scripts/build_appimage.sh` also
+applies the fix. SHA256 integrity checks alone cannot detect this ABI mismatch.

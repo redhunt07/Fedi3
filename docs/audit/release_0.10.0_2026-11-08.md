@@ -40,3 +40,11 @@ the published core loads and its FFI version function responds correctly.
 | --- | --- |
 | `Fedi3-linux-x86_64.AppImage` | `9fb3dea2bd191566f31ae01e254899908b0d1b7c9bdecfefffa473696240b334` |
 | `Fedi3-windows-x64.zip` | `ea3127251cf208fe641f8f7aa82bee5898677c0ad350b95960f30b95f02838b7` |
+
+## Follow-up: Linux GUI startup regression
+
+A subsequent launch on a newer Arch desktop failed with `MOUNT_2_40` and then
+`LIBSYSTEMD_251`: bundled older dependencies shadowed the host GLib stack. The
+checks above validated the packages and core FFI, but did not test the complete
+GUI startup. The corrected packaging policy and required two-distribution GUI
+startup gate are prepared for 0.10.1. Existing profile data is unaffected.

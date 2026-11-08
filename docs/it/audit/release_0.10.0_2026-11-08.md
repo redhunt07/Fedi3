@@ -41,3 +41,12 @@ il core pubblicato si carica e la funzione FFI di versione risponde correttament
 | --- | --- |
 | `Fedi3-linux-x86_64.AppImage` | `9fb3dea2bd191566f31ae01e254899908b0d1b7c9bdecfefffa473696240b334` |
 | `Fedi3-windows-x64.zip` | `ea3127251cf208fe641f8f7aa82bee5898677c0ad350b95960f30b95f02838b7` |
+
+## Verifica successiva: regressione nell’avvio GUI Linux
+
+L’avvio su un desktop Arch recente ha rilevato `MOUNT_2_40` e poi
+`LIBSYSTEMD_251`: vecchie dipendenze incluse nascondevano quelle della GLib di
+sistema. I controlli precedenti verificavano pacchetti e FFI del core, ma non
+l’avvio della GUI completa. Politica di packaging corretta e controllo GUI
+obbligatorio su due distribuzioni sono preparati per la 0.10.1. I dati dei profili
+restano invariati.

@@ -93,3 +93,8 @@ piattaforme precedono la creazione dei pacchetti Linux/Windows. Il job verifica
 i checksum, carica i pacchetti e pubblica la release come ultima stabile. Le
 release già pubblicate non vengono sovrascritte; una bozza esistente deve puntare
 allo stesso commit. I normali tag mantengono il percorso bozza/pubblicazione manuale.
+
+Prima della pubblicazione i pacchetti Linux richiedono anche l’avvio reale della
+GUI con display virtuale su Ubuntu 22.04 e 24.04. La finestra deve diventare
+visibile dopo il primo frame Flutter: compilazione e caricamento della sola
+libreria del core non bastano. Il controllo copre la regressione ABI della 0.10.0.

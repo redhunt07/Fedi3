@@ -93,3 +93,8 @@ Linux/Windows packaging. The publishing job verifies checksums, uploads the
 packages and publishes the release as latest stable. Existing published releases
 are never overwritten, and an existing draft must target the same commit.
 Ordinary tag builds keep the draft/manual-publication path described above.
+
+Linux packages additionally require a real GUI startup under a virtual display on
+Ubuntu 22.04 and 24.04 before publication. The window must become visible after
+Flutter renders its first frame; successful compilation or loading only the core
+library is insufficient. This gate covers the 0.10.0 host-library ABI regression.
