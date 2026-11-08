@@ -600,12 +600,16 @@ class _CallScreenState extends State<CallScreen> {
     _mediaStatsTimer?.cancel();
     // Stop capture immediately, even when signaling is offline or queued.
     if (notify) unawaited(_signal('leave'));
-    for (final actor in _pcs.keys.toList()) {
-      await _closePeer(actor);
-    }
+    final peers = _pcs.keys.toList();
     _localStream?.getTracks().forEach((t) => t.stop());
     _screenStream?.getTracks().forEach((t) => t.stop());
     if (mounted) Navigator.of(context).pop();
+    // Closing a peer connection can block when it never connected, so the
+    // screen must not wait for it.
+    for (final actor in peers) {
+      unawaited(_closePeer(actor)
+          .timeout(const Duration(seconds: 3), onTimeout: () {}));
+    }
   }
 
   String _actorName(String actor) {
