@@ -597,44 +597,40 @@ class _ProfileHeader extends StatelessWidget {
                 ),
               ),
             if (profile.imageUrl.trim().isNotEmpty) const SizedBox(height: 12),
-            Row(
+            Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(profile.displayName,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 2),
-                      Text(
-                        profile.preferredUsername.isNotEmpty
-                            ? '@${profile.preferredUsername}'
-                            : profile.id,
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withAlpha(179)),
-                      ),
-                      if (profile.url.trim().isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            profile.url,
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontSize: 12),
-                          ),
-                        ),
-                    ],
-                  ),
+                Text(profile.displayName,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(
+                  _fullHandle(profile),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color:
+                          Theme.of(context).colorScheme.onSurface.withAlpha(179)),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                if (_secondaryLink(profile) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _secondaryLink(profile)!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontSize: 12),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     if (isSelf)
                       OutlinedButton(
@@ -652,24 +648,16 @@ class _ProfileHeader extends StatelessWidget {
                                     CircularProgressIndicator(strokeWidth: 2))
                             : Text(label),
                       ),
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (followersCount != null)
-                          _StatChip(
-                              label: context.l10n.profileFollowers,
-                              value: followersCount!,
-                              onTap: onOpenFollowers),
-                        if (followersCount != null && followingCount != null)
-                          const SizedBox(width: 6),
-                        if (followingCount != null)
-                          _StatChip(
-                              label: context.l10n.profileFollowing,
-                              value: followingCount!,
-                              onTap: onOpenFollowing),
-                      ],
-                    ),
+                    if (followersCount != null)
+                      _StatChip(
+                          label: context.l10n.profileFollowers,
+                          value: followersCount!,
+                          onTap: onOpenFollowers),
+                    if (followingCount != null)
+                      _StatChip(
+                          label: context.l10n.profileFollowing,
+                          value: followingCount!,
+                          onTap: onOpenFollowing),
                   ],
                 ),
               ],
@@ -812,4 +800,21 @@ class _Avatar extends StatelessWidget {
       statusKey: statusKey,
     );
   }
+}
+
+/// Full Fediverse handle (`@user@host`) for a profile.
+String _fullHandle(ActorProfile profile) {
+  final username = profile.preferredUsername;
+  final id = profile.id;
+  final host = Uri.tryParse(id)?.host ?? '';
+  if (username.isEmpty) return id;
+  return host.isEmpty ? '@$username' : '@$username@$host';
+}
+
+/// The profile URL, shown only when it is not already implied by the handle.
+String? _secondaryLink(ActorProfile profile) {
+  final url = profile.url.trim();
+  final id = profile.id;
+  if (url.isEmpty || url == id) return null;
+  return url;
 }

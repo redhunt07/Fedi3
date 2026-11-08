@@ -495,6 +495,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       return;
     }
     if (_index == index) return;
+    // A pending "new message" banner must not linger over the chat list.
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
     setState(() => _index = index);
     if (!MediaQuery.of(context).disableAnimations) {
       _sectionFade.forward(from: 0.35);
@@ -717,9 +719,16 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     messenger.showSnackBar(
       SnackBar(
         content: Text(context.l10n.chatNewMessage),
+        behavior: SnackBarBehavior.floating,
+        // Float above the composer so it never hides the input field.
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 88),
+        duration: const Duration(seconds: 5),
         action: SnackBarAction(
           label: context.l10n.chatOpen,
-          onPressed: () => setState(() => _index = 2),
+          onPressed: () {
+            messenger.hideCurrentSnackBar();
+            setState(() => _index = 2);
+          },
         ),
       ),
     );
