@@ -1104,6 +1104,7 @@ class _TimelineListState extends State<_TimelineList>
             return const SizedBox.shrink();
           }
           if (index == filtered.length + 2) {
+            if (filtered.isEmpty && !_loading) return const SizedBox.shrink();
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Center(

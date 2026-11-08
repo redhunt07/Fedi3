@@ -214,3 +214,35 @@ fn r10c_username_too_long_is_rejected() {
     let (code, _, _) = call_start(&cfg);
     assert_ne!(code, 0);
 }
+
+/// A second start with the same bind address and data directory adopts the
+/// already running core instead of failing on a busy port. This is what lets a
+/// restarted app isolate (for example after Android recreates the activity)
+/// keep using the core that is still running in the process.
+#[tokio::test]
+async fn r11_restart_with_same_bind_and_data_dir_adopts_running_core() {
+    let dir = fedi3_core::test_support::TempDir::new("ffi-adopt");
+    let port = free_port();
+    let cfg = base_config(port, dir.path());
+    let (code, handle, err) = call_start(&cfg);
+    assert_eq!(code, 0, "first start must succeed: {err:?}");
+
+    let (code2, handle2, err2) = call_start(&cfg);
+    assert_eq!(code2, 0, "second start must adopt, not fail: {err2:?}");
+    assert_eq!(handle, handle2);
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/_fedi3/health"))
+        .header("X-Fedi3-Internal", INTERNAL_TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    assert_eq!(call_stop(handle).0, 0);
+    // The adopted handle is gone too, so a further start binds the port again.
+    let (code3, handle3, err3) = call_start(&cfg);
+    assert_eq!(code3, 0, "restart after stop must bind again: {err3:?}");
+    assert_ne!(handle3, handle);
+    assert_eq!(call_stop(handle3).0, 0);
+}

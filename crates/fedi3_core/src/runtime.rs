@@ -33,6 +33,8 @@ static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
 struct RunningCore {
     shutdown_tx: watch::Sender<bool>,
     join: Option<thread::JoinHandle<()>>,
+    bind: SocketAddr,
+    data_dir: std::path::PathBuf,
 }
 
 static REGISTRY: Mutex<Vec<(u64, RunningCore)>> = Mutex::new(Vec::new());
@@ -223,6 +225,24 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
         anyhow::bail!("invalid domain {:?}: expected a hostname", cfg.domain);
     }
     let addr: SocketAddr = cfg.bind.parse().context("parse bind address")?;
+    let data_dir = data_dir_for(&cfg)?;
+
+    // Starting twice with the same bind address and data directory is not an
+    // error: the FFI runtime survives a Dart isolate restart (for example when
+    // Android recreates the activity while the process is still alive), so the
+    // new isolate must be able to adopt the running core instead of failing on
+    // a busy port.
+    {
+        let reg = REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((handle, _)) = reg
+            .iter()
+            .find(|(_, core)| core.bind == addr && core.data_dir == data_dir)
+        {
+            return Ok(*handle);
+        }
+    }
 
     // Synchronous bind on the calling thread: a busy port must be an Err, never a live handle.
     let std_listener = StdTcpListener::bind(addr).with_context(|| format!("bind {addr}"))?;
@@ -231,7 +251,6 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
         .context("set listener nonblocking")?;
 
     // Open the DB before spawning so a corrupt/locked DB fails the start.
-    let data_dir = data_dir_for(&cfg)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create data dir {}", data_dir.display()))?;
     crate::keys::secure_dir(&data_dir)?;
@@ -245,6 +264,7 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
 
     let handle = HANDLE_SEQ.fetch_add(1, Ordering::Relaxed);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let registered_data_dir = data_dir.clone();
 
     let join = thread::spawn(move || {
         if let Err(e) = run_core(cfg, shutdown_rx, std_listener, data_dir, identity) {
@@ -260,6 +280,8 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
         RunningCore {
             shutdown_tx,
             join: Some(join),
+            bind: addr,
+            data_dir: registered_data_dir,
         },
     ));
 
