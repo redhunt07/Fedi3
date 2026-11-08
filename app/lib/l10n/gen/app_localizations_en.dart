@@ -2332,6 +2332,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noteUnmute => 'Unmute';
 
   @override
+  String get noteMoreActions => 'More actions';
+
+  @override
+  String get noteBookmark => 'Bookmark';
+
+  @override
+  String get noteUnbookmark => 'Remove bookmark';
+
+  @override
+  String get notePin => 'Pin';
+
+  @override
+  String get noteUnpin => 'Unpin';
+
+  @override
+  String get noteMute => 'Mute thread';
+
+  @override
   String get noteLinkCopied => 'Link copied';
 
   @override

@@ -969,7 +969,8 @@ class _TimelineListState extends State<_TimelineList>
       child: ListView.builder(
         key: PageStorageKey('timeline-${widget.kind}'),
         controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+        padding: EdgeInsets.fromLTRB(
+            16, widget.constrainWidth ? 4 : 16, 16, 20),
         scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
         addAutomaticKeepAlives: false,
         itemCount: filtered.length + 3,
@@ -979,8 +980,8 @@ class _TimelineListState extends State<_TimelineList>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Container(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: EdgeInsets.only(bottom: widget.constrainWidth ? 2 : 10),
+                  margin: EdgeInsets.only(bottom: widget.constrainWidth ? 6 : 10),
                   decoration: BoxDecoration(
                     border: Border(
                       bottom: BorderSide(
@@ -988,7 +989,15 @@ class _TimelineListState extends State<_TimelineList>
                       ),
                     ),
                   ),
-                  child: Row(
+                  child: IconButtonTheme(
+                    data: const IconButtonThemeData(
+                      style: ButtonStyle(
+                        minimumSize: WidgetStatePropertyAll(Size(36, 36)),
+                        iconSize: WidgetStatePropertyAll(20),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: Row(
                     children: [
                       if (!widget.constrainWidth) ...[
                         Container(
@@ -1037,6 +1046,7 @@ class _TimelineListState extends State<_TimelineList>
                             : const Icon(Icons.refresh),
                       ),
                     ],
+                    ),
                   ),
                 ),
                 if (widget.header != null) widget.header!,

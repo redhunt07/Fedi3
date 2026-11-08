@@ -2343,6 +2343,24 @@ class AppLocalizationsIt extends AppLocalizations {
   String get noteUnmute => 'Riattiva audio';
 
   @override
+  String get noteMoreActions => 'Altre azioni';
+
+  @override
+  String get noteBookmark => 'Salva';
+
+  @override
+  String get noteUnbookmark => 'Rimuovi dai salvati';
+
+  @override
+  String get notePin => 'Fissa';
+
+  @override
+  String get noteUnpin => 'Rimuovi fissaggio';
+
+  @override
+  String get noteMute => 'Silenzia thread';
+
+  @override
   String get noteLinkCopied => 'Link copiato';
 
   @override

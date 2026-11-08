@@ -425,42 +425,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: ListView(
               padding: const EdgeInsets.all(12),
               children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterAll),
-                      selected: _filter == 'all',
-                      onSelected: (_) => setState(() => _filter = 'all'),
-                    ),
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterMentions),
-                      selected: _filter == 'mentions',
-                      onSelected: (_) => setState(() => _filter = 'mentions'),
-                    ),
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterReactions),
-                      selected: _filter == 'reactions',
-                      onSelected: (_) => setState(() => _filter = 'reactions'),
-                    ),
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterFollows),
-                      selected: _filter == 'follows',
-                      onSelected: (_) => setState(() => _filter = 'follows'),
-                    ),
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterBoosts),
-                      selected: _filter == 'boosts',
-                      onSelected: (_) => setState(() => _filter = 'boosts'),
-                    ),
-                    ChoiceChip(
-                      label: Text(context.l10n.notificationsFilterLikes),
-                      selected: _filter == 'likes',
-                      onSelected: (_) => setState(() => _filter = 'likes'),
-                    ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                    for (final f in const [
+                      ('all', 'notificationsFilterAll'),
+                      ('mentions', 'notificationsFilterMentions'),
+                      ('reactions', 'notificationsFilterReactions'),
+                      ('follows', 'notificationsFilterFollows'),
+                      ('boosts', 'notificationsFilterBoosts'),
+                      ('likes', 'notificationsFilterLikes'),
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(_filterLabel(context, f.$2)),
+                          selected: _filter == f.$1,
+                          onSelected: (_) => setState(() => _filter = f.$1),
+                        ),
+                      ),
                   ],
+                  ),
                 ),
+                const SizedBox(height: 8),
                 const SizedBox(height: 8),
                 if (_error != null)
                   NetworkErrorCard(
@@ -477,25 +465,46 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ),
                   ),
                 ..._groupedNotifications(context, filtered),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Center(
-                    child: _loading
-                        ? const CircularProgressIndicator()
-                        : OutlinedButton(
-                            onPressed: canLoadMore ? _loadMore : null,
-                            child: Text(canLoadMore
-                                ? context.l10n.listLoadMore
-                                : context.l10n.listEnd),
-                          ),
+                if (filtered.isNotEmpty || _loading)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Center(
+                      child: _loading
+                          ? const CircularProgressIndicator()
+                          : OutlinedButton(
+                              onPressed: canLoadMore ? _loadMore : null,
+                              child: Text(canLoadMore
+                                  ? context.l10n.listLoadMore
+                                  : context.l10n.listEnd),
+                            ),
+                    ),
                   ),
-                ),
               ],
             ),
           ),
         );
       },
     );
+  }
+}
+
+String _filterLabel(BuildContext context, String key) {
+  final l10n = context.l10n;
+  switch (key) {
+    case 'notificationsFilterAll':
+      return l10n.notificationsFilterAll;
+    case 'notificationsFilterMentions':
+      return l10n.notificationsFilterMentions;
+    case 'notificationsFilterReactions':
+      return l10n.notificationsFilterReactions;
+    case 'notificationsFilterFollows':
+      return l10n.notificationsFilterFollows;
+    case 'notificationsFilterBoosts':
+      return l10n.notificationsFilterBoosts;
+    case 'notificationsFilterLikes':
+      return l10n.notificationsFilterLikes;
+    default:
+      return key;
   }
 }
 

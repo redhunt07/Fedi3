@@ -729,61 +729,55 @@ class _NoteCardState extends State<NoteCard> {
                               ),
                             ),
                           ),
-                          Tooltip(
-                            message: _translatedText == null
-                                ? context.l10n.noteTranslate
-                                : (_translationVisible
-                                    ? context.l10n.noteShowOriginal
-                                    : context.l10n.noteShowTranslation),
-                            child: IconButton(
-                              onPressed: _translationLoading
-                                  ? null
-                                  : () => _toggleTranslate(
-                                      context, note.contentHtml),
-                              icon: _translationLoading
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2))
-                                  : Icon(
-                                      Icons.translate,
-                                      color: _translationVisible
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .primary
-                                          : null,
-                                    ),
-                            ),
-                          ),
-                          Tooltip(
-                            message: 'Bookmark',
-                            child: IconButton(
-                              onPressed: () =>
-                                  _toggleFlag(context, 'bookmark', note.id),
-                              icon: Icon(_bookmarked
-                                  ? Icons.bookmark
-                                  : Icons.bookmark_border),
-                            ),
-                          ),
-                          Tooltip(
-                            message: 'Pin',
-                            child: IconButton(
-                              onPressed: () =>
-                                  _toggleFlag(context, 'pin', note.id),
-                              icon: Icon(_pinned
-                                  ? Icons.push_pin
-                                  : Icons.push_pin_outlined),
-                            ),
-                          ),
-                          Tooltip(
-                            message: _muted ? 'Unmute thread' : 'Mute thread',
-                            child: IconButton(
-                              onPressed: () =>
-                                  _toggleFlag(context, 'mute', note.id),
-                              icon: Icon(
-                                  _muted ? Icons.volume_off : Icons.volume_up),
-                            ),
+                          PopupMenuButton<String>(
+                            tooltip: context.l10n.noteMoreActions,
+                            icon: const Icon(Icons.more_horiz),
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'translate':
+                                  _toggleTranslate(context, note.contentHtml);
+                                case 'bookmark':
+                                  _toggleFlag(context, 'bookmark', note.id);
+                                case 'pin':
+                                  _toggleFlag(context, 'pin', note.id);
+                                case 'mute':
+                                  _toggleFlag(context, 'mute', note.id);
+                                case 'raw':
+                                  setState(() => _showRaw = !_showRaw);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                value: 'translate',
+                                child: Text(context.l10n.noteTranslate),
+                              ),
+                              PopupMenuItem(
+                                value: 'bookmark',
+                                child: Text(_bookmarked
+                                    ? context.l10n.noteUnbookmark
+                                    : context.l10n.noteBookmark),
+                              ),
+                              PopupMenuItem(
+                                value: 'pin',
+                                child: Text(_pinned
+                                    ? context.l10n.noteUnpin
+                                    : context.l10n.notePin),
+                              ),
+                              PopupMenuItem(
+                                value: 'mute',
+                                child: Text(_muted
+                                    ? context.l10n.noteUnmute
+                                    : context.l10n.noteMute),
+                              ),
+                              if (widget.showRawFallback &&
+                                  widget.rawActivity != null)
+                                PopupMenuItem(
+                                  value: 'raw',
+                                  child: Text(_showRaw
+                                      ? context.l10n.activityHideRaw
+                                      : context.l10n.activityViewRaw),
+                                ),
+                            ],
                           ),
                           Tooltip(
                             message: 'Copy link',
@@ -803,16 +797,7 @@ class _NoteCardState extends State<NoteCard> {
                         ],
                       ),
                     ),
-                    if (widget.showRawFallback && widget.rawActivity != null)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: () => setState(() => _showRaw = !_showRaw),
-                          child: Text(_showRaw
-                              ? context.l10n.activityHideRaw
-                              : context.l10n.activityViewRaw),
-                        ),
-                      ),
+
                   ],
                 ),
                 if (_reactionsOpen) ...[

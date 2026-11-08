@@ -4382,6 +4382,42 @@ abstract class AppLocalizations {
   /// **'Unmute'**
   String get noteUnmute;
 
+  /// No description provided for @noteMoreActions.
+  ///
+  /// In en, this message translates to:
+  /// **'More actions'**
+  String get noteMoreActions;
+
+  /// No description provided for @noteBookmark.
+  ///
+  /// In en, this message translates to:
+  /// **'Bookmark'**
+  String get noteBookmark;
+
+  /// No description provided for @noteUnbookmark.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove bookmark'**
+  String get noteUnbookmark;
+
+  /// No description provided for @notePin.
+  ///
+  /// In en, this message translates to:
+  /// **'Pin'**
+  String get notePin;
+
+  /// No description provided for @noteUnpin.
+  ///
+  /// In en, this message translates to:
+  /// **'Unpin'**
+  String get noteUnpin;
+
+  /// No description provided for @noteMute.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute thread'**
+  String get noteMute;
+
   /// No description provided for @noteLinkCopied.
   ///
   /// In en, this message translates to:
