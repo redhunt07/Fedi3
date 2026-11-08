@@ -3518,7 +3518,12 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Ok(v) => v,
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
-    if input.text.trim().is_empty() {
+    let has_attachments = input
+        .attachments
+        .as_ref()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    if input.text.trim().is_empty() && !has_attachments {
         return simple(StatusCode::BAD_REQUEST, "empty text");
     }
     let self_actor = format!(
