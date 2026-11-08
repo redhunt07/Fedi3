@@ -1182,7 +1182,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             return AlertDialog(
               title: Text(context.l10n.chatMembers),
               content: SizedBox(
-                width: 420,
+                width: 460,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1267,7 +1267,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 final host = Uri.tryParse(actor)?.host ?? '';
                                 final user = profile?.preferredUsername ??
                                     _usernameFromActor(actor);
-                                return host.isEmpty ? '@$user' : '@$user@$host';
+                                final handle =
+                                    host.isEmpty ? '@$user' : '@$user@$host';
+                                return handle;
                               }(),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -1275,24 +1277,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(6),
+                                // Show the role chip only for privileged members so
+                                // plain member rows keep enough room for the name.
+                                if (role != 'member')
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      role == 'owner'
+                                          ? context.l10n.chatRoleOwner
+                                          : context.l10n.chatRoleAdmin,
+                                      style: const TextStyle(fontSize: 10),
+                                    ),
                                   ),
-                                  child: Text(
-                                    role == 'owner'
-                                        ? context.l10n.chatRoleOwner
-                                        : role == 'admin'
-                                            ? context.l10n.chatRoleAdmin
-                                            : context.l10n.chatRoleMember,
-                                    style: const TextStyle(fontSize: 10),
-                                  ),
-                                ),
                                 if (canManage)
                                   PopupMenuButton<String>(
                                     enabled: !working,
