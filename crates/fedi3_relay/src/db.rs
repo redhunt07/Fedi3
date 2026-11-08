@@ -579,9 +579,10 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                 conn.query_row(
                     "SELECT sign_pubkey_b64 FROM relay_registry WHERE relay_url=?1",
                     params![relay_url],
-                    |r| r.get(0),
+                    |r| r.get::<_, Option<String>>(0),
                 )
                 .optional()
+                .map(|v| v.flatten())
                 .map_err(Into::into)
             }
             DbDriver::Postgres => {
@@ -590,7 +591,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                     "SELECT sign_pubkey_b64 FROM relay_registry WHERE relay_url=$1",
                     &[&relay_url],
                 )?;
-                Ok(row.map(|r| r.get(0)))
+                Ok(row.and_then(|r| r.get::<_, Option<String>>(0)))
             }
         }
     }
