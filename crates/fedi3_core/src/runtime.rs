@@ -219,14 +219,22 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriter {
 fn init_tracing(data_dir: Option<&std::path::Path>) {
     let filter = tracing_subscriber::EnvFilter::from_default_env()
         .add_directive("info".parse().unwrap());
+    const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
     let file_writer = data_dir
         .map(|dir| dir.join("fedi3.log"))
         .and_then(|path| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .ok()
+            // Keep the log bounded: start over once it grows past the cap.
+            let oversized = std::fs::metadata(&path)
+                .map(|m| m.len() > MAX_LOG_BYTES)
+                .unwrap_or(false);
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true);
+            if oversized {
+                options.write(true).truncate(true);
+            } else {
+                options.append(true);
+            }
+            options.open(path).ok()
         })
         .map(|file| FileWriter(Arc::new(file)));
     let builder = tracing_subscriber::fmt().with_env_filter(filter);

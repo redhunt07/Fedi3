@@ -17,6 +17,7 @@ import 'package:media_kit/media_kit.dart';
 import 'state/app_state.dart';
 import 'state/config_store.dart';
 import 'ui/app_root.dart';
+import 'core/core_api.dart';
 import 'l10n/gen/app_localizations.dart';
 import 'services/core_event_stream.dart';
 import 'services/notification_service.dart';
@@ -127,9 +128,31 @@ Future<void> backgroundMain() async {
       } else if (ev.kind == 'chat' &&
           (ev.activityType == 'message' || ev.activityType == 'system') &&
           ev.tsMs > lastChatSeen) {
+        var body = l10n.chatNewMessageBody;
+        try {
+          final threads =
+              await CoreApi(config: cfg).fetchChatThreads(limit: 20);
+          final items = (threads['items'] as List?) ?? const <dynamic>[];
+          for (final item in items.whereType<Map<String, dynamic>>()) {
+            if (item['thread_id'] != ev.activityId) continue;
+            final peers =
+                (item['peer_usernames'] as List?)?.cast<String>() ?? const [];
+            final preview = (item['last_message_preview'] as String?) ?? '';
+            final title = (item['title'] as String?) ?? '';
+            final who = title.isNotEmpty
+                ? title
+                : (peers.isNotEmpty ? '@${peers.first}' : '');
+            if (who.isNotEmpty || preview.isNotEmpty) {
+              body = who.isEmpty ? preview : '$who: $preview';
+            }
+            break;
+          }
+        } catch (_) {
+          // Keep the generic body when the thread list is unavailable.
+        }
         await NotificationService.showChatNotification(
           title: l10n.chatTitle,
-          body: l10n.chatNewMessageBody,
+          body: body,
           threadId: ev.activityId,
         );
       }
