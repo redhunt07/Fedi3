@@ -8123,6 +8123,9 @@ pub(crate) async fn process_inbox_activity(
             if actor.is_empty() || object != me {
                 return Ok(());
             }
+            // Persist the Follow as an inbox record so /_fedi3/notifications
+            // lists it (the UI event alone is transient).
+            let _ = store_generic_activity(state, activity);
             let act_id = activity
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -8306,6 +8309,7 @@ pub(crate) async fn process_inbox_activity(
                 return Ok(());
             }
             let _ = state.social.remove_following(obj_object);
+            let _ = store_generic_activity(state, activity);
             let act_id = activity
                 .get("id")
                 .and_then(|v| v.as_str())
