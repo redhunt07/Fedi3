@@ -258,11 +258,15 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
           widget.appState.incrementUnreadChats();
           _showChatSnack();
           unawaited(SoundService.playChat());
-          NotificationService.showChatNotification(
-            title: context.l10n.chatTitle,
-            body: context.l10n.chatNewMessageBody,
-            threadId: ev.activityId,
-          );
+          // A visible app already shows the banner and the sound: a system
+          // notification would duplicate it as a heads-up.
+          if (!AppActivity.foreground) {
+            NotificationService.showChatNotification(
+              title: context.l10n.chatTitle,
+              body: context.l10n.chatNewMessageBody,
+              threadId: ev.activityId,
+            );
+          }
         }
       });
     }, onError: (_) => _scheduleChatRetry(), onDone: _scheduleChatRetry);
