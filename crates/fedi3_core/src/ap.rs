@@ -3695,6 +3695,8 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
 struct ChatDispatch {
     sent: u32,
     queued: u32,
+    /// First delivery failure, surfaced to the client so the UI can explain it.
+    last_error: Option<String>,
 }
 
 async fn send_chat_payload_to_members(
@@ -3736,10 +3738,32 @@ async fn dispatch_chat_payload_to_members(
         {
             continue;
         }
-        if let Ok(peers) = resolve_actor_peers(state, &actor).await {
+        let peers = match resolve_actor_peers(state, &actor).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                warn!(actor=%actor, error=%e, "chat peer resolution failed");
+                outcome.last_error = Some(format!("{actor}: {e}"));
+                continue;
+            }
+        };
+        {
             for peer_id in peers {
-                if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
+                let bundle = match fetch_chat_bundle(state, &peer_id, &actor).await {
+                    Ok(Some(bundle)) => bundle,
+                    Ok(None) => {
+                        outcome.last_error =
+                            Some(format!("{actor}: chat bundle missing for peer {peer_id}"));
+                        continue;
+                    }
+                    Err(e) => {
+                        outcome.last_error = Some(format!("{actor}: chat bundle failed: {e}"));
+                        continue;
+                    }
+                };
+                {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
+                        outcome.last_error =
+                            Some(format!("{actor}: chat bundle signature invalid"));
                         continue;
                     }
                     if let Ok(env) = chat::encrypt_payload_for_bundle(
@@ -3766,7 +3790,11 @@ async fn dispatch_chat_payload_to_members(
                                 );
                                 outcome.queued = outcome.queued.saturating_add(1);
                             }
-                            Err(e) => warn!(peer=%peer_id, error=%e, "chat member delivery failed"),
+                            Err(e) => {
+                                warn!(peer=%peer_id, error=%e, "chat member delivery failed");
+                                outcome.last_error =
+                                    Some(format!("{actor}: delivery failed: {e}"));
+                            }
                         }
                     }
                 }
@@ -4485,10 +4513,13 @@ async fn chat_call_signal_post(state: &ApState, req: Request<Body>) -> Response<
     let outcome =
         dispatch_chat_payload_to_members(state, &input.thread_id, &payload, &envelope_id).await;
     if outcome.sent == 0 && outcome.queued == 0 {
-        return simple(
-            StatusCode::BAD_GATEWAY,
-            "call signal could not be delivered",
-        );
+        let reason = outcome.last_error.clone().unwrap_or_default();
+        let body = if reason.is_empty() {
+            "call signal could not be delivered".to_string()
+        } else {
+            format!("call signal could not be delivered: {reason}")
+        };
+        return simple(StatusCode::BAD_GATEWAY, &body);
     }
     axum::Json(serde_json::json!({"ok": true, "sent": outcome.sent, "queued": outcome.queued}))
         .into_response()

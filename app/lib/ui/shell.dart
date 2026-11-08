@@ -373,6 +373,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
           .map((s) => s.callId)
           .toSet();
       // Advance in ID order: two events in the same millisecond are distinct.
+      // Several calls can be ringing at once (a group where members invite each
+      // other); the newest one wins, otherwise a stale invite steals the prompt.
+      ChatCallSignal? newest;
       for (final signal in signals) {
         if (signal.id > _lastCallSignalId) _lastCallSignalId = signal.id;
         if (signal.action != 'invite' ||
@@ -383,6 +386,12 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
                 60000) {
           continue;
         }
+        if (newest == null || signal.createdAtMs > newest.createdAtMs) {
+          newest = signal;
+        }
+      }
+      if (newest != null) {
+        final signal = newest;
         _incomingCallId = signal.callId;
         final title = signal.threadTitle.isNotEmpty
             ? signal.threadTitle

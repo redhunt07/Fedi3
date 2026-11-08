@@ -575,10 +575,17 @@ pub async fn send_envelope_to_peer(
         debug!(actor=%actor_id, msg_id=%env.message_id, "chat delivered over relay HTTP");
         Ok(ChatSendOutcome::Sent)
     } else {
-        Err(anyhow::anyhow!(
-            "chat http delivery failed: {}",
-            resp.status()
-        ))
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(200).collect();
+        warn!(
+            actor=%actor_id,
+            msg_id=%env.message_id,
+            %status,
+            body=%snippet,
+            "chat relay HTTP delivery failed"
+        );
+        Err(anyhow::anyhow!("chat http delivery failed: {status}"))
     }
 }
 
