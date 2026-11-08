@@ -4771,6 +4771,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix.'**
   String get clientUpdatesRestart;
+
+  /// No description provided for @chatGroupCreated.
+  ///
+  /// In en, this message translates to:
+  /// **'Group created'**
+  String get chatGroupCreated;
+
+  /// No description provided for @chatGroupRenamed.
+  ///
+  /// In en, this message translates to:
+  /// **'Group renamed'**
+  String get chatGroupRenamed;
+
+  /// No description provided for @chatMemberAdded.
+  ///
+  /// In en, this message translates to:
+  /// **'Member added'**
+  String get chatMemberAdded;
+
+  /// No description provided for @chatMemberRemoved.
+  ///
+  /// In en, this message translates to:
+  /// **'Member removed'**
+  String get chatMemberRemoved;
+
+  /// No description provided for @chatMemberLeft.
+  ///
+  /// In en, this message translates to:
+  /// **'Member left'**
+  String get chatMemberLeft;
+
+  /// No description provided for @chatThreadDeleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat deleted'**
+  String get chatThreadDeleted;
 }
 
 class _AppLocalizationsDelegate

@@ -2556,4 +2556,22 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get clientUpdatesRestart =>
       'Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix.';
+
+  @override
+  String get chatGroupCreated => 'Group created';
+
+  @override
+  String get chatGroupRenamed => 'Group renamed';
+
+  @override
+  String get chatMemberAdded => 'Member added';
+
+  @override
+  String get chatMemberRemoved => 'Member removed';
+
+  @override
+  String get chatMemberLeft => 'Member left';
+
+  @override
+  String get chatThreadDeleted => 'Chat deleted';
 }

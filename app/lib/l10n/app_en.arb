@@ -801,7 +801,11 @@
   "relaysLastSeenLabel": "Last seen {time}",
   "@relaysLastSeenLabel": {
     "description": "Relative time of the last contact with a relay",
-    "placeholders": { "time": { "type": "String" } }
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
   },
   "relaysLastSeen": "last_seen={ms}",
   "@relaysLastSeen": {
@@ -1153,9 +1157,21 @@
   "clientUpdatesHint": "Check official releases. Downloads are verified before installation.",
   "clientUpdatesCheck": "Check for updates",
   "clientUpdatesAvailable": "Version {version} is available",
-  "@clientUpdatesAvailable": {"placeholders": {"version": {"type": "String"}}},
+  "@clientUpdatesAvailable": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "clientUpdatesVersion": "Installed version: {version}",
-  "@clientUpdatesVersion": {"placeholders": {"version": {"type": "String"}}},
+  "@clientUpdatesVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "clientUpdatesCurrent": "No newer stable release is available.",
   "clientUpdatesRelease": "View release",
   "clientUpdatesDownload": "Download verified update",
@@ -1163,5 +1179,11 @@
   "clientUpdatesManual": "Close Fedi3 before replacing the installed application with the new package. Keep your profile data. On mobile, use your installation source or store.",
   "clientUpdatesInstall": "Install AppImage update",
   "clientUpdatesFolder": "Open download folder",
-  "clientUpdatesRestart": "Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix."
+  "clientUpdatesRestart": "Update installed. Close and reopen Fedi3 to use it. The previous AppImage is saved with the .previous suffix.",
+  "chatGroupCreated": "Group created",
+  "chatGroupRenamed": "Group renamed",
+  "chatMemberAdded": "Member added",
+  "chatMemberRemoved": "Member removed",
+  "chatMemberLeft": "Member left",
+  "chatThreadDeleted": "Chat deleted"
 }

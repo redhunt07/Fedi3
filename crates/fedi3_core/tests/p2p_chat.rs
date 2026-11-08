@@ -232,3 +232,89 @@ async fn encrypted_message_exact_receipt_presence_and_call_reach_other_core() {
             && s["data"]["sdp"] == "test-signaling-only"
             && s["data"]["media"] == "audio"));
 }
+
+#[tokio::test]
+async fn group_thread_is_announced_and_messages_reach_members() {
+    let a = core();
+    let b = core();
+    let created = post(
+        &a,
+        "/_fedi3/chat/thread/create",
+        json!({
+            "recipients": [b.actor_url()], "kind": "group", "title": "Team P2P",
+        }),
+    )
+    .await;
+    let thread = created["thread_id"].as_str().unwrap().to_string();
+    assert_eq!(created["kind"], "group");
+
+    // Creating a group must introduce it to the members, otherwise they reject
+    // the first message as an unknown thread.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let threads: Value = b
+                .get("/_fedi3/chat/threads?limit=20")
+                .await
+                .json()
+                .await
+                .unwrap();
+            if threads["items"].as_array().unwrap().iter().any(|t| {
+                t["thread_id"] == thread.as_str() && t["title"] == "Team P2P"
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("group thread was not announced to the member");
+
+    // The creator also sees the group notice in its own history.
+    let own: Value = a
+        .get(&format!("/_fedi3/chat/threads/{}", urlencoding::encode(&thread)))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        own["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["body_json"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("create_group")),
+        "creator must keep the group notice: {own}"
+    );
+
+    let sent = post(
+        &a,
+        "/_fedi3/chat/send",
+        json!({
+            "thread_id": thread,
+            "recipients": [b.actor_url()],
+            "text": "group hello",
+        }),
+    )
+    .await;
+    assert_eq!(sent["sent"], 1, "group message must reach the member: {sent}");
+    let message = sent["message_id"].as_str().unwrap();
+    let query = format!("/_fedi3/chat/threads/{}", urlencoding::encode(&thread));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let received: Value = b.get(&query).await.json().await.unwrap();
+            if received["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["message_id"] == message)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("group message missing on the member core");
+}

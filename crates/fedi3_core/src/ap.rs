@@ -4355,6 +4355,43 @@ async fn chat_thread_create_post(state: &ApState, req: Request<Body>) -> Respons
         };
         let _ = state.social.upsert_chat_member(&thread_id, actor, role);
     }
+    // A group only exists locally until it is announced: without this system
+    // payload the other members reject the first message as an unknown thread.
+    if kind == "group" {
+        let payload = chat::ChatPayload {
+            op: "system".to_string(),
+            text: Some("Group created".to_string()),
+            reply_to: None,
+            message_id: None,
+            status: None,
+            thread_id: Some(thread_id.clone()),
+            attachments: None,
+            action: Some("create_group".to_string()),
+            targets: None,
+            members: Some(members.clone()),
+            title: title.clone(),
+            reaction: None,
+        };
+        let env_id = chat::random_id();
+        // The creator sees the same notice the members receive.
+        let msg = crate::social_db::ChatMessage {
+            message_id: env_id.clone(),
+            thread_id: thread_id.clone(),
+            sender_actor: self_actor.clone(),
+            sender_device: state
+                .social
+                .get_local_meta("chat_device_id")
+                .unwrap_or(None)
+                .unwrap_or_default(),
+            created_at_ms: now_ms(),
+            edited_at_ms: None,
+            deleted: false,
+            body_json: serde_json::to_string(&payload).unwrap_or_default(),
+        };
+        let _ = state.social.insert_chat_message(&msg);
+        let _ = state.social.touch_chat_thread(&thread_id);
+        let _ = send_chat_payload_to_members(state, &thread_id, &payload, &env_id).await;
+    }
     let _ = state.ui_events.send(UiEvent::new(
         "chat",
         Some("thread".to_string()),

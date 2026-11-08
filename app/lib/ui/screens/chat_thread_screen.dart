@@ -1612,7 +1612,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (_recipients.length == 1)
+                      if (!widget.isGroup && _recipients.length == 1)
                         ValueListenableBuilder<Map<String, PresenceStatus>>(
                           valueListenable:
                               PeerPresenceStore.instance.statusByUsername,
@@ -1884,6 +1884,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         }
         final isSelf = message.senderActor == selfActor;
         final text = _messageText(message);
+        if (payload?.op == 'system') {
+          return _systemNotice(context, payload!, message, isSelf);
+        }
         final attachments = payload?.attachments ?? const [];
         final replyId = payload?.replyTo;
         final replyMsg = (replyId != null && replyId.isNotEmpty)
@@ -2249,20 +2252,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 IconButton(
                   tooltip: context.l10n.composeAttachments,
                   visualDensity: VisualDensity.compact,
-                  onPressed: _sending ? null : _pickFiles,
-                  icon: const Icon(Icons.attach_file_rounded, size: 20),
-                ),
-                IconButton(
-                  tooltip: context.l10n.chatAudioNote,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _sending ? null : () => _recordNote(false),
-                  icon: const Icon(Icons.mic_none_rounded, size: 20),
-                ),
-                IconButton(
-                  tooltip: context.l10n.chatVideoNote,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _sending ? null : () => _recordNote(true),
-                  icon: const Icon(Icons.videocam_outlined, size: 20),
+                  onPressed: _sending ? null : _openAttachMenu,
+                  icon: const Icon(Icons.add_circle_outline_rounded, size: 22),
                 ),
                 Expanded(
                   child: TextField(
@@ -2290,12 +2281,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   onPressed: _sending ? null : _insertEmoji,
                   icon: const Icon(Icons.emoji_emotions_outlined, size: 20),
                 ),
-                IconButton(
-                  tooltip: context.l10n.chatGif,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _sending ? null : _openGifPicker,
-                  icon: const Icon(Icons.gif_box_outlined, size: 20),
-                ),
                 const SizedBox(width: 4),
                 _ChatSendButton(
                   sending: _sending,
@@ -2305,6 +2290,85 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _openAttachMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _AttachOption(
+              icon: Icons.attach_file_rounded,
+              label: context.l10n.composeAttachments,
+              value: 'file',
+            ),
+            _AttachOption(
+              icon: Icons.mic_none_rounded,
+              label: context.l10n.chatAudioNote,
+              value: 'audio',
+            ),
+            _AttachOption(
+              icon: Icons.videocam_outlined,
+              label: context.l10n.chatVideoNote,
+              value: 'video',
+            ),
+            _AttachOption(
+              icon: Icons.gif_box_outlined,
+              label: context.l10n.chatGif,
+              value: 'gif',
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'audio':
+        await _recordNote(false);
+      case 'video':
+        await _recordNote(true);
+      case 'gif':
+        await _openGifPicker();
+      default:
+        await _pickFiles();
+    }
+  }
+
+  Widget _systemNotice(
+      BuildContext context, ChatPayload payload, ChatMessageItem message,
+      bool isSelf) {
+    final label = switch (payload.action) {
+      'create_group' => context.l10n.chatGroupCreated,
+      'rename' => context.l10n.chatGroupRenamed,
+      'add_member' => context.l10n.chatMemberAdded,
+      'remove_member' => context.l10n.chatMemberRemoved,
+      'leave' => context.l10n.chatMemberLeft,
+      'delete_thread' => context.l10n.chatThreadDeleted,
+      _ => payload.text?.trim() ?? '',
+    };
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ),
       ),
     );
   }
@@ -2786,6 +2850,27 @@ class _GifPickerState extends State<_GifPicker> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AttachOption extends StatelessWidget {
+  const _AttachOption({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(label),
+      onTap: () => Navigator.of(context).pop(value),
     );
   }
 }
