@@ -26,7 +26,7 @@ Le note della release e i relativi workflow registrano l'esito dei pacchetti.
 Gli APK Android `Fedi3-android-arm64-v8a.apk` e `Fedi3-android-x86_64.apk` includono
 il core Rust release ricompilato per la rispettiva ABI, richiedono Android 7/API 24
 o successivo e sono per installazione manuale. ARM a 32 bit non è supportato.
-La versione Android è `0.11.0`, codice build `3`.
+La versione Android è `0.11.0`, numero build base `3` (codici APK separati: ARM64 `2003`, x86_64 `4003`).
 
 Non è configurato `app/android/key.properties`: gli APK usano la chiave di debug
 locale già esistente. Conservare quella chiave per gli aggiornamenti; un certificato

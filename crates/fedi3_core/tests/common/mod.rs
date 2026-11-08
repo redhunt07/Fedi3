@@ -313,7 +313,10 @@ pub struct MockActorServer {
 impl MockActorServer {
     pub async fn new(username: &str) -> anyhow::Result<Self> {
         ensure_test_env();
-        let port = free_port();
+        // Keep the ephemeral port bound while building the actor document.
+        // Probing and closing it first lets a concurrent test claim the port.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
         let base_url = format!("http://127.0.0.1:{port}");
         let actor_url = format!("{base_url}/users/{username}");
         let key_id = format!("{actor_url}#main-key");
@@ -337,7 +340,6 @@ impl MockActorServer {
         let inbox_status = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(202));
         let inbox_status_for_router = inbox_status.clone();
         let (shutdown, mut rx) = tokio::sync::watch::channel(false);
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
         let join = tokio::spawn(async move {
             let router = axum::Router::new().fallback(axum::routing::any(
                 move |req: axum::http::Request<axum::body::Body>| {

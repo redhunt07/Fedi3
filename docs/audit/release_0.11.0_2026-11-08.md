@@ -26,7 +26,7 @@ The release notes and associated workflow runs record package validation results
 Android `Fedi3-android-arm64-v8a.apk` and `Fedi3-android-x86_64.apk` include a freshly
 compiled release Rust core for their ABI, require Android 7/API 24 or later and
 are sideload builds. 32-bit ARM is unsupported. Android version is `0.11.0`,
-build code `3`.
+base build number `3` (split APK version codes: ARM64 `2003`, x86_64 `4003`).
 
 `app/android/key.properties` is not configured: APKs use the existing local debug
 signing key. Retain that key for updates; changing certificates requires a backup
