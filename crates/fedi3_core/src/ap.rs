@@ -37,7 +37,7 @@ use serde_json::Value;
 use std::convert::Infallible;
 use tokio::sync::broadcast;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Clone)]
 pub struct ApConfig {
@@ -3626,6 +3626,7 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             Ok(peers) => peers,
             Err(e) => {
                 warn!(actor=%actor, msg_id=%message_id, "chat peer resolution failed: {e}");
+                queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                 continue;
             }
         };
@@ -3637,10 +3638,12 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                 Ok(Some(bundle)) => bundle,
                 Ok(None) => {
                     warn!(actor=%actor, peer=%peer_id, "chat bundle not found");
+                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                     continue;
                 }
                 Err(e) => {
                     warn!(actor=%actor, peer=%peer_id, "chat bundle fetch failed: {e}");
+                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                     continue;
                 }
             };
@@ -3674,8 +3677,18 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                         .upsert_chat_message_status(&message_id, &actor, "queued");
                     queued = queued.saturating_add(1);
                 }
+                Ok(chat::ChatSendOutcome::RelayAccepted) => {
+                    // The relay does not queue chat envelopes, so an accepted POST
+                    // can still mean the recipient never saw it: keep a retry.
+                    let _ = state
+                        .social
+                        .upsert_chat_message_status(&message_id, &actor, "sent");
+                    sent = sent.saturating_add(1);
+                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
+                }
                 Err(e) => {
                     warn!(actor=%actor, peer=%peer_id, msg_id=%message_id, "chat delivery failed: {e}");
+                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                 }
             }
         }
@@ -3708,6 +3721,133 @@ async fn send_chat_payload_to_members(
     let outcome =
         dispatch_chat_payload_to_members(state, thread_id, payload, envelope_message_id).await;
     outcome.sent.saturating_add(outcome.queued)
+}
+
+/// Retry queued chat payloads while the core runs, so a peer that was offline
+/// still receives the message once it reconnects.
+pub fn start_chat_retry_worker(
+    state: ApState,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    if *shutdown.borrow() {
+                        break;
+                    }
+                    retry_pending_chat(&state).await;
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
+async fn retry_pending_chat(state: &ApState) {
+    let now = now_ms();
+    let Ok(due) = state.social.due_chat_deliveries(now, 40) else {
+        return;
+    };
+    for row in due {
+        let Ok(payload) = serde_json::from_slice::<chat::ChatPayload>(&row.payload_json) else {
+            let _ = state.social.finish_chat_delivery(row.id);
+            continue;
+        };
+        // Give up on envelopes older than a day: the recipient may be gone.
+        if now.saturating_sub(row.created_at_ms) > 24 * 60 * 60 * 1000 {
+            let _ = state.social.finish_chat_delivery(row.id);
+            continue;
+        }
+        let mut delivered = false;
+        if let Ok(peers) = resolve_actor_peers(state, &row.actor_id).await {
+            for peer_id in peers {
+                let Ok(Some(bundle)) =
+                    fetch_chat_bundle(state, &peer_id, &row.actor_id).await
+                else {
+                    continue;
+                };
+                if chat::verify_bundle(state, &bundle).await.is_err() {
+                    continue;
+                }
+                let Ok(env) = chat::encrypt_payload_for_bundle(
+                    state,
+                    &bundle,
+                    &row.thread_id,
+                    &row.message_id,
+                    &payload,
+                ) else {
+                    continue;
+                };
+                match chat::send_envelope_to_peer(state, &peer_id, &row.actor_id, &env).await {
+                    Ok(chat::ChatSendOutcome::Sent) => {
+                        delivered = true;
+                    }
+                    Ok(chat::ChatSendOutcome::Queued) => {
+                        delivered = true;
+                    }
+                    Ok(chat::ChatSendOutcome::RelayAccepted) => {
+                        // Still unconfirmed: the recipient core may be offline.
+                        debug!(actor=%row.actor_id, "chat retry relay-accepted, will retry");
+                        continue;
+                    }
+                    Err(e) => {
+                        debug!(peer=%peer_id, actor=%row.actor_id, error=%e, "chat retry failed");
+                        continue;
+                    }
+                }
+                let _ = state
+                    .social
+                    .upsert_chat_message_status(&row.message_id, &row.actor_id, "sent");
+                break;
+            }
+        }
+        if delivered {
+            let _ = state.social.finish_chat_delivery(row.id);
+        } else {
+            let attempts = row.attempts.saturating_add(1);
+            if attempts >= 40 {
+                let _ = state.social.finish_chat_delivery(row.id);
+            } else {
+                let delay = retry_backoff_ms(attempts);
+                let _ = state
+                    .social
+                    .reschedule_chat_delivery(row.id, attempts, now + delay);
+            }
+        }
+    }
+}
+
+fn retry_backoff_ms(attempts: u32) -> i64 {
+    let exp = 2i64.saturating_pow(attempts.min(6));
+    (20_000i64 * exp).min(30 * 60 * 1000)
+}
+
+/// Remember a payload for a member we could not reach. The retry worker resolves
+/// the peer, fetches its bundle and encrypts the envelope when the recipient is
+/// back online, so chat messages survive an offline peer instead of being lost.
+fn queue_chat_retry(
+    state: &ApState,
+    thread_id: &str,
+    actor: &str,
+    message_id: &str,
+    payload: &chat::ChatPayload,
+) {
+    let Ok(bytes) = serde_json::to_vec(payload) else {
+        return;
+    };
+    let _ = state.social.enqueue_chat_delivery(
+        thread_id,
+        actor,
+        message_id,
+        &bytes,
+        now_ms() + 20_000,
+    );
 }
 
 async fn dispatch_chat_payload_to_members(
@@ -3743,6 +3883,8 @@ async fn dispatch_chat_payload_to_members(
             Err(e) => {
                 warn!(actor=%actor, error=%e, "chat peer resolution failed");
                 outcome.last_error = Some(format!("{actor}: {e}"));
+                queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                outcome.queued = outcome.queued.saturating_add(1);
                 continue;
             }
         };
@@ -3753,10 +3895,14 @@ async fn dispatch_chat_payload_to_members(
                     Ok(None) => {
                         outcome.last_error =
                             Some(format!("{actor}: chat bundle missing for peer {peer_id}"));
+                        queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                        outcome.queued = outcome.queued.saturating_add(1);
                         continue;
                     }
                     Err(e) => {
                         outcome.last_error = Some(format!("{actor}: chat bundle failed: {e}"));
+                        queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                        outcome.queued = outcome.queued.saturating_add(1);
                         continue;
                     }
                 };
@@ -3764,6 +3910,8 @@ async fn dispatch_chat_payload_to_members(
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         outcome.last_error =
                             Some(format!("{actor}: chat bundle signature invalid"));
+                        queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                        outcome.queued = outcome.queued.saturating_add(1);
                         continue;
                     }
                     if let Ok(env) = chat::encrypt_payload_for_bundle(
@@ -3790,10 +3938,27 @@ async fn dispatch_chat_payload_to_members(
                                 );
                                 outcome.queued = outcome.queued.saturating_add(1);
                             }
+                            Ok(chat::ChatSendOutcome::RelayAccepted) => {
+                                let _ = state.social.upsert_chat_message_status(
+                                    envelope_message_id,
+                                    &actor,
+                                    "sent",
+                                );
+                                outcome.sent = outcome.sent.saturating_add(1);
+                                queue_chat_retry(
+                                    state,
+                                    thread_id,
+                                    &actor,
+                                    envelope_message_id,
+                                    payload,
+                                );
+                            }
                             Err(e) => {
                                 warn!(peer=%peer_id, error=%e, "chat member delivery failed");
                                 outcome.last_error =
                                     Some(format!("{actor}: delivery failed: {e}"));
+                                queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                                outcome.queued = outcome.queued.saturating_add(1);
                             }
                         }
                     }
@@ -5318,6 +5483,15 @@ async fn send_chat_system(
                                     "sent",
                                 );
                                 sent = sent.saturating_add(1);
+                            }
+                            Ok(chat::ChatSendOutcome::RelayAccepted) => {
+                                let _ = state.social.upsert_chat_message_status(
+                                    &message_id,
+                                    &actor,
+                                    "sent",
+                                );
+                                sent = sent.saturating_add(1);
+                                queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                             }
                             Ok(chat::ChatSendOutcome::Queued) => {
                                 let _ = state.social.upsert_chat_message_status(

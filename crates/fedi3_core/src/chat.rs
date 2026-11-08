@@ -27,8 +27,13 @@ const CHAT_PREKEY_TARGET: u32 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSendOutcome {
+    /// The recipient core acknowledged the envelope over P2P.
     Sent,
+    /// The envelope was stored in a mailbox for later delivery.
     Queued,
+    /// The relay accepted the HTTP POST, but the recipient core may be offline:
+    /// the relay does not queue chat envelopes, so this needs a retry.
+    RelayAccepted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -573,7 +578,7 @@ pub async fn send_envelope_to_peer(
         .await?;
     if resp.status().is_success() {
         debug!(actor=%actor_id, msg_id=%env.message_id, "chat delivered over relay HTTP");
-        Ok(ChatSendOutcome::Sent)
+        Ok(ChatSendOutcome::RelayAccepted)
     } else {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();

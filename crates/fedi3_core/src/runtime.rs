@@ -797,6 +797,11 @@ fn run_core(
             });
         }
 
+        shutdown_handles.push(crate::ap::start_chat_retry_worker(
+            state.clone(),
+            shutdown_rx.clone(),
+        ));
+
         let key_id_for_queue = key_id.clone();
         shutdown_handles.push(queue.start_worker(
             shutdown_rx.clone(),

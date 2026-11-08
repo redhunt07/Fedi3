@@ -529,3 +529,32 @@ async fn q06_worker_survives_transient_db_error() {
         "worker must recover and deliver after a transient DB error"
     );
 }
+
+#[test]
+fn d90_chat_pending_delivery_queue_round_trip() {
+    let (_dir, path) = temp_db();
+    let db = SocialDb::open(&path).unwrap();
+    let payload = br#"{"op":"message","text":"ciao","thread_id":"urn:fedi3:chat:dm:x"}"#;
+    db.enqueue_chat_delivery("urn:fedi3:chat:dm:x", "https://relay/users/alice", "urn:fedi3:chat:msg:1", payload, 1_000)
+        .unwrap();
+    // Duplicate enqueue must not create a second row.
+    db.enqueue_chat_delivery("urn:fedi3:chat:dm:x", "https://relay/users/alice", "urn:fedi3:chat:msg:1", payload, 1_000)
+        .unwrap();
+    assert_eq!(db.count_chat_deliveries().unwrap(), 1);
+
+    let due = db.due_chat_deliveries(1_000, 10).unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].actor_id, "https://relay/users/alice");
+    assert_eq!(due[0].message_id, "urn:fedi3:chat:msg:1");
+    assert_eq!(due[0].attempts, 0);
+
+    // Not due before its retry time.
+    assert!(db.due_chat_deliveries(999, 10).unwrap().is_empty());
+
+    db.reschedule_chat_delivery(due[0].id, 1, 5_000).unwrap();
+    let due = db.due_chat_deliveries(5_000, 10).unwrap();
+    assert_eq!(due[0].attempts, 1);
+
+    db.finish_chat_delivery(due[0].id).unwrap();
+    assert_eq!(db.count_chat_deliveries().unwrap(), 0);
+}

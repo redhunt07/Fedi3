@@ -148,6 +148,18 @@ pub struct FollowRequest {
     pub activity_json: Option<Vec<u8>>,
 }
 
+/// A chat envelope waiting for a recipient that could not be reached yet.
+#[derive(Debug, Clone)]
+pub struct ChatPendingDelivery {
+    pub id: i64,
+    pub thread_id: String,
+    pub actor_id: String,
+    pub message_id: String,
+    pub payload_json: Vec<u8>,
+    pub attempts: u32,
+    pub created_at_ms: i64,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChatMessage {
     pub message_id: String,
@@ -343,6 +355,18 @@ impl SocialDb {
               body_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created ON chat_messages(thread_id, created_at_ms DESC);
+            CREATE TABLE IF NOT EXISTS chat_pending_deliveries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              thread_id TEXT NOT NULL,
+              actor_id TEXT NOT NULL,
+              message_id TEXT NOT NULL,
+              payload_json BLOB NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              next_at_ms INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_pending_actor_message ON chat_pending_deliveries(actor_id, message_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_pending_next ON chat_pending_deliveries(next_at_ms);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_chat_threads_updated ON chat_threads(updated_at_ms DESC);
             CREATE TABLE IF NOT EXISTS chat_message_status (
@@ -4369,6 +4393,93 @@ impl SocialDb {
             |r| r.get::<_, String>(0),
         )
         .optional()
+        .map_err(Into::into)
+    }
+
+    /// Persist a chat envelope whose delivery failed so it can be retried once
+    /// the recipient is reachable again (offline peers are common on phones).
+    pub fn enqueue_chat_delivery(
+        &self,
+        thread_id: &str,
+        actor_id: &str,
+        message_id: &str,
+        payload_json: &[u8],
+        next_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO chat_pending_deliveries
+              (thread_id, actor_id, message_id, payload_json, attempts, next_at_ms, created_at_ms)
+            VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5)
+            ON CONFLICT(actor_id, message_id) DO UPDATE SET
+              payload_json=excluded.payload_json,
+              next_at_ms=MIN(next_at_ms, excluded.next_at_ms)
+            "#,
+            params![thread_id, actor_id, message_id, payload_json, next_at_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Envelopes whose retry time has come, oldest first.
+    pub fn due_chat_deliveries(
+        &self,
+        now_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<ChatPendingDelivery>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, thread_id, actor_id, message_id, payload_json, attempts, created_at_ms
+            FROM chat_pending_deliveries
+            WHERE next_at_ms <= ?1
+            ORDER BY next_at_ms ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![now_ms, limit.max(1)], |r| {
+            Ok(ChatPendingDelivery {
+                id: r.get(0)?,
+                thread_id: r.get(1)?,
+                actor_id: r.get(2)?,
+                message_id: r.get(3)?,
+                payload_json: r.get(4)?,
+                attempts: r.get(5)?,
+                created_at_ms: r.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn finish_chat_delivery(&self, id: i64) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute("DELETE FROM chat_pending_deliveries WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn reschedule_chat_delivery(
+        &self,
+        id: i64,
+        attempts: u32,
+        next_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE chat_pending_deliveries SET attempts=?2, next_at_ms=?3 WHERE id=?1",
+            params![id, attempts, next_at_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn count_chat_deliveries(&self) -> Result<u64> {
+        let conn = self.connect()?;
+        conn.query_row("SELECT COUNT(*) FROM chat_pending_deliveries", [], |r| {
+            r.get(0)
+        })
         .map_err(Into::into)
     }
 
