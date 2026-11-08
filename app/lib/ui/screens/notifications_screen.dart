@@ -140,6 +140,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
+  /// Stable identity for a notification row. The core returns `{activity, ts}`
+  /// without a top-level id, so merging pages used to re-add every row and the
+  /// list showed duplicates.
+  String _notificationKey(Map<String, dynamic> m) {
+    final activity = m['activity'];
+    if (activity is Map) {
+      final id = activity['id']?.toString() ?? '';
+      if (id.isNotEmpty) return id;
+    }
+    final direct = m['id']?.toString() ?? '';
+    if (direct.isNotEmpty) return direct;
+    final actor = (activity is Map ? activity['actor'] : null)?.toString() ??
+        m['actor']?.toString() ??
+        '';
+    final type = (activity is Map ? activity['type'] : null)?.toString() ??
+        m['type']?.toString() ??
+        '';
+    final object = activity is Map ? activity['object'] : null;
+    final objectId = object is Map
+        ? (object['id']?.toString() ?? '')
+        : (object?.toString() ?? '');
+    return '$actor|$type|$objectId|${m['ts'] ?? ''}';
+  }
+
   Future<void> _refresh() async {
     setState(() {
       _items.clear();
@@ -172,12 +196,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .toList();
       if (!mounted) return;
       setState(() {
-        final known = _items
-            .map((m) => m['id']?.toString() ?? '')
-            .where((s) => s.isNotEmpty)
-            .toSet();
+        final known = _items.map(_notificationKey).toSet();
         final fresh = items
-            .where((m) => !known.contains(m['id']?.toString() ?? ''))
+            .where((m) => !known.contains(_notificationKey(m)))
             .toList();
         _items.insertAll(0, fresh);
         final next = (resp['next'] as String?)?.trim();
@@ -217,7 +238,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       final next = (resp['next'] as String?)?.trim();
       if (!mounted) return;
       setState(() {
-        _items.addAll(items);
+        final known = _items.map(_notificationKey).toSet();
+        _items.addAll(
+            items.where((m) => !known.contains(_notificationKey(m))));
         _cursor = (next != null && next.isNotEmpty) ? next : null;
       });
     } catch (e) {

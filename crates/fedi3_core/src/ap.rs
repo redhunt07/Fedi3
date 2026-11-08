@@ -6878,6 +6878,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         let base_recipients = recipients.clone();
 
         let mut cursor: Option<String> = None;
+        let mut delivered_batches = 0u64;
         loop {
             let page = match state.social.list_followers(1000, cursor) {
                 Ok(p) => p,
@@ -6896,6 +6897,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             batch.sort();
             batch.dedup();
             if !batch.is_empty() {
+                delivered_batches = delivered_batches.saturating_add(1);
                 pending = pending.saturating_add(
                     match state
                         .queue
@@ -6914,6 +6916,23 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             if cursor.is_none() {
                 break;
             }
+        }
+        // A user with no followers still has explicit `to`/`cc` recipients (e.g. a mention).
+        // The follower fan-out loop above never enqueues those when the follower page is empty,
+        // so deliver them directly here.
+        if delivered_batches == 0 && !base_recipients.is_empty() {
+            pending = pending.saturating_add(
+                match state
+                    .queue
+                    .enqueue_activity(activity_bytes.clone(), base_recipients)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return simple(StatusCode::BAD_GATEWAY, &format!("enqueue failed: {e}"))
+                    }
+                },
+            );
         }
     } else {
         if !recipients.is_empty() {
