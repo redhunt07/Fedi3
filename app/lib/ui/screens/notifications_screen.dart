@@ -587,6 +587,12 @@ class _NotificationItemState extends State<_NotificationItem> {
     return _usernameFromActor(_actorUrl);
   }
 
+  String _handle(String username) {
+    if (username.isEmpty) return _actorUrl;
+    final host = Uri.tryParse(_actorUrl)?.host ?? '';
+    return host.isEmpty ? '@$username' : '@$username@$host';
+  }
+
   String _usernameFromActor(String actorUrl) {
     final uri = Uri.tryParse(actorUrl.trim());
     if (uri == null) return actorUrl;
@@ -612,11 +618,18 @@ class _NotificationItemState extends State<_NotificationItem> {
     final label = _labelFor(context, type);
     final when =
         ts > 0 ? DateTime.fromMillisecondsSinceEpoch(ts).toLocal() : null;
-    final excerpt = _plainExcerpt(activity);
     final profile = _actorProfile;
     final username = profile?.preferredUsername.isNotEmpty == true
         ? profile!.preferredUsername
         : _usernameFromActor(_actorUrl);
+    // A follow notification carries the followed actor as its object, so the
+    // generic excerpt would repeat the local user's URL. Show the handle of
+    // the account that followed instead.
+    final excerpt = (type == 'Follow' ||
+            type == 'Accept' ||
+            type == 'Reject')
+        ? _handle(username)
+        : _plainExcerpt(activity);
 
     return Card(
       child: InkWell(

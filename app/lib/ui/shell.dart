@@ -173,6 +173,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       if (!mounted) return;
       if (update.hasNew) {
         setState(() => _announcementsUnread = true);
+        // While a call is on screen the banner would sit over the controls;
+        // the unread flag keeps it available for the next visit.
+        if (CallScreen.active > 0) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(context.l10n.announcementsNewAlert),

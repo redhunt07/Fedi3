@@ -44,6 +44,10 @@ class CallScreen extends StatefulWidget {
   final String? callId;
   final String? remoteActor;
 
+  /// Number of call screens currently mounted. The shell uses it to keep
+  /// transient banners (announcements, new messages) off the call controls.
+  static int active = 0;
+
   @override
   State<CallScreen> createState() => _CallScreenState();
 }
@@ -89,6 +93,11 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    CallScreen.active++;
+    // A banner already on screen would cover the call controls.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    });
     _callId = widget.callId?.trim().isNotEmpty == true
         ? widget.callId!.trim()
         : 'call-${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(9999)}';
@@ -99,6 +108,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _ended = true;
+    CallScreen.active = (CallScreen.active - 1).clamp(0, 1 << 30);
     _signalTimer?.cancel();
     _streamSub?.cancel();
     _durationTimer?.cancel();
