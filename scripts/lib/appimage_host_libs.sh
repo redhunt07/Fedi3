@@ -8,7 +8,7 @@ appimage_uses_host_library() {
   case "$1" in
     ld-linux*|libc.so.*|libm.so.*|libmvec.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libresolv.so.*|libutil.so.*|libanl.so.*|libnss_*.so.*|libstdc++.so.*|libgcc_s.so.*)
       return 0 ;;
-    libEGL.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libdrm.so.*|libwayland-*.so.*|libxshmfence.so.*)
+    libEGL.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libdrm.so.*|libwayland-*.so.*|libxshmfence.so.*|libX11.so.*|libX11-xcb.so.*|libxcb.so.*)
       return 0 ;;
     libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*|libgmodule-2.0.so.*|libgthread-2.0.so.*|libmount.so.*|libblkid.so.*|libsystemd.so.*|libudev.so.*|libpcre2-8.so.*|libffi.so.*)
       return 0 ;;

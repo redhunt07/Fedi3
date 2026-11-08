@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   present in the Flutter bundle.
 - Use the host Fontconfig, font libraries and configuration together, avoiding
   invalid-font-configuration errors on newer distributions.
+- Keep Xlib/XCB on the host with its Mesa drivers; old bundled Xlib could prevent
+  EGL context creation on Ubuntu 24.04 even after the GLib conflict was fixed.
 - Added an actual versioned-library regression reproducing `MOUNT_2_40` and
   required GUI startup tests of the packaged AppImage on Ubuntu 22.04 and 24.04.
   Publication now requires a visible first Flutter frame on both systems.

@@ -18,7 +18,8 @@ def uses_host(name):
 
 class HostLibraries(unittest.TestCase):
     def test_host_desktop_dependencies_and_application_libraries(self):
-        for name in ['libmount.so.1', 'libblkid.so.1', 'libsystemd.so.0',
+        for name in ['libX11.so.6', 'libX11-xcb.so.1', 'libxcb.so.1',
+                     'libmount.so.1', 'libblkid.so.1', 'libsystemd.so.0',
                      'libudev.so.1', 'libpcre2-8.so.0', 'libffi.so.8',
                      'libgthread-2.0.so.0', 'libfontconfig.so.1',
                      'libfreetype.so.6', 'libharfbuzz.so.0', 'libexpat.so.1',
