@@ -233,6 +233,37 @@ fn h17_legitimate_first_dm_creates_thread_with_both_members() {
     );
 }
 
+#[test]
+fn h17_first_dm_call_invite_creates_thread_and_stores_signal() {
+    let (_dir, db) = test_db("h17-first-dm-call");
+    let local = "http://local.test/users/alice";
+    let sender = "http://remote.test/users/bob";
+    let mut members = vec![sender.to_string(), local.to_string()];
+    members.sort();
+    let thread = fedi3_core::ap::chat_dm_thread_id(&members);
+
+    let mut payload = message_payload("");
+    payload.op = "call".into();
+    payload.message_id = Some("call-1".into());
+    payload.action = Some("invite".into());
+    payload.targets = Some(vec![local.to_string()]);
+    payload.text = Some(json!({"media": "audio", "data": {"sdp": "offer"}}).to_string());
+
+    let env = envelope(&thread, sender, "call-msg-1");
+    fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
+
+    assert!(
+        db.chat_thread_exists(&thread).unwrap(),
+        "a call invite on the deterministic DM thread must create it"
+    );
+    let signals = db
+        .list_chat_call_signals(&thread, local, 0, 50)
+        .unwrap();
+    assert_eq!(signals.len(), 1, "the invite must be stored as a call signal");
+    assert_eq!(signals[0].4, "invite");
+    assert_eq!(signals[0].1, sender);
+}
+
 // ---------------------------------------------------------------------------
 // H-39: outbox visibility.
 // ---------------------------------------------------------------------------

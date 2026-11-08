@@ -2,6 +2,10 @@
     <!-- Release builds must reach the local core (127.0.0.1) and federated peers.
          P0-01: INTERNET belongs in the main manifest, not only in the debug/profile overlays. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- flutter_webrtc NetworkMonitor reads the active network; without this the JNI
+         call throws a SecurityException and aborts the process on the first call. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.CAMERA"/>

@@ -313,7 +313,10 @@ pub fn store_incoming_payload_db(
     }
     let thread_exists = social.chat_thread_exists(thread_id)?;
     if !thread_exists {
-        if payload.op == "message" {
+        // A first DM can be a plain message or a call invite: both are legitimate when the
+        // thread id is the deterministic hash of the sender and the local actor, so a call
+        // placed before any message still reaches the recipient.
+        if payload.op == "message" || payload.op == "call" {
             let mut members = vec![
                 sender.to_string(),
                 local_actor.trim_end_matches('/').to_string(),
@@ -327,7 +330,7 @@ pub fn store_incoming_payload_db(
                     thread=%thread_id,
                     sender=%sender,
                     expected=%expected_thread,
-                    "chat message for unknown thread from a non-participant; skipping"
+                    "chat payload for unknown thread from a non-participant; skipping"
                 );
                 return Ok(());
             }
