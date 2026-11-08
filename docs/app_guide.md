@@ -40,6 +40,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - It supports reactions, files, GIFs and read status.
 - The notification service declares `remoteMessaging` on Android 14+ (falling back to
   `dataSync` below): Android 15 caps `dataSync` foreground services at six hours per day.
+- Activity, chat and call notifications use three distinct bundled sounds
+  (`res/raw/fedi3_activity`, `fedi3_chat`, `fedi3_call`).
 - Incoming calls ring with a system notification while the app is in the background; the
   call prompt opens as soon as the app is brought forward.
 - Screen sharing needs a `mediaProjection` foreground service on Android; the app starts

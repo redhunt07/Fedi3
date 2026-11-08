@@ -65,11 +65,12 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_activity',
+        'fedi3_activity_v2',
         'Activity',
         channelDescription: 'Timeline activity',
         importance: Importance.defaultImportance,
         priority: Priority.defaultPriority,
+        sound: RawResourceAndroidNotificationSound('fedi3_activity'),
       ),
       linux: LinuxNotificationDetails(),
       macOS: DarwinNotificationDetails(),
@@ -92,11 +93,12 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_chat',
+        'fedi3_chat_v2',
         'Chat',
         channelDescription: 'Chat messages',
         importance: Importance.high,
         priority: Priority.high,
+        sound: RawResourceAndroidNotificationSound('fedi3_chat'),
       ),
       linux: LinuxNotificationDetails(),
       macOS: DarwinNotificationDetails(),
@@ -121,13 +123,14 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_call',
+        'fedi3_call_v2',
         'Calls',
         channelDescription: 'Incoming calls',
         importance: Importance.max,
         priority: Priority.max,
         category: AndroidNotificationCategory.call,
         fullScreenIntent: true,
+        sound: RawResourceAndroidNotificationSound('fedi3_call'),
       ),
       linux: LinuxNotificationDetails(),
       macOS: DarwinNotificationDetails(),
