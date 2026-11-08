@@ -4382,6 +4382,18 @@ abstract class AppLocalizations {
   /// **'Unmute'**
   String get noteUnmute;
 
+  /// No description provided for @activityNotificationTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New activity'**
+  String get activityNotificationTitle;
+
+  /// No description provided for @activityNotificationBody.
+  ///
+  /// In en, this message translates to:
+  /// **'You have new activity on Fedi3.'**
+  String get activityNotificationBody;
+
   /// No description provided for @noteMoreActions.
   ///
   /// In en, this message translates to:

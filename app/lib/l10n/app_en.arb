@@ -1069,6 +1069,8 @@
   },
   "noteThreadMuted": "Thread muted",
   "noteUnmute": "Unmute",
+  "activityNotificationTitle": "New activity",
+  "activityNotificationBody": "You have new activity on Fedi3.",
   "noteMoreActions": "More actions",
   "noteBookmark": "Bookmark",
   "noteUnbookmark": "Remove bookmark",

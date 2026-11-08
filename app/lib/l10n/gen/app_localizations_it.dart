@@ -2343,6 +2343,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get noteUnmute => 'Riattiva audio';
 
   @override
+  String get activityNotificationTitle => 'Nuova attività';
+
+  @override
+  String get activityNotificationBody => 'Hai nuova attività su Fedi3.';
+
+  @override
   String get noteMoreActions => 'Altre azioni';
 
   @override

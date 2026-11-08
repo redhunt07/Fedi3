@@ -2332,6 +2332,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noteUnmute => 'Unmute';
 
   @override
+  String get activityNotificationTitle => 'New activity';
+
+  @override
+  String get activityNotificationBody => 'You have new activity on Fedi3.';
+
+  @override
   String get noteMoreActions => 'More actions';
 
   @override

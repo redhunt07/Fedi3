@@ -1065,6 +1065,8 @@
   },
   "noteThreadMuted": "Thread silenziato",
   "noteUnmute": "Riattiva audio",
+  "activityNotificationTitle": "Nuova attività",
+  "activityNotificationBody": "Hai nuova attività su Fedi3.",
   "noteMoreActions": "Altre azioni",
   "noteBookmark": "Salva",
   "noteUnbookmark": "Rimuovi dai salvati",

@@ -60,6 +60,33 @@ class NotificationService {
     }
   }
 
+  static Future<void> showActivityNotification(
+      {required String title, required String body}) async {
+    if (!_ready) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'fedi3_activity',
+        'Activity',
+        channelDescription: 'Timeline activity',
+        importance: Importance.defaultImportance,
+        priority: Priority.defaultPriority,
+      ),
+      linux: LinuxNotificationDetails(),
+      macOS: DarwinNotificationDetails(),
+      iOS: DarwinNotificationDetails(),
+    );
+    try {
+      if (Platform.isAndroid) {
+        final allowed = await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.areNotificationsEnabled();
+        if (allowed == false) return;
+      }
+      await _plugin.show(1002, title, body, details);
+    } catch (_) {/* Notification service may disappear after initialization. */}
+  }
+
   static Future<void> showChatNotification(
       {required String title, required String body, String? threadId}) async {
     if (!_ready) return;

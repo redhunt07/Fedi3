@@ -11,6 +11,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../services/core_event_stream.dart';
+import '../../services/notification_service.dart';
 import '../../services/sound_service.dart';
 import '../../state/app_state.dart';
 import '../screens/note_detail_screen.dart';
@@ -107,7 +108,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         if (!mounted) return;
         if (widget.appState.isRunning) _refreshIncremental();
         widget.appState.incrementUnreadNotifications();
-        unawaited(SoundService.playActivity());
+        final lifecycle = WidgetsBinding.instance.lifecycleState;
+        final background = lifecycle == AppLifecycleState.paused ||
+            lifecycle == AppLifecycleState.hidden;
+        if (background) {
+          NotificationService.showActivityNotification(
+            title: context.l10n.activityNotificationTitle,
+            body: context.l10n.activityNotificationBody,
+          );
+        } else {
+          unawaited(SoundService.playActivity());
+        }
       });
     }, onError: (_) => _scheduleStreamRetry(), onDone: _scheduleStreamRetry);
   }
