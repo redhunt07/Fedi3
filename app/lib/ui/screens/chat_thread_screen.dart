@@ -1495,8 +1495,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
     ctrl.dispose();
     if (result == null || result.trim().isEmpty) return;
-    await CoreApi(config: cfg)
-        .editChatMessage(messageId: message.messageId, text: result.trim());
+    try {
+      await CoreApi(config: cfg)
+          .editChatMessage(messageId: message.messageId, text: result.trim());
+    } on CoreApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
     await _loadMessages(reset: true);
   }
 
@@ -2116,6 +2122,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                   style:
                                       TextStyle(fontSize: 10, color: timeColor),
                                 ),
+                                if (message.editedAtMs != null && !message.deleted) ...[
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    context.l10n.chatEdited,
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        fontStyle: FontStyle.italic,
+                                        color: timeColor),
+                                  ),
+                                ],
                                 if (isSelf) ...[
                                   const SizedBox(width: 5),
                                   Tooltip(

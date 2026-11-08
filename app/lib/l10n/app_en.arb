@@ -171,6 +171,7 @@
   "chatGifSearchHint": "Search GIFs…",
   "chatGifEmpty": "No GIFs found",
   "chatGifMissingKey": "Add a GIF API key in Settings to enable search.",
+  "chatEdited": "edited",
   "chatStatusPending": "Pending",
   "chatStatusQueued": "Queued",
   "chatStatusSent": "Sent",

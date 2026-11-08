@@ -914,6 +914,12 @@ abstract class AppLocalizations {
   /// **'Add a GIF API key in Settings to enable search.'**
   String get chatGifMissingKey;
 
+  /// No description provided for @chatEdited.
+  ///
+  /// In en, this message translates to:
+  /// **'edited'**
+  String get chatEdited;
+
   /// No description provided for @chatStatusPending.
   ///
   /// In en, this message translates to:

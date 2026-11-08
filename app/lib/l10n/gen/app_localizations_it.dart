@@ -434,6 +434,9 @@ class AppLocalizationsIt extends AppLocalizations {
       'Aggiungi una API key GIF nelle impostazioni per abilitare la ricerca.';
 
   @override
+  String get chatEdited => 'modificato';
+
+  @override
   String get chatStatusPending => 'In attesa';
 
   @override

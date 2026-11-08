@@ -4150,8 +4150,8 @@ impl SocialDb {
     pub fn mark_chat_message_deleted(&self, message_id: &str) -> Result<()> {
         let conn = self.connect()?;
         conn.execute(
-            "UPDATE chat_messages SET deleted=1, edited_at_ms=?2 WHERE message_id=?1",
-            params![message_id, now_ms()],
+            "UPDATE chat_messages SET deleted=1 WHERE message_id=?1",
+            params![message_id],
         )?;
         Ok(())
     }

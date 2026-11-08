@@ -434,6 +434,9 @@ class AppLocalizationsEn extends AppLocalizations {
       'Add a GIF API key in Settings to enable search.';
 
   @override
+  String get chatEdited => 'edited';
+
+  @override
   String get chatStatusPending => 'Pending';
 
   @override
