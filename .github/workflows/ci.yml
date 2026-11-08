@@ -166,6 +166,9 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
+          # Ubuntu 22.04's LLVM development package conflicts with GStreamer.
+          # https://github.com/actions/runner-images/issues/9546
+          sudo apt-get remove -y libunwind-14-dev
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
             libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev \
