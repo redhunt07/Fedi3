@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:io' show Directory, Platform;
+import 'dart:ui' show DartPluginRegistrant, PlatformDispatcher;
 
 import 'package:path_provider/path_provider.dart';
 
@@ -16,6 +17,8 @@ import 'package:media_kit/media_kit.dart';
 import 'state/app_state.dart';
 import 'state/config_store.dart';
 import 'ui/app_root.dart';
+import 'l10n/gen/app_localizations.dart';
+import 'services/core_event_stream.dart';
 import 'services/notification_service.dart';
 import 'services/mobile_push_service.dart';
 import 'services/telemetry_service.dart';
@@ -92,4 +95,44 @@ Future<void> main(List<String> args) async {
       force: kDebugMode,
     );
   });
+}
+
+/// Entry point for the Android keep-alive service engine.
+///
+/// It runs without any UI: it loads the stored configuration, starts (or
+/// adopts) the local core and listens to the core event stream so activity and
+/// chat notifications keep arriving while the app UI is in the background.
+@pragma('vm:entry-point')
+Future<void> backgroundMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  await NotificationService.init();
+  if (Platform.isAndroid) {
+    final support = await getApplicationSupportDirectory();
+    final sep = Platform.pathSeparator;
+    ConfigStore.useBaseDirectory(Directory('${support.path}${sep}config'));
+    final appState = await AppState.load(watchdogEnabled: false);
+    appState.useCoreDataDirBase('${support.path}${sep}core');
+    await appState.startCore();
+    final cfg = appState.config;
+    if (cfg == null) return;
+    final lastChatSeen = appState.prefs.lastChatSeenMs;
+    final l10n = lookupAppLocalizations(PlatformDispatcher.instance.locale);
+    CoreEventStream(config: cfg).stream().listen((ev) async {
+      if (ev.kind == 'notification' || ev.kind == 'inbox') {
+        await NotificationService.showActivityNotification(
+          title: l10n.activityNotificationTitle,
+          body: l10n.activityNotificationBody,
+        );
+      } else if (ev.kind == 'chat' &&
+          (ev.activityType == 'message' || ev.activityType == 'system') &&
+          ev.tsMs > lastChatSeen) {
+        await NotificationService.showChatNotification(
+          title: l10n.chatTitle,
+          body: l10n.chatNewMessageBody,
+          threadId: ev.activityId,
+        );
+      }
+    }, onError: (_) {});
+  }
 }

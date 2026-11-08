@@ -11,6 +11,11 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
+import io.flutter.FlutterInjector
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.dart.DartExecutor
+import io.flutter.plugins.GeneratedPluginRegistrant
+
 /**
  * Keeps the app process (and therefore the local core plus its event streams)
  * alive while the UI is in the background, so notifications keep arriving
@@ -22,6 +27,23 @@ import android.os.IBinder
  */
 class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private var engine: FlutterEngine? = null
+
+    private fun ensureEngine() {
+        if (engine != null) return
+        val loader = FlutterInjector.instance().flutterLoader()
+        loader.startInitialization(applicationContext)
+        loader.ensureInitializationComplete(applicationContext, null)
+        val flutterEngine = FlutterEngine(applicationContext)
+        GeneratedPluginRegistrant.registerWith(flutterEngine)
+        val entrypoint = DartExecutor.DartEntrypoint(
+            loader.findAppBundlePath(),
+            "backgroundMain"
+        )
+        flutterEngine.dartExecutor.executeDartEntrypoint(entrypoint)
+        engine = flutterEngine
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -65,10 +87,13 @@ class KeepAliveService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        ensureEngine()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        engine?.destroy()
+        engine = null
         super.onDestroy()
     }
 

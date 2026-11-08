@@ -44,7 +44,7 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 - Le notifiche sono locali; non serve un servizio push esterno.
 - Su Android serve il permesso `POST_NOTIFICATIONS` (richiesto all'avvio) e il permesso `INTERNET`.
-- Android mantiene attivo un servizio in primo piano mentre l'app è in background, così il core locale e i suoi flussi di eventi continuano a consegnare notifiche. Si controlla in **Impostazioni > Sicurezza > Notifiche in background**; durante l'esecuzione viene mostrata una piccola notifica persistente.
+- Android mantiene attivo un servizio in primo piano mentre l'app è in background. Il servizio ospita un motore Flutter headless che adotta il core locale, ascolta il flusso di eventi e pubblica le notifiche, così attività e chat arrivano anche senza un provider push. Si controlla in **Impostazioni > Sicurezza > Notifiche in background**; durante l'esecuzione viene mostrata una piccola notifica persistente.
 - UnifiedPush (quando il relay espone un provider push) copre il caso in cui Android recupera il processo.
 - La lista delle notifiche si aggiorna in testa senza azzerare quelle già lette.
 
