@@ -3678,13 +3678,12 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
                     queued = queued.saturating_add(1);
                 }
                 Ok(chat::ChatSendOutcome::RelayAccepted) => {
-                    // The relay does not queue chat envelopes, so an accepted POST
-                    // can still mean the recipient never saw it: keep a retry.
+                    // The relay answers 503 when the recipient tunnel is down and
+                    // 2xx only when it proxied to the core, so this is a delivery.
                     let _ = state
                         .social
                         .upsert_chat_message_status(&message_id, &actor, "sent");
                     sent = sent.saturating_add(1);
-                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                 }
                 Err(e) => {
                     warn!(actor=%actor, peer=%peer_id, msg_id=%message_id, "chat delivery failed: {e}");
@@ -3792,9 +3791,7 @@ async fn retry_pending_chat(state: &ApState) {
                         delivered = true;
                     }
                     Ok(chat::ChatSendOutcome::RelayAccepted) => {
-                        // Still unconfirmed: the recipient core may be offline.
-                        debug!(actor=%row.actor_id, "chat retry relay-accepted, will retry");
-                        continue;
+                        delivered = true;
                     }
                     Err(e) => {
                         debug!(peer=%peer_id, actor=%row.actor_id, error=%e, "chat retry failed");
@@ -3824,8 +3821,10 @@ async fn retry_pending_chat(state: &ApState) {
 }
 
 fn retry_backoff_ms(attempts: u32) -> i64 {
-    let exp = 2i64.saturating_pow(attempts.min(6));
-    (20_000i64 * exp).min(30 * 60 * 1000)
+    // Chat should reach a peer that just reconnected promptly, so the backoff
+    // tops out at five minutes instead of growing to half an hour.
+    let exp = 2i64.saturating_pow(attempts.min(4));
+    (20_000i64 * exp).min(5 * 60 * 1000)
 }
 
 /// Remember a payload for a member we could not reach. The retry worker resolves
@@ -3945,13 +3944,6 @@ async fn dispatch_chat_payload_to_members(
                                     "sent",
                                 );
                                 outcome.sent = outcome.sent.saturating_add(1);
-                                queue_chat_retry(
-                                    state,
-                                    thread_id,
-                                    &actor,
-                                    envelope_message_id,
-                                    payload,
-                                );
                             }
                             Err(e) => {
                                 warn!(peer=%peer_id, error=%e, "chat member delivery failed");
@@ -5491,7 +5483,6 @@ async fn send_chat_system(
                                     "sent",
                                 );
                                 sent = sent.saturating_add(1);
-                                queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
                             }
                             Ok(chat::ChatSendOutcome::Queued) => {
                                 let _ = state.social.upsert_chat_message_status(
