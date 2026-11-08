@@ -264,6 +264,39 @@ fn h17_first_dm_call_invite_creates_thread_and_stores_signal() {
     assert_eq!(signals[0].1, sender);
 }
 
+#[test]
+fn h40_add_member_system_message_creates_group_thread_on_the_new_member() {
+    let (_dir, db) = test_db("h40-group-invite");
+    let local = "http://local.test/users/alice";
+    let owner = "http://remote.test/users/bob";
+    let thread = "urn:fedi3:chat:group-invite-test";
+
+    let mut payload = message_payload("Added: alice");
+    payload.op = "system".into();
+    payload.action = Some("add_member".into());
+    payload.title = Some("Team".into());
+    payload.targets = Some(vec![local.to_string()]);
+    payload.members = Some(vec![owner.to_string(), local.to_string()]);
+
+    let env = envelope(thread, owner, "sys-msg-1");
+    fedi3_core::chat::store_incoming_payload_db(&db, local, &env, &payload).unwrap();
+
+    assert!(
+        db.chat_thread_exists(thread).unwrap(),
+        "an add_member system message must introduce an unknown group thread"
+    );
+    let members = db.list_chat_members(thread).unwrap();
+    assert_eq!(members.len(), 2, "the announced members must be stored");
+    let page = db.list_chat_threads(10, None).unwrap();
+    let created = page
+        .items
+        .iter()
+        .find(|t| t.thread_id == thread)
+        .expect("the introduced thread must be listed");
+    assert_eq!(created.kind, "group");
+    assert_eq!(created.title.as_deref(), Some("Team"));
+}
+
 // ---------------------------------------------------------------------------
 // H-39: outbox visibility.
 // ---------------------------------------------------------------------------

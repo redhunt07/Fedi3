@@ -113,4 +113,42 @@ class NotificationService {
       await _plugin.show(1001, title, body, details, payload: threadId);
     } catch (_) {/* Notification service may disappear after initialization. */}
   }
+
+  /// Rings for an incoming call while the app is in the background. The tap
+  /// brings the app forward and the shell then shows its call prompt.
+  static Future<void> showCallNotification(
+      {required String title, required String body, String? threadId}) async {
+    if (!_ready) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'fedi3_call',
+        'Calls',
+        channelDescription: 'Incoming calls',
+        importance: Importance.max,
+        priority: Priority.max,
+        category: AndroidNotificationCategory.call,
+        fullScreenIntent: true,
+      ),
+      linux: LinuxNotificationDetails(),
+      macOS: DarwinNotificationDetails(),
+      iOS: DarwinNotificationDetails(),
+    );
+    try {
+      if (Platform.isAndroid) {
+        final allowed = await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.areNotificationsEnabled();
+        if (allowed == false) return;
+      }
+      await _plugin.show(1002, title, body, details, payload: threadId);
+    } catch (_) {/* Notification service may disappear after initialization. */}
+  }
+
+  static Future<void> cancelCallNotification() async {
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(1002);
+    } catch (_) {}
+  }
 }

@@ -40,6 +40,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - It supports reactions, files, GIFs and read status.
 - The notification service declares `remoteMessaging` on Android 14+ (falling back to
   `dataSync` below): Android 15 caps `dataSync` foreground services at six hours per day.
+- Incoming calls ring with a system notification while the app is in the background; the
+  call prompt opens as soon as the app is brought forward.
 - Screen sharing needs a `mediaProjection` foreground service on Android; the app starts
   `ScreenShareService` before requesting the projection and stops it when sharing ends.
 - Calls use WebRTC between clients. Android needs `ACCESS_NETWORK_STATE` and `ACCESS_WIFI_STATE`: without them the WebRTC network monitor throws and aborts the process on the first call.

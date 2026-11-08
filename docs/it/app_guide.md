@@ -40,6 +40,8 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Supporta reazioni, file, GIF e stato di lettura.
 - Il servizio notifiche dichiara `remoteMessaging` su Android 14+ (con fallback a `dataSync`
   sotto): Android 15 limita i foreground service `dataSync` a sei ore al giorno.
+- Le chiamate in arrivo suonano con una notifica di sistema mentre l'app è in background;
+  il prompt di chiamata si apre appena l'app torna in primo piano.
 - La condivisione schermo richiede un foreground service `mediaProjection` su Android;
   l'app avvia `ScreenShareService` prima di chiedere la proiezione e lo ferma alla fine.
 - Le chiamate usano WebRTC tra client. Android richiede `ACCESS_NETWORK_STATE` e `ACCESS_WIFI_STATE`: senza questi permessi il network monitor di WebRTC lancia un'eccezione e manda in crash il processo alla prima chiamata.

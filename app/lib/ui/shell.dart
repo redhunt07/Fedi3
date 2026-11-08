@@ -68,6 +68,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   bool _announcementsChecking = false;
   StreamSubscription<String>? _notificationTaps;
   Timer? _callPollTimer;
+  ChatCallSignal? _pendingCallSignal;
+  StreamSubscription<bool>? _activitySub;
   int _lastCallSignalMs = 0;
   int _lastCallSignalId = 0;
   int _idleCallPolls = 0;
@@ -85,6 +87,26 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   void initState() {
     super.initState();
     _notificationTaps = NotificationService.taps.listen(_openNotifiedThread);
+    _activitySub = AppActivity.changes.listen((foreground) {
+      if (!foreground || !mounted) return;
+      final pending = _pendingCallSignal;
+      if (pending == null) return;
+      _pendingCallSignal = null;
+      unawaited(NotificationService.cancelCallNotification());
+      // Ignore a call that stopped ringing long before the app came back.
+      if (DateTime.now().millisecondsSinceEpoch - pending.createdAtMs >
+          const Duration(seconds: 120).inMilliseconds) {
+        return;
+      }
+      unawaited(_showGlobalIncomingCall(
+        threadId: pending.threadId,
+        title: pending.threadTitle.isNotEmpty
+            ? pending.threadTitle
+            : pending.fromActor.split('/').last,
+        media: pending.data['media']?.toString() ?? 'audio',
+        signal: pending,
+      ));
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final pending = NotificationService.pendingThread;
       if (pending != null) _openNotifiedThread(pending);
@@ -209,6 +231,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     _notificationTaps?.cancel();
+    _activitySub?.cancel();
     unawaited(SoundService.stopCall());
     _chatStream?.cancel();
     _chatDebounce?.cancel();
@@ -304,7 +327,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch -
           const Duration(seconds: 30).inMilliseconds;
     }
-    _callPollTimer = AppActivity.periodic(const Duration(seconds: 3), (_) {
+    // Plain periodic timer: calls must ring while the app is backgrounded too,
+    // where AppActivity.periodic deliberately stays silent.
+    _callPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (++_callPollTicks % (_idleCallPolls >= 3 ? 5 : 1) == 0) {
         _pollIncomingCall();
       }
@@ -359,12 +384,26 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
           continue;
         }
         _incomingCallId = signal.callId;
+        final title = signal.threadTitle.isNotEmpty
+            ? signal.threadTitle
+            : signal.fromActor.split('/').last;
+        final media = signal.data['media']?.toString() ?? 'audio';
+        if (!mounted) return;
+        if (!AppActivity.foreground) {
+          // A dialog is invisible in the background: ring through the system
+          // notification and keep the signal for the next resume.
+          _pendingCallSignal = signal;
+          unawaited(NotificationService.showCallNotification(
+            title: context.l10n.callIncoming,
+            body: title,
+            threadId: signal.threadId,
+          ));
+          return;
+        }
         await _showGlobalIncomingCall(
             threadId: signal.threadId,
-            title: signal.threadTitle.isNotEmpty
-                ? signal.threadTitle
-                : signal.fromActor.split('/').last,
-            media: signal.data['media']?.toString() ?? 'audio',
+            title: title,
+            media: media,
             signal: signal);
         return;
       }

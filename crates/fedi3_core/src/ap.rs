@@ -5116,6 +5116,13 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
             notify_targets.push(a.clone());
         }
     }
+    // A newly added member may not know the thread yet: the system message is
+    // what creates it on their side, so it has to reach them too.
+    for a in &add {
+        if !notify_targets.contains(a) {
+            notify_targets.push(a.clone());
+        }
+    }
     let text = if !add.is_empty() {
         format!("Added: {}", add.join(", "))
     } else if !remove.is_empty() {
