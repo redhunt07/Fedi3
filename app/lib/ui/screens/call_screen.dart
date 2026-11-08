@@ -883,6 +883,9 @@ class _CallScreenState extends State<CallScreen> {
     for (final device in devices) {
       if (device.id == defaultId) continue;
       final label = device.label.toLowerCase();
+      // The ADM lists the default device twice ("default: <name>" and
+      // "<name>"); the alias points at the captured sink, so skip it.
+      if (label.startsWith('default:')) continue;
       final isHeadset = label.contains('headset') ||
           label.contains('headphone') ||
           label.contains('cuffie') ||
