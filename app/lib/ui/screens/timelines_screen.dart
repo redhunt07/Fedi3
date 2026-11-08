@@ -61,9 +61,8 @@ class _TimelinesScreenState extends State<TimelinesScreen>
       child: TabBar(
         controller: _tabs,
         isScrollable: MediaQuery.sizeOf(context).width < 720,
-        tabAlignment: MediaQuery.sizeOf(context).width < 720
-            ? TabAlignment.start
-            : null,
+        tabAlignment:
+            MediaQuery.sizeOf(context).width < 720 ? TabAlignment.start : null,
         dividerColor: Colors.transparent,
         indicatorSize: TabBarIndicatorSize.tab,
         indicatorPadding:
@@ -734,7 +733,8 @@ class _TimelineListState extends State<_TimelineList>
     _refresh();
     // Live updates arrive through the core event stream; this periodic poll is
     // only a safety net, so keep it slow to spare battery and CPU.
-    _poll = AppActivity.periodic(const Duration(seconds: 20), (_) => _pollNew());
+    _poll =
+        AppActivity.periodic(const Duration(seconds: 20), (_) => _pollNew());
     _scroll.addListener(_onScroll);
     _lastRunning = widget.appState.isRunning;
     _appStateListener = () {
@@ -973,8 +973,8 @@ class _TimelineListState extends State<_TimelineList>
       child: ListView.builder(
         key: PageStorageKey('timeline-${widget.kind}'),
         controller: _scroll,
-        padding: EdgeInsets.fromLTRB(
-            16, widget.constrainWidth ? 4 : 16, 16, 20),
+        padding:
+            EdgeInsets.fromLTRB(16, widget.constrainWidth ? 4 : 16, 16, 20),
         scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
         addAutomaticKeepAlives: false,
         itemCount: filtered.length + 3,
@@ -984,8 +984,10 @@ class _TimelineListState extends State<_TimelineList>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Container(
-                  padding: EdgeInsets.only(bottom: widget.constrainWidth ? 2 : 10),
-                  margin: EdgeInsets.only(bottom: widget.constrainWidth ? 6 : 10),
+                  padding:
+                      EdgeInsets.only(bottom: widget.constrainWidth ? 2 : 10),
+                  margin:
+                      EdgeInsets.only(bottom: widget.constrainWidth ? 6 : 10),
                   decoration: BoxDecoration(
                     border: Border(
                       bottom: BorderSide(
@@ -1002,54 +1004,54 @@ class _TimelineListState extends State<_TimelineList>
                       ),
                     ),
                     child: Row(
-                    children: [
-                      if (!widget.constrainWidth) ...[
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: LinearGradient(
-                              colors: [
-                                Color(UiTokens.brandViolet),
-                                Color(UiTokens.brandCyan),
-                              ],
+                      children: [
+                        if (!widget.constrainWidth) ...[
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Color(UiTokens.brandViolet),
+                                  Color(UiTokens.brandCyan),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Tooltip(
-                          message: widget.headerTooltip,
-                          child: Text(
-                            widget.headerTitle,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w800),
+                          const SizedBox(width: 8),
+                          Tooltip(
+                            message: widget.headerTooltip,
+                            child: Text(
+                              widget.headerTitle,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
                           ),
+                        ],
+                        const Spacer(),
+                        IconButton(
+                          tooltip: context.l10n.timelineFiltersTooltip,
+                          onPressed: () => _showFilters(context),
+                          icon: const Icon(Icons.filter_alt_outlined),
+                        ),
+                        IconButton(
+                          tooltip: context.l10n.timelineRefreshHint,
+                          onPressed: widget.appState.isRunning && !_syncing
+                              ? _forceSyncAndRefresh
+                              : null,
+                          icon: _syncing
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.refresh),
                         ),
                       ],
-                      const Spacer(),
-                      IconButton(
-                        tooltip: context.l10n.timelineFiltersTooltip,
-                        onPressed: () => _showFilters(context),
-                        icon: const Icon(Icons.filter_alt_outlined),
-                      ),
-                      IconButton(
-                        tooltip: context.l10n.timelineRefreshHint,
-                        onPressed: widget.appState.isRunning && !_syncing
-                            ? _forceSyncAndRefresh
-                            : null,
-                        icon: _syncing
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.refresh),
-                      ),
-                    ],
                     ),
                   ),
                 ),
@@ -1297,50 +1299,84 @@ class _TimelineListState extends State<_TimelineList>
   }
 }
 
-class _TimelineSkeletonCard extends StatelessWidget {
+class _TimelineSkeletonCard extends StatefulWidget {
   const _TimelineSkeletonCard();
 
   @override
+  State<_TimelineSkeletonCard> createState() => _TimelineSkeletonCardState();
+}
+
+class _TimelineSkeletonCardState extends State<_TimelineSkeletonCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1500),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final base =
-        Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120);
+    final scheme = Theme.of(context).colorScheme;
+    final base = scheme.surfaceContainerHighest.withAlpha(120);
+    final highlight = scheme.surfaceContainerHighest.withAlpha(50);
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                    width: 42,
-                    height: 42,
-                    decoration:
-                        BoxDecoration(color: base, shape: BoxShape.circle)),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(height: 12, width: 160, color: base),
-                      const SizedBox(height: 8),
-                      Container(height: 10, width: 110, color: base),
-                    ],
+      child: AnimatedBuilder(
+        animation: _shimmer,
+        builder: (context, child) {
+          final dx = -1.6 + 3.2 * _shimmer.value;
+          return ShaderMask(
+            blendMode: BlendMode.srcATop,
+            shaderCallback: (bounds) => LinearGradient(
+              begin: Alignment(dx - 0.7, 0),
+              end: Alignment(dx + 0.7, 0),
+              colors: [base, highlight, base],
+              stops: const [0.0, 0.5, 1.0],
+            ).createShader(bounds),
+            child: child,
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                      width: 42,
+                      height: 42,
+                      decoration:
+                          BoxDecoration(color: base, shape: BoxShape.circle)),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(height: 12, width: 160, color: base),
+                        const SizedBox(height: 8),
+                        Container(height: 10, width: 110, color: base),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Container(height: 12, width: double.infinity, color: base),
-            const SizedBox(height: 8),
-            Container(height: 12, width: 240, color: base),
-            const SizedBox(height: 8),
-            Container(
-                height: 180,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                    color: base, borderRadius: BorderRadius.circular(10))),
-          ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(height: 12, width: double.infinity, color: base),
+              const SizedBox(height: 8),
+              Container(height: 12, width: 240, color: base),
+              const SizedBox(height: 8),
+              Container(
+                  height: 180,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                      color: base, borderRadius: BorderRadius.circular(10))),
+            ],
+          ),
         ),
       ),
     );

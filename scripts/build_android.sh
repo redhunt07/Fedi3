@@ -4,6 +4,11 @@ set -euo pipefail
 profile="${1:-debug}"
 case "$profile" in debug|profile|release) ;; *) echo 'Usage: scripts/build_android.sh [debug|profile|release]' >&2; exit 2;; esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Cargo installs into ~/.cargo/bin; a login shell may not have it on PATH, which
+# used to leave the APK bundling a stale core library.
+export PATH="$HOME/.cargo/bin:$PATH"
+# Same for the Flutter SDK: fall back to the default checkout when it is absent.
+command -v flutter >/dev/null 2>&1 || export PATH="$HOME/flutter/bin:$PATH"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 ndk_root="${FEDI3_ANDROID_NDK:-$sdk_root/ndk/28.2.13676358}"
 ndk_bin="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"
