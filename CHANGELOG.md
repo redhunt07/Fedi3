@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-08
+
+### Linux and Android client
+
+- Combine the Android client work with all 0.10.1 AppImage runtime fixes.
+- Android foreground notifications use a headless Flutter engine, separate sounds
+  for activity/chat/calls, deduplication and Android 15-compatible service types.
+- Improve phone navigation, profile/settings layout, media labels and backup sharing.
+- Fix first-call crashes, background ringing, screen-sharing service startup and
+  microphone cleanup when calls end.
+- Deliver chat through relay HTTP when P2P is unavailable and retry offline peers;
+  announce groups to new members and support edit/delete status.
+- Send attachment-only messages, play audio/video inline, show video posters,
+  reject empty recordings and allow realistic media-upload sizes.
+- Backfill followed Fedi3 peers into the home timeline; display update notes as Markdown.
+- Build Android APKs with freshly compiled Rust cores for ARM64 phones and x86_64
+  emulators; constrain Flutter packaging to those supported ABIs.
+- Android packages use the existing local debug signing key because no dedicated
+  release key is configured. They are sideload builds, not Play Store packages.
+
 ## [0.10.1] - 2026-11-08
 
 ### Linux AppImage startup

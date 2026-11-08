@@ -10,14 +10,12 @@ FEDI3 is a federated social platform with a peer-to-peer layer: privacy-first,
 interoperable with the fediverse and resilient without giving up compatibility
 with classic ActivityPub instances.
 
-> **Status: pre-1.0; [0.10.1 is published](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1).** Current
-> verification is in the [client/update audit](docs/audit/client_updates_2026-11-07.md)
-> and [compatible RSA/WebRTC remediation](docs/audit/crypto_compatibility_2026-11-08.md).
-> The [production readiness audit](docs/audit/production_readiness_audit.md) and
-> [remediation plan](docs/audit/remediation_plan.md) are historical background;
-> [Publication verification](docs/audit/release_0.10.1_2026-11-08.md) records the passing
-> Linux and Windows release builds and remote CI. Apple/mobile packages
-> are outside this release pipeline.
+> **Status: pre-1.0; [release 0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0).**
+> Includes the Android client work and the 0.10.1 AppImage startup fixes.
+> This release ships Linux x86_64 and Android ARM64/x86_64 packages with SHA256.
+> Android APKs are sideload builds signed with the local debug key, not Play Store
+> packages. [Verification and limits](docs/audit/release_0.11.0_2026-11-08.md).
+> Historical audits remain in [docs/audit](docs/audit).
 
 ## Contents
 
@@ -132,9 +130,11 @@ The client stores tokens in the OS keyring: Linux builds require `libsecret`
 and a running Secret Service. An AppImage can be built locally with
 `scripts/build_appimage.sh release`.
 
-Android and iOS builds are available, but the mobile release pipeline and
-signing are not final yet; the primary production target is relay + Linux
-desktop.
+Android: download `Fedi3-android-arm64-v8a.apk` for a 64-bit ARM phone or
+`Fedi3-android-x86_64.apk` for an x86_64 emulator from the release page, verify
+`checksums.txt`, then allow installation from that source. Android installs updates
+only when signing certificates match; keep the existing local signing key for
+future builds. iOS/macOS packages are not included in this release.
 
 Available since 0.10.0: Settings → Client updates checks stable releases and verifies
 SHA256 downloads. Linux x86_64 AppImages can replace themselves with a backup;

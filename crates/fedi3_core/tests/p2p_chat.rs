@@ -258,9 +258,12 @@ async fn group_thread_is_announced_and_messages_reach_members() {
                 .json()
                 .await
                 .unwrap();
-            if threads["items"].as_array().unwrap().iter().any(|t| {
-                t["thread_id"] == thread.as_str() && t["title"] == "Team P2P"
-            }) {
+            if threads["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["thread_id"] == thread.as_str() && t["title"] == "Team P2P")
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -271,7 +274,10 @@ async fn group_thread_is_announced_and_messages_reach_members() {
 
     // The creator also sees the group notice in its own history.
     let own: Value = a
-        .get(&format!("/_fedi3/chat/threads/{}", urlencoding::encode(&thread)))
+        .get(&format!(
+            "/_fedi3/chat/threads/{}",
+            urlencoding::encode(&thread)
+        ))
         .await
         .json()
         .await
@@ -298,7 +304,10 @@ async fn group_thread_is_announced_and_messages_reach_members() {
         }),
     )
     .await;
-    assert_eq!(sent["sent"], 1, "group message must reach the member: {sent}");
+    assert_eq!(
+        sent["sent"], 1,
+        "group message must reach the member: {sent}"
+    );
     let message = sent["message_id"].as_str().unwrap();
     let query = format!("/_fedi3/chat/threads/{}", urlencoding::encode(&thread));
     tokio::time::timeout(Duration::from_secs(10), async {

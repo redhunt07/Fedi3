@@ -10,14 +10,12 @@ FEDI3 è un social federato con componente P2P: privacy-first, interoperabile co
 il fediverso e resiliente senza rinunciare alla compatibilità con le istanze
 ActivityPub classiche.
 
-> **Stato: pre-1.0; [0.10.1 pubblicata](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1).** Le verifiche
-> correnti sono nell’[audit client/aggiornamenti](docs/it/audit/client_updates_2026-11-07.md)
-> e nella [correzione compatibile RSA/WebRTC](docs/it/audit/crypto_compatibility_2026-11-08.md).
-> L’[audit di production readiness](docs/it/audit/production_readiness_audit.md) e il
-> [piano di rimedio](docs/it/audit/remediation_plan.md) restano riferimenti storici;
-> la [verifica di pubblicazione](docs/it/audit/release_0.10.1_2026-11-08.md) registra
-> build release Linux e Windows e CI remota superate. I pacchetti Apple/mobile
-> restano fuori da questa pipeline di release.
+> **Stato: pre-1.0; [release 0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0).**
+> Include il client Android e le correzioni di avvio AppImage della 0.10.1.
+> Pacchetti di questa release: Linux x86_64 e Android ARM64/x86_64, con SHA256.
+> Gli APK Android sono per installazione manuale e usano la chiave di debug locale;
+> non sono pacchetti Play Store. [Verifiche e limiti](docs/it/audit/release_0.11.0_2026-11-08.md).
+> Gli audit storici restano in [docs/it/audit](docs/it/audit).
 
 ## Indice
 
@@ -132,9 +130,11 @@ Il client salva i token nel portachiavi di sistema: le build Linux richiedono
 `libsecret` e un Secret Service attivo. Un'AppImage può essere compilata in
 locale con `scripts/build_appimage.sh release`.
 
-Le build Android e iOS sono disponibili, ma la pipeline di release e la firma
-mobile non sono ancora definitive; il target di produzione primario è
-relay + desktop Linux.
+Android: scarica `Fedi3-android-arm64-v8a.apk` per un telefono ARM a 64 bit oppure
+`Fedi3-android-x86_64.apk` per un emulatore x86_64 dalla pagina della release,
+verifica `checksums.txt` e autorizza l'installazione da quella fonte. Android
+consente aggiornamenti solo con lo stesso certificato: conserva la chiave di
+firma locale per le build future. Questa release non include pacchetti iOS/macOS.
 
 Disponibile dalla 0.10.0: Configurazioni → Aggiornamenti del client controlla le release
 stabili e verifica i download SHA256. Le AppImage Linux x86_64 possono sostituirsi

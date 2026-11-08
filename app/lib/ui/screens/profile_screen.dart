@@ -611,8 +611,10 @@ class _ProfileHeader extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                      color:
-                          Theme.of(context).colorScheme.onSurface.withAlpha(179)),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withAlpha(179)),
                 ),
                 if (_secondaryLink(profile) != null)
                   Padding(

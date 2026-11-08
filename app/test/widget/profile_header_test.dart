@@ -36,8 +36,7 @@ Map<String, dynamic> _actorDoc() => {
     };
 
 void main() {
-  testWidgets('profile header shows the full fediverse handle',
-      (tester) async {
+  testWidgets('profile header shows the full fediverse handle', (tester) async {
     await setUpPumpEnv(tester);
     final client =
         FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));

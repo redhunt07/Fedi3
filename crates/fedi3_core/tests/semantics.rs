@@ -256,10 +256,12 @@ fn h17_first_dm_call_invite_creates_thread_and_stores_signal() {
         db.chat_thread_exists(&thread).unwrap(),
         "a call invite on the deterministic DM thread must create it"
     );
-    let signals = db
-        .list_chat_call_signals(&thread, local, 0, 50)
-        .unwrap();
-    assert_eq!(signals.len(), 1, "the invite must be stored as a call signal");
+    let signals = db.list_chat_call_signals(&thread, local, 0, 50).unwrap();
+    assert_eq!(
+        signals.len(),
+        1,
+        "the invite must be stored as a call signal"
+    );
     assert_eq!(signals[0].4, "invite");
     assert_eq!(signals[0].1, sender);
 }

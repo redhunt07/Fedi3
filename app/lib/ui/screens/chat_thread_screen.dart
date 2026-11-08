@@ -1533,7 +1533,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
     if (ok != true) return;
     try {
-      await CoreApi(config: cfg).deleteChatMessage(messageId: message.messageId);
+      await CoreApi(config: cfg)
+          .deleteChatMessage(messageId: message.messageId);
     } on CoreApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1770,8 +1771,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             },
             itemBuilder: (context) => [
               PopupMenuItem(
-                  value: 'search',
-                  child: Text(context.l10n.chatSearchTooltip)),
+                  value: 'search', child: Text(context.l10n.chatSearchTooltip)),
               PopupMenuItem(
                   value: 'refresh', child: Text(context.l10n.chatRefresh)),
               PopupMenuItem(
@@ -2116,8 +2116,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             ),
                             if (attachments.isNotEmpty) ...[
                               const SizedBox(height: 8),
-                              _buildAttachments(attachments,
-                                  isSelf: isSelf),
+                              _buildAttachments(attachments, isSelf: isSelf),
                             ],
                             const SizedBox(height: 4),
                             Row(
@@ -2128,7 +2127,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                   style:
                                       TextStyle(fontSize: 10, color: timeColor),
                                 ),
-                                if (message.editedAtMs != null && !message.deleted) ...[
+                                if (message.editedAtMs != null &&
+                                    !message.deleted) ...[
                                   const SizedBox(width: 4),
                                   Text(
                                     context.l10n.chatEdited,
@@ -2381,9 +2381,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
   }
 
-  Widget _systemNotice(
-      BuildContext context, ChatPayload payload, ChatMessageItem message,
-      bool isSelf) {
+  Widget _systemNotice(BuildContext context, ChatPayload payload,
+      ChatMessageItem message, bool isSelf) {
     final label = switch (payload.action) {
       'create_group' => context.l10n.chatGroupCreated,
       'rename' => context.l10n.chatGroupRenamed,
@@ -2484,9 +2483,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   Widget _buildAttachments(List<ChatAttachment> attachments,
       {bool isSelf = false}) {
-    final audio = attachments.where((a) => _isAudio(a.mediaType, a.url)).toList();
+    final audio =
+        attachments.where((a) => _isAudio(a.mediaType, a.url)).toList();
     final media = attachments
-        .where((a) => _isMedia(a.mediaType, a.url) && !_isAudio(a.mediaType, a.url))
+        .where((a) =>
+            _isMedia(a.mediaType, a.url) && !_isAudio(a.mediaType, a.url))
         .toList();
     final docs =
         attachments.where((a) => !_isMedia(a.mediaType, a.url)).toList();
@@ -3035,13 +3036,11 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final fg = widget.isSelf ? Colors.white : scheme.onSurface;
-    final track = widget.isSelf
-        ? Colors.white.withAlpha(70)
-        : scheme.outlineVariant;
+    final track =
+        widget.isSelf ? Colors.white.withAlpha(70) : scheme.outlineVariant;
     final total = _duration.inMilliseconds;
-    final progress = total <= 0
-        ? 0.0
-        : (_position.inMilliseconds / total).clamp(0.0, 1.0);
+    final progress =
+        total <= 0 ? 0.0 : (_position.inMilliseconds / total).clamp(0.0, 1.0);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(

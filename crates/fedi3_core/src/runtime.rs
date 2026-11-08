@@ -217,8 +217,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriter {
 }
 
 fn init_tracing(data_dir: Option<&std::path::Path>) {
-    let filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive("info".parse().unwrap());
+    let filter =
+        tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse().unwrap());
     const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
     let file_writer = data_dir
         .map(|dir| dir.join("fedi3.log"))

@@ -277,7 +277,6 @@ class _RelaysScreenState extends State<RelaysScreen> {
     );
   }
 
-
   Widget _telemetryCard(BuildContext context, Map<String, dynamic> stats) {
     // The core returns the telemetry object at the top level; older payloads
     // nested it under "telemetry".
@@ -299,8 +298,7 @@ class _RelaysScreenState extends State<RelaysScreen> {
         (context.l10n.relaysTotalUsers, '${count('total_users')}'),
       if (count('total_peers_seen') != null)
         (context.l10n.relaysPeersSeen, '${count('total_peers_seen')}'),
-      if (relayCount != null)
-        (context.l10n.relaysRelayCount, '$relayCount'),
+      if (relayCount != null) (context.l10n.relaysRelayCount, '$relayCount'),
     ];
 
     return Card(

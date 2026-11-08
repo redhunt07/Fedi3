@@ -4422,11 +4422,7 @@ impl SocialDb {
     }
 
     /// Envelopes whose retry time has come, oldest first.
-    pub fn due_chat_deliveries(
-        &self,
-        now_ms: i64,
-        limit: u32,
-    ) -> Result<Vec<ChatPendingDelivery>> {
+    pub fn due_chat_deliveries(&self, now_ms: i64, limit: u32) -> Result<Vec<ChatPendingDelivery>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
@@ -4457,16 +4453,14 @@ impl SocialDb {
 
     pub fn finish_chat_delivery(&self, id: i64) -> Result<()> {
         let conn = self.connect()?;
-        conn.execute("DELETE FROM chat_pending_deliveries WHERE id=?1", params![id])?;
+        conn.execute(
+            "DELETE FROM chat_pending_deliveries WHERE id=?1",
+            params![id],
+        )?;
         Ok(())
     }
 
-    pub fn reschedule_chat_delivery(
-        &self,
-        id: i64,
-        attempts: u32,
-        next_at_ms: i64,
-    ) -> Result<()> {
+    pub fn reschedule_chat_delivery(&self, id: i64, attempts: u32, next_at_ms: i64) -> Result<()> {
         let conn = self.connect()?;
         conn.execute(
             "UPDATE chat_pending_deliveries SET attempts=?2, next_at_ms=?3 WHERE id=?1",

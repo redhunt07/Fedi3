@@ -31,9 +31,9 @@ class BackgroundService {
     if (!supported) return false;
     try {
       return await _channel.invokeMethod<bool>('setEnabled', {
-        'enabled': enabled,
-        'text': statusText,
-      }) ??
+            'enabled': enabled,
+            'text': statusText,
+          }) ??
           enabled;
     } catch (_) {
       return enabled;

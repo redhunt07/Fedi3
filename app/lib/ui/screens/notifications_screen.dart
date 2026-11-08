@@ -197,9 +197,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (!mounted) return;
       setState(() {
         final known = _items.map(_notificationKey).toSet();
-        final fresh = items
-            .where((m) => !known.contains(_notificationKey(m)))
-            .toList();
+        final fresh =
+            items.where((m) => !known.contains(_notificationKey(m))).toList();
         _items.insertAll(0, fresh);
         final next = (resp['next'] as String?)?.trim();
         if (_cursor == null && next != null && next.isNotEmpty) {
@@ -239,8 +238,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (!mounted) return;
       setState(() {
         final known = _items.map(_notificationKey).toSet();
-        _items.addAll(
-            items.where((m) => !known.contains(_notificationKey(m))));
+        _items.addAll(items.where((m) => !known.contains(_notificationKey(m))));
         _cursor = (next != null && next.isNotEmpty) ? next : null;
       });
     } catch (e) {
@@ -463,23 +461,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                    for (final f in const [
-                      ('all', 'notificationsFilterAll'),
-                      ('mentions', 'notificationsFilterMentions'),
-                      ('reactions', 'notificationsFilterReactions'),
-                      ('follows', 'notificationsFilterFollows'),
-                      ('boosts', 'notificationsFilterBoosts'),
-                      ('likes', 'notificationsFilterLikes'),
-                    ])
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(_filterLabel(context, f.$2)),
-                          selected: _filter == f.$1,
-                          onSelected: (_) => setState(() => _filter = f.$1),
+                      for (final f in const [
+                        ('all', 'notificationsFilterAll'),
+                        ('mentions', 'notificationsFilterMentions'),
+                        ('reactions', 'notificationsFilterReactions'),
+                        ('follows', 'notificationsFilterFollows'),
+                        ('boosts', 'notificationsFilterBoosts'),
+                        ('likes', 'notificationsFilterLikes'),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(_filterLabel(context, f.$2)),
+                            selected: _filter == f.$1,
+                            onSelected: (_) => setState(() => _filter = f.$1),
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -648,9 +646,7 @@ class _NotificationItemState extends State<_NotificationItem> {
     // A follow notification carries the followed actor as its object, so the
     // generic excerpt would repeat the local user's URL. Show the handle of
     // the account that followed instead.
-    final excerpt = (type == 'Follow' ||
-            type == 'Accept' ||
-            type == 'Reject')
+    final excerpt = (type == 'Follow' || type == 'Accept' || type == 'Reject')
         ? _handle(username)
         : _plainExcerpt(activity);
 

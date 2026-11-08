@@ -4,6 +4,15 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-08 — Linux and Android release 0.11.0
+
+[0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0) combines the updated
+Android client with the 0.10.1 AppImage repairs. It includes background
+notifications, calls, chat attachments and followed-peer timeline backfill.
+Packages are a Linux x86_64 AppImage and Android ARM64/x86_64 APKs with SHA256.
+The APKs use the local debug signing key and are intended for sideloading.
+[Verification and limits](docs/audit/release_0.11.0_2026-11-08.md).
+
 ## 2026-11-08 — Android chat media, notifications and relay update
 
 The Android client was hardened end to end on two real devices against the

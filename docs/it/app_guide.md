@@ -82,6 +82,17 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se il nuovo valore non funziona, l'app ripristina la configurazione precedente.
 
+## Installazione Android 0.11.0
+
+Dalla [release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0) scarica
+`Fedi3-android-arm64-v8a.apk` per telefoni ARM a 64 bit o
+`Fedi3-android-x86_64.apk` per emulatori x86_64 e verifica il relativo SHA256 in
+`checksums.txt`. Sono build per installazione manuale, firmate con la chiave di
+debug locale; non sono distribuzioni Play Store. Per aggiornare una vecchia
+installazione serve lo stesso certificato. Esporta prima un backup dalle
+impostazioni se devi cambiare certificato e reinstallare. I dispositivi ARM a
+32 bit non sono supportati.
+
 ## Build Android ed emulatore
 
 - `scripts/build_android.sh debug` compila il core per `arm64-v8a` e `x86_64` e produce un APK di debug. `profile` fa lo stesso con una build AOT, utile per misurare prestazioni realistiche su un emulatore.

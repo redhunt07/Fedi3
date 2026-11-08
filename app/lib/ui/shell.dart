@@ -284,7 +284,9 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (!widget.appState.isRunning) return;
     final cfg = widget.appState.config;
     if (cfg == null) return;
-    if (identical(_activityStreamConfig, cfg) && _activityStream != null) return;
+    if (identical(_activityStreamConfig, cfg) && _activityStream != null) {
+      return;
+    }
     _activityStreamConfig = cfg;
     _activityStream?.cancel();
     _activityStream =
@@ -583,8 +585,8 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     if (!mounted || index < 0 || index >= _pages.length) return;
     // Phones expose five labelled primary sections; relay management and
     // settings open as full pages instead of crowding the bottom bar.
-    final isWide = MediaQuery.of(context).size.width >=
-        UiTokens.desktopBreakpoint;
+    final isWide =
+        MediaQuery.of(context).size.width >= UiTokens.desktopBreakpoint;
     if (!isWide && index >= 4 && index < 6) {
       if (index == 4) {
         _openRelays();
@@ -714,8 +716,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
               destinations: [
                 for (final s in sections)
                   NavigationDestination(
-                    tooltip:
-                        '${items[s].label} (${items[s].shortcut})',
+                    tooltip: '${items[s].label} (${items[s].shortcut})',
                     icon: items[s].badge > 0
                         ? Badge(
                             label: Text('${items[s].badge}'),

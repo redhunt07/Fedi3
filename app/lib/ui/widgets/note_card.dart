@@ -797,7 +797,6 @@ class _NoteCardState extends State<NoteCard> {
                         ],
                       ),
                     ),
-
                   ],
                 ),
                 if (_reactionsOpen) ...[

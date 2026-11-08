@@ -3785,8 +3785,7 @@ async fn retry_pending_chat(state: &ApState) {
         let mut delivered = false;
         if let Ok(peers) = resolve_actor_peers(state, &row.actor_id).await {
             for peer_id in peers {
-                let Ok(Some(bundle)) =
-                    fetch_chat_bundle(state, &peer_id, &row.actor_id).await
+                let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &row.actor_id).await
                 else {
                     continue;
                 };
@@ -3817,9 +3816,10 @@ async fn retry_pending_chat(state: &ApState) {
                         continue;
                     }
                 }
-                let _ = state
-                    .social
-                    .upsert_chat_message_status(&row.message_id, &row.actor_id, "sent");
+                let _ =
+                    state
+                        .social
+                        .upsert_chat_message_status(&row.message_id, &row.actor_id, "sent");
                 break;
             }
         }
@@ -3859,13 +3859,10 @@ fn queue_chat_retry(
     let Ok(bytes) = serde_json::to_vec(payload) else {
         return;
     };
-    let _ = state.social.enqueue_chat_delivery(
-        thread_id,
-        actor,
-        message_id,
-        &bytes,
-        now_ms() + 20_000,
-    );
+    let _ =
+        state
+            .social
+            .enqueue_chat_delivery(thread_id, actor, message_id, &bytes, now_ms() + 20_000);
 }
 
 async fn dispatch_chat_payload_to_members(
@@ -3966,9 +3963,14 @@ async fn dispatch_chat_payload_to_members(
                             }
                             Err(e) => {
                                 warn!(peer=%peer_id, error=%e, "chat member delivery failed");
-                                outcome.last_error =
-                                    Some(format!("{actor}: delivery failed: {e}"));
-                                queue_chat_retry(state, thread_id, &actor, envelope_message_id, payload);
+                                outcome.last_error = Some(format!("{actor}: delivery failed: {e}"));
+                                queue_chat_retry(
+                                    state,
+                                    thread_id,
+                                    &actor,
+                                    envelope_message_id,
+                                    payload,
+                                );
                                 outcome.queued = outcome.queued.saturating_add(1);
                             }
                         }

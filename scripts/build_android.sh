@@ -53,7 +53,7 @@ done
 
 platform_list="$(IFS=,; echo "${platforms[*]}")"
 if [[ "$profile" == release ]]; then
-  (cd "$repo_root/app" && flutter build apk --release --split-per-abi)
+  (cd "$repo_root/app" && flutter build apk --release --target-platform "$platform_list" --split-per-abi)
   rm -f "$repo_root/app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk"
 else
   (cd "$repo_root/app" && flutter build apk --"$profile" --target-platform "$platform_list")

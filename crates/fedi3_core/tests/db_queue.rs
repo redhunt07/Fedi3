@@ -535,11 +535,23 @@ fn d90_chat_pending_delivery_queue_round_trip() {
     let (_dir, path) = temp_db();
     let db = SocialDb::open(&path).unwrap();
     let payload = br#"{"op":"message","text":"ciao","thread_id":"urn:fedi3:chat:dm:x"}"#;
-    db.enqueue_chat_delivery("urn:fedi3:chat:dm:x", "https://relay/users/alice", "urn:fedi3:chat:msg:1", payload, 1_000)
-        .unwrap();
+    db.enqueue_chat_delivery(
+        "urn:fedi3:chat:dm:x",
+        "https://relay/users/alice",
+        "urn:fedi3:chat:msg:1",
+        payload,
+        1_000,
+    )
+    .unwrap();
     // Duplicate enqueue must not create a second row.
-    db.enqueue_chat_delivery("urn:fedi3:chat:dm:x", "https://relay/users/alice", "urn:fedi3:chat:msg:1", payload, 1_000)
-        .unwrap();
+    db.enqueue_chat_delivery(
+        "urn:fedi3:chat:dm:x",
+        "https://relay/users/alice",
+        "urn:fedi3:chat:msg:1",
+        payload,
+        1_000,
+    )
+    .unwrap();
     assert_eq!(db.count_chat_deliveries().unwrap(), 1);
 
     let due = db.due_chat_deliveries(1_000, 10).unwrap();

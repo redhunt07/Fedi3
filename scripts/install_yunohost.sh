@@ -347,7 +347,7 @@ if [[ $SKIP_FIREWALL -eq 0 && $DRY_RUN -eq 0 ]]; then
   fi
   if [[ "$PROFILES" == *turn* ]]; then
     open_firewall_port Both 3478
-    open_firewall_port UDP 49152-65535
+    open_firewall_port UDP 49152:65535
   fi
   info "YunoHost firewall ports updated"
 fi
