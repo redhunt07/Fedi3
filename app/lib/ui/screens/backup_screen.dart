@@ -9,6 +9,8 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../l10n/l10n_ext.dart';
 import '../../services/backup_codec.dart';
@@ -139,13 +141,31 @@ class _BackupScreenState extends State<BackupScreen> {
       _status = null;
     });
     try {
-      // file_selector does not support save dialogs on Android/iOS; fallback to clipboard.
+      // file_selector has no save dialog on Android/iOS, so hand the file to the
+      // system share sheet (Files, Drive, mail) and keep the clipboard as a
+      // fallback when sharing is unavailable.
       if (Platform.isAndroid || Platform.isIOS) {
         final text = await _buildBackupText();
-        await Clipboard.setData(ClipboardData(text: text));
-        if (!mounted) return;
-        setState(() => _status = context.l10n.backupExportOk);
-        return;
+        final cfg = widget.appState.config;
+        final name = cfg == null
+            ? 'fedi3-backup.json'
+            : BackupCodec.suggestedFileName(cfg);
+        try {
+          final dir = await getTemporaryDirectory();
+          final file = File('${dir.path}/$name');
+          await file.writeAsString(text);
+          await Share.shareXFiles(
+            [XFile(file.path, mimeType: 'application/json', name: name)],
+          );
+          if (!mounted) return;
+          setState(() => _status = context.l10n.backupExportSaved);
+          return;
+        } catch (_) {
+          await Clipboard.setData(ClipboardData(text: text));
+          if (!mounted) return;
+          setState(() => _status = context.l10n.backupExportOk);
+          return;
+        }
       }
 
       final cfg = widget.appState.config;

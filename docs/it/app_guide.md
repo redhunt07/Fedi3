@@ -40,6 +40,9 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Supporta reazioni, file, GIF e stato di lettura.
 - Il servizio notifiche dichiara `remoteMessaging` su Android 14+ (con fallback a `dataSync`
   sotto): Android 15 limita i foreground service `dataSync` a sei ore al giorno.
+- Su Android il backup delle impostazioni viene scritto in un file JSON temporaneo
+  e passato al pannello di condivisione di sistema (File, Drive, mail); gli appunti
+  restano come fallback quando la condivisione non è disponibile.
 - Le animazioni decorative (alone di presenza, anello di selezione, marchio)
   girano per pochi cicli e poi si fermano: una schermata statica non viene
   ridisegnata a 60fps, quindi la CPU in idle resta vicina a zero.
