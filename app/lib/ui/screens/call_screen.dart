@@ -75,6 +75,8 @@ class _CallScreenState extends State<CallScreen> {
   bool _micOn = true;
   bool _cameraOn = true;
   bool _screenSharing = false;
+  String? _screenShareOutputBackup;
+  bool _screenShareOutputChanged = false;
   bool _ended = false;
   bool _connecting = true;
   String? _error;
@@ -832,7 +834,6 @@ class _CallScreenState extends State<CallScreen> {
         final actor = entry.key;
         final pc = entry.value;
         final videoSender = _videoSenders[actor];
-        final audioSender = _audioSenders[actor];
         if (video != null) {
           if (videoSender != null) {
             await videoSender.replaceTrack(video);
@@ -842,16 +843,18 @@ class _CallScreenState extends State<CallScreen> {
           }
         }
         if (audio != null) {
-          if (audioSender != null) {
-            await audioSender.replaceTrack(audio);
-          } else {
-            _addedScreenAudio[actor] = await pc.addTrack(audio, stream);
-            if (!added.contains(actor)) added.add(actor);
-          }
+          // Keep the microphone: the far end must hear the operator and the
+          // PC sounds together. Replacing the mic sender would silence the
+          // microphone for the whole screen share.
+          _addedScreenAudio[actor] = await pc.addTrack(audio, stream);
+          if (!added.contains(actor)) added.add(actor);
         }
       }
       for (final actor in added) {
         await _createOffer(actor);
+      }
+      if (audio != null) {
+        await _preferSeparateCallOutput();
       }
       _screenSharing = true;
       if (_localRenderer != null) _localRenderer!.srcObject = stream;
@@ -859,6 +862,65 @@ class _CallScreenState extends State<CallScreen> {
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  /// Moves the call playout away from the sink captured as system audio.
+  ///
+  /// The Linux loopback captures the default sink, so a call playing on that
+  /// sink is echoed back to the far end. When the operator did not choose an
+  /// output explicitly, route the call to another device for the duration of
+  /// the share and restore it afterwards.
+  Future<void> _preferSeparateCallOutput() async {
+    if (defaultTargetPlatform != TargetPlatform.linux) return;
+    final selected = widget.appState.prefs.audioOutputDeviceId;
+    final defaultId = await AudioDevices.defaultOutputId();
+    if (defaultId == null) return;
+    if (selected.isNotEmpty && selected != defaultId) return;
+    final devices = await AudioDevices.outputs();
+    AudioDeviceOption? headset;
+    AudioDeviceOption? fallback;
+    for (final device in devices) {
+      if (device.id == defaultId) continue;
+      final label = device.label.toLowerCase();
+      final isHeadset = label.contains('headset') ||
+          label.contains('headphone') ||
+          label.contains('cuffie') ||
+          label.contains('auricolari') ||
+          label.contains('earbud');
+      if (isHeadset) {
+        headset = device;
+        break;
+      }
+      if (fallback == null &&
+          !label.contains('hdmi') &&
+          !label.contains('digital')) {
+        fallback = device;
+      }
+    }
+    final target = headset ?? fallback;
+    if (target == null) return;
+    try {
+      await Helper.selectAudioOutput(target.id);
+      _screenShareOutputBackup = selected;
+      _screenShareOutputChanged = true;
+    } catch (_) {
+      // Keep the default when the alternative cannot be selected.
+    }
+  }
+
+  Future<void> _restoreCallOutput() async {
+    if (!_screenShareOutputChanged) return;
+    _screenShareOutputChanged = false;
+    final backup = _screenShareOutputBackup;
+    _screenShareOutputBackup = null;
+    try {
+      final restore = backup != null && backup.isNotEmpty
+          ? backup
+          : await AudioDevices.defaultOutputId();
+      if (restore != null) await Helper.selectAudioOutput(restore);
+    } catch (_) {
+      // The saved device may have been unplugged during the share.
     }
   }
 
@@ -893,6 +955,7 @@ class _CallScreenState extends State<CallScreen> {
     }
     stream?.getTracks().forEach((t) => t.stop());
     await ScreenShareService.stop();
+    await _restoreCallOutput();
     _screenSharing = false;
     if (_localRenderer != null && _localStream != null) {
       _localRenderer!.srcObject = _localStream;
@@ -954,8 +1017,28 @@ class _CallScreenState extends State<CallScreen> {
         fit: StackFit.expand,
         children: [
           if (renderer != null)
-            RTCVideoView(renderer,
-                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+            ValueListenableBuilder<RTCVideoValue>(
+              valueListenable: renderer,
+              builder: (context, value, _) {
+                final width = value.width;
+                final height = value.height;
+                if (width <= 0 || height <= 0) {
+                  return RTCVideoView(renderer,
+                      objectFit:
+                          RTCVideoViewObjectFit.RTCVideoViewObjectFitContain);
+                }
+                // Size the tile to the camera frame so a portrait phone feed
+                // is not cropped to a landscape slot.
+                return Center(
+                  child: AspectRatio(
+                    aspectRatio: width / height,
+                    child: RTCVideoView(renderer,
+                        objectFit:
+                            RTCVideoViewObjectFit.RTCVideoViewObjectFitContain),
+                  ),
+                );
+              },
+            )
           else
             Center(
               child: CircleAvatar(
@@ -1152,13 +1235,15 @@ class _CallScreenState extends State<CallScreen> {
                         ],
                       ),
                     )
-                  : GridView.count(
-                      crossAxisCount: actors.length > 1 ? 2 : 1,
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                      childAspectRatio: 16 / 10,
-                      children: actors.map(_remoteTile).toList(),
-                    ),
+                  : actors.length == 1
+                      ? _remoteTile(actors.first)
+                      : GridView.count(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 8,
+                          crossAxisSpacing: 8,
+                          childAspectRatio: 16 / 10,
+                          children: actors.map(_remoteTile).toList(),
+                        ),
             ),
           ),
           if ((widget.mediaType == 'video' || _screenSharing) &&
@@ -1176,7 +1261,7 @@ class _CallScreenState extends State<CallScreen> {
                         ? RTCVideoView(_localRenderer!,
                             mirror: true,
                             objectFit: RTCVideoViewObjectFit
-                                .RTCVideoViewObjectFitCover)
+                                .RTCVideoViewObjectFitContain)
                         : const SizedBox.shrink(),
                   ),
                 ),

@@ -4,6 +4,20 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Chiamate: la condivisione schermo mantiene il microfono e il formato della webcam
+
+Condividere lo schermo non silenzia più chi parla: la chiamata invia microfono
+e audio di sistema del PC come tracce separate, così l’interlocutore sente
+entrambi. Su Linux l’audio di sistema viene preso dall’uscita predefinita;
+se non è scelta un’uscita della chiamata, l’app la sposta su un altro
+dispositivo per la durata della condivisione, così l’interlocutore non risente
+la propria voce attraverso il loopback.
+Le immagini della webcam ora rispettano il formato nativo invece di essere
+tagliate alla forma del riquadro, e le chiamate uno-a-uno occupano lo spazio
+disponibile. **Impostazioni > Audio** su desktop mostra lo stesso suggerimento
+di routing.
+[Documentazione](docs/it/app_guide.md).
+
 ## 2026-11-08 — Chiamate: TURN automatico e impostazioni audio desktop
 
 Le chiamate squillavano, venivano accettate e si chiudevano correttamente, ma

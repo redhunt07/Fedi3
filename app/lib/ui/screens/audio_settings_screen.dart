@@ -399,6 +399,10 @@ class _AudioSettingsScreenState extends State<AudioSettingsScreen> {
                   Text(context.l10n.audioTestOutputHint,
                       style: TextStyle(
                           color: scheme.onSurfaceVariant, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  Text(context.l10n.audioScreenShareHint,
+                      style: TextStyle(
+                          color: scheme.onSurfaceVariant, fontSize: 11)),
                 ],
               ),
             ),

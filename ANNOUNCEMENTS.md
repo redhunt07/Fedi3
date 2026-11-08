@@ -4,6 +4,18 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Calls: screen share keeps the microphone and camera framing
+
+Sharing the screen no longer silences the operator: the call sends the
+microphone and the PC system audio as separate tracks, so the far end hears
+both. The system audio comes from the default output on Linux; when no call
+output is chosen, the app moves the call to another device for the duration of
+the share, so the other side does not hear its own voice through the loopback. Camera frames are now
+shown with their native aspect ratio instead of being cropped to the tile, and
+one-to-one calls fit the available area. Desktop **Settings > Audio** shows the
+same routing hint.
+[Docs](docs/app_guide.md).
+
 ## 2026-11-08 — Calls: automatic TURN and desktop audio settings
 
 Calls could ring, be accepted and hang up correctly while no audio or video

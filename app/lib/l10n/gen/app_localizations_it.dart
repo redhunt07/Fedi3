@@ -2658,4 +2658,8 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get audioAppliedHint =>
       'Le modifiche valgono per le prossime chiamate. Se un dispositivo non è disponibile, la chiamata usa il predefinito.';
+
+  @override
+  String get audioScreenShareHint =>
+      'Durante la condivisione schermo l’audio di sistema viene preso dall’uscita predefinita. Se non hai scelto un’uscita della chiamata, l’app la sposta su un altro dispositivo così l’interlocutore non risente la propria voce.';
 }

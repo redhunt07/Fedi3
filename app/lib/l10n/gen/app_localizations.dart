@@ -4933,6 +4933,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Changes apply to the next calls. When a device is unavailable, the call uses the default.'**
   String get audioAppliedHint;
+
+  /// No description provided for @audioScreenShareHint.
+  ///
+  /// In en, this message translates to:
+  /// **'During screen sharing, system audio is captured from the default output. If no call output is chosen, the app moves the call to another device so the other side does not hear its own voice.'**
+  String get audioScreenShareHint;
 }
 
 class _AppLocalizationsDelegate

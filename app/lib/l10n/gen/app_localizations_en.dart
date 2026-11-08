@@ -2645,4 +2645,8 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get audioAppliedHint =>
       'Changes apply to the next calls. When a device is unavailable, the call uses the default.';
+
+  @override
+  String get audioScreenShareHint =>
+      'During screen sharing, system audio is captured from the default output. If no call output is chosen, the app moves the call to another device so the other side does not hear its own voice.';
 }
