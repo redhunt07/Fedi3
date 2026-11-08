@@ -38,7 +38,7 @@ class _BrandMarkState extends State<BrandMark>
   @override
   void initState() {
     super.initState();
-    if (widget.animated) _c.repeat();
+    if (widget.animated) _c.repeat(count: 2);
   }
 
   @override
@@ -47,8 +47,8 @@ class _BrandMarkState extends State<BrandMark>
     final reduce = MediaQuery.of(context).disableAnimations;
     if (!widget.animated || reduce) {
       if (_c.isAnimating) _c.stop();
-    } else if (!_c.isAnimating) {
-      _c.repeat();
+    } else if (!_c.isAnimating && _c.value == 0) {
+      _c.repeat(count: 2);
     }
   }
 
@@ -389,7 +389,15 @@ class _StatusDotState extends State<StatusDot>
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1800),
-  )..repeat(reverse: true);
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // Pulse a few times when the dot appears, then settle. A never-ending glow
+    // keeps every avatar repainting and drains battery on a static screen.
+    _controller.repeat(reverse: true, count: 4);
+  }
 
   @override
   void dispose() {

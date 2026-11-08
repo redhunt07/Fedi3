@@ -40,6 +40,9 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - It supports reactions, files, GIFs and read status.
 - The notification service declares `remoteMessaging` on Android 14+ (falling back to
   `dataSync` below): Android 15 caps `dataSync` foreground services at six hours per day.
+- Decorative animations (presence glow, selection ring, brand mark) run for a
+  few cycles and then settle: a static screen does not render at 60fps, so
+  idle CPU stays near zero and battery use is minimal.
 - Activity, chat and call notifications use three distinct bundled sounds.
   Activity notifications are raised by the app shell too, so they reach the
   notification shade while the user is on another tab.

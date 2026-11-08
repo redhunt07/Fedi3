@@ -1159,14 +1159,16 @@ class _RailButtonState extends State<_RailButton>
   @override
   void initState() {
     super.initState();
-    if (widget.active) _spin.repeat();
+    // Three turns are enough to signal the selection: a never-ending ticker
+    // would keep the whole UI at 60fps and drain the battery on a static screen.
+    if (widget.active) _spin.repeat(count: 3);
   }
 
   @override
   void didUpdateWidget(covariant _RailButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.active && !_spin.isAnimating) {
-      _spin.repeat();
+    if (widget.active && !oldWidget.active) {
+      _spin.repeat(count: 3);
     } else if (!widget.active && _spin.isAnimating) {
       _spin.stop();
       _spin.value = 0;

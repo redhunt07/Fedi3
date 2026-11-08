@@ -40,6 +40,9 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Supporta reazioni, file, GIF e stato di lettura.
 - Il servizio notifiche dichiara `remoteMessaging` su Android 14+ (con fallback a `dataSync`
   sotto): Android 15 limita i foreground service `dataSync` a sei ore al giorno.
+- Le animazioni decorative (alone di presenza, anello di selezione, marchio)
+  girano per pochi cicli e poi si fermano: una schermata statica non viene
+  ridisegnata a 60fps, quindi la CPU in idle resta vicina a zero.
 - Le notifiche di attività, chat e chiamata usano tre suoni distinti inclusi nell'app.
   Le notifiche di attività sono emesse anche dalla shell, così arrivano nel
   pannello di notifica mentre l'utente è su un'altra scheda.
