@@ -8,7 +8,7 @@ FEDI3 is pre-1.0. Only the latest release receives security fixes.
 |---|---|
 | Latest published release | Receives security fixes |
 | Older releases | No maintained security branch |
-| Unreleased 0.10.0 | Prepared locally; not published |
+| 0.10.1 | Latest stable; compatible crypto fixes and Linux startup repair |
 
 ## Reporting a vulnerability
 

@@ -25,9 +25,26 @@ public relay.
 - Validation: 51 Rust tests and 189 Flutter tests passed; idle CPU stays under
   1% of a core and memory stays flat around 200 MB.
 
-## 2026-11-08 — Preparing 0.10.0: client updates and compatible security fixes
 
-Version `0.10.0` is being prepared and has not been published yet. Existing
+## 2026-11-08 — 0.10.1 released: Linux AppImage startup fix
+
+[Version 0.10.1 is published](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1)
+for Linux x86_64 and Windows x64. It fixes the 0.10.0 AppImage startup failure on
+newer desktops, caused by older bundled system libraries shadowing host GLib
+requirements (`MOUNT_2_40` / `LIBSYSTEMD_251`). Fontconfig uses the host's font
+libraries and configuration together.
+
+The packaged GUI now passes required first-frame startup checks on Ubuntu 22.04
+and 24.04 before publication, in addition to the existing tests and audit. Linux
+0.10.0 users affected by the failure should download 0.10.1 manually, since their
+old client cannot start its updater. Profiles, keys, credentials and messages
+remain in their existing data directories; no reset or migration is needed.
+
+[Publication verification](docs/audit/release_0.10.1_2026-11-08.md).
+
+## 2026-11-08 — 0.10.0 released: client updates and compatible security fixes
+
+[Version `0.10.0` is published](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.0) for Linux x86_64 and Windows x64, with SHA256 checksums. Existing
 clients need a manual first upgrade to receive the new updater.
 
 - The client can check stable releases from Settings, announce newer versions
@@ -37,10 +54,10 @@ clients need a manual first upgrade to receive the new updater.
 - RSA operations use AWS-LC and the Rust WebRTC transport uses the current stack.
   Existing profile keys, public keys, DIDs, signatures and encrypted messages
   remain compatible; old/new RSA and WebRTC interoperability was tested.
-- Local validation: 307 Rust tests and 184 Flutter tests passed, Linux release
-  builds succeeded and the dependency audit reported zero vulnerabilities with
-  no ignored advisories. Five maintenance notices remain; native Windows/Apple
-  runners and the remote release workflow are still part of publication.
+- Validation: 304 standard Rust tests and 184 Flutter tests passed, alongside
+  old/new RSA and WebRTC interoperability checks. GitHub CI and native Linux/Windows
+  release builds passed. The dependency audit reports zero vulnerabilities with
+  no ignored advisories; five maintenance notices remain.
 - Client diagnostics stay on the device, with bounded logs and manual export.
   There is no automatic telemetry upload or Git push.
 - Relay directory fallback, core authentication diagnostics and submillisecond

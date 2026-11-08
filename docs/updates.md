@@ -9,7 +9,7 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
 foreign download URLs and incompatible architectures are rejected. The first
-version containing this updater is prepared as `0.10.0+1`, above the historical
+version containing this updater is published as `0.10.0+1`, above the historical
 `0.9.19` release. Older clients require a manual first upgrade.
 
 ## Installation
@@ -93,3 +93,8 @@ Linux/Windows packaging. The publishing job verifies checksums, uploads the
 packages and publishes the release as latest stable. Existing published releases
 are never overwritten, and an existing draft must target the same commit.
 Ordinary tag builds keep the draft/manual-publication path described above.
+
+Linux packages additionally require a real GUI startup under a virtual display on
+Ubuntu 22.04 and 24.04 before publication. The window must become visible after
+Flutter renders its first frame; successful compilation or loading only the core
+library is insufficient. This gate covers the 0.10.0 host-library ABI regression.

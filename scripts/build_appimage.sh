@@ -17,6 +17,8 @@ appdir="$repo_root/dist/AppDir"
 appimage_out="${FEDI3_APPIMAGE_OUT:-$repo_root/dist/Fedi3-${profile}-x86_64.AppImage}"
 icon_src="$app_dir/web/icons/Icon-512.png"
 desktop_src="$repo_root/deploy/appimage/fedi3.desktop"
+# shellcheck source=lib/appimage_host_libs.sh
+source "$repo_root/scripts/lib/appimage_host_libs.sh"
 
 if ! command -v flutter >/dev/null 2>&1; then
   echo "Missing command: flutter"
@@ -122,15 +124,6 @@ resolve_lib_path() {
   return 1
 }
 
-skip_lib() {
-  case "$1" in
-    libEGL.so.*|libGL.so.*|libGLX.so.*|libGLdispatch.so.*|libOpenGL.so.*|libgbm.so.*|libdrm.so.*|libwayland-client.so.*|libwayland-egl.so.*|libxshmfence.so.*|libstdc++.so.*|libgcc_s.so.*|libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*|libgmodule-2.0.so.*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
 bundle_all_deps() {
   local changed=1
   while [[ "$changed" -eq 1 ]]; do
@@ -140,10 +133,7 @@ bundle_all_deps() {
       deps="$(ldd "$bin" 2>/dev/null | awk '/=>/ {print $1, $3}')" || true
       while read -r name path; do
         [[ -z "$name" ]] && continue
-        case "$name" in
-          ld-linux*|libc.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libgcc_s.so.*|libstdc++.so.*|libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*|libgmodule-2.0.so.*) continue ;;
-        esac
-        if skip_lib "$name"; then
+        if appimage_uses_host_library "$name"; then
           continue
         fi
         if [[ "$path" == "not" ]]; then
@@ -160,7 +150,7 @@ bundle_all_deps() {
         if [[ -n "$path" && -f "$path" && "$path" != "$appdir"* ]]; then
           local base
           base="$(basename "$path")"
-          if skip_lib "$base"; then
+          if appimage_uses_host_library "$base"; then
             continue
           fi
           if [[ ! -f "$appdir/usr/lib/$base" ]]; then
@@ -175,18 +165,14 @@ bundle_all_deps() {
 
 bundle_all_deps
 
-rm -f "$appdir/usr/lib"/libEGL.so.* \
-  "$appdir/usr/lib"/libGL.so.* \
-  "$appdir/usr/lib"/libGLX.so.* \
-  "$appdir/usr/lib"/libGLdispatch.so.* \
-  "$appdir/usr/lib"/libOpenGL.so.* \
-  "$appdir/usr/lib"/libgbm.so.* \
-  "$appdir/usr/lib"/libdrm.so.* \
-  "$appdir/usr/lib"/libwayland-client.so.* \
-  "$appdir/usr/lib"/libwayland-egl.so.* \
-  "$appdir/usr/lib"/libwayland-cursor.so.* \
-  "$appdir/usr/lib"/libwayland-server.so.* \
-  "$appdir/usr/lib"/libxshmfence.so.* || true
+# The Flutter bundle can already contain libraries before dependency discovery.
+# Apply the same policy to those files, too, including SONAME symlinks.
+for bundled_lib in "$appdir/usr/lib/"*; do
+  [[ -f "$bundled_lib" || -L "$bundled_lib" ]] || continue
+  if appimage_uses_host_library "$(basename "$bundled_lib")"; then
+    rm -f "$bundled_lib"
+  fi
+done
 
 chmod -R a+rX "$appdir/usr/lib"
 chmod a+rx "$appdir/usr/fedi3"

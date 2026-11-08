@@ -9,7 +9,7 @@ Le richieste HTTPS sono in sola lettura: non inviano token, log o telemetria.
 La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
-La prima versione preparata con questo sistema è `0.10.0+1`, successiva alla
+La prima versione pubblicata con questo sistema è `0.10.0+1`, successiva alla
 release storica `0.9.19`. I vecchi client richiedono un primo aggiornamento manuale.
 
 ## Installazione
@@ -93,3 +93,8 @@ piattaforme precedono la creazione dei pacchetti Linux/Windows. Il job verifica
 i checksum, carica i pacchetti e pubblica la release come ultima stabile. Le
 release già pubblicate non vengono sovrascritte; una bozza esistente deve puntare
 allo stesso commit. I normali tag mantengono il percorso bozza/pubblicazione manuale.
+
+Prima della pubblicazione i pacchetti Linux richiedono anche l’avvio reale della
+GUI con display virtuale su Ubuntu 22.04 e 24.04. La finestra deve diventare
+visibile dopo il primo frame Flutter: compilazione e caricamento della sola
+libreria del core non bastano. Il controllo copre la regressione ABI della 0.10.0.

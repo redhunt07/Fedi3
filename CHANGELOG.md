@@ -5,9 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Preparing 0.10.0 — 2026-11-08
+## [0.10.1] - 2026-11-08
 
-This version is prepared locally; no 0.10.0 tag or release has been published.
+### Linux AppImage startup
+
+- Fixed Linux AppImage startup on newer desktops: bundled Ubuntu 22.04
+  `libmount`/`libsystemd` and PCRE2 libraries could shadow the host GLib's required
+  ABI. Host GLib dependencies now remain on the host, including files already
+  present in the Flutter bundle.
+- Use the host Fontconfig, font libraries and configuration together, avoiding
+  invalid-font-configuration errors on newer distributions.
+- Keep Xlib/XCB on the host with its Mesa drivers; old bundled Xlib could prevent
+  EGL context creation on Ubuntu 24.04 even after the GLib conflict was fixed.
+- Added an actual versioned-library regression reproducing `MOUNT_2_40` and
+  required GUI startup tests of the packaged AppImage on Ubuntu 22.04 and 24.04.
+  Publication now requires a visible first Flutter frame on both systems.
+- Profile databases, keyring credentials and cryptographic formats are unchanged.
+
+## [0.10.0] - 2026-11-08
+
+### Client updates and compatible security fixes
+
+Published for Linux x86_64 and Windows x64 with verified package checksums.
 
 - Added stable-release checks, update notifications, verified SHA256 downloads,
   atomic Linux x86_64 AppImage replacement with a previous-image backup, and a
@@ -20,16 +39,17 @@ This version is prepared locally; no 0.10.0 tag or release has been published.
 - Added old/new RSA interoperability, complete legacy encrypted-message fixtures,
   unchanged-profile/DID checks and WebRTC 0.12 interoperability in both SDP roles.
   The old test oracle is isolated from the release dependency graph.
-- Removed the two remaining dependency vulnerabilities: the prepared workspace
+- Removed the two remaining dependency vulnerabilities: the release workspace
   audit reports zero findings, no ignored advisories and five maintenance notices.
 - Fixed corrupt/truncated diagnostic log reads, serialized writes and bounded log
   rotation. Clarified that client diagnostics are local and exported manually;
   no automatic GitHub telemetry transport was present.
 - Fixed relay directory fallback, authentication error guidance, submillisecond
   RTT reporting and release-script failures; synchronized the Palermo relay entry.
-- Local verification: 307 Rust tests, 184 Flutter tests, strict Clippy/analyzer,
+- Verification: 304 standard Rust tests, 184 Flutter tests, strict Clippy/analyzer,
   Linux core/relay/client release builds and Android ARM64 core compilation check.
-  Native Windows/Apple build and remote tag-workflow validation remain outstanding.
+  GitHub CI, legacy interoperability checks and native Linux/Windows release builds passed.
+  Apple/mobile packages remain outside this release pipeline.
 - Updated English/Italian update guides, security documentation and verification
   reports. See [compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md).
 

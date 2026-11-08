@@ -47,6 +47,9 @@ class ReleaseContract(unittest.TestCase):
         self.assertIn("!startsWith(github.ref, 'refs/tags/')", audit['continue-on-error'])
         self.assertIn("!startsWith(github.ref, 'refs/heads/codex/release/')", audit['continue-on-error'])
         publish = workflow['jobs']['publish']
+        self.assertIn('linux-smoke', publish['needs'])
+        self.assertEqual(workflow['jobs']['linux-smoke']['strategy']['matrix']['os'],
+                         ['ubuntu-22.04', 'ubuntu-24.04'])
         self.assertIn('Release request is not current main', str(publish))
         self.assertIn('--draft=false --latest', str(publish))
         self.assertIn('Fedi3-linux-x86_64.AppImage', str(workflow['jobs']['appimage']))
