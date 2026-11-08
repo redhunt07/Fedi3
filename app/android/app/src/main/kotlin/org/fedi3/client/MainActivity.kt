@@ -25,6 +25,16 @@ class MainActivity : FlutterActivity() {
                     }
                     "isEnabled" -> result.success(KeepAliveService.isEnabled(this))
                     "isRunning" -> result.success(isServiceRunning())
+                    "startScreenShare" -> {
+                        // The projection can only be created while a
+                        // mediaProjection foreground service is running.
+                        ScreenShareService.start(this)
+                        result.success(true)
+                    }
+                    "stopScreenShare" -> {
+                        ScreenShareService.stop(this)
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }

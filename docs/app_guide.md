@@ -38,6 +38,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - Chats are 1:1 or group. Delivery prefers the P2P circuit; when that is unavailable the envelope is posted over HTTPS to the peer's relay path (`/users/<name>/_fedi3/chat/inbox`), so chat works in relay-only deployments too. The message body stays end-to-end encrypted either way.
 - Chat messages use AES-256-GCM with per-message keys derived from Kyber768 through HKDF-SHA256 and RSA-SHA256 signatures. The relay does not see the chat content. RSA-OAEP is used separately for compatibility/spool envelopes.
 - It supports reactions, files, GIFs and read status.
+- Screen sharing needs a `mediaProjection` foreground service on Android; the app starts
+  `ScreenShareService` before requesting the projection and stops it when sharing ends.
 - Calls use WebRTC between clients. Android needs `ACCESS_NETWORK_STATE` and `ACCESS_WIFI_STATE`: without them the WebRTC network monitor throws and aborts the process on the first call.
 - Voice notes and video messages can be recorded in the chat; audio attachments play inline with a progress bar and duration, and a failed send keeps the draft and shows the error with a retry action.
 - Creating a group announces it to the selected members with a system payload (member list and title), so every participant gets the thread before the first message. Group events (created, renamed, member added/removed, left, deleted) appear as centered notices in the conversation.

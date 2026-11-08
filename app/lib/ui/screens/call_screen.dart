@@ -16,6 +16,7 @@ import '../../model/chat_models.dart';
 import '../../services/core_event_stream.dart';
 import '../../services/call_ice_config.dart';
 import '../../services/relay_capabilities.dart';
+import '../../services/screen_share_service.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 
@@ -501,6 +502,9 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _startScreenShare() async {
     try {
+      // Android needs the mediaProjection foreground service before the
+      // projection is created, otherwise getDisplayMedia kills the process.
+      await ScreenShareService.start();
       final stream = await navigator.mediaDevices.getDisplayMedia({
         'video': true,
         'audio': true,
@@ -584,6 +588,7 @@ class _CallScreenState extends State<CallScreen> {
       await _createOffer(actor);
     }
     stream?.getTracks().forEach((t) => t.stop());
+    await ScreenShareService.stop();
     _screenSharing = false;
     if (_localRenderer != null && _localStream != null) {
       _localRenderer!.srcObject = _localStream;
