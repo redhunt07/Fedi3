@@ -38,6 +38,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - Chats are 1:1 or group. Delivery prefers the P2P circuit; when that is unavailable the envelope is posted over HTTPS to the peer's relay path (`/users/<name>/_fedi3/chat/inbox`), so chat works in relay-only deployments too. The message body stays end-to-end encrypted either way.
 - Chat messages use AES-256-GCM with per-message keys derived from Kyber768 through HKDF-SHA256 and RSA-SHA256 signatures. The relay does not see the chat content. RSA-OAEP is used separately for compatibility/spool envelopes.
 - It supports reactions, files, GIFs and read status.
+- Creating a group announces it to the selected members with a system payload (member list and title), so every participant gets the thread before the first message. Group events (created, renamed, member added/removed, left, deleted) appear as centered notices in the conversation.
+- Only groups can be renamed; direct chats always show the other person's handle. Roles are owner/admin/member, and message actions (react, reply, forward, pin, edit, delete) are available from a long press.
 - Known limit: there is no *forward secrecy*. If a private key is compromised, past messages become readable.
 
 ## Notifications
