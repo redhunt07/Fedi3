@@ -38,7 +38,7 @@ class _BrandMarkState extends State<BrandMark>
   @override
   void initState() {
     super.initState();
-    if (widget.animated) _c.repeat(count: 2);
+    if (widget.animated) _c.repeat();
   }
 
   @override
@@ -47,8 +47,8 @@ class _BrandMarkState extends State<BrandMark>
     final reduce = MediaQuery.of(context).disableAnimations;
     if (!widget.animated || reduce) {
       if (_c.isAnimating) _c.stop();
-    } else if (!_c.isAnimating && _c.value == 0) {
-      _c.repeat(count: 2);
+    } else if (!_c.isAnimating) {
+      _c.repeat();
     }
   }
 

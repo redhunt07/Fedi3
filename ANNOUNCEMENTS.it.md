@@ -4,6 +4,13 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Effetti particellari continui nella barra di navigazione
+
+Il campo di particelle della sezione selezionata e il marchio ora si animano in
+modo continuo invece di fermarsi dopo qualche giro. Flutter sospende i ticker
+quando l'app non è visibile, quindi il consumo in background non cambia. Build
+0.11.8 (2011).
+
 ## 2026-11-09 — Pulizia composer, layout presenza e task Android unico
 
 Il composer non ripete più i pulsanti di scelta file e MFM cheatsheet; l'azione

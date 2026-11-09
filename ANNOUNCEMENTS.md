@@ -4,6 +4,13 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Continuous particle effects in the navigation rail
+
+The selected section's particle field and the brand mark now animate
+continuously instead of stopping after a few turns. Flutter mutes tickers while
+the app is not visible, so background battery use is unchanged. Build 0.11.8
+(2011).
+
 ## 2026-11-09 — Composer cleanup, presence layout and single Android task
 
 The composer no longer repeats the file picker and MFM cheatsheet buttons; the

@@ -1215,16 +1215,17 @@ class _RailButtonState extends State<_RailButton>
   @override
   void initState() {
     super.initState();
-    // Three turns are enough to signal the selection: a never-ending ticker
-    // would keep the whole UI at 60fps and drain the battery on a static screen.
-    if (widget.active) _spin.repeat(count: 3);
+    // Keep the particle field alive for as long as the section is selected.
+    // Flutter mutes tickers while the app is not visible, so this does not
+    // keep the engine awake in the background.
+    if (widget.active) _spin.repeat();
   }
 
   @override
   void didUpdateWidget(covariant _RailButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.active && !oldWidget.active) {
-      _spin.repeat(count: 3);
+      _spin.repeat();
     } else if (!widget.active && _spin.isAnimating) {
       _spin.stop();
       _spin.value = 0;
