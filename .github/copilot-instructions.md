@@ -10,12 +10,21 @@
 - **Primary data flow:** UI ⇄ local core over HTTP/FFI; the core federates
   through the relay tunnel and P2P transport. The relay is deployed with the
   root `docker-compose.yml`.
-- **Documentation:** English is the default (`docs/`); Italian counterparts are
-  in `docs/it/`. Historical audits are in `docs/audit/`.
+- **Project state:** pre-1.0; current release 0.11.9 (build 2012), supported
+  line 0.11.x. Read `README.md` and `AGENTS.md` for the authoritative layout and
+  commands; do not duplicate them here.
+- **Documentation:** English is the default (`docs/`); every document has an
+  Italian counterpart in `docs/it/`. Historical audits are in `docs/audit/`.
+  Root policy files (`CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`,
+  `GOVERNANCE.md`, `FORK_POLICY.md`, `ETHICS.md`, `NETWORK_INTEGRITY.md`,
+  `PROTOCOL_COMPATIBILITY.md`, `TRADEMARK_AND_NAME.md`) are English only.
+- **License:** AGPL-3.0-or-later. Network-facing changes must remain open
+  source.
 
 ## Commands
 
-- Build core (Linux/macOS): `scripts/build_core.sh [release|debug]` (defaults to `release`).
+- Build core (Linux/macOS): `scripts/build_core.sh [release|debug]` (defaults to
+  `release`).
 - Build core (Windows): `scripts/build_core.ps1 -Profile release`.
 - The build scripts compile `crates/fedi3_core` and copy the produced
   `fedi3_core.dll` / `libfedi3_core.so` into `app/` and the Flutter output paths.
@@ -26,13 +35,17 @@
 
 ## Important code pointers
 
-- Rust core: `crates/fedi3_core/Cargo.toml` (crate-type `cdylib`, FFI entrypoints in `src/`).
-- Workspace: root `Cargo.toml` lists the members; use `cargo build -p <crate>` for a single crate.
+- Rust core: `crates/fedi3_core/Cargo.toml` (crate-type `cdylib`, FFI entrypoints
+  in `src/`).
+- Workspace: root `Cargo.toml` lists the members; use `cargo build -p <crate>`
+  for a single crate.
 - Flutter app: `app/pubspec.yaml`; the native library is expected at
   `app/fedi3_core.dll` (Windows) or `app/libfedi3_core.so` (Linux).
 - Relay/infra compose: root `docker-compose.yml` (environment-driven; P2P data
   under `deploy/p2p_infra/data`, ignored by git).
 - OpenAPI: `docs/openapi.yaml`.
+- Compatibility evidence: `docs/audit/activitypub_compatibility_matrix.md`,
+  `docs/interop.md` and `docs/audit/crypto_compatibility_2026-11-08.md`.
 
 ## Conventions
 
@@ -47,14 +60,33 @@
 - Keep the Rust/FFI surface minimal and preserve the cdylib ABI.
 - Keep panics unwinding: `catch_unwind` is used at the FFI boundary, so
   `panic = "abort"` must not be enabled.
+- Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`,
+  `refactor:`, `ci:`, `chore:`), with an imperative subject.
+- Keep the client visually consistent with the existing Aurora design system.
+- Relay-to-relay peering uses HTTP. Do not document removed libp2p mesh
+  prototypes as a running subsystem.
+- Do not edit generated output (`dist/`, `target/`, `build/`, `AppDir/`,
+  `*.so`, `*.dll`) and do not edit `Cargo.lock` by hand.
 
 ## Testing and debugging
 
-- Rust: `cargo test --workspace --locked` (use `--test-threads=4` to match CI).
+- Rust: `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  `cargo test --workspace --locked` (CI uses `-- --test-threads=4`).
 - Flutter: `cd app && flutter test`, `flutter analyze --fatal-infos`,
   `dart format --output=none --set-exit-if-changed lib test`.
-- Deployment contracts: `python3 scripts/tests/test_deploy_config.py` and
-  `python3 scripts/tests/test_backup_scripts.py`.
+- Platform configuration: `bash scripts/verify_platform_config.sh`.
+- Deployment, release, relay directory and backup contracts:
+  `python3 scripts/tests/test_deploy_config.py`,
+  `python3 scripts/tests/test_release_contract.py`,
+  `python3 scripts/tests/test_relay_directory.py`,
+  `python3 scripts/tests/test_backup_scripts.py`,
+  `python3 scripts/tests/test_appimage_host_libs.py`.
+- ShellCheck: use the same file list as `.github/workflows/ci.yml`.
+- Crypto/interop: `python3 scripts/verify_legacy_webrtc.py` (CI release gate),
+  `python3 scripts/tests/test_forward_receipts.py` (unit checks) and the
+  `scripts/verify_forward_receipt.py` CLI, which needs a receipt file and a
+  pinned key (see `docs/push_forward_receipts.md`).
 - When copying the native library fails, the build script prints an explicit
   message and suggests closing any running Flutter app.
 
@@ -62,6 +94,11 @@
 
 - License: AGPL-3.0-or-later; network-facing changes must remain open source.
 - Do not commit credentials, `.env`, runtime databases or generated build output.
+- Preserve SPDX headers and copyright notices; add attribution when modifying a
+  file substantially.
+- Federated HTML and media are untrusted input: keep sanitisation, size caps and
+  SSRF protections intact.
+- Do not add tracking, profiling or advertising. Telemetry stays opt-in.
 - Do not document or add the local-only `tools/team/` tooling to the public
   repository: it is excluded through `.git/info/exclude`.
 

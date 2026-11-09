@@ -1,23 +1,64 @@
-name: Feature request / Proposta
-description: Describe a use case or a focused improvement.
-title: "[Idea]: "
+name: Feature request
+description: Propose a focused improvement or describe a use case.
+title: "[Feature]: "
+labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the proposal. Describe the problem before the solution, and
+        keep the scope focused. Check existing issues and the
+        [documentation](https://github.com/redhunt07/Fedi3/blob/main/docs/README.md)
+        first.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Fedi3 would this change?
+      options:
+        - Flutter client (UI/UX)
+        - Local core (federation, chat, P2P)
+        - Relay or relay mesh
+        - P2P infrastructure
+        - Deployment or operations
+        - Documentation or localisation
+        - Other
+    validations:
+      required: true
   - type: textarea
-    id: need
+    id: use-case
     attributes:
       label: Use case
-      description: Who needs this, and what problem would it solve?
+      description: Who needs this, and what problem would it solve? Describe the situation, not only the feature.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed improvement
-      description: Describe the smallest useful change and any alternatives.
+      description: Describe the smallest useful change, how it would behave and any alternatives you considered.
     validations:
       required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and privacy impact
+      description: Does it change protocol behavior, federation with classic instances, P2P, data collection or the UI? Leave empty if none.
+    validations:
+      required: false
   - type: textarea
     id: contribution
     attributes:
       label: How could you help?
       description: Testing, hardware reports, documentation, translation or implementation.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests for this proposal.
+          required: true
+        - label: I read the documentation and the FAQ.
+          required: true

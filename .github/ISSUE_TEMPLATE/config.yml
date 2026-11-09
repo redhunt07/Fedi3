@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/redhunt07/Fedi3/security/advisories/new
+    about: Report a vulnerability privately instead of opening a public issue.
+  - name: Documentation
+    url: https://github.com/redhunt07/Fedi3/blob/main/docs/README.md
+    about: Setup, deployment, protocol and troubleshooting documentation.
+  - name: Contributing guide
+    url: https://github.com/redhunt07/Fedi3/blob/main/CONTRIBUTING.md
+    about: Development setup, test commands and pull request expectations.

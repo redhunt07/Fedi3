@@ -1,39 +1,92 @@
-name: Bug report / Segnalazione bug
-description: Report a reproducible problem with this project.
+name: Bug report
+description: Report a reproducible problem with Fedi3.
 title: "[Bug]: "
+labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search existing issues
+        and read the [documentation](https://github.com/redhunt07/Fedi3/blob/main/docs/README.md)
+        and [FAQ](https://github.com/redhunt07/Fedi3/blob/main/docs/faq.md) first.
+        Remove tokens, passwords, private keys and personal data from logs and
+        screenshots before submitting.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of Fedi3 does the problem affect?
+      options:
+        - Flutter client (app)
+        - Local core (crates/fedi3_core)
+        - Relay (crates/fedi3_relay)
+        - Protocol or federation
+        - P2P infrastructure (crates/fedi3_p2p_infra)
+        - Deployment, Docker or scripts
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, the version in `app/pubspec.yaml`, or the commit hash.
+      placeholder: "0.11.9+2012 or 850ffa9"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where did the problem occur?
+      options:
+        - Linux
+        - Windows
+        - Android
+        - iOS
+        - macOS
+        - Server / relay only
+        - Other
+    validations:
+      required: true
   - type: textarea
-    id: summary
+    id: what-happened
     attributes:
       label: What happened?
-      description: Explain the problem and what you expected.
+      description: Describe the problem and what you expected to happen instead.
+      placeholder: |
+        Observed behavior:
+        Expected behavior:
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
       label: Steps to reproduce
-      description: Include the smallest input, configuration or sequence that reproduces it.
-    validations:
-      required: true
-  - type: textarea
-    id: environment
-    attributes:
-      label: Version and environment
-      description: Include commit or version, operating system, hardware and relevant dependency versions.
+      description: Include the smallest input, configuration or sequence that reproduces the problem.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Sanitized logs or screenshots
-      description: Remove tokens, passwords, personal data and private prompts before posting.
+      description: Paste relevant logs, stack traces or screenshots. Remove tokens, passwords and personal data.
+      render: shell
+    validations:
+      required: false
   - type: checkboxes
     id: checks
     attributes:
       label: Before submitting
       options:
-        - label: I checked existing issues and the project documentation.
+        - label: I searched existing issues and read the documentation.
           required: true
-        - label: I removed credentials and private data from this report.
+        - label: I removed credentials and personal data from this report.
+          required: true
+        - label: This is not a security vulnerability (those go to a private advisory).
           required: true
