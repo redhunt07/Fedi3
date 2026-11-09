@@ -240,6 +240,60 @@ impl DbDispatch {
         let token = token.to_owned();
         self.run(move |db| db.verify_token(&username, &token)).await
     }
+    pub(super) async fn upsert_user_identity(&self, username: &str, envelope: &str) -> Result<()> {
+        let username = username.to_owned();
+        let envelope = envelope.to_owned();
+        self.run(move |db| db.upsert_user_identity(&username, &envelope))
+            .await
+    }
+    pub(super) async fn get_user_identity(&self, username: &str) -> Result<Option<String>> {
+        let username = username.to_owned();
+        self.run(move |db| db.get_user_identity(&username)).await
+    }
+    pub(super) async fn put_pair_session(
+        &self,
+        code: &str,
+        username: &str,
+        envelope: &str,
+        expires_at_ms: i64,
+    ) -> Result<()> {
+        let code = code.to_owned();
+        let username = username.to_owned();
+        let envelope = envelope.to_owned();
+        self.run(move |db| db.put_pair_session(&code, &username, &envelope, expires_at_ms))
+            .await
+    }
+    pub(super) async fn get_pair_session(&self, code: &str, now: i64) -> Result<Option<String>> {
+        let code = code.to_owned();
+        self.run(move |db| db.get_pair_session(&code, now)).await
+    }
+    pub(super) async fn prune_pair_sessions(&self, now: i64) -> Result<()> {
+        self.run(move |db| db.prune_pair_sessions(now)).await
+    }
+    pub(super) async fn insert_chat_spool(&self, username: &str, envelope: &str) -> Result<i64> {
+        let username = username.to_owned();
+        let envelope = envelope.to_owned();
+        self.run(move |db| db.insert_chat_spool(&username, &envelope))
+            .await
+    }
+    pub(super) async fn chat_spool_after(
+        &self,
+        username: &str,
+        after_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, String)>> {
+        let username = username.to_owned();
+        self.run(move |db| db.chat_spool_after(&username, after_id, limit))
+            .await
+    }
+    pub(super) async fn prune_chat_spool(&self, cutoff_ms: i64) -> Result<()> {
+        self.run(move |db| db.prune_chat_spool(cutoff_ms)).await
+    }
+    pub(super) async fn trim_chat_spool(&self, username: &str, keep: i64) -> Result<()> {
+        let username = username.to_owned();
+        self.run(move |db| db.trim_chat_spool(&username, keep))
+            .await
+    }
     pub(super) async fn set_user_move(&self, username: &str, moved_to_actor: &str) -> Result<()> {
         let username = username.to_owned();
         let moved_to_actor = moved_to_actor.to_owned();

@@ -646,8 +646,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         filename: name.isEmpty ? 'upload.bin' : name,
       );
       final url = (resp['url'] as String?)?.trim() ?? '';
-      final mediaType =
-          (resp['media_type'] as String?)?.trim() ?? lookupMimeType(name) ?? '';
+      final mediaType = (resp['mediaType'] as String?)?.trim() ??
+          (resp['media_type'] as String?)?.trim() ??
+          lookupMimeType(name) ??
+          '';
       if (url.isEmpty) throw StateError('upload missing url');
 
       if (!mounted) return;

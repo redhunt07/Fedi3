@@ -91,10 +91,11 @@ class _MediaNoteRecorderState extends State<MediaNoteRecorder> {
         videoTrack: widget.video && _stream!.getVideoTracks().isNotEmpty
             ? _stream!.getVideoTracks().first
             : null,
-        // The plugin's muxer only starts once the audio encoder reports its
-        // format. On Android that never happens for camera+mic recordings, so a
-        // video note is recorded video-only; voice is covered by audio notes.
-        audioChannel: !widget.video && _stream!.getAudioTracks().isNotEmpty
+        // Video notes must keep their sound: enable the input audio channel
+        // whenever the captured stream has an audio track. The first-frame wait
+        // and the zero-byte guard below still protect the muxer on devices
+        // where the camera is slow to deliver a frame.
+        audioChannel: _stream!.getAudioTracks().isNotEmpty
             ? RecorderAudioChannel.INPUT
             : null,
       );

@@ -182,11 +182,13 @@ fn h17_message_from_non_member_into_existing_thread_is_dropped() {
 }
 
 #[test]
-fn h17_unknown_thread_from_stranger_does_not_create_thread() {
-    let (_dir, db) = test_db("h17-ghost");
+fn h17_unknown_thread_message_bootstraps_group_thread() {
+    let (_dir, db) = test_db("h17-bootstrap");
     let local = "http://local.test/users/alice";
     let sender = "http://remote.test/users/eve";
-    // A valid-looking DM id that is NOT the hash of (sender, local).
+    // A valid-looking thread id that is NOT the DM hash of (sender, local): the message
+    // bootstraps a group thread instead of being dropped, so a manual-login client can
+    // fill its chat list from the relay spool without a pairing snapshot.
     let thread = "urn:fedi3:chat:dm:deadbeef";
 
     let env = envelope(thread, sender, "msg-3");
@@ -194,14 +196,25 @@ fn h17_unknown_thread_from_stranger_does_not_create_thread() {
         .unwrap();
 
     assert!(
-        !db.chat_thread_exists(thread).unwrap(),
-        "unknown thread must not be created for a stranger"
+        db.chat_thread_exists(thread).unwrap(),
+        "an unknown-thread message must bootstrap the thread"
     );
-    assert!(db
-        .list_chat_messages(thread, 10, None)
-        .unwrap()
-        .items
-        .is_empty());
+    assert_eq!(
+        db.get_chat_thread_kind(thread).unwrap().as_deref(),
+        Some("group"),
+        "a non-DM thread id bootstraps a group thread"
+    );
+    let members = db.list_chat_members(thread).unwrap();
+    assert!(members
+        .iter()
+        .any(|(actor, role)| actor == sender && role == "member"));
+    assert!(members
+        .iter()
+        .any(|(actor, role)| actor == local && role == "owner"));
+    assert_eq!(
+        db.list_chat_messages(thread, 10, None).unwrap().items.len(),
+        1
+    );
 }
 
 #[test]

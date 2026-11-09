@@ -2668,4 +2668,79 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get callSwitchCameraFailed => 'Impossibile cambiare fotocamera.';
+
+  @override
+  String get onboardingLoginWithQr => 'Accedi con QR';
+
+  @override
+  String get pairingTitle => 'Collega un dispositivo';
+
+  @override
+  String get pairingIntro =>
+      'Scansiona questo codice QR con un client già collegato a questo account.';
+
+  @override
+  String get pairingInstanceUrl => 'URL istanza (https://...)';
+
+  @override
+  String get pairingGenerate => 'Mostra codice QR';
+
+  @override
+  String get pairingRegenerate => 'Nuovo codice';
+
+  @override
+  String get pairingWaiting => 'In attesa dell’altro dispositivo…';
+
+  @override
+  String get pairingConnected => 'Dispositivo collegato. Avvio del core…';
+
+  @override
+  String get pairingExpired =>
+      'Il codice di accoppiamento è scaduto. Generane uno nuovo.';
+
+  @override
+  String get pairingInvalidUrl =>
+      'Inserisci l’URL dell’istanza del tuo account.';
+
+  @override
+  String pairingError(String error) {
+    return 'Accoppiamento non riuscito: $error';
+  }
+
+  @override
+  String get linkDeviceTitle => 'Collega un nuovo dispositivo';
+
+  @override
+  String get linkDeviceIntro =>
+      'Inquadra il codice QR mostrato sull’altro dispositivo.';
+
+  @override
+  String get linkDeviceSuccess => 'Dispositivo collegato';
+
+  @override
+  String get linkDeviceInvalidCode =>
+      'Questo codice QR non è un codice di accoppiamento Fedi3.';
+
+  @override
+  String linkDeviceError(String error) {
+    return 'Impossibile collegare il dispositivo: $error';
+  }
+
+  @override
+  String get linkDeviceUnsupported =>
+      'La scansione con fotocamera è disponibile solo su Android e iOS.';
+
+  @override
+  String get settingsLinkDevice => 'Collega un nuovo dispositivo';
+
+  @override
+  String get settingsLinkDeviceHint =>
+      'Aggiungi questo account su un altro telefono o computer.';
+
+  @override
+  String get networkingDeviceSync => 'Sincronizza l’attività tra dispositivi';
+
+  @override
+  String get networkingDeviceSyncHint =>
+      'Replica chat, conferme di lettura e segnalazione delle chiamate su ogni client collegato a questo account.';
 }

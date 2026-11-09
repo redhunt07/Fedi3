@@ -139,6 +139,47 @@ void main() {
           buildTestConfig(anchorActorUrl: '  https://alice.example///  ');
       expect(normalized.anchorActorUrl, 'https://alice.example');
     });
+
+    test('AM-11 identity and device sync fields reach the core', () {
+      final cfg = buildTestConfig().copyWith(
+        identityPrivateKeyPem:
+            '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----',
+        chatIdentityPublicB64: 'cHVibGlj',
+        chatIdentitySecretB64: 'c2VjcmV0',
+        deviceSyncEnable: false,
+      );
+      final json = cfg.toJson();
+      expect(json['identityPrivateKeyPem'], cfg.identityPrivateKeyPem);
+      expect(json['chatIdentityPublicB64'], 'cHVibGlj');
+      expect(json['chatIdentitySecretB64'], 'c2VjcmV0');
+      expect(json['deviceSyncEnable'], isFalse);
+
+      final decoded = CoreConfig.fromJson(
+          jsonDecode(jsonEncode(json)) as Map<String, dynamic>);
+      expect(decoded.toJson(), equals(json));
+      expect(decoded.identityPrivateKeyPem, cfg.identityPrivateKeyPem);
+      expect(decoded.deviceSyncEnable, isFalse);
+
+      final start = decoded.toCoreStartJson();
+      expect(start['identity_private_key_pem'], cfg.identityPrivateKeyPem);
+      expect(start['chat_identity_public_b64'], 'cHVibGlj');
+      expect(start['chat_identity_secret_b64'], 'c2VjcmV0');
+      final p2p = start['p2p'] as Map;
+      expect(p2p['device_sync_enable'], isFalse);
+      expect(p2p['device_sync_poll_secs'], 3);
+
+      final defaults = CoreConfig.fromJson(<String, dynamic>{});
+      expect(defaults.deviceSyncEnable, isTrue);
+      expect((defaults.toCoreStartJson()['p2p'] as Map)['device_sync_enable'],
+          isTrue);
+      expect(defaults.toCoreStartJson().containsKey('identity_private_key_pem'),
+          isFalse);
+
+      final cleared = cfg.copyWith(identityPrivateKeyPem: null);
+      expect(cleared.identityPrivateKeyPem, isNull);
+      expect(cleared.toCoreStartJson().containsKey('identity_private_key_pem'),
+          isFalse);
+    });
   });
 
   group('UiPrefs serialization (AM-05)', () {

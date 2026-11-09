@@ -1208,5 +1208,40 @@
   "audioAppliedHint": "Le modifiche valgono per le prossime chiamate. Se un dispositivo non è disponibile, la chiamata usa il predefinito.",
   "audioScreenShareHint": "Durante la condivisione schermo l’audio di sistema viene preso dall’uscita predefinita. Se non hai scelto un’uscita della chiamata, l’app la sposta su un altro dispositivo così l’interlocutore non risente la propria voce.",
   "callSwitchCamera": "Cambia fotocamera",
-  "callSwitchCameraFailed": "Impossibile cambiare fotocamera."
+  "callSwitchCameraFailed": "Impossibile cambiare fotocamera.",
+  "onboardingLoginWithQr": "Accedi con QR",
+  "pairingTitle": "Collega un dispositivo",
+  "pairingIntro": "Scansiona questo codice QR con un client già collegato a questo account.",
+  "pairingInstanceUrl": "URL istanza (https://...)",
+  "pairingGenerate": "Mostra codice QR",
+  "pairingRegenerate": "Nuovo codice",
+  "pairingWaiting": "In attesa dell’altro dispositivo…",
+  "pairingConnected": "Dispositivo collegato. Avvio del core…",
+  "pairingExpired": "Il codice di accoppiamento è scaduto. Generane uno nuovo.",
+  "pairingInvalidUrl": "Inserisci l’URL dell’istanza del tuo account.",
+  "pairingError": "Accoppiamento non riuscito: {error}",
+  "@pairingError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "linkDeviceTitle": "Collega un nuovo dispositivo",
+  "linkDeviceIntro": "Inquadra il codice QR mostrato sull’altro dispositivo.",
+  "linkDeviceSuccess": "Dispositivo collegato",
+  "linkDeviceInvalidCode": "Questo codice QR non è un codice di accoppiamento Fedi3.",
+  "linkDeviceError": "Impossibile collegare il dispositivo: {error}",
+  "@linkDeviceError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "linkDeviceUnsupported": "La scansione con fotocamera è disponibile solo su Android e iOS.",
+  "settingsLinkDevice": "Collega un nuovo dispositivo",
+  "settingsLinkDeviceHint": "Aggiungi questo account su un altro telefono o computer.",
+  "networkingDeviceSync": "Sincronizza l’attività tra dispositivi",
+  "networkingDeviceSyncHint": "Replica chat, conferme di lettura e segnalazione delle chiamate su ogni client collegato a questo account."
 }

@@ -4,6 +4,16 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Multi-device sync, QR login and playable media notes
+
+Voice notes and video notes now load and play on both sides: the client reads the camelCase `mediaType` field written by newer cores, falls back to the file name or URL extension when the type is empty or generic, and shows a play control on the recipient's bubble instead of a bare attachment. Video notes keep the inline player with the play overlay; audio notes keep the dedicated voice bubble. The recorder now enables the audio track for video notes too, so the recorded clip carries sound.
+
+An account can now be used from several clients. The first client publishes a sealed identity package (RSA signing key, Kyber chat identity key and account configuration) to the relay; the relay stores only the sealed envelope and cannot read the keys. A new client logs in manually and downloads the package, or shows a QR code (`fedi3://pair?relay=…&code=…`) that the already logged-in phone scans: the phone seals its identity and a chat snapshot with the one-time code and uploads it, and the desktop starts with the same account, threads, messages, reactions, receipts, pins and call signals. Per-device values (P2P peer id, bind address, internal token, data directory) stay local.
+
+Chat activity is replicated to every linked client through a relay spool: messages, edits, deletions, reactions, receipts and call signalling are stored as ciphertext for up to 90 days and fetched by every client of the account. A client that was offline catches up when it reconnects; a manual-login client bootstraps its chat list from the spool, and a QR-linked client starts from the pairing snapshot. Calls ring on every linked client, but the first accept owns the call: the accept is replicated to the account's other clients, they stop ringing, and a client already in a call does not ring again.
+
+P2P-only accounts keep the existing direct delivery and do not use the spool. History older than the spool retention is available on a new client through the QR pairing snapshot. The new **Link a new device** entry in Settings starts the scanner on mobile or shows the QR on desktop, and **Sync activity across devices** in Networking controls activity replication.
+
 ## 2026-11-09 — Stable relay reservations and reachable mobile P2P
 
 The relay no longer refuses client reservations in a loop: the per-peer budget

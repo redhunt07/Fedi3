@@ -396,4 +396,51 @@ void main() {
       expect(body['thread_id'], 't1');
     });
   });
+
+  group('CoreApi chat snapshot (multi-device pairing)', () {
+    test('exports the chat snapshot with the internal token', () async {
+      client.json('GET', '/_fedi3/chat/snapshot', {
+        'v': 1,
+        'threads': <dynamic>[],
+        'members': <dynamic>[],
+        'messages': <dynamic>[],
+        'statuses': <dynamic>[],
+        'reactions': <dynamic>[],
+        'pins': <dynamic>[],
+        'call_signals': <dynamic>[],
+        'truncated': false,
+      });
+      final snapshot = await api().exportChatSnapshot();
+      expect(snapshot['v'], 1);
+      expect(snapshot['truncated'], isFalse);
+      expect(client.lastHeader('X-Fedi3-Internal'),
+          'internal-token-0123456789abcdef');
+    });
+
+    test('imports a chat snapshot as a JSON POST', () async {
+      client.json('POST', '/_fedi3/chat/snapshot', {'ok': true});
+      await api().importChatSnapshot({
+        'v': 1,
+        'threads': [
+          {'thread_id': 't1'}
+        ],
+        'truncated': false,
+      });
+      final body = jsonDecode(client.lastBody) as Map<String, dynamic>;
+      expect(body['v'], 1);
+      expect(body['threads'], hasLength(1));
+      expect(client.lastHeader('X-Fedi3-Internal'),
+          'internal-token-0123456789abcdef');
+      expect(client.lastHeader('Content-Type'), 'application/json');
+    });
+
+    test('import rejects a non-200 response', () async {
+      client.route('POST', '/_fedi3/chat/snapshot',
+          FakeHttpResponse(statusCode: 500, body: 'boom'));
+      await expectLater(
+        api().importChatSnapshot({'v': 1}),
+        throwsA(isA<CoreApiException>()),
+      );
+    });
+  });
 }

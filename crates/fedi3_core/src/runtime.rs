@@ -165,6 +165,17 @@ pub struct CoreStartConfig {
     /// Mailbox cache TTL for P2P store-and-forward (seconds).
     #[serde(default)]
     pub p2p_cache_ttl_secs: Option<u64>,
+    /// Identity package: the RSA private key PEM of the account actor. When provided it
+    /// becomes the local identity, so every client of the same account signs with the same
+    /// key. A corrupt PEM fails the start instead of silently generating a new identity.
+    #[serde(default)]
+    pub identity_private_key_pem: Option<String>,
+    /// Identity package: the shared Kyber768 chat identity public key (base64).
+    #[serde(default)]
+    pub chat_identity_public_b64: Option<String>,
+    /// Identity package: the shared Kyber768 chat identity secret key (base64).
+    #[serde(default)]
+    pub chat_identity_secret_b64: Option<String>,
 }
 
 impl Default for CoreStartConfig {
@@ -205,6 +216,9 @@ impl Default for CoreStartConfig {
             post_delivery_mode: None,
             p2p_relay_fallback_secs: None,
             p2p_cache_ttl_secs: None,
+            identity_private_key_pem: None,
+            chat_identity_public_b64: None,
+            chat_identity_secret_b64: None,
         }
     }
 }
@@ -428,6 +442,23 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
     crate::social_db::SocialDb::open(&db_path).context("open social db")?;
     crate::delivery_queue::DeliveryQueue::open(&db_path).context("open delivery queue db")?;
 
+    // Identity package import: a provided RSA private key becomes the local identity.
+    // Validate it before writing so a corrupt package cannot destroy an existing good key,
+    // then persist it atomically (0600) and load it through the normal path. A corrupt
+    // PEM fails the start loudly instead of silently generating a new actor identity.
+    if let Some(pem) = cfg
+        .identity_private_key_pem
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        fedi3_protocol::crypto::rsa_private_key(pem).context("parse identity_private_key_pem")?;
+        // Persist the package bytes unchanged so an exported identity round-trips exactly.
+        crate::keys::write_secret_atomic(
+            &data_dir.join("identity_private_key.pem"),
+            pem.as_bytes(),
+        )?;
+    }
+
     // Load (or generate) the identity on the caller thread too: a corrupted key file must not
     // silently produce a new DID after start returned success.
     let identity = crate::keys::load_or_generate_identity(&data_dir)?;
@@ -531,6 +562,34 @@ fn run_core(
         let db_path = data_dir.join("fedi3.db");
         let queue = Arc::new(DeliveryQueue::open(&db_path)?);
         let social = Arc::new(SocialDb::open(&db_path)?);
+
+        // Identity package: adopt the transferred chat identity key. The pairing package is
+        // authoritative: a client that already has a device-local chat key must switch to the
+        // account key, otherwise envelopes self-synced by the other clients cannot be decrypted.
+        // Stored message bodies are plaintext JSON, so replacing the key does not lose history.
+        let chat_public = cfg
+            .chat_identity_public_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let chat_secret = cfg
+            .chat_identity_secret_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        if let (Some(chat_public), Some(chat_secret)) = (chat_public, chat_secret) {
+            let current = social.get_chat_identity_key()?;
+            let replace = match current {
+                None => true,
+                Some((public_b64, secret_b64)) => {
+                    public_b64 != chat_public || secret_b64 != chat_secret
+                }
+            };
+            if replace {
+                social.set_chat_identity_key(chat_public, chat_secret)?;
+            }
+        }
+
         let http_timeout_secs = cfg.http_timeout_secs.unwrap_or(30).clamp(5, 120);
         // Federation fetches share one policy: bounded redirects and an explicit user agent
         // (the per-request body caps live in net_policy).
@@ -993,6 +1052,31 @@ fn run_core(
             state.clone(),
             shutdown_rx.clone(),
         ));
+
+        // Relay chat spool: every linked client of the account pulls the envelopes the relay
+        // stored for it, so history and call signalling reach clients that were offline.
+        // P2P-only accounts (no relay token) keep using direct delivery only.
+        if let (Some(relay_base), Some(relay_token)) = (
+            state
+                .cfg
+                .relay_base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty()),
+            state
+                .cfg
+                .relay_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty()),
+        ) {
+            shutdown_handles.push(crate::chat::start_chat_spool_worker(
+                state.clone(),
+                relay_base.to_string(),
+                relay_token.to_string(),
+                shutdown_rx.clone(),
+            ));
+        }
 
         let key_id_for_queue = key_id.clone();
         shutdown_handles.push(queue.start_worker(

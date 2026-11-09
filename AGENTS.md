@@ -71,6 +71,7 @@ flutter run
 - `docs/deploy_relay.md`: full relay config, TLS, monitoring.
 - `docs/deploy_core.md`: local core runtime and health endpoints.
 - `docs/app_guide.md`: app usage and Linux build steps.
+- `docs/multi_device_sync.md`: multi-device identity, QR pairing and chat spool contract.
 - `docs/ops_backup_restore.md`: backup/restore guidance.
 - `docs/troubleshooting.md`: common issues.
 - `docs/it/`: Italian counterparts of every document.
@@ -212,7 +213,9 @@ flutter run
   `icon_media_type`, `image_url`, `image_media_type`, `profile_fields`,
   `manually_approves_followers`, `blocked_domains`, `blocked_actors`,
   `ap_relays`, `bootstrap_follow_actors`, `previous_public_base_url`,
-  `previous_relay_token`.
+  `previous_relay_token`, `identity_private_key_pem`,
+  `chat_identity_public_b64`, `chat_identity_secret_b64` (multi-device
+  identity transfer).
 - App settings: surfaced in UI and stored via state stores under `app/lib/state/`.
 ### Defaults and constraints
 - If `public_base_url` is empty, core infers it from `relay_ws`.

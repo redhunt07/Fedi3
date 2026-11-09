@@ -20,8 +20,10 @@ import 'client_updates_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
 import 'follow_requests_screen.dart';
+import 'link_device_screen.dart';
 import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
+import 'pairing_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'relays_screen.dart';
 import 'profile_edit_screen.dart';
@@ -114,6 +116,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: context.l10n.settingsFollowRequestsHint,
                 onTap: () => _push(
                     context, FollowRequestsScreen(appState: widget.appState)),
+              ),
+              _tile(
+                context,
+                icon: Icons.devices_rounded,
+                title: context.l10n.settingsLinkDevice,
+                subtitle: context.l10n.settingsLinkDeviceHint,
+                onTap: () => _linkDevice(context, cfg),
               ),
               _tile(
                 context,
@@ -406,6 +415,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  void _linkDevice(BuildContext context, CoreConfig cfg) {
+    final mobile = defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    _push(
+      context,
+      mobile
+          ? LinkDeviceScreen(appState: widget.appState)
+          : PairingScreen(
+              appState: widget.appState,
+              initialInstanceUrl: cfg.publicBaseUrl,
+            ),
     );
   }
 

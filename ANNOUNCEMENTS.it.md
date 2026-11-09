@@ -4,6 +4,16 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Sincronizzazione multi-dispositivo, accesso QR e note vocali riproducibili
+
+Le note vocali e le video note ora si caricano e si riproducono su entrambi i lati: il client legge il campo camelCase `mediaType` scritto dai core più recenti, ripiega sul nome del file o sull'estensione dell'URL quando il tipo è vuoto o generico e mostra un controllo di riproduzione sulla bolla del destinatario invece di un semplice allegato. Le video note mantengono il player inline con l'overlay di riproduzione; le note audio mantengono la bolla vocale dedicata. Il registratore ora abilita anche la traccia audio per le video note, così il clip registrato contiene il suono.
+
+Un account può ora essere usato da più client. Il primo client pubblica sul relay un pacchetto di identità sigillato (chiave di firma RSA, chiave di identità chat Kyber e configurazione dell'account); il relay memorizza solo l'envelope sigillato e non può leggere le chiavi. Un nuovo client accede manualmente e scarica il pacchetto, oppure mostra un codice QR (`fedi3://pair?relay=…&code=…`) che il telefono già autenticato scansiona: il telefono sigilla la propria identità e uno snapshot delle chat con il codice monouso e li carica, e il desktop parte con lo stesso account, thread, messaggi, reazioni, ricevute, pin e segnali di chiamata. I valori specifici del dispositivo (peer id P2P, indirizzo di bind, token interno, directory dati) restano locali.
+
+L'attività delle chat viene replicata su ogni client collegato attraverso uno spool del relay: messaggi, modifiche, eliminazioni, reazioni, ricevute e segnalazione delle chiamate sono memorizzati come testo cifrato per un massimo di 90 giorni e scaricati da ogni client dell'account. Un client che era offline si aggiorna quando si riconnette; un client con accesso manuale ricostruisce la lista chat dallo spool, mentre un client collegato via QR parte dallo snapshot di abbinamento. Le chiamate squillano su ogni client collegato, ma la prima accettazione possiede la chiamata: l'accept viene replicato sugli altri client dell'account, che smettono di squillare, e un client già in chiamata non squilla di nuovo.
+
+Gli account solo P2P mantengono la consegna diretta esistente e non usano lo spool. La cronologia più vecchia della ritenzione dello spool è disponibile su un nuovo client tramite lo snapshot dell'abbinamento QR. La nuova voce **Collega un nuovo dispositivo** nelle Impostazioni avvia lo scanner su mobile o mostra il QR su desktop, e **Sincronizza attività tra dispositivi** in Rete controlla la replica dell'attività.
+
 ## 2026-11-09 — Prenotazioni relay stabili e P2P mobile raggiungibile
 
 Il relay non rifiuta più a ripetizione le prenotazioni dei client: il budget per

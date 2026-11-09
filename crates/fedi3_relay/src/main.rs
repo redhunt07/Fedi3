@@ -66,6 +66,19 @@ static TUNNEL_CONN_ID: AtomicU64 = AtomicU64::new(1);
 const DB_BATCH_DELETE_MAX: usize = 500;
 /// Current relay schema version. Bumped by every numbered migration.
 const SCHEMA_VERSION: i64 = 2;
+/// Chat envelopes are kept for ninety days so a client that was offline for a
+/// long time can still catch up.
+const CHAT_SPOOL_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+/// Hard cap per account: the oldest envelopes are trimmed first.
+const CHAT_SPOOL_MAX_PER_USER: i64 = 20_000;
+/// A QR pairing package is valid for ten minutes.
+const PAIR_SESSION_TTL_MS: i64 = 10 * 60 * 1000;
+/// Identity and single chat envelopes stay small; they only carry keys or one
+/// encrypted payload.
+const SEALED_ENVELOPE_MAX_BYTES: usize = 256 * 1024;
+/// A QR pairing envelope also carries the chat snapshot, so it can be large.
+/// The global request body limit still applies.
+const PAIR_ENVELOPE_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 fn next_request_id() -> String {
     let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
@@ -1285,6 +1298,15 @@ async fn main() {
                 error!("spool cleanup failed: {e}");
             }
             if let Err(e) = db
+                .prune_chat_spool(now_ms() - CHAT_SPOOL_RETENTION_MS)
+                .await
+            {
+                error!("chat spool cleanup failed: {e}");
+            }
+            if let Err(e) = db.prune_pair_sessions(now_ms()).await {
+                error!("pair session cleanup failed: {e}");
+            }
+            if let Err(e) = db
                 .cleanup_move_notices(cleanup_state.cfg.move_notice_ttl_secs)
                 .await
             {
@@ -1453,6 +1475,15 @@ async fn main() {
         .route("/_fedi3/webrtc/send", post(webrtc_signal_send))
         .route("/_fedi3/webrtc/poll", get(webrtc_signal_poll))
         .route("/_fedi3/webrtc/ack", post(webrtc_signal_ack))
+        .route(
+            "/_fedi3/users/:user/identity",
+            get(user_identity_get).put(user_identity_put),
+        )
+        .route(
+            "/_fedi3/pair/:code",
+            get(pair_session_get).put(pair_session_put),
+        )
+        .route("/_fedi3/chat/spool", get(chat_spool_get))
         .route("/users/:user/media", post(media_upload))
         .route(
             "/users/:user/media/:id",
@@ -3527,8 +3558,307 @@ async fn forward_user_rest(
         {
             return resp.into_response();
         }
+    } else if method == Method::POST && rest == "_fedi3/chat/inbox" {
+        // The spool is the durable copy for every client of the account. Store
+        // before forwarding so an offline client still receives the envelope.
+        return spool_chat_envelope(state, user, method, path, query, headers, body).await;
     }
     forward_to_user(state, user, method, &path, query, headers, body).await
+}
+
+async fn spool_chat_envelope(
+    state: AppState,
+    user: String,
+    method: Method,
+    path: String,
+    query: String,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(envelope) = sealed_envelope(&body, SEALED_ENVELOPE_MAX_BYTES) else {
+        return (StatusCode::BAD_REQUEST, "invalid chat envelope").into_response();
+    };
+    if let Err(e) = state.db.insert_chat_spool(&user, &envelope).await {
+        error!(user=%user, error=%e, "chat spool insert failed");
+        return (StatusCode::BAD_GATEWAY, "chat spool unavailable").into_response();
+    }
+    let _ = state
+        .db
+        .trim_chat_spool(&user, CHAT_SPOOL_MAX_PER_USER)
+        .await;
+    // Live delivery is best effort. The spool already owns durability, so a
+    // tunnel that is down must not turn into a sender retry.
+    let _ = forward_to_user(state, user, method, &path, query, headers, body).await;
+    (StatusCode::ACCEPTED, "accepted").into_response()
+}
+
+fn sealed_envelope(body: &Bytes, max_bytes: usize) -> Option<String> {
+    if body.is_empty() || body.len() > max_bytes {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(body).into_owned())
+}
+
+fn decode_query_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                match std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                {
+                    Some(decoded) => {
+                        out.push(decoded as char);
+                        i += 3;
+                    }
+                    None => {
+                        out.push('%');
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(' ');
+                i += 1;
+            }
+            byte => {
+                out.push(byte as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn query_value(raw: Option<&str>, name: &str) -> Option<String> {
+    let raw = raw?;
+    for pair in raw.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == name {
+            return Some(decode_query_value(value));
+        }
+    }
+    None
+}
+
+fn is_valid_pair_code(code: &str) -> bool {
+    (16..=64).contains(&code.len())
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+async fn user_identity_get(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(user): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
+    if !state
+        .limiter
+        .check(client_ip(&state.cfg, &peer, &headers), "identity", 120)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    };
+    match state.db.verify_token(&user, &token).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+    match state.db.get_user_identity(&user).await {
+        Ok(Some(envelope)) => match serde_json::from_str::<serde_json::Value>(&envelope) {
+            Ok(value) => axum::Json(value).into_response(),
+            Err(_) => (
+                StatusCode::OK,
+                [("Content-Type", "application/json; charset=utf-8")],
+                envelope,
+            )
+                .into_response(),
+        },
+        Ok(None) => (StatusCode::NOT_FOUND, "no identity").into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+}
+
+async fn user_identity_put(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(user): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
+    if !state
+        .limiter
+        .check(client_ip(&state.cfg, &peer, &headers), "identity", 120)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    };
+    match state.db.verify_token(&user, &token).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+    let Some(envelope) = sealed_envelope(&body, SEALED_ENVELOPE_MAX_BYTES) else {
+        return (StatusCode::BAD_REQUEST, "invalid identity envelope").into_response();
+    };
+    match state.db.upsert_user_identity(&user, &envelope).await {
+        Ok(()) => (StatusCode::NO_CONTENT, "").into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+}
+
+async fn pair_session_put(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(code): Path<String>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_valid_pair_code(&code) {
+        return (StatusCode::BAD_REQUEST, "invalid code").into_response();
+    }
+    let Some(user) = query_value(raw_query.as_deref(), "user") else {
+        return (StatusCode::BAD_REQUEST, "missing user").into_response();
+    };
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
+    if !state
+        .limiter
+        .check(client_ip(&state.cfg, &peer, &headers), "pair", 120)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    };
+    match state.db.verify_token(&user, &token).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+    let Some(envelope) = sealed_envelope(&body, PAIR_ENVELOPE_MAX_BYTES) else {
+        return (StatusCode::BAD_REQUEST, "invalid pairing envelope").into_response();
+    };
+    let expires_at_ms = now_ms().saturating_add(PAIR_SESSION_TTL_MS);
+    match state
+        .db
+        .put_pair_session(&code, &user, &envelope, expires_at_ms)
+        .await
+    {
+        Ok(()) => {
+            let _ = state.db.prune_pair_sessions(now_ms()).await;
+            (StatusCode::NO_CONTENT, "").into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+}
+
+async fn pair_session_get(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_valid_pair_code(&code) {
+        return (StatusCode::BAD_REQUEST, "invalid code").into_response();
+    }
+    if !state
+        .limiter
+        .check(client_ip(&state.cfg, &peer, &headers), "pair", 120)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    match state.db.get_pair_session(&code, now_ms()).await {
+        Ok(Some(envelope)) => match serde_json::from_str::<serde_json::Value>(&envelope) {
+            Ok(value) => axum::Json(value).into_response(),
+            Err(_) => (
+                StatusCode::OK,
+                [("Content-Type", "application/json; charset=utf-8")],
+                envelope,
+            )
+                .into_response(),
+        },
+        Ok(None) => (StatusCode::NOT_FOUND, "no pairing session").into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+}
+
+async fn chat_spool_get(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let Some(user) = query_value(raw_query.as_deref(), "user") else {
+        return (StatusCode::BAD_REQUEST, "missing user").into_response();
+    };
+    if !is_valid_username(&user) {
+        return (StatusCode::BAD_REQUEST, "invalid user").into_response();
+    }
+    if !state
+        .limiter
+        .check(client_ip(&state.cfg, &peer, &headers), "chat_spool", 300)
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+    let Some(token) = bearer_token(&headers) else {
+        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+    };
+    match state.db.verify_token(&user, &token).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    }
+    let after = query_value(raw_query.as_deref(), "after")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let limit = query_value(raw_query.as_deref(), "limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+    let rows = match state.db.chat_spool_after(&user, after, limit).await {
+        Ok(rows) => rows,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    let mut latest_id = after;
+    for (id, envelope) in rows {
+        latest_id = latest_id.max(id);
+        match serde_json::from_str::<serde_json::Value>(&envelope) {
+            Ok(value) => items.push(serde_json::json!({"id": id, "envelope": value})),
+            Err(_) => continue,
+        }
+    }
+    axum::Json(serde_json::json!({"items": items, "latest_id": latest_id})).into_response()
 }
 
 /// Route a request for a user hosted on a peer relay (relay mesh). Returns `None` when the
@@ -10580,5 +10910,162 @@ mod tests {
         for url in DEFAULT_RELAY_DIRECTORY_URLS {
             assert!(url.starts_with("https://"));
         }
+    }
+
+    #[tokio::test]
+    async fn identity_pair_and_chat_spool_roundtrip() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        let token = "test-token-0123456789abcdef";
+        state
+            .db
+            .verify_or_register(&state.cfg, "alice", token)
+            .await
+            .unwrap();
+        let auth = hmap(&[("Authorization", &format!("Bearer {token}"))]);
+        let peer: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let envelope = serde_json::json!({
+            "v": 1,
+            "alg": "aes-256-gcm",
+            "kdf": "hkdf-sha256",
+            "salt_b64": "AA==",
+            "nonce_b64": "AA==",
+            "ciphertext_b64": "AA==",
+            "mac_b64": "AA=="
+        });
+        let body = Bytes::from(serde_json::to_vec(&envelope).unwrap());
+
+        let response = user_identity_put(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path("alice".to_string()),
+            auth.clone(),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = user_identity_get(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path("alice".to_string()),
+            auth.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(stored, envelope);
+
+        let code = "0123456789abcdef0123456789abcdef";
+        let response = pair_session_put(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path(code.to_string()),
+            RawQuery(Some("user=alice".to_string())),
+            auth.clone(),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = pair_session_get(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path(code.to_string()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let chat_envelope = serde_json::json!({
+            "v": 1,
+            "thread_id": "thread-1",
+            "message_id": "message-1",
+            "sender_actor": "https://relay.example/users/alice",
+            "sender_device": "dev-1",
+            "sender_peer_id": "peer-1",
+            "created_at_ms": 1,
+            "kem_alg": "kyber768",
+            "kem_ciphertext_b64": "AA==",
+            "kem_key_id": "identity",
+            "nonce_b64": "AA==",
+            "ciphertext_b64": "AA=="
+        });
+        let id = state
+            .db
+            .insert_chat_spool("alice", &serde_json::to_string(&chat_envelope).unwrap())
+            .await
+            .unwrap();
+        assert!(id > 0);
+
+        let response = chat_spool_get(
+            State(state.clone()),
+            ConnectInfo(peer),
+            RawQuery(Some("user=alice&after=0&limit=10".to_string())),
+            auth.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let spool: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(spool["items"][0]["id"], id);
+        assert_eq!(spool["items"][0]["envelope"]["message_id"], "message-1");
+        assert_eq!(spool["latest_id"], id);
+
+        let bad = hmap(&[("Authorization", "Bearer wrong-token-0123456789")]);
+        let response = user_identity_get(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path("alice".to_string()),
+            bad,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn chat_inbox_is_spooled_before_forwarding() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        let token = "test-token-0123456789abcdef";
+        state
+            .db
+            .verify_or_register(&state.cfg, "alice", token)
+            .await
+            .unwrap();
+        let peer: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let chat_envelope = serde_json::json!({
+            "v": 1,
+            "thread_id": "thread-1",
+            "message_id": "message-1",
+            "sender_actor": "https://relay.example/users/alice",
+            "sender_device": "dev-1",
+            "sender_peer_id": "peer-1",
+            "created_at_ms": 1,
+            "kem_alg": "kyber768",
+            "kem_ciphertext_b64": "AA==",
+            "kem_key_id": "identity",
+            "nonce_b64": "AA==",
+            "ciphertext_b64": "AA=="
+        });
+        let body = Bytes::from(serde_json::to_vec(&chat_envelope).unwrap());
+        let response = forward_user_rest(
+            State(state.clone()),
+            ConnectInfo(peer),
+            Path(("alice".to_string(), "_fedi3/chat/inbox".to_string())),
+            RawQuery(None),
+            Method::POST,
+            HeaderMap::new(),
+            body,
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let rows = state.db.chat_spool_after("alice", 0, 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.contains("message-1"));
     }
 }

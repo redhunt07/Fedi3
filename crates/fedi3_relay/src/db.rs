@@ -280,6 +280,36 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
               PRIMARY KEY(activity_id, recipient)
             );
             CREATE INDEX IF NOT EXISTS idx_inbox_dedupe_created ON inbox_dedupe(created_at_ms);
+
+            -- Sealed account identity (RSA key + chat identity key). The relay
+            -- stores ciphertext only, so it cannot read the private key.
+            CREATE TABLE IF NOT EXISTS user_identity (
+              username TEXT PRIMARY KEY,
+              envelope TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            -- Short-lived QR pairing sessions: the logged-in phone uploads a
+            -- sealed identity package under a one-time code.
+            CREATE TABLE IF NOT EXISTS pair_sessions (
+              code TEXT PRIMARY KEY,
+              username TEXT NOT NULL,
+              envelope TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              expires_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pair_sessions_expires ON pair_sessions(expires_at_ms);
+
+            -- Chat envelopes kept for clients that are offline and for the
+            -- other clients of the same account. Ciphertext only.
+            CREATE TABLE IF NOT EXISTS chat_spool (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT NOT NULL,
+              envelope TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_spool_user_id ON chat_spool(username, id);
+            CREATE INDEX IF NOT EXISTS idx_chat_spool_created ON chat_spool(created_at_ms);
             "#,
                 )?;
                 migrate_sqlite_schema(&conn)?;
@@ -1110,6 +1140,234 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                 Ok(ct_eq_str(&stored, &token_hash_hex(token)))
             }
         }
+    }
+
+    /// Store or replace the sealed account identity envelope.
+    pub(super) fn upsert_user_identity(&self, username: &str, envelope: &str) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO user_identity(username, envelope, updated_at_ms) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(username) DO UPDATE SET envelope=excluded.envelope, updated_at_ms=excluded.updated_at_ms",
+                    params![username, envelope, now],
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO user_identity(username, envelope, updated_at_ms) VALUES ($1, $2, $3)
+                     ON CONFLICT (username) DO UPDATE SET envelope=EXCLUDED.envelope, updated_at_ms=EXCLUDED.updated_at_ms",
+                    &[&username, &envelope, &now],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn get_user_identity(&self, username: &str) -> Result<Option<String>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let row: Option<String> = conn
+                    .query_row(
+                        "SELECT envelope FROM user_identity WHERE username = ?1",
+                        params![username],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok(row)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT envelope FROM user_identity WHERE username = $1",
+                    &[&username],
+                )?;
+                Ok(row.map(|r| r.get(0)))
+            }
+        }
+    }
+
+    pub(super) fn put_pair_session(
+        &self,
+        code: &str,
+        username: &str,
+        envelope: &str,
+        expires_at_ms: i64,
+    ) -> Result<()> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO pair_sessions(code, username, envelope, created_at_ms, expires_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(code) DO UPDATE SET
+                       username=excluded.username,
+                       envelope=excluded.envelope,
+                       created_at_ms=excluded.created_at_ms,
+                       expires_at_ms=excluded.expires_at_ms",
+                    params![code, username, envelope, now, expires_at_ms],
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "INSERT INTO pair_sessions(code, username, envelope, created_at_ms, expires_at_ms)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (code) DO UPDATE SET
+                       username=EXCLUDED.username,
+                       envelope=EXCLUDED.envelope,
+                       created_at_ms=EXCLUDED.created_at_ms,
+                       expires_at_ms=EXCLUDED.expires_at_ms",
+                    &[&code, &username, &envelope, &now, &expires_at_ms],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn get_pair_session(&self, code: &str, now: i64) -> Result<Option<String>> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let row: Option<String> = conn
+                    .query_row(
+                        "SELECT envelope FROM pair_sessions WHERE code = ?1 AND expires_at_ms > ?2",
+                        params![code, now],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok(row)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_opt(
+                    "SELECT envelope FROM pair_sessions WHERE code = $1 AND expires_at_ms > $2",
+                    &[&code, &now],
+                )?;
+                Ok(row.map(|r| r.get(0)))
+            }
+        }
+    }
+
+    pub(super) fn prune_pair_sessions(&self, now: i64) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM pair_sessions WHERE expires_at_ms <= ?1",
+                    params![now],
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM pair_sessions WHERE expires_at_ms <= $1",
+                    &[&now],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Append one chat envelope to the recipient's spool and return its id.
+    pub(super) fn insert_chat_spool(&self, username: &str, envelope: &str) -> Result<i64> {
+        let now = now_ms();
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "INSERT INTO chat_spool(username, envelope, created_at_ms) VALUES (?1, ?2, ?3)",
+                    params![username, envelope, now],
+                )?;
+                Ok(conn.last_insert_rowid())
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let row = conn.query_one(
+                    "INSERT INTO chat_spool(username, envelope, created_at_ms) VALUES ($1, $2, $3) RETURNING id",
+                    &[&username, &envelope, &now],
+                )?;
+                Ok(row.get(0))
+            }
+        }
+    }
+
+    pub(super) fn chat_spool_after(
+        &self,
+        username: &str,
+        after_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, String)>> {
+        let limit = limit.clamp(1, 500);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                let mut stmt = conn.prepare(
+                    "SELECT id, envelope FROM chat_spool WHERE username = ?1 AND id > ?2 ORDER BY id ASC LIMIT ?3",
+                )?;
+                let rows = stmt
+                    .query_map(params![username, after_id, limit], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let rows = conn.query(
+                    "SELECT id, envelope FROM chat_spool WHERE username = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
+                    &[&username, &after_id, &limit],
+                )?;
+                Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+            }
+        }
+    }
+
+    /// Drop spool rows older than the retention window.
+    pub(super) fn prune_chat_spool(&self, cutoff_ms: i64) -> Result<()> {
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM chat_spool WHERE created_at_ms < ?1",
+                    params![cutoff_ms],
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM chat_spool WHERE created_at_ms < $1",
+                    &[&cutoff_ms],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep only the newest `keep` spool rows of one account.
+    pub(super) fn trim_chat_spool(&self, username: &str, keep: i64) -> Result<()> {
+        let keep = keep.max(1);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let conn = self.open_sqlite_conn()?;
+                conn.execute(
+                    "DELETE FROM chat_spool WHERE username = ?1 AND id < (SELECT COALESCE(MAX(id), 0) - ?2 FROM chat_spool WHERE username = ?1)",
+                    params![username, keep],
+                )?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                conn.execute(
+                    "DELETE FROM chat_spool WHERE username = $1 AND id < (SELECT COALESCE(MAX(id), 0) - $2 FROM chat_spool WHERE username = $1)",
+                    &[&username, &keep],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn set_user_move(&self, username: &str, moved_to_actor: &str) -> Result<()> {

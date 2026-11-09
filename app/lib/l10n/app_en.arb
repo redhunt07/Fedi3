@@ -1216,5 +1216,40 @@
   "audioAppliedHint": "Changes apply to the next calls. When a device is unavailable, the call uses the default.",
   "audioScreenShareHint": "During screen sharing, system audio is captured from the default output. If no call output is chosen, the app moves the call to another device so the other side does not hear its own voice.",
   "callSwitchCamera": "Switch camera",
-  "callSwitchCameraFailed": "Could not switch the camera."
+  "callSwitchCameraFailed": "Could not switch the camera.",
+  "onboardingLoginWithQr": "Log in with QR",
+  "pairingTitle": "Link a device",
+  "pairingIntro": "Scan this QR code with a client that is already logged in to this account.",
+  "pairingInstanceUrl": "Instance URL (https://...)",
+  "pairingGenerate": "Show QR code",
+  "pairingRegenerate": "New code",
+  "pairingWaiting": "Waiting for the other device…",
+  "pairingConnected": "Device linked. Starting the core…",
+  "pairingExpired": "The pairing code expired. Generate a new one.",
+  "pairingInvalidUrl": "Enter the instance URL of your account.",
+  "pairingError": "Pairing failed: {error}",
+  "@pairingError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "linkDeviceTitle": "Link a new device",
+  "linkDeviceIntro": "Point the camera at the QR code shown on the other device.",
+  "linkDeviceSuccess": "Device linked",
+  "linkDeviceInvalidCode": "This QR code is not a Fedi3 pairing code.",
+  "linkDeviceError": "Could not link the device: {error}",
+  "@linkDeviceError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "linkDeviceUnsupported": "Camera scanning is available on Android and iOS only.",
+  "settingsLinkDevice": "Link a new device",
+  "settingsLinkDeviceHint": "Add this account to another phone or computer.",
+  "networkingDeviceSync": "Sync activity across devices",
+  "networkingDeviceSyncHint": "Replicate chats, receipts and call signalling to every linked client of this account."
 }

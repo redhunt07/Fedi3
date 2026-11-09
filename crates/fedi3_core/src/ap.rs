@@ -304,6 +304,11 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/suggested/actors") => suggested_actors(state, req).await,
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
+        // Identity package export (internal): used by QR pairing and manual login.
+        ("GET", "/_fedi3/identity/export") => identity_export_get(state, req).await,
+        // Chat snapshot (internal): recent history carried by the pairing package.
+        ("GET", "/_fedi3/chat/snapshot") => chat_snapshot_get(state, req).await,
+        ("POST", "/_fedi3/chat/snapshot") => chat_snapshot_post(state, req).await,
         // H-44: locked-account Follow requests (internal UI endpoints).
         ("GET", "/_fedi3/follow_requests") => follow_requests_list(state, req).await,
         ("POST", p) if p.starts_with("/_fedi3/follow_requests/") && p.ends_with("/approve") => {
@@ -3321,6 +3326,68 @@ async fn chat_bundle_get(state: &ApState, _req: Request<Body>) -> Response<Body>
     }
 }
 
+async fn identity_export_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    // A fresh profile must export a usable chat identity too: ensure_chat_keys creates
+    // the Kyber768 identity (and keeps prekey generation harmless for older peers).
+    if let Err(e) = chat::ensure_chat_keys(state) {
+        return simple(StatusCode::BAD_GATEWAY, &format!("chat key error: {e}"));
+    }
+    let chat_keys = match state.social.get_chat_identity_key() {
+        Ok(Some(keys)) => keys,
+        Ok(None) => return simple(StatusCode::BAD_GATEWAY, "missing chat identity key"),
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    axum::Json(serde_json::json!({
+        "public_key_pem": state.cfg.public_key_pem,
+        "private_key_pem": state.private_key_pem,
+        "chat_identity_public_b64": chat_keys.0,
+        "chat_identity_secret_b64": chat_keys.1,
+    }))
+    .into_response()
+}
+
+async fn chat_snapshot_get(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    match chat::export_chat_snapshot(state) {
+        Ok(snapshot) => axum::Json(snapshot).into_response(),
+        Err(e) => simple(
+            StatusCode::BAD_GATEWAY,
+            &format!("chat snapshot error: {e}"),
+        ),
+    }
+}
+
+async fn chat_snapshot_post(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    // Bound memory: the body is read with an explicit cap and parsed into structs whose
+    // fields are all defaulted, so missing fields are tolerated and unknown ones ignored.
+    let bytes = match axum::body::to_bytes(body, chat::CHAT_SNAPSHOT_MAX_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid body"),
+    };
+    let snapshot: chat::ChatSnapshot = match serde_json::from_slice(&bytes) {
+        Ok(snapshot) => snapshot,
+        Err(e) => return simple(StatusCode::BAD_REQUEST, &format!("invalid snapshot: {e}")),
+    };
+    match chat::import_chat_snapshot(state, &snapshot) {
+        Ok(()) => simple(StatusCode::OK, "ok"),
+        Err(e) => simple(
+            StatusCode::BAD_GATEWAY,
+            &format!("chat snapshot import failed: {e}"),
+        ),
+    }
+}
+
 async fn chat_inbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     let (_parts, body) = req.into_parts();
     let bytes = match axum::body::to_bytes(body, 256 * 1024).await {
@@ -3712,6 +3779,10 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
+    // The message is already stored locally: publish exactly one self-sync copy for the
+    // account's other clients, independently of the per-recipient delivery loop above.
+    chat::self_sync_chat_payload(state, &thread_id, &payload, &message_id).await;
+
     axum::Json(serde_json::json!({
         "ok": true,
         "thread_id": thread_id,
@@ -3886,6 +3957,9 @@ async fn dispatch_chat_payload_to_members(
         .list_chat_members(thread_id)
         .unwrap_or_default();
     let mut outcome = ChatDispatch::default();
+    // One self-sync copy per dispatched payload (never per recipient): the account's other
+    // clients receive the same envelope through the relay spool.
+    chat::self_sync_chat_payload(state, thread_id, payload, envelope_message_id).await;
     for (actor, _role) in members {
         // Actor URLs are stored with inconsistent trailing slashes across
         // federation paths; compare them normalized or call signals silently
@@ -4055,6 +4129,8 @@ async fn chat_react_post(state: &ApState, req: Request<Body>) -> Response<Body> 
         title: None,
         reaction: Some(reaction.to_string()),
     };
+    // One self-sync copy for the account's linked clients, before the recipient loop.
+    chat::self_sync_chat_payload(state, &thread_id, &payload, &chat::random_id()).await;
     let mut sent = 0u32;
     for actor in member_ids {
         if actor == self_actor {
@@ -4303,26 +4379,28 @@ async fn chat_seen_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         state.cfg.public_base_url.trim_end_matches('/'),
         state.cfg.username
     );
+    let payload = chat::ChatPayload {
+        op: "receipt".to_string(),
+        text: None,
+        reply_to: None,
+        message_id: Some(input.message_id.clone()),
+        status: Some("seen".to_string()),
+        thread_id: Some(input.thread_id.clone()),
+        attachments: None,
+        action: None,
+        targets: None,
+        members: None,
+        title: None,
+        reaction: None,
+    };
+    // One self-sync copy for the account's linked clients, before the recipient loop.
+    chat::self_sync_chat_payload(state, &input.thread_id, &payload, &input.message_id).await;
     for (actor, _role) in members {
         if actor == self_actor {
             continue;
         }
         if let Ok(peers) = resolve_actor_peers(state, &actor).await {
             for peer_id in peers {
-                let payload = chat::ChatPayload {
-                    op: "receipt".to_string(),
-                    text: None,
-                    reply_to: None,
-                    message_id: Some(input.message_id.clone()),
-                    status: Some("seen".to_string()),
-                    thread_id: Some(input.thread_id.clone()),
-                    attachments: None,
-                    action: None,
-                    targets: None,
-                    members: None,
-                    title: None,
-                    reaction: None,
-                };
                 if let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &actor).await {
                     if chat::verify_bundle(state, &bundle).await.is_err() {
                         continue;
@@ -5382,7 +5460,7 @@ async fn chat_thread_members_post(state: &ApState, req: Request<Body>) -> Respon
     simple(StatusCode::OK, "ok")
 }
 
-async fn send_chat_receipt(
+pub(crate) async fn send_chat_receipt(
     state: &ApState,
     env: &chat::ChatEnvelope,
     status: &str,
@@ -5401,6 +5479,9 @@ async fn send_chat_receipt(
         title: None,
         reaction: None,
     };
+    // Receipts are locally originated payloads: sync them so every linked client sees
+    // the same message status. This stays best-effort and never fails the receipt itself.
+    chat::self_sync_chat_payload(state, &env.thread_id, &payload, &env.message_id).await;
     let peer_id = env.sender_peer_id.trim();
     if peer_id.is_empty() {
         return Ok(());
@@ -5477,6 +5558,9 @@ async fn send_chat_system(
     };
     let _ = state.social.insert_chat_message(&msg);
     let _ = state.social.touch_chat_thread(thread_id);
+
+    // One self-sync copy for the account's linked clients, before the recipient loop.
+    chat::self_sync_chat_payload(state, thread_id, &payload, &message_id).await;
 
     let mut sent = 0u32;
     for actor in all_members {

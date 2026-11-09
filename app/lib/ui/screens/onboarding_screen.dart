@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,11 +12,13 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../model/relay_directory.dart';
 import '../../services/call_ice_config.dart';
+import '../../services/identity_sync.dart';
 import '../../services/relay_directory_service.dart';
 import '../../services/backup_codec.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/relay_latency_badge.dart';
+import 'pairing_screen.dart';
 
 enum OnboardingMode { loginExisting, createNew }
 
@@ -162,9 +166,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: () => setState(() => _manualLogin = true),
-                      child: Text(context.l10n.onboardingManualConfig),
+                    child: Wrap(
+                      spacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        TextButton(
+                          onPressed: () => setState(() => _manualLogin = true),
+                          child: Text(context.l10n.onboardingManualConfig),
+                        ),
+                        TextButton.icon(
+                          onPressed: _openPairing,
+                          icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                          label: Text(context.l10n.onboardingLoginWithQr),
+                        ),
+                      ],
                     ),
                   ),
                 ] else ...[
@@ -516,7 +531,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     setState(() => _formError = null);
     _autofillNetworkingDefaults(force: false);
-    final cfg = CoreConfig(
+    var cfg = CoreConfig(
       username: _username.text.trim(),
       domain: _domain.text.trim(),
       publicBaseUrl: _publicBaseUrl.text.trim(),
@@ -556,6 +571,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       postDeliveryMode: _postDeliveryMode,
       anchorActorUrl: widget.appState.config?.anchorActorUrl,
     );
+
+    // Multi-device login: reuse the identity already stored by the relay.
+    // A missing or unreadable blob must never block the login; only a core
+    // that fails to start is a real error.
+    var relayHasIdentity = false;
+    if (widget.mode == OnboardingMode.loginExisting) {
+      final relayBase = IdentitySync.relayHttpBaseFromWs(cfg.relayWs);
+      if (relayBase.isNotEmpty) {
+        try {
+          final sealed = await IdentitySync.fetchRelayIdentity(
+            relayBase: relayBase,
+            user: cfg.username,
+            token: relayToken,
+          );
+          if (sealed != null) {
+            relayHasIdentity = true;
+            if (IdentitySync.looksSealed(sealed)) {
+              final package = await IdentitySync.open(sealed, relayToken);
+              cfg = IdentitySync.mergeIdentity(cfg, package);
+            }
+          }
+        } catch (_) {
+          // Identity transfer is best-effort on login.
+        }
+      }
+    }
+
     await widget.appState.saveConfig(cfg);
     await widget.appState.startCore();
     if (!mounted) return;
@@ -564,11 +606,34 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           widget.appState.lastError ?? context.l10n.networkErrorTitle);
       return;
     }
+    final runningConfig = widget.appState.config;
+    if (runningConfig != null && !relayHasIdentity) {
+      // First client of the account: publish its identity for the others.
+      // New accounts publish too, so a second device can log in right away.
+      unawaited(IdentitySync.ensurePublished(runningConfig));
+    }
     if (widget.mode == OnboardingMode.createNew) {
       await _showRecoveryCode(cfg);
       if (!mounted) return;
     }
     Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
+  Future<void> _openPairing() async {
+    final entered = _quickUrl.text.trim().isNotEmpty
+        ? _quickUrl.text.trim()
+        : _publicBaseUrl.text.trim();
+    final paired = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PairingScreen(
+          appState: widget.appState,
+          initialInstanceUrl: entered,
+        ),
+      ),
+    );
+    if (paired == true && mounted) {
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    }
   }
 
   Future<void> _quickConnect() async {

@@ -52,6 +52,10 @@ class CoreConfig {
     this.p2pCacheTtlSecs,
     this.previousPublicBaseUrl,
     this.previousRelayToken,
+    this.identityPrivateKeyPem,
+    this.chatIdentityPublicB64,
+    this.chatIdentitySecretB64,
+    this.deviceSyncEnable = true,
     String? anchorActorUrl,
   })  : username = username.toLowerCase(),
         webrtcIceUrls = List.unmodifiable(webrtcIceUrls),
@@ -88,6 +92,16 @@ class CoreConfig {
   final int? p2pCacheTtlSecs;
   final String? previousPublicBaseUrl;
   final String? previousRelayToken;
+
+  /// Account identity transferred to a linked client. All three are secrets
+  /// and live in the OS keyring, never in the plaintext config file.
+  final String? identityPrivateKeyPem;
+  final String? chatIdentityPublicB64;
+  final String? chatIdentitySecretB64;
+
+  /// Replicate chat activity (messages, calls, receipts) across the account's
+  /// linked devices through the relay spool.
+  final bool deviceSyncEnable;
 
   /// Optional identity anchor: a static domain that hosts the actor document
   /// and WebFinger, decoupling the identity from the relay. Normalized to
@@ -130,6 +144,10 @@ class CoreConfig {
     Object? p2pCacheTtlSecs = _unset,
     Object? previousPublicBaseUrl = _unset,
     Object? previousRelayToken = _unset,
+    Object? identityPrivateKeyPem = _unset,
+    Object? chatIdentityPublicB64 = _unset,
+    Object? chatIdentitySecretB64 = _unset,
+    bool? deviceSyncEnable,
     Object? anchorActorUrl = _unset,
   }) {
     return CoreConfig(
@@ -175,6 +193,16 @@ class CoreConfig {
       previousRelayToken: previousRelayToken == _unset
           ? this.previousRelayToken
           : previousRelayToken as String?,
+      identityPrivateKeyPem: identityPrivateKeyPem == _unset
+          ? this.identityPrivateKeyPem
+          : identityPrivateKeyPem as String?,
+      chatIdentityPublicB64: chatIdentityPublicB64 == _unset
+          ? this.chatIdentityPublicB64
+          : chatIdentityPublicB64 as String?,
+      chatIdentitySecretB64: chatIdentitySecretB64 == _unset
+          ? this.chatIdentitySecretB64
+          : chatIdentitySecretB64 as String?,
+      deviceSyncEnable: deviceSyncEnable ?? this.deviceSyncEnable,
       anchorActorUrl: anchorActorUrl == _unset
           ? this.anchorActorUrl
           : anchorActorUrl as String?,
@@ -275,6 +303,12 @@ class CoreConfig {
       p2pCacheTtlSecs: _intOrNull(json['p2pCacheTtlSecs']),
       previousPublicBaseUrl: _strOrNull(json['previousPublicBaseUrl']),
       previousRelayToken: _strOrNull(json['previousRelayToken']),
+      identityPrivateKeyPem: _strOrNull(json['identityPrivateKeyPem']),
+      chatIdentityPublicB64: _strOrNull(json['chatIdentityPublicB64']),
+      chatIdentitySecretB64: _strOrNull(json['chatIdentitySecretB64']),
+      deviceSyncEnable: json['deviceSyncEnable'] == null
+          ? true
+          : _bool(json['deviceSyncEnable']),
       anchorActorUrl: normalizeAnchorActorUrl(json['anchorActorUrl']),
     );
   }
@@ -311,6 +345,10 @@ class CoreConfig {
         'p2pCacheTtlSecs': p2pCacheTtlSecs,
         'previousPublicBaseUrl': previousPublicBaseUrl,
         'previousRelayToken': previousRelayToken,
+        'identityPrivateKeyPem': identityPrivateKeyPem,
+        'chatIdentityPublicB64': chatIdentityPublicB64,
+        'chatIdentitySecretB64': chatIdentitySecretB64,
+        'deviceSyncEnable': deviceSyncEnable,
         'anchorActorUrl': anchorActorUrl,
       };
 
@@ -360,8 +398,22 @@ class CoreConfig {
         if (webrtcIceCredential != null &&
             webrtcIceCredential!.trim().isNotEmpty)
           'webrtc_ice_credential': webrtcIceCredential!.trim(),
+        'device_sync_enable': deviceSyncEnable,
+        'device_sync_poll_secs': 3,
       },
     };
+    if (identityPrivateKeyPem != null &&
+        identityPrivateKeyPem!.trim().isNotEmpty) {
+      cfg['identity_private_key_pem'] = identityPrivateKeyPem!.trim();
+    }
+    if (chatIdentityPublicB64 != null &&
+        chatIdentityPublicB64!.trim().isNotEmpty) {
+      cfg['chat_identity_public_b64'] = chatIdentityPublicB64!.trim();
+    }
+    if (chatIdentitySecretB64 != null &&
+        chatIdentitySecretB64!.trim().isNotEmpty) {
+      cfg['chat_identity_secret_b64'] = chatIdentitySecretB64!.trim();
+    }
     if (displayName.trim().isNotEmpty) cfg['display_name'] = displayName.trim();
     if (summary.trim().isNotEmpty) cfg['summary'] = textToHtml(summary);
     if (iconUrl.trim().isNotEmpty) cfg['icon_url'] = iconUrl.trim();

@@ -80,6 +80,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   String? _incomingCallId;
   Timer? _incomingCallTimer;
   bool _callPromptOpen = false;
+  bool _callAnsweredElsewhere = false;
   late final AnimationController _sectionFade = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 220),
@@ -430,22 +431,43 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
               s.action == 'decline')
           .map((s) => s.callId)
           .toSet();
-      // Close a prompt that is already open when the caller hangs up.
+      // A call answered on another client of the same account is owned there:
+      // stop ringing here and never send a busy decline.
+      final accepted = signals
+          .where((s) => s.action == 'accept')
+          .map((s) => s.callId)
+          .toSet();
+      final answeredByThisAccount = signals
+          .where((s) => s.action == 'accept' && s.fromActor == self)
+          .map((s) => s.callId)
+          .toSet();
+      // Advance in ID order: two events in the same millisecond are distinct.
+      for (final signal in signals) {
+        if (signal.id > _lastCallSignalId) _lastCallSignalId = signal.id;
+        if (signal.createdAtMs > _lastCallSignalMs) {
+          _lastCallSignalMs = signal.createdAtMs;
+        }
+      }
+      // Close a prompt that is already open when the caller hangs up or when
+      // another linked client answers.
       if (_callPromptOpen &&
           _incomingCallId != null &&
-          ended.contains(_incomingCallId) &&
+          (ended.contains(_incomingCallId) ||
+              answeredByThisAccount.contains(_incomingCallId)) &&
           mounted) {
+        if (answeredByThisAccount.contains(_incomingCallId)) {
+          _callAnsweredElsewhere = true;
+        }
         Navigator.of(context, rootNavigator: true).pop(false);
       }
-      // Advance in ID order: two events in the same millisecond are distinct.
       // Several calls can be ringing at once (a group where members invite each
       // other); the newest one wins, otherwise a stale invite steals the prompt.
       ChatCallSignal? newest;
       for (final signal in signals) {
-        if (signal.id > _lastCallSignalId) _lastCallSignalId = signal.id;
         if (signal.action != 'invite' ||
             signal.fromActor == self ||
             ended.contains(signal.callId) ||
+            accepted.contains(signal.callId) ||
             signal.callId == _incomingCallId ||
             DateTime.now().millisecondsSinceEpoch - signal.createdAtMs >
                 60000) {
@@ -498,6 +520,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       return;
     }
     _callPromptOpen = true;
+    _callAnsweredElsewhere = false;
     // Loop the dedicated ringtone while the incoming-call prompt is open.
     unawaited(SoundService.playCallLoop());
     _incomingCallTimer?.cancel();
@@ -556,16 +579,21 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _incomingCallTimer = null;
     await SoundService.stopCall();
     _callPromptOpen = false;
+    final answeredElsewhere = _callAnsweredElsewhere;
+    _callAnsweredElsewhere = false;
     if (accepted != true) {
       _incomingCallId = null;
-      try {
-        await CoreApi(config: widget.appState.config!).sendChatCallSignal(
-          threadId: threadId,
-          callId: signal.callId,
-          action: 'decline',
-          to: from,
-        );
-      } catch (_) {}
+      // The call was answered on another linked client: no busy decline.
+      if (!answeredElsewhere) {
+        try {
+          await CoreApi(config: widget.appState.config!).sendChatCallSignal(
+            threadId: threadId,
+            callId: signal.callId,
+            action: 'decline',
+            to: from,
+          );
+        } catch (_) {}
+      }
       return;
     }
     if (!mounted) return;

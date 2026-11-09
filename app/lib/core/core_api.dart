@@ -1338,6 +1338,40 @@ class CoreApi {
     );
   }
 
+  /// GET /_fedi3/identity/export. Returns the actor RSA key pair and the chat
+  /// identity key pair used to build the multi-device identity package.
+  Future<Map<String, dynamic>> exportIdentity() async {
+    final resp = await _request(
+      method: 'GET',
+      uri: _internal('/_fedi3/identity/export'),
+      headers: _internalHeaders,
+    );
+    return _decodeMap(resp, 'identity export');
+  }
+
+  /// GET /_fedi3/chat/snapshot. Returns the chat history bundle used to seed a
+  /// newly linked client during QR pairing.
+  Future<Map<String, dynamic>> exportChatSnapshot() async {
+    final resp = await _request(
+      method: 'GET',
+      uri: _internal('/_fedi3/chat/snapshot'),
+      headers: _internalHeaders,
+    );
+    return _decodeMap(resp, 'chat snapshot export');
+  }
+
+  /// POST /_fedi3/chat/snapshot. Restores a snapshot exported by another
+  /// client of the same account.
+  Future<void> importChatSnapshot(Map<String, dynamic> snapshot) async {
+    await _request(
+      method: 'POST',
+      uri: _internal('/_fedi3/chat/snapshot'),
+      headers: _jsonHeaders,
+      body: snapshot,
+      okStatus: const {200},
+    );
+  }
+
   Future<Map<String, dynamic>> uploadMedia({
     required Uint8List bytes,
     required String filename,

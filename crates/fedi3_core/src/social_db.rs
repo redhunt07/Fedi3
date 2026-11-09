@@ -4888,6 +4888,255 @@ impl SocialDb {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
+
+    // ---- Pairing chat snapshot helpers -------------------------------------------------
+    // Full-table reads and timestamp-preserving writes used by the chat snapshot export
+    // and import endpoints. Existing method signatures are untouched.
+
+    pub fn list_chat_threads_snapshot(&self) -> Result<Vec<ChatThread>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, kind, title, created_at_ms, updated_at_ms
+             FROM chat_threads ORDER BY created_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ChatThread {
+                thread_id: r.get(0)?,
+                kind: r.get(1)?,
+                title: r.get(2)?,
+                created_at_ms: r.get(3)?,
+                updated_at_ms: r.get(4)?,
+                last_message_ms: None,
+                last_message_preview: None,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Insert a thread from a snapshot only when it is absent locally.
+    pub fn insert_chat_thread_snapshot(
+        &self,
+        thread_id: &str,
+        kind: &str,
+        title: Option<&str>,
+        created_at_ms: i64,
+        updated_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_threads
+               (thread_id, kind, title, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![thread_id, kind, title, created_at_ms, updated_at_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_all_chat_members(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, actor_id, role, added_at_ms
+             FROM chat_members ORDER BY thread_id ASC, added_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_chat_member_snapshot(
+        &self,
+        thread_id: &str,
+        actor_id: &str,
+        role: &str,
+        added_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO chat_members (thread_id, actor_id, role, added_at_ms)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(thread_id, actor_id)
+            DO UPDATE SET role=excluded.role
+            "#,
+            params![thread_id, actor_id, role, added_at_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Newest messages across all threads, used for the bounded snapshot export.
+    pub fn list_chat_messages_snapshot(&self, limit: u32) -> Result<Vec<ChatMessage>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT message_id, thread_id, sender_actor, sender_device, created_at_ms,
+                    edited_at_ms, deleted, body_json
+             FROM chat_messages ORDER BY created_at_ms DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.max(1) as i64], |r| {
+            let deleted: i64 = r.get(6)?;
+            Ok(ChatMessage {
+                message_id: r.get(0)?,
+                thread_id: r.get(1)?,
+                sender_actor: r.get(2)?,
+                sender_device: r.get(3)?,
+                created_at_ms: r.get(4)?,
+                edited_at_ms: r.get(5)?,
+                deleted: deleted != 0,
+                body_json: r.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_all_chat_statuses(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT message_id, actor_id, status, updated_at_ms
+             FROM chat_message_status ORDER BY updated_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_all_chat_reactions(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT message_id, actor_id, reaction, created_at_ms
+             FROM chat_message_reactions ORDER BY created_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_chat_reaction_snapshot(
+        &self,
+        message_id: &str,
+        actor_id: &str,
+        reaction: &str,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO chat_message_reactions
+               (message_id, actor_id, reaction, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![message_id, actor_id, reaction, created_at_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_all_chat_pins(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, message_id, pinned_by, pinned_at_ms
+             FROM chat_pins ORDER BY pinned_at_ms ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_chat_pin_snapshot(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+        pinned_by: &str,
+        pinned_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO chat_pins
+               (thread_id, message_id, pinned_by, pinned_at_ms)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![thread_id, message_id, pinned_by, pinned_at_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_all_chat_call_signals(
+        &self,
+    ) -> Result<Vec<(String, String, Option<String>, String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms
+             FROM chat_call_signals ORDER BY created_at_ms ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Insert a call signal from a snapshot, skipping an exact duplicate.
+    pub fn insert_chat_call_signal_snapshot(
+        &self,
+        thread_id: &str,
+        from_actor: &str,
+        to_actor: Option<&str>,
+        call_id: &str,
+        action: &str,
+        data_json: &str,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO chat_call_signals
+               (thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+             WHERE NOT EXISTS (SELECT 1 FROM chat_call_signals WHERE thread_id=?1 AND from_actor=?2
+               AND to_actor IS ?3 AND call_id=?4 AND action=?5 AND data_json=?6)",
+            params![
+                thread_id,
+                from_actor,
+                to_actor,
+                call_id,
+                action,
+                data_json,
+                created_at_ms
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 #[repr(u32)]

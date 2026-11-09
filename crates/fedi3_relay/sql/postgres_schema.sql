@@ -375,3 +375,27 @@ CREATE TABLE IF NOT EXISTS forward_receipts (
 );
 CREATE INDEX IF NOT EXISTS forward_receipts_user_seq ON forward_receipts(username,seq);
 CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_at_ms);
+
+CREATE TABLE IF NOT EXISTS user_identity (
+  username TEXT PRIMARY KEY,
+  envelope TEXT NOT NULL,
+  updated_at_ms BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pair_sessions (
+  code TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  envelope TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  expires_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pair_sessions_expires ON pair_sessions (expires_at_ms);
+
+CREATE TABLE IF NOT EXISTS chat_spool (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL,
+  envelope TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_spool_user_id ON chat_spool (username, id);
+CREATE INDEX IF NOT EXISTS idx_chat_spool_created ON chat_spool (created_at_ms);

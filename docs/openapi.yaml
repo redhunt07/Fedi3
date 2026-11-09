@@ -800,7 +800,177 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-  /_fedi3/reactions:
+  /_fedi3/identity/export:
+    get:
+      tags: [core]
+      summary: Esporta il pacchetto di identità dell'account
+      description: |
+        Restituisce la chiave privata RSA dell'attore e la coppia di chiavi di
+        identità chat Kyber768. Il client sigilla il pacchetto prima di
+        trasferirlo a un altro dispositivo.
+      responses:
+        '200':
+          description: Pacchetto di identità
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [public_key_pem, private_key_pem, chat_identity_public_b64, chat_identity_secret_b64]
+                properties:
+                  public_key_pem: {type: string}
+                  private_key_pem: {type: string}
+                  chat_identity_public_b64: {type: string}
+                  chat_identity_secret_b64: {type: string}
+  /_fedi3/chat/snapshot:
+    get:
+      tags: [core]
+      summary: Esporta lo stato delle chat per l'abbinamento QR
+      description: |
+        Thread, membri, messaggi, stati, reazioni, pin e segnali di chiamata.
+        I messaggi sono limitati ai 10.000 più recenti o a circa 8 MB di JSON;
+        truncated segnala quando i messaggi più vecchi sono stati esclusi.
+      responses:
+        '200':
+          description: Snapshot delle chat
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [v, threads, members, messages, statuses, reactions, pins, call_signals, truncated]
+                properties:
+                  v: {type: integer}
+                  threads: {type: array, items: {type: object, additionalProperties: true}}
+                  members: {type: array, items: {type: object, additionalProperties: true}}
+                  messages: {type: array, items: {type: object, additionalProperties: true}}
+                  statuses: {type: array, items: {type: object, additionalProperties: true}}
+                  reactions: {type: array, items: {type: object, additionalProperties: true}}
+                  pins: {type: array, items: {type: object, additionalProperties: true}}
+                  call_signals: {type: array, items: {type: object, additionalProperties: true}}
+                  truncated: {type: boolean}
+    post:
+      tags: [core]
+      summary: Importa uno snapshot delle chat
+      description: Importazione idempotente; i duplicati vengono ignorati. Non invia ricevute né repliche.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Snapshot importato
+        '400':
+          description: JSON non valido o troppo grande
+  /_fedi3/users/{username}/identity:
+    get:
+      tags: [relay]
+      summary: Blob di identità sigillato dell'account
+      description: Il relay memorizza solo l'envelope sigillato e non può decifrarlo.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      responses:
+        '200':
+          description: Envelope sigillato
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '404':
+          description: Nessun blob pubblicato
+    put:
+      tags: [relay]
+      summary: Pubblica il blob di identità sigillato
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: true}
+      responses:
+        '204':
+          description: Blob memorizzato
+        '400':
+          description: Envelope non valido
+  /_fedi3/pair/{code}:
+    get:
+      tags: [relay]
+      summary: Recupera il pacchetto di abbinamento QR
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 128}
+      responses:
+        '200':
+          description: Envelope sigillato con identità, configurazione e snapshot chat
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '404':
+          description: Codice sconosciuto
+        '410':
+          description: Codice scaduto
+    put:
+      tags: [relay]
+      summary: Pubblica il pacchetto di abbinamento QR
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: {type: string, minLength: 8, maxLength: 128}
+        - name: user
+          in: query
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: true}
+      responses:
+        '204':
+          description: Pacchetto memorizzato per dieci minuti
+        '400':
+          description: Codice o envelope non valido
+  /_fedi3/chat/spool:
+    get:
+      tags: [relay]
+      summary: Envelope chat accumulati per l'account
+      description: |
+        Restituisce gli envelope dopo il cursore indicato, dal più vecchio al
+        più recente. Lo spool conserva solo testo cifrato per 90 giorni.
+      parameters:
+        - name: user
+          in: query
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        '200':
+          description: Envelope e ultimo id
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, latest_id]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, envelope]
+                      properties:
+                        id: {type: integer}
+                        envelope: {type: object, additionalProperties: true}
+                  latest_id: {type: integer}
+    /_fedi3/reactions:
     get:
       tags: [core]
       summary: Reazioni a una nota

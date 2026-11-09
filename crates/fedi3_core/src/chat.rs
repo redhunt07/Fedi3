@@ -20,6 +20,7 @@ use tracing::{debug, warn};
 use crate::ap::ApState;
 use crate::http_sig::{sign_bytes_rsa_sha256, verify_bytes_rsa_sha256};
 use crate::social_db::{ChatMessage, ChatThread, CollectionPage, SocialDb};
+use crate::ui_events::UiEvent;
 use fedi3_protocol::RelayHttpRequest;
 
 const CHAT_VERSION: u32 = 1;
@@ -136,12 +137,12 @@ pub fn build_chat_bundle(state: &ApState) -> Result<ChatBundle> {
         .social
         .get_chat_identity_key()?
         .context("missing chat identity key")?;
-    let prekeys = state
-        .social
-        .list_chat_prekeys(CHAT_PREKEY_TARGET)?
-        .into_iter()
-        .map(|(id, public_b64, _)| ChatPreKey { id, public_b64 })
-        .collect::<Vec<_>>();
+    // No prekeys are advertised: every linked client of an account shares the chat
+    // identity key, and an envelope is encrypted once for the account so all of them
+    // must be able to decrypt it. A prekey belongs to a single device, so advertising
+    // one would make the envelope unreadable on the other clients. Prekey decryption
+    // remains supported for envelopes produced by older clients.
+    let prekeys = Vec::new();
     let device_id = get_or_create_device_id(state)?;
     let actor = format!(
         "{}/users/{}",
@@ -179,11 +180,19 @@ pub async fn verify_bundle(state: &ApState, bundle: &ChatBundle) -> Result<()> {
     let mut clone = bundle.clone();
     clone.signature_b64 = None;
     let bytes = serde_json::to_vec(&clone)?;
-    let summary = state
-        .key_resolver
-        .resolve_actor_summary_for_key_id(&bundle.actor)
-        .await?;
-    verify_bytes_rsa_sha256(&summary.public_key_pem, &bytes, &sig)?;
+    // Self-sync bundles and envelopes are signed by this same account: verifying them with
+    // the local public key avoids a network actor resolution that a device talking only to
+    // the relay may not be able to perform.
+    let public_key_pem = if is_local_actor(state, &bundle.actor) {
+        state.cfg.public_key_pem.clone()
+    } else {
+        state
+            .key_resolver
+            .resolve_actor_summary_for_key_id(&bundle.actor)
+            .await?
+            .public_key_pem
+    };
+    verify_bytes_rsa_sha256(&public_key_pem, &bytes, &sig)?;
     Ok(())
 }
 
@@ -318,10 +327,33 @@ pub fn store_incoming_payload_db(
     }
     let thread_exists = social.chat_thread_exists(thread_id)?;
     if !thread_exists {
-        // A first DM can be a plain message or a call invite: both are legitimate when the
-        // thread id is the deterministic hash of the sender and the local actor, so a call
-        // placed before any message still reaches the recipient.
-        if payload.op == "message" || payload.op == "call" {
+        if payload.op == "message" {
+            // A linked client bootstraps a thread from a spooled message even when the
+            // pairing snapshot did not carry it (manual login, older snapshot). A message
+            // signed by the local actor is a self-sync copy from another client of this
+            // account, so the thread is a DM owned locally. A remote sender is a first
+            // contact only when the thread id is the deterministic DM hash of the sender
+            // and the local actor; any other unknown thread is a group.
+            let mut dm_members = vec![
+                sender.to_string(),
+                local_actor.trim_end_matches('/').to_string(),
+            ];
+            dm_members.sort();
+            dm_members.dedup();
+            let sender_is_local = sender.trim_end_matches('/') == local_actor.trim_end_matches('/');
+            let kind = if sender_is_local || thread_id == crate::ap::chat_dm_thread_id(&dm_members)
+            {
+                "dm"
+            } else {
+                "group"
+            };
+            let sender_role = if sender_is_local { "owner" } else { "member" };
+            social.create_chat_thread(thread_id, kind, None)?;
+            social.upsert_chat_member(thread_id, sender, sender_role)?;
+            social.upsert_chat_member(thread_id, local_actor, "owner")?;
+        } else if payload.op == "call" {
+            // A call invite can precede any message: accept it when the thread id is the
+            // deterministic hash of the sender and the local actor (existing first-DM path).
             let mut members = vec![
                 sender.to_string(),
                 local_actor.trim_end_matches('/').to_string(),
@@ -419,7 +451,11 @@ pub fn store_incoming_payload_db(
         )?;
     } else if payload.op == "message" {
         social.create_chat_thread(thread_id, "dm", None)?;
-        social.upsert_chat_member(thread_id, sender, "member")?;
+        // Bootstrap already assigned the right role (the local actor is owner on a
+        // self-sync thread); never downgrade an existing member.
+        if social.get_chat_member_role(thread_id, sender)?.is_none() {
+            social.upsert_chat_member(thread_id, sender, "member")?;
+        }
         let msg = ChatMessage {
             message_id: env.message_id.clone(),
             thread_id: thread_id.to_string(),
@@ -451,6 +487,12 @@ pub fn store_incoming_payload_db(
         social.create_chat_thread(thread_id, "group", title)?;
         if let Some(members) = payload.members.as_ref() {
             social.set_chat_members(thread_id, members)?;
+            // The wire member list carries no roles. When the announcement is a self-sync
+            // copy of our own system message (sender is the local actor), this account
+            // created the group and must keep ownership locally.
+            if sender.trim_end_matches('/') == local_actor.trim_end_matches('/') {
+                social.upsert_chat_member(thread_id, local_actor, "owner")?;
+            }
         }
         if let Some(action) = payload.action.as_deref() {
             if action == "delete_thread" {
@@ -632,6 +674,597 @@ async fn send_envelope_over_http(
     }
 }
 
+/// Best-effort self-sync copy of a locally originated chat payload.
+///
+/// The envelope is encrypted for this account's own chat identity key and POSTed to the
+/// account chat inbox on the relay transport (`relay_base_url`, not the public identity
+/// anchor, which may be a static domain without the chat endpoint). The relay appends it
+/// to the account spool, so every linked client of the account can then decrypt it, which
+/// is what makes messages, edits, deletions, reactions, receipts, pins, system notices and
+/// call signals visible on the other devices. Delivery to the real recipients is handled
+/// separately; a missing relay or a failed POST must never fail the user-visible send.
+pub async fn self_sync_chat_payload(
+    state: &ApState,
+    thread_id: &str,
+    payload: &ChatPayload,
+    envelope_message_id: &str,
+) {
+    let Some(relay_base) = state
+        .cfg
+        .relay_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    let bundle = match build_chat_bundle(state) {
+        Ok(bundle) => bundle,
+        Err(e) => {
+            debug!(error=%e, "self-sync bundle unavailable");
+            return;
+        }
+    };
+    let env =
+        match encrypt_payload_for_bundle(state, &bundle, thread_id, envelope_message_id, payload) {
+            Ok(env) => env,
+            Err(e) => {
+                debug!(error=%e, "self-sync encryption failed");
+                return;
+            }
+        };
+    let bytes = match serde_json::to_vec(&env) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            debug!(error=%e, "self-sync serialization failed");
+            return;
+        }
+    };
+    let url = format!(
+        "{}/users/{}/_fedi3/chat/inbox",
+        relay_base.trim_end_matches('/'),
+        state.cfg.username
+    );
+    match state
+        .http
+        .post(&url)
+        .timeout(Duration::from_secs(8))
+        .header("content-type", "application/json")
+        .body(bytes)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            debug!(thread=%thread_id, "chat payload self-synced to the account spool");
+        }
+        Ok(resp) => debug!(thread=%thread_id, status=%resp.status(), "self-sync rejected"),
+        Err(e) => debug!(thread=%thread_id, error=%e, "self-sync failed"),
+    }
+}
+
+const CHAT_SPOOL_AFTER_META: &str = "chat_spool_after";
+const CHAT_SPOOL_POLL_SECS: u64 = 3;
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatSpoolPage {
+    #[serde(default)]
+    items: Vec<ChatSpoolItem>,
+    #[serde(default)]
+    latest_id: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatSpoolItem {
+    id: i64,
+    envelope: serde_json::Value,
+}
+
+/// Relay chat spool poller: applies the envelopes the relay stored for this account to the
+/// local database and wakes the UI. It only stores; nothing is re-broadcast here.
+pub fn start_chat_spool_worker(
+    state: ApState,
+    relay_base: String,
+    relay_token: String,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(CHAT_SPOOL_POLL_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    if *shutdown.borrow() {
+                        break;
+                    }
+                    poll_chat_spool_once(&state, &relay_base, &relay_token).await;
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
+async fn poll_chat_spool_once(state: &ApState, relay_base: &str, relay_token: &str) {
+    let cursor = state
+        .social
+        .get_local_meta(CHAT_SPOOL_AFTER_META)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let url = format!(
+        "{}/_fedi3/chat/spool?user={}&after={}&limit=100",
+        relay_base.trim_end_matches('/'),
+        urlencoding::encode(&state.cfg.username),
+        cursor
+    );
+    let resp = match state
+        .http
+        .get(&url)
+        .timeout(Duration::from_secs(8))
+        .bearer_auth(relay_token)
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            debug!(error=%e, "chat spool fetch failed");
+            return;
+        }
+    };
+    if !resp.status().is_success() {
+        debug!(status=%resp.status(), "chat spool rejected");
+        return;
+    }
+    let page: ChatSpoolPage = match resp.json().await {
+        Ok(page) => page,
+        Err(e) => {
+            debug!(error=%e, "chat spool response invalid");
+            return;
+        }
+    };
+    let mut highest = cursor;
+    for item in page.items {
+        // The cursor always advances past an item that was consumed, even when the
+        // envelope cannot be decrypted: retrying it forever would block the spool.
+        highest = highest.max(item.id);
+        let env = match serde_json::from_value::<ChatEnvelope>(item.envelope) {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(spool_id=item.id, error=%e, "chat spool envelope invalid");
+                continue;
+            }
+        };
+        let payload = match decrypt_envelope(state, &env).await {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!(spool_id=item.id, error=%e, "chat spool envelope undecryptable");
+                continue;
+            }
+        };
+        // A message that is already stored came from another path (live delivery, or a
+        // previous poll): do not acknowledge it again.
+        let already_stored = state
+            .social
+            .get_chat_message_thread_id(&env.message_id)
+            .ok()
+            .flatten()
+            .is_some();
+        if let Err(e) = store_incoming_payload(state, &env, &payload).await {
+            warn!(spool_id=item.id, error=%e, "chat spool store failed");
+            continue;
+        }
+        if payload.op == "message" && !already_stored {
+            // Storage succeeded: acknowledge it. Receipt delivery must not hold the
+            // poller, so it runs in its own task.
+            let state = state.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::ap::send_chat_receipt(&state, &env, "delivered").await {
+                    debug!(error=%e, "chat spool delivered receipt failed");
+                }
+            });
+        }
+        let _ = state.ui_events.send(UiEvent::new(
+            "chat",
+            Some(payload.op.clone()),
+            Some(env.thread_id.clone()),
+        ));
+    }
+    if highest > cursor {
+        let _ = state
+            .social
+            .set_local_meta(CHAT_SPOOL_AFTER_META, &highest.to_string());
+    }
+    if page.latest_id > highest {
+        debug!(
+            cursor=%highest,
+            latest=%page.latest_id,
+            "chat spool has more envelopes to fetch"
+        );
+    }
+}
+
+/// Maximum accepted snapshot request body. The snapshot travels inside a sealed pairing
+/// envelope (base64 adds ~33%), so it stays well below the relay pair-envelope cap.
+pub const CHAT_SNAPSHOT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+const CHAT_SNAPSHOT_VERSION: u32 = 1;
+/// Newest messages carried by one snapshot.
+const CHAT_SNAPSHOT_MAX_MESSAGES: usize = 10_000;
+/// Serialized snapshot budget for the messages array. The sealed pairing package is
+/// base64-encoded and the relay caps pair envelopes at 16 MB, so the raw JSON must stay
+/// around 8 MB to fit with margin.
+const CHAT_SNAPSHOT_MAX_MESSAGES_BYTES: usize = 8 * 1024 * 1024;
+const CHAT_SNAPSHOT_BYTE_MARGIN: usize = 64 * 1024;
+
+/// Chat snapshot exchanged by QR pairing / manual login. Every field is defaulted so an
+/// older or newer peer can import it without failing on missing or unknown fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChatSnapshot {
+    #[serde(default)]
+    pub v: u32,
+    #[serde(default)]
+    pub threads: Vec<SnapshotThread>,
+    #[serde(default)]
+    pub members: Vec<SnapshotMember>,
+    #[serde(default)]
+    pub messages: Vec<SnapshotMessage>,
+    #[serde(default)]
+    pub statuses: Vec<SnapshotStatus>,
+    #[serde(default)]
+    pub reactions: Vec<SnapshotReaction>,
+    #[serde(default)]
+    pub pins: Vec<SnapshotPin>,
+    #[serde(default)]
+    pub call_signals: Vec<SnapshotCallSignal>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotThread {
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub created_at_ms: i64,
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotMember {
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub added_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotMessage {
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub sender_actor: String,
+    #[serde(default)]
+    pub sender_device: String,
+    #[serde(default)]
+    pub created_at_ms: i64,
+    #[serde(default)]
+    pub edited_at_ms: Option<i64>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub body_json: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotStatus {
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotReaction {
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub reaction: String,
+    #[serde(default)]
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotPin {
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub pinned_by: String,
+    #[serde(default)]
+    pub pinned_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SnapshotCallSignal {
+    #[serde(default)]
+    pub thread_id: String,
+    #[serde(default)]
+    pub from_actor: String,
+    #[serde(default)]
+    pub to_actor: Option<String>,
+    #[serde(default)]
+    pub call_id: String,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub data_json: String,
+    #[serde(default)]
+    pub created_at_ms: i64,
+}
+
+/// Build the chat snapshot of this client. Messages are capped both by count and by the
+/// serialized size budget; `truncated` tells the importing client that older history is
+/// missing from this package.
+pub fn export_chat_snapshot(state: &ApState) -> Result<ChatSnapshot> {
+    let threads = state
+        .social
+        .list_chat_threads_snapshot()?
+        .into_iter()
+        .map(|thread| SnapshotThread {
+            thread_id: thread.thread_id,
+            kind: thread.kind,
+            title: thread.title,
+            created_at_ms: thread.created_at_ms,
+            updated_at_ms: thread.updated_at_ms,
+        })
+        .collect();
+    let members = state
+        .social
+        .list_all_chat_members()?
+        .into_iter()
+        .map(|(thread_id, actor_id, role, added_at_ms)| SnapshotMember {
+            thread_id,
+            actor_id,
+            role,
+            added_at_ms,
+        })
+        .collect();
+    let statuses = state
+        .social
+        .list_all_chat_statuses()?
+        .into_iter()
+        .map(
+            |(message_id, actor_id, status, updated_at_ms)| SnapshotStatus {
+                message_id,
+                actor_id,
+                status,
+                updated_at_ms,
+            },
+        )
+        .collect();
+    let reactions = state
+        .social
+        .list_all_chat_reactions()?
+        .into_iter()
+        .map(
+            |(message_id, actor_id, reaction, created_at_ms)| SnapshotReaction {
+                message_id,
+                actor_id,
+                reaction,
+                created_at_ms,
+            },
+        )
+        .collect();
+    let pins = state
+        .social
+        .list_all_chat_pins()?
+        .into_iter()
+        .map(
+            |(thread_id, message_id, pinned_by, pinned_at_ms)| SnapshotPin {
+                thread_id,
+                message_id,
+                pinned_by,
+                pinned_at_ms,
+            },
+        )
+        .collect();
+    let call_signals = state
+        .social
+        .list_all_chat_call_signals()?
+        .into_iter()
+        .map(
+            |(thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms)| {
+                SnapshotCallSignal {
+                    thread_id,
+                    from_actor,
+                    to_actor,
+                    call_id,
+                    action,
+                    data_json,
+                    created_at_ms,
+                }
+            },
+        )
+        .collect();
+
+    let mut snapshot = ChatSnapshot {
+        v: CHAT_SNAPSHOT_VERSION,
+        threads,
+        members,
+        messages: Vec::new(),
+        statuses,
+        reactions,
+        pins,
+        call_signals,
+        truncated: false,
+    };
+    // Fetch one extra row to detect that the count cap was hit.
+    let raw_messages = state
+        .social
+        .list_chat_messages_snapshot(CHAT_SNAPSHOT_MAX_MESSAGES as u32 + 1)?;
+    let mut truncated = raw_messages.len() > CHAT_SNAPSHOT_MAX_MESSAGES;
+    // Base size of everything except the messages array; each accepted message adds its
+    // encoded length plus the separating comma. Newest messages are kept first.
+    let mut budget_used = serde_json::to_vec(&snapshot)?.len();
+    for message in raw_messages.into_iter().take(CHAT_SNAPSHOT_MAX_MESSAGES) {
+        let record = SnapshotMessage {
+            message_id: message.message_id,
+            thread_id: message.thread_id,
+            sender_actor: message.sender_actor,
+            sender_device: message.sender_device,
+            created_at_ms: message.created_at_ms,
+            edited_at_ms: message.edited_at_ms,
+            deleted: message.deleted,
+            body_json: message.body_json,
+        };
+        let encoded_len = serde_json::to_vec(&record)?.len() + 1;
+        if budget_used
+            .saturating_add(encoded_len)
+            .saturating_add(CHAT_SNAPSHOT_BYTE_MARGIN)
+            > CHAT_SNAPSHOT_MAX_MESSAGES_BYTES
+        {
+            truncated = true;
+            break;
+        }
+        budget_used = budget_used.saturating_add(encoded_len);
+        snapshot.messages.push(record);
+    }
+    snapshot.truncated = truncated;
+    Ok(snapshot)
+}
+
+/// Import a chat snapshot idempotently. Nothing is re-broadcast and no receipts are sent:
+/// this only fills the local database of a newly linked client.
+pub fn import_chat_snapshot(state: &ApState, snapshot: &ChatSnapshot) -> Result<()> {
+    for thread in &snapshot.threads {
+        let thread_id = thread.thread_id.trim();
+        if thread_id.is_empty() {
+            continue;
+        }
+        let kind = if thread.kind.trim().is_empty() {
+            "group"
+        } else {
+            thread.kind.trim()
+        };
+        state.social.insert_chat_thread_snapshot(
+            thread_id,
+            kind,
+            thread.title.as_deref(),
+            thread.created_at_ms,
+            thread.updated_at_ms,
+        )?;
+    }
+    for member in &snapshot.members {
+        let thread_id = member.thread_id.trim();
+        let actor_id = member.actor_id.trim();
+        if thread_id.is_empty() || actor_id.is_empty() {
+            continue;
+        }
+        let role = if member.role.trim().is_empty() {
+            "member"
+        } else {
+            member.role.trim()
+        };
+        state
+            .social
+            .upsert_chat_member_snapshot(thread_id, actor_id, role, member.added_at_ms)?;
+    }
+    for message in &snapshot.messages {
+        if message.message_id.trim().is_empty() || message.thread_id.trim().is_empty() {
+            continue;
+        }
+        let msg = ChatMessage {
+            message_id: message.message_id.clone(),
+            thread_id: message.thread_id.clone(),
+            sender_actor: message.sender_actor.clone(),
+            sender_device: message.sender_device.clone(),
+            created_at_ms: message.created_at_ms,
+            edited_at_ms: message.edited_at_ms,
+            deleted: message.deleted,
+            body_json: message.body_json.clone(),
+        };
+        state.social.insert_chat_message(&msg)?;
+    }
+    for status in &snapshot.statuses {
+        if status.message_id.trim().is_empty()
+            || status.actor_id.trim().is_empty()
+            || status.status.trim().is_empty()
+        {
+            continue;
+        }
+        state.social.upsert_chat_message_status(
+            &status.message_id,
+            &status.actor_id,
+            &status.status,
+        )?;
+    }
+    for reaction in &snapshot.reactions {
+        if reaction.message_id.trim().is_empty()
+            || reaction.actor_id.trim().is_empty()
+            || reaction.reaction.trim().is_empty()
+        {
+            continue;
+        }
+        state.social.upsert_chat_reaction_snapshot(
+            &reaction.message_id,
+            &reaction.actor_id,
+            &reaction.reaction,
+            reaction.created_at_ms,
+        )?;
+    }
+    for pin in &snapshot.pins {
+        if pin.thread_id.trim().is_empty() || pin.message_id.trim().is_empty() {
+            continue;
+        }
+        state.social.upsert_chat_pin_snapshot(
+            &pin.thread_id,
+            &pin.message_id,
+            &pin.pinned_by,
+            pin.pinned_at_ms,
+        )?;
+    }
+    for signal in &snapshot.call_signals {
+        if signal.thread_id.trim().is_empty() || signal.call_id.trim().is_empty() {
+            continue;
+        }
+        state.social.insert_chat_call_signal_snapshot(
+            &signal.thread_id,
+            &signal.from_actor,
+            signal.to_actor.as_deref(),
+            &signal.call_id,
+            &signal.action,
+            &signal.data_json,
+            signal.created_at_ms,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn list_threads(
     state: &ApState,
     limit: u32,
@@ -678,12 +1311,31 @@ async fn verify_envelope(state: &ApState, env: &ChatEnvelope) -> Result<()> {
     let mut clone = env.clone();
     clone.signature_b64 = None;
     let bytes = serde_json::to_vec(&clone)?;
-    let summary = state
-        .key_resolver
-        .resolve_actor_summary_for_key_id(&env.sender_actor)
-        .await?;
-    verify_bytes_rsa_sha256(&summary.public_key_pem, &bytes, &sig)?;
+    // A self-sync envelope was signed by another client of this account, so its sender is
+    // the local actor and the local public key verifies it without any network lookup.
+    let public_key_pem = if is_local_actor(state, &env.sender_actor) {
+        state.cfg.public_key_pem.clone()
+    } else {
+        state
+            .key_resolver
+            .resolve_actor_summary_for_key_id(&env.sender_actor)
+            .await?
+            .public_key_pem
+    };
+    verify_bytes_rsa_sha256(&public_key_pem, &bytes, &sig)?;
     Ok(())
+}
+
+fn local_actor(state: &ApState) -> String {
+    format!(
+        "{}/users/{}",
+        state.cfg.public_base_url.trim_end_matches('/'),
+        state.cfg.username
+    )
+}
+
+fn is_local_actor(state: &ApState, actor: &str) -> bool {
+    actor.trim_end_matches('/') == local_actor(state).trim_end_matches('/')
 }
 
 fn derive_key(

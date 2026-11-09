@@ -72,6 +72,9 @@ class ConfigStore {
     'previousRelayToken',
     'webrtcIceCredential',
     'webrtcIceUsername',
+    'identityPrivateKeyPem',
+    'chatIdentityPublicB64',
+    'chatIdentitySecretB64',
   ];
   static final Map<String, String> _testVault = {};
 

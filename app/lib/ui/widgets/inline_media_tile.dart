@@ -16,6 +16,7 @@ class InlineMediaTile extends StatefulWidget {
     required this.mediaType,
     required this.onOpen,
     required this.cacheWidth,
+    this.name,
     this.borderRadius = 12,
     this.autoplay = false,
     this.muted = false,
@@ -24,6 +25,10 @@ class InlineMediaTile extends StatefulWidget {
 
   final String url;
   final String mediaType;
+
+  /// Original attachment name, used to infer the kind when the media type is
+  /// missing or a generic `application/octet-stream`.
+  final String? name;
   final VoidCallback onOpen;
   final int cacheWidth;
   final double borderRadius;
@@ -54,21 +59,61 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
     }
   }
 
-  bool get _isVideoOrAudio {
-    final mt = widget.mediaType.toLowerCase();
-    if (mt.startsWith('video/') || mt.startsWith('audio/')) return true;
-    if (mt.isNotEmpty) return false;
-    final u = widget.url.toLowerCase();
-    return u.endsWith('.mp4') ||
-        u.endsWith('.webm') ||
-        u.endsWith('.mov') ||
-        u.endsWith('.m4v') ||
-        u.endsWith('.mp3') ||
-        u.endsWith('.ogg') ||
-        u.endsWith('.wav') ||
-        u.endsWith('.flac') ||
-        u.endsWith('.m4a') ||
-        u.endsWith('.opus');
+  bool get _isVideoOrAudio => _isAudio || _isVideo;
+
+  bool get _isGenericMediaType {
+    final mt = widget.mediaType.toLowerCase().trim();
+    return mt.isEmpty ||
+        mt == 'application/octet-stream' ||
+        mt == 'binary/octet-stream';
+  }
+
+  bool _hasExtension(String? value, Set<String> extensions) {
+    var v = (value ?? '').toLowerCase().trim();
+    if (v.isEmpty) return false;
+    final query = v.indexOf('?');
+    if (query >= 0) v = v.substring(0, query);
+    final fragment = v.indexOf('#');
+    if (fragment >= 0) v = v.substring(0, fragment);
+    return extensions.any(v.endsWith);
+  }
+
+  static const Set<String> _audioExtensions = {
+    '.m4a',
+    '.mp3',
+    '.ogg',
+    '.opus',
+    '.wav',
+    '.aac',
+    '.flac',
+    '.oga',
+  };
+
+  static const Set<String> _videoExtensions = {
+    '.mp4',
+    '.webm',
+    '.mov',
+    '.m4v',
+    '.mkv',
+    '.ogv',
+  };
+
+  bool get _isAudio {
+    final mt = widget.mediaType.toLowerCase().trim();
+    if (mt.startsWith('audio/')) return true;
+    if (mt.startsWith('video/')) return false;
+    if (!_isGenericMediaType) return false;
+    return _hasExtension(widget.url, _audioExtensions) ||
+        _hasExtension(widget.name, _audioExtensions);
+  }
+
+  bool get _isVideo {
+    final mt = widget.mediaType.toLowerCase().trim();
+    if (mt.startsWith('video/')) return true;
+    if (mt.startsWith('audio/')) return false;
+    if (!_isGenericMediaType) return false;
+    return _hasExtension(widget.url, _videoExtensions) ||
+        _hasExtension(widget.name, _videoExtensions);
   }
 
   @override
@@ -107,7 +152,7 @@ class _InlineMediaTileState extends State<InlineMediaTile> {
       );
     }
 
-    final isAudio = widget.mediaType.toLowerCase().startsWith('audio/');
+    final isAudio = _isAudio;
     return ClipRRect(
       borderRadius: BorderRadius.circular(widget.borderRadius),
       child: AspectRatio(

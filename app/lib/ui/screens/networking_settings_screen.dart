@@ -46,6 +46,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
   late final TextEditingController _bootstrap;
   late bool _publicDiscovery;
   late bool _peerExchange;
+  late bool _deviceSync;
   bool _savingDiscovery = false;
   String? _discoveryStatus;
 
@@ -59,6 +60,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
         TextEditingController(text: cfg?.p2pBootstrap.join('\n') ?? '');
     _publicDiscovery = cfg?.p2pPublicDiscovery ?? true;
     _peerExchange = cfg?.p2pPeerExchange ?? true;
+    _deviceSync = cfg?.deviceSyncEnable ?? true;
     _loadRelays();
     _loadDirectory();
   }
@@ -120,6 +122,7 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
             .toList(),
         p2pPublicDiscovery: _publicDiscovery,
         p2pPeerExchange: _peerExchange,
+        deviceSyncEnable: _deviceSync,
       ));
       if (mounted) setState(() => _discoveryStatus = context.l10n.ok);
     } catch (e) {
@@ -399,6 +402,19 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
                   onChanged: _savingDiscovery
                       ? null
                       : (v) => setState(() => _peerExchange = v),
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile(
+                  key: const Key('deviceSyncToggle'),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(context.l10n.networkingDeviceSync),
+                  subtitle: Text(context.l10n.networkingDeviceSyncHint),
+                  value: _deviceSync,
+                  onChanged: _savingDiscovery
+                      ? null
+                      : (v) => setState(() => _deviceSync = v),
                 ),
               ),
               TextField(

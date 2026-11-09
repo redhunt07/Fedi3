@@ -12,6 +12,7 @@ import 'package:fedi3/ui/screens/chat_thread_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:media_kit/media_kit.dart';
 
 import '../support/fake_core.dart';
 import '../support/fake_http.dart';
@@ -23,6 +24,86 @@ Future<AppState> _runningApp() async {
       buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime());
   await app.startCore();
   return app;
+}
+
+/// Minimal audioplayers platform mock: the voice-note tile must reach its
+/// ready state without a native plugin in widget tests.
+void _mockAudioPlugin() {
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(
+    const MethodChannel('xyz.luan/audioplayers.global'),
+    (call) async => null,
+  );
+  messenger.setMockMethodCallHandler(
+    const MethodChannel('xyz.luan/audioplayers'),
+    (call) async {
+      if (call.method == 'create') {
+        final args = call.arguments is Map ? call.arguments as Map : const {};
+        final playerId = args['playerId']?.toString() ?? '';
+        messenger.setMockStreamHandler(
+          EventChannel('xyz.luan/audioplayers/events/$playerId'),
+          MockStreamHandler.inline(
+            onListen: (arguments, sink) {
+              sink.success(<String, dynamic>{
+                'event': 'audio.onPrepared',
+                'value': true,
+              });
+            },
+          ),
+        );
+      }
+      if (call.method == 'getDuration') return 3000;
+      if (call.method == 'getCurrentPosition') return 0;
+      return null;
+    },
+  );
+}
+
+Map<String, dynamic> _attachmentMessage({
+  required String attachmentId,
+  required String url,
+  required String mediaType,
+  required String name,
+}) {
+  return {
+    'message_id': 'm-$attachmentId',
+    'thread_id': 't1',
+    'sender_actor': 'https://fedi3.test/users/bob',
+    'sender_device': 'dev',
+    'created_at_ms': 1000,
+    'edited_at_ms': null,
+    'deleted': false,
+    'body_json': jsonEncode({
+      'op': 'message',
+      'text': '',
+      'attachments': [
+        {
+          'id': attachmentId,
+          'url': url,
+          'mediaType': mediaType,
+          'name': name,
+        }
+      ],
+    }),
+  };
+}
+
+FakeHttpClient _attachmentClient(Map<String, dynamic> message) {
+  final client = FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+  client.json('GET', '/_fedi3/chat/threads/t1', {
+    'items': [message],
+    'next': null,
+  });
+  client.json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+  client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
+  client.route(
+    'GET',
+    '/_fedi3/stream',
+    FakeHttpResponse(
+        headers: const {'content-type': 'text/event-stream'}, body: ''),
+  );
+  return client;
 }
 
 void main() {
@@ -378,5 +459,58 @@ void main() {
     expect(find.text('Team'), findsOneWidget);
     expect(find.textContaining('ciao a tutti'), findsOneWidget);
     expect(find.textContaining('@bob'), findsOneWidget);
+  });
+
+  testWidgets(
+      'audio note with an empty mediaType is still a playable voice bubble',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    _mockAudioPlugin();
+    final client = _attachmentClient(_attachmentMessage(
+      attachmentId: 'a1',
+      url: 'https://fedi3.test/media/note.m4a',
+      mediaType: '',
+      name: 'note.m4a',
+    ));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(
+      tester,
+      ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'),
+    );
+    await tester.pumpAndSettle();
+
+    // The recipient sees the existing voice-note bubble, not a plain file row.
+    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.insert_drive_file), findsNothing);
+  });
+
+  testWidgets(
+      'video/mp4 attachment keeps the inline tile with the play overlay',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    // The inline tile renders a first-frame poster through media_kit.
+    MediaKit.ensureInitialized();
+    final client = _attachmentClient(_attachmentMessage(
+      attachmentId: 'v1',
+      url: 'http://127.0.0.1:1/media/clip.mp4',
+      mediaType: 'video/mp4',
+      name: 'clip.mp4',
+    ));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(
+      tester,
+      ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'),
+    );
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
+    expect(find.byIcon(Icons.insert_drive_file), findsNothing);
   });
 }

@@ -4951,6 +4951,132 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Could not switch the camera.'**
   String get callSwitchCameraFailed;
+
+  /// No description provided for @onboardingLoginWithQr.
+  ///
+  /// In en, this message translates to:
+  /// **'Log in with QR'**
+  String get onboardingLoginWithQr;
+
+  /// No description provided for @pairingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Link a device'**
+  String get pairingTitle;
+
+  /// No description provided for @pairingIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan this QR code with a client that is already logged in to this account.'**
+  String get pairingIntro;
+
+  /// No description provided for @pairingInstanceUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Instance URL (https://...)'**
+  String get pairingInstanceUrl;
+
+  /// No description provided for @pairingGenerate.
+  ///
+  /// In en, this message translates to:
+  /// **'Show QR code'**
+  String get pairingGenerate;
+
+  /// No description provided for @pairingRegenerate.
+  ///
+  /// In en, this message translates to:
+  /// **'New code'**
+  String get pairingRegenerate;
+
+  /// No description provided for @pairingWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for the other device…'**
+  String get pairingWaiting;
+
+  /// No description provided for @pairingConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Device linked. Starting the core…'**
+  String get pairingConnected;
+
+  /// No description provided for @pairingExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'The pairing code expired. Generate a new one.'**
+  String get pairingExpired;
+
+  /// No description provided for @pairingInvalidUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter the instance URL of your account.'**
+  String get pairingInvalidUrl;
+
+  /// No description provided for @pairingError.
+  ///
+  /// In en, this message translates to:
+  /// **'Pairing failed: {error}'**
+  String pairingError(String error);
+
+  /// No description provided for @linkDeviceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Link a new device'**
+  String get linkDeviceTitle;
+
+  /// No description provided for @linkDeviceIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Point the camera at the QR code shown on the other device.'**
+  String get linkDeviceIntro;
+
+  /// No description provided for @linkDeviceSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Device linked'**
+  String get linkDeviceSuccess;
+
+  /// No description provided for @linkDeviceInvalidCode.
+  ///
+  /// In en, this message translates to:
+  /// **'This QR code is not a Fedi3 pairing code.'**
+  String get linkDeviceInvalidCode;
+
+  /// No description provided for @linkDeviceError.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not link the device: {error}'**
+  String linkDeviceError(String error);
+
+  /// No description provided for @linkDeviceUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Camera scanning is available on Android and iOS only.'**
+  String get linkDeviceUnsupported;
+
+  /// No description provided for @settingsLinkDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Link a new device'**
+  String get settingsLinkDevice;
+
+  /// No description provided for @settingsLinkDeviceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Add this account to another phone or computer.'**
+  String get settingsLinkDeviceHint;
+
+  /// No description provided for @networkingDeviceSync.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync activity across devices'**
+  String get networkingDeviceSync;
+
+  /// No description provided for @networkingDeviceSyncHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Replicate chats, receipts and call signalling to every linked client of this account.'**
+  String get networkingDeviceSyncHint;
 }
 
 class _AppLocalizationsDelegate

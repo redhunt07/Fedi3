@@ -1,7 +1,7 @@
 name: fedi3
 description: Personal ActivityPub instance client (Flutter UI + Rust core)
 publish_to: "none"
-version: 0.11.10+2013
+version: 0.11.10+4014
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -40,6 +40,8 @@ dependencies:
   flutter_secure_storage: ^10.3.4
   unifiedpush_android: ^3.5.0
   unifiedpush_platform_interface: ^4.0.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.5.0
 
 dev_dependencies:
   flutter_test:

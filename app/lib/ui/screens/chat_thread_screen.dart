@@ -85,6 +85,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   int _lastCallSignalId = 0;
   String? _incomingCallId;
   bool _callPromptOpen = false;
+  bool _callAnsweredElsewhere = false;
   Timer? _incomingCallTimer;
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
@@ -472,19 +473,35 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               s.action == 'decline')
           .map((s) => s.callId)
           .toSet();
-      if (_callPromptOpen &&
-          _incomingCallId != null &&
-          ended.contains(_incomingCallId) &&
-          mounted) {
-        Navigator.of(context, rootNavigator: true).pop(false);
-      }
-      if (_callPromptOpen) return;
+      // Another client of the same account answered: stop ringing here and do
+      // not send a busy decline for a call that is already owned elsewhere.
+      final accepted =
+          items.where((s) => s.action == 'accept').map((s) => s.callId).toSet();
+      final answeredByThisAccount = items
+          .where((s) => s.action == 'accept' && s.fromActor == _selfActor())
+          .map((s) => s.callId)
+          .toSet();
       for (final s in items) {
         if (s.id > _lastCallSignalId) _lastCallSignalId = s.id;
         if (s.createdAtMs > _lastCallSignalMs) {
           _lastCallSignalMs = s.createdAtMs;
         }
+      }
+      if (_callPromptOpen &&
+          _incomingCallId != null &&
+          (ended.contains(_incomingCallId) ||
+              answeredByThisAccount.contains(_incomingCallId)) &&
+          mounted) {
+        if (answeredByThisAccount.contains(_incomingCallId)) {
+          _callAnsweredElsewhere = true;
+        }
+        Navigator.of(context, rootNavigator: true).pop(false);
+      }
+      if (_callPromptOpen) return;
+      for (final s in items) {
         if (s.action != 'invite') continue;
+        // Skip invites whose call was already answered in this same batch.
+        if (accepted.contains(s.callId)) continue;
         if (_incomingCallId == s.callId) continue;
         if (s.fromActor == _selfActor()) continue;
         final media = s.data['media']?.toString() ?? 'audio';
@@ -500,6 +517,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       return;
     }
     _callPromptOpen = true;
+    _callAnsweredElsewhere = false;
     unawaited(SoundService.playCallLoop());
     _incomingCallTimer?.cancel();
     _incomingCallTimer = Timer(const Duration(seconds: 60), () {
@@ -557,16 +575,22 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _incomingCallTimer = null;
     await SoundService.stopCall();
     _callPromptOpen = false;
+    final answeredElsewhere = _callAnsweredElsewhere;
+    _callAnsweredElsewhere = false;
     if (accepted != true) {
       _incomingCallId = null;
-      try {
-        await CoreApi(config: widget.appState.config!).sendChatCallSignal(
-          threadId: widget.threadId,
-          callId: signal.callId,
-          action: 'decline',
-          to: from,
-        );
-      } catch (_) {}
+      // The accept from another linked client already owns the call: closing
+      // the dialog here must not send a busy decline.
+      if (!answeredElsewhere) {
+        try {
+          await CoreApi(config: widget.appState.config!).sendChatCallSignal(
+            threadId: widget.threadId,
+            callId: signal.callId,
+            action: 'decline',
+            to: from,
+          );
+        } catch (_) {}
+      }
       return;
     }
     if (!mounted) return;
@@ -923,7 +947,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           final resp = await api.uploadMedia(bytes: m.bytes, filename: m.name);
           final id = (resp['id'] as String?)?.trim();
           final url = (resp['url'] as String?)?.trim();
-          final mediaType = (resp['media_type'] as String?)?.trim() ??
+          final mediaType = (resp['mediaType'] as String?)?.trim() ??
+              (resp['media_type'] as String?)?.trim() ??
               lookupMimeType(m.name) ??
               '';
           if (id != null && id.isNotEmpty && url != null && url.isNotEmpty) {
@@ -2544,13 +2569,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Widget _buildAttachments(List<ChatAttachment> attachments,
       {bool isSelf = false}) {
     final audio =
-        attachments.where((a) => _isAudio(a.mediaType, a.url)).toList();
+        attachments.where((a) => _isAudio(a.mediaType, a.url, a.name)).toList();
     final media = attachments
         .where((a) =>
-            _isMedia(a.mediaType, a.url) && !_isAudio(a.mediaType, a.url))
+            _isMedia(a.mediaType, a.url, a.name) &&
+            !_isAudio(a.mediaType, a.url, a.name))
         .toList();
-    final docs =
-        attachments.where((a) => !_isMedia(a.mediaType, a.url)).toList();
+    final docs = attachments
+        .where((a) => !_isMedia(a.mediaType, a.url, a.name))
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2573,7 +2600,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   height: 120,
                   child: InlineMediaTile(
                     url: _resolveMediaUrl(a.url),
-                    mediaType: a.mediaType,
+                    mediaType: _effectiveMediaType(a),
+                    name: a.name,
                     cacheWidth: 320,
                     autoplay: false,
                     muted: true,
@@ -2599,53 +2627,110 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
   }
 
-  bool _looksLikeImage(String name) {
-    final n = name.toLowerCase();
-    return n.endsWith('.png') ||
-        n.endsWith('.jpg') ||
-        n.endsWith('.jpeg') ||
-        n.endsWith('.gif') ||
-        n.endsWith('.webp');
+  bool _looksLikeImage(String name) => _hasExtension(name, _imageExtensions);
+
+  static const Set<String> _imageExtensions = {
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.heic',
+    '.avif',
+  };
+
+  static const Set<String> _videoExtensions = {
+    '.mp4',
+    '.webm',
+    '.mov',
+    '.m4v',
+    '.mkv',
+    '.ogv',
+  };
+
+  static const Set<String> _audioExtensions = {
+    '.m4a',
+    '.mp3',
+    '.ogg',
+    '.opus',
+    '.wav',
+    '.aac',
+    '.flac',
+    '.oga',
+  };
+
+  bool _hasExtension(String? value, Set<String> extensions) {
+    var v = (value ?? '').toLowerCase().trim();
+    if (v.isEmpty) return false;
+    final query = v.indexOf('?');
+    if (query >= 0) v = v.substring(0, query);
+    final fragment = v.indexOf('#');
+    if (fragment >= 0) v = v.substring(0, fragment);
+    return extensions.any(v.endsWith);
   }
 
-  bool _isAudio(String mediaType, String url) {
-    final mt = mediaType.toLowerCase();
+  bool _isGenericMediaType(String mediaType) {
+    final mt = mediaType.toLowerCase().trim();
+    return mt.isEmpty ||
+        mt == 'application/octet-stream' ||
+        mt == 'binary/octet-stream';
+  }
+
+  bool _isAudio(String mediaType, String url, [String? name]) {
+    final mt = mediaType.toLowerCase().trim();
     if (mt.startsWith('audio/')) return true;
-    final u = url.toLowerCase();
-    return u.endsWith('.m4a') ||
-        u.endsWith('.mp3') ||
-        u.endsWith('.ogg') ||
-        u.endsWith('.opus') ||
-        u.endsWith('.wav') ||
-        u.endsWith('.aac');
+    if (mt.startsWith('video/')) return false;
+    if (!_isGenericMediaType(mediaType)) return false;
+    return _hasExtension(url, _audioExtensions) ||
+        _hasExtension(name, _audioExtensions);
   }
 
-  bool _isMedia(String mediaType, String url) {
-    final mt = mediaType.toLowerCase();
-    if (mt.startsWith('image/') ||
-        mt.startsWith('video/') ||
-        mt.startsWith('audio/')) {
-      return true;
+  bool _isVideo(String mediaType, String url, [String? name]) {
+    final mt = mediaType.toLowerCase().trim();
+    if (mt.startsWith('video/')) return true;
+    if (mt.startsWith('audio/')) return false;
+    if (!_isGenericMediaType(mediaType)) return false;
+    return _hasExtension(url, _videoExtensions) ||
+        _hasExtension(name, _videoExtensions);
+  }
+
+  bool _isImage(String mediaType, String url, [String? name]) {
+    final mt = mediaType.toLowerCase().trim();
+    if (mt.startsWith('image/')) return true;
+    if (mt.startsWith('video/') || mt.startsWith('audio/')) return false;
+    if (!_isGenericMediaType(mediaType)) return false;
+    return _hasExtension(url, _imageExtensions) ||
+        _hasExtension(name, _imageExtensions);
+  }
+
+  bool _isMedia(String mediaType, String url, [String? name]) =>
+      _isAudio(mediaType, url, name) ||
+      _isVideo(mediaType, url, name) ||
+      _isImage(mediaType, url, name);
+
+  /// Uploads report the type as camelCase, but older payloads and generic
+  /// `application/octet-stream` values are common. Fall back to the attachment
+  /// name and URL extension so a media note never turns into a plain file.
+  String _effectiveMediaType(ChatAttachment attachment) {
+    final mt = attachment.mediaType.toLowerCase().trim();
+    if (mt.isNotEmpty && !_isGenericMediaType(attachment.mediaType)) {
+      return mt;
     }
-    final u = url.toLowerCase();
-    return u.endsWith('.png') ||
-        u.endsWith('.jpg') ||
-        u.endsWith('.jpeg') ||
-        u.endsWith('.gif') ||
-        u.endsWith('.webp') ||
-        u.endsWith('.mp4') ||
-        u.endsWith('.webm') ||
-        u.endsWith('.mov') ||
-        u.endsWith('.mp3') ||
-        u.endsWith('.ogg') ||
-        u.endsWith('.wav');
+    if (_isVideo(mt, attachment.url, attachment.name)) return 'video/mp4';
+    if (_isAudio(mt, attachment.url, attachment.name)) return 'audio/mp4';
+    if (_isImage(mt, attachment.url, attachment.name)) return 'image/jpeg';
+    return mt;
   }
 
   void _openMediaViewer(
       List<ChatAttachment> attachments, ChatAttachment focus) {
     final items = attachments
-        .where((a) => _isMedia(a.mediaType, a.url))
-        .map((a) => NoteAttachment(url: a.url, mediaType: a.mediaType))
+        .where((a) => _isMedia(a.mediaType, a.url, a.name))
+        .map((a) => NoteAttachment(
+              url: a.url,
+              mediaType: _effectiveMediaType(a),
+            ))
         .toList();
     if (items.isEmpty) {
       openUrlExternal(focus.url);
@@ -2656,7 +2741,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         builder: (_) => MediaViewerScreen(
           appState: widget.appState,
           url: focus.url,
-          mediaType: focus.mediaType,
+          mediaType: _effectiveMediaType(focus),
           attachments: items,
         ),
       ),

@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../services/identity_sync.dart';
 import '../../state/app_state.dart';
 import '../../state/peer_presence_store.dart';
 
@@ -87,6 +90,16 @@ class _AutoStartCoreState extends State<AutoStartCore> {
       if (!mounted) return;
       await widget.appState.startCore();
       if (mounted && !widget.appState.isRunning) _started = false;
+      final running = widget.appState.config;
+      if (!mounted || !widget.appState.isRunning || running == null) return;
+      // A config written before multi-device support has no identity fields:
+      // publish the local identity so another client can log in with the same
+      // account. Best-effort and never blocking the UI.
+      if (running.identityPrivateKeyPem == null ||
+          running.chatIdentityPublicB64 == null ||
+          running.chatIdentitySecretB64 == null) {
+        unawaited(IdentitySync.ensurePublished(running));
+      }
     });
   }
 

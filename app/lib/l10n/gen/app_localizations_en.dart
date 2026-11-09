@@ -2655,4 +2655,77 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get callSwitchCameraFailed => 'Could not switch the camera.';
+
+  @override
+  String get onboardingLoginWithQr => 'Log in with QR';
+
+  @override
+  String get pairingTitle => 'Link a device';
+
+  @override
+  String get pairingIntro =>
+      'Scan this QR code with a client that is already logged in to this account.';
+
+  @override
+  String get pairingInstanceUrl => 'Instance URL (https://...)';
+
+  @override
+  String get pairingGenerate => 'Show QR code';
+
+  @override
+  String get pairingRegenerate => 'New code';
+
+  @override
+  String get pairingWaiting => 'Waiting for the other device…';
+
+  @override
+  String get pairingConnected => 'Device linked. Starting the core…';
+
+  @override
+  String get pairingExpired => 'The pairing code expired. Generate a new one.';
+
+  @override
+  String get pairingInvalidUrl => 'Enter the instance URL of your account.';
+
+  @override
+  String pairingError(String error) {
+    return 'Pairing failed: $error';
+  }
+
+  @override
+  String get linkDeviceTitle => 'Link a new device';
+
+  @override
+  String get linkDeviceIntro =>
+      'Point the camera at the QR code shown on the other device.';
+
+  @override
+  String get linkDeviceSuccess => 'Device linked';
+
+  @override
+  String get linkDeviceInvalidCode =>
+      'This QR code is not a Fedi3 pairing code.';
+
+  @override
+  String linkDeviceError(String error) {
+    return 'Could not link the device: $error';
+  }
+
+  @override
+  String get linkDeviceUnsupported =>
+      'Camera scanning is available on Android and iOS only.';
+
+  @override
+  String get settingsLinkDevice => 'Link a new device';
+
+  @override
+  String get settingsLinkDeviceHint =>
+      'Add this account to another phone or computer.';
+
+  @override
+  String get networkingDeviceSync => 'Sync activity across devices';
+
+  @override
+  String get networkingDeviceSyncHint =>
+      'Replicate chats, receipts and call signalling to every linked client of this account.';
 }
