@@ -115,11 +115,12 @@ impl DeliveryQueue {
                     )?;
                 }
                 tx.commit()?;
-                let pending: u64 = conn.query_row(
+                let pending: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM delivery_jobs WHERE status = 0",
                     [],
                     |r| r.get(0),
                 )?;
+                let pending = pending as u64;
                 Ok(pending)
             }
         })
@@ -710,21 +711,24 @@ impl DeliveryQueue {
             let db_path = self.db_path.clone();
             move || -> Result<QueueStats> {
                 let conn = open_conn(&db_path)?;
-                let pending: u64 = conn.query_row(
+                let pending: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM delivery_jobs WHERE status = 0",
                     [],
                     |r| r.get(0),
                 )?;
-                let delivered: u64 = conn.query_row(
+                let pending = pending as u64;
+                let delivered: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM delivery_jobs WHERE status = 1",
                     [],
                     |r| r.get(0),
                 )?;
-                let dead: u64 = conn.query_row(
+                let delivered = delivered as u64;
+                let dead: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM delivery_jobs WHERE status = 2",
                     [],
                     |r| r.get(0),
                 )?;
+                let dead = dead as u64;
                 Ok(QueueStats {
                     pending,
                     delivered,

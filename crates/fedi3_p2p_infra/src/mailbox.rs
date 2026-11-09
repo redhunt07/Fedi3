@@ -68,13 +68,13 @@ impl MailboxStore {
             let _ = conn.execute("DELETE FROM mailbox_messages WHERE expires_at_ms <= ?1", params![now]);
 
             // Enforce max_per_peer by deleting oldest.
-            let count: u64 = conn.query_row(
+            let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM mailbox_messages WHERE to_peer_id = ?1",
                 params![to_peer_id],
                 |r| r.get(0),
             )?;
-            if count > max_per_peer as u64 {
-                let to_delete = count - max_per_peer as u64;
+            if count > max_per_peer as i64 {
+                let to_delete = count - max_per_peer as i64;
                 let mut stmt = conn.prepare(
                     r#"
                     SELECT id FROM mailbox_messages

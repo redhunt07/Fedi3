@@ -1170,7 +1170,7 @@ impl SocialDb {
         let (count, bytes): (u64, i64) = conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM global_feed WHERE actor_id=?1 AND created_at_ms>=?2",
             params![actor_id, since_ms],
-            |r| Ok((r.get::<_, u64>(0)?, r.get::<_, i64>(1)?)),
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)?)),
         )?;
         Ok((count, bytes.max(0) as u64))
     }
@@ -1181,7 +1181,8 @@ impl SocialDb {
         cursor_ms: Option<i64>,
     ) -> Result<CollectionPage<GlobalFeedItem>> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row("SELECT COUNT(*) FROM global_feed", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM global_feed", [], |r| r.get(0))?;
+        let total = total as u64;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
             (
@@ -1236,7 +1237,8 @@ impl SocialDb {
         cursor_ms: Option<i64>,
     ) -> Result<CollectionPage<GlobalFeedItem>> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row("SELECT COUNT(*) FROM federated_feed", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM federated_feed", [], |r| r.get(0))?;
+        let total = total as u64;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
             (
@@ -1303,8 +1305,8 @@ impl SocialDb {
               SELECT id AS id, created_at_ms AS ts FROM outbox_items
             )
             "#,
-            params![accepted],
-            |r| r.get(0),
+            params![accepted as i64],
+            |r| r.get::<_, i64>(0).map(|v| v as u64),
         )?;
 
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
@@ -1394,8 +1396,8 @@ impl SocialDb {
               SELECT id AS id, created_at_ms AS ts FROM outbox_items
             )
             "#,
-            params![accepted],
-            |r| r.get(0),
+            params![accepted as i64],
+            |r| r.get::<_, i64>(0).map(|v| v as u64),
         )?;
 
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor_ms {
@@ -1865,13 +1867,14 @@ impl SocialDb {
         let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let q_like = format!("%{}%", escape_like(&q));
-        let total: u64 = conn
+        let total: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\'",
                 params![q_like],
                 |r| r.get(0),
             )
             .unwrap_or(0);
+        let total = total as u64;
         let mut stmt = if cursor.is_some() {
             conn.prepare(
                 "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
@@ -1926,7 +1929,7 @@ impl SocialDb {
         let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let tag_hash = format!("#{tag}");
-        let total: u64 = conn
+        let total: i64 = conn
             .query_row(
                 r#"
                 SELECT COUNT(*)
@@ -1940,6 +1943,7 @@ impl SocialDb {
                 |r| r.get(0),
             )
             .unwrap_or(0);
+        let total = total as u64;
         let mut stmt = if cursor.is_some() {
             conn.prepare(
                 r#"
@@ -2013,13 +2017,14 @@ impl SocialDb {
         let conn = self.connect()?;
         let limit = limit.min(200).max(1) as i64;
         let q_like = format!("%{}%", escape_like(&q));
-        let total: u64 = conn
+        let total: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\'",
                 params![q_like],
                 |r| r.get(0),
             )
             .unwrap_or(0);
+        let total = total as u64;
         let mut stmt = if cursor.is_some() {
             conn.prepare(
                 "SELECT object_id, created_at_ms, actor_id, object_json FROM objects WHERE deleted=0 AND lower(CAST(object_json AS TEXT)) LIKE ?1 ESCAPE '\\' AND created_at_ms < ?2 ORDER BY created_at_ms DESC LIMIT ?3",
@@ -2109,7 +2114,8 @@ impl SocialDb {
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let name: String = row.get(0)?;
-            let count: u64 = row.get(1)?;
+            let count: i64 = row.get(1)?;
+            let count = count as u64;
             out.push((name, count));
         }
         Ok(out)
@@ -2142,7 +2148,8 @@ impl SocialDb {
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let name: String = row.get(0)?;
-            let count: u64 = row.get(1)?;
+            let count: i64 = row.get(1)?;
+            let count = count as u64;
             out.push((name, count));
         }
         Ok(out)
@@ -2577,11 +2584,12 @@ impl SocialDb {
         }
         let limit = limit.min(200);
         let conn = self.connect()?;
-        let total: u64 = conn.query_row(
+        let total: i64 = conn.query_row(
             "SELECT COUNT(*) FROM note_replies WHERE note_id=?1",
             params![note_id],
             |r| r.get(0),
         )?;
+        let total = total as u64;
 
         let before = cursor.unwrap_or(i64::MAX);
         let mut stmt = conn.prepare(
@@ -2645,15 +2653,15 @@ impl SocialDb {
 
     pub fn count_followers(&self) -> Result<u64> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row("SELECT COUNT(*) FROM followers", [], |r| r.get(0))?;
-        Ok(total)
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM followers", [], |r| r.get(0))?;
+        Ok(total as u64)
     }
 
     /// Followers from legacy instances (best-effort).
     /// We treat unknown actors (missing `actor_meta`) as legacy for safety.
     pub fn count_legacy_followers(&self) -> Result<u64> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row(
+        let total: i64 = conn.query_row(
             r#"
             SELECT COUNT(*)
             FROM followers f
@@ -2663,7 +2671,7 @@ impl SocialDb {
             [],
             |r| r.get(0),
         )?;
-        Ok(total)
+        Ok(total as u64)
     }
 
     pub fn list_following(
@@ -2709,8 +2717,9 @@ impl SocialDb {
         cursor: Option<String>,
     ) -> Result<CollectionPage<String>> {
         let conn = self.connect()?;
-        let total: u64 =
+        let total: i64 =
             conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+        let total = total as u64;
 
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) =
             cursor.as_deref().and_then(parse_cursor)
@@ -2780,7 +2789,7 @@ impl SocialDb {
             )
         };
         let conn = self.connect()?;
-        let total: u64 = conn.query_row(
+        let total: i64 = conn.query_row(
             &format!(
                 "SELECT COUNT(*) FROM outbox_items WHERE {}",
                 visible_clause(1)
@@ -2788,6 +2797,7 @@ impl SocialDb {
             params![followers_visible],
             |r| r.get(0),
         )?;
+        let total = total as u64;
 
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) =
             cursor.as_deref().and_then(parse_cursor)
@@ -4003,7 +4013,8 @@ impl SocialDb {
         cursor: Option<i64>,
     ) -> Result<CollectionPage<ChatThread>> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row("SELECT COUNT(*) FROM chat_threads", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM chat_threads", [], |r| r.get(0))?;
+        let total = total as u64;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor {
             (
@@ -4103,11 +4114,12 @@ impl SocialDb {
         cursor: Option<i64>,
     ) -> Result<CollectionPage<ChatMessage>> {
         let conn = self.connect()?;
-        let total: u64 = conn.query_row(
+        let total: i64 = conn.query_row(
             "SELECT COUNT(*) FROM chat_messages WHERE thread_id=?1",
             params![thread_id],
             |r| r.get(0),
         )?;
+        let total = total as u64;
         let limit = limit.min(200).max(1);
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = if let Some(c) = cursor {
             (
@@ -4486,7 +4498,7 @@ impl SocialDb {
     pub fn count_chat_deliveries(&self) -> Result<u64> {
         let conn = self.connect()?;
         conn.query_row("SELECT COUNT(*) FROM chat_pending_deliveries", [], |r| {
-            r.get(0)
+            r.get::<_, i64>(0).map(|v| v as u64)
         })
         .map_err(Into::into)
     }

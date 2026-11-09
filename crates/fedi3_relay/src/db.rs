@@ -795,12 +795,12 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row(
+                let n: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM peer_registry WHERE last_seen_ms >= ?1",
                     params![cutoff_ms],
                     |r| r.get(0),
                 )?;
-                Ok(n)
+                Ok(n as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -818,11 +818,11 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 =
+                let n: i64 =
                     conn.query_row("SELECT COUNT(*) FROM users WHERE disabled=0", [], |r| {
                         r.get(0)
                     })?;
-                Ok(n)
+                Ok(n as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -1315,8 +1315,8 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
-                Ok(n)
+                let n: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+                Ok(n as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
@@ -2868,13 +2868,15 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                             params![tag_like],
                             |r| r.get(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0)
                     } else {
                         conn.query_row(
                             "SELECT COUNT(*) FROM relay_notes WHERE lower(content_text) LIKE ?1 ESCAPE '\\'",
                             params![q_like],
-                            |r| r.get(0),
+                            |r| r.get::<_, i64>(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0)
                     }
                 } else {
@@ -3233,6 +3235,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                             params![q_like],
                             |r| r.get(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0);
                     let total_users: u64 = conn
                         .query_row(
@@ -3240,6 +3243,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                             params![q_like],
                             |r| r.get(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0);
                     let total_peers: u64 = conn
                         .query_row(
@@ -3247,6 +3251,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                             params![q_like],
                             |r| r.get(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0);
                     let total_relay_users: u64 = conn
                         .query_row(
@@ -3254,6 +3259,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                             params![q_like],
                             |r| r.get(0),
                         )
+                        .map(|v: i64| v as u64)
                         .unwrap_or(0);
                     total_cache
                         .saturating_add(total_users)
@@ -3572,7 +3578,8 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                 let mut out = Vec::new();
                 while let Some(row) = rows.next()? {
                     let tag: String = row.get(0)?;
-                    let count: u64 = row.get(1)?;
+                    let count: i64 = row.get(1)?;
+                    let count = count as u64;
                     out.push((tag, count));
                 }
                 Ok(out)
@@ -3766,6 +3773,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                     params![cutoff_ms],
                     |r| r.get(0),
                 )
+                .map(|v: i64| v as u64)
                 .map_err(Into::into)
             }
             DbDriver::Postgres => {
@@ -3807,12 +3815,12 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
-                let n: u64 = conn.query_row(
+                let n: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM webrtc_signals WHERE to_peer_id=?1",
                     params![to_peer_id],
                     |r| r.get(0),
                 )?;
-                Ok(n)
+                Ok(n as u64)
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
