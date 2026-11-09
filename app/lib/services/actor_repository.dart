@@ -331,7 +331,9 @@ class ActorRepository {
       final href = (firstLink['id'] as String?)?.trim() ??
           (firstLink['href'] as String?)?.trim() ??
           '';
-      if (href.isNotEmpty) page = await _fetchJson(_localCollectionUrl(href, config));
+      if (href.isNotEmpty) {
+        page = await _fetchJson(_localCollectionUrl(href, config));
+      }
     }
 
     final raw = (page?['orderedItems'] as List<dynamic>? ??
@@ -353,7 +355,8 @@ class ActorRepository {
     return out;
   }
 
-  Future<int?> fetchCollectionCount(String collectionUrl, {CoreConfig? config}) async {
+  Future<int?> fetchCollectionCount(String collectionUrl,
+      {CoreConfig? config}) async {
     final data = await _fetchJson(_localCollectionUrl(collectionUrl, config));
     if (data == null) return null;
     final total = data['totalItems'];
@@ -368,16 +371,23 @@ class ActorRepository {
     if (config == null) return url;
     final public = Uri.tryParse(config.publicBaseUrl);
     final uri = Uri.tryParse(url);
-    if (public == null || uri == null ||
+    if (public == null ||
+        uri == null ||
         !const ['http', 'https'].contains(public.scheme) ||
         !const ['http', 'https'].contains(uri.scheme) ||
-        public.host.isEmpty || uri.host.isEmpty || uri.origin != public.origin) {
+        public.host.isEmpty ||
+        uri.host.isEmpty ||
+        uri.origin != public.origin) {
       return url;
     }
     final basePath = public.path.replaceFirst(RegExp(r'/$'), '');
     final actor = '$basePath/users/${Uri.encodeComponent(config.username)}';
-    if (uri.path != '$actor/followers' && uri.path != '$actor/following') return url;
-    return config.localBaseUri.replace(path: uri.path.substring(basePath.length), query: uri.query).toString();
+    if (uri.path != '$actor/followers' && uri.path != '$actor/following') {
+      return url;
+    }
+    return config.localBaseUri
+        .replace(path: uri.path.substring(basePath.length), query: uri.query)
+        .toString();
   }
 
   Future<Map<String, dynamic>?> _fetchJson(String url) async {

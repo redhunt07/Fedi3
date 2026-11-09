@@ -193,10 +193,10 @@ class MisskeyTheme {
         backgroundColor: background,
         indicatorColor: scheme.primary.withAlpha(28),
         iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
-          color: states.contains(WidgetState.selected)
-              ? scheme.primary
-              : scheme.onSurfaceVariant,
-        )),
+              color: states.contains(WidgetState.selected)
+                  ? scheme.primary
+                  : scheme.onSurfaceVariant,
+            )),
         labelTextStyle: WidgetStatePropertyAll(text.labelSmall),
       ),
       snackBarTheme: SnackBarThemeData(

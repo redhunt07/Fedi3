@@ -143,10 +143,12 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                 ? (useColumns
                     ? null
                     : PreferredSize(
-                        preferredSize: Size.fromHeight(48 * MediaQuery.textScalerOf(context).scale(1) + 4),
+                        preferredSize: Size.fromHeight(
+                            48 * MediaQuery.textScalerOf(context).scale(1) + 4),
                         child: _timelineTabs(context)))
                 : PreferredSize(
-                    preferredSize: Size.fromHeight(48 * MediaQuery.textScalerOf(context).scale(1) + 4),
+                    preferredSize: Size.fromHeight(
+                        48 * MediaQuery.textScalerOf(context).scale(1) + 4),
                     child: _timelineTabs(context)),
             actions: [
               IconButton(

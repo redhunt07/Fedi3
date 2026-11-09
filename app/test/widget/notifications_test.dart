@@ -52,14 +52,20 @@ void main() {
             : (request.url.path == '/_fedi3/stream' ? '' : '{}'));
     CoreHttp.useTestClient(client);
     addTearDown(CoreHttp.reset);
-    final app = buildTestAppState(config: buildTestConfig(), core: FakeCoreRuntime(),
-        prefs: UiPrefs.defaults().copyWith(lastNotificationsSeenMs: 1760000000000));
+    final app = buildTestAppState(
+        config: buildTestConfig(),
+        core: FakeCoreRuntime(),
+        prefs: UiPrefs.defaults()
+            .copyWith(lastNotificationsSeenMs: 1760000000000));
     await app.startCore();
     final seen = app.prefs.lastNotificationsSeenMs;
     await pumpScreen(tester, NotificationsScreen(appState: app, active: false));
     await tester.pumpAndSettle();
     expect(app.prefs.lastNotificationsSeenMs, seen);
-    items = [{..._follow('https://poll.test/users/second'), 'ts': 1760000000001}, ...items];
+    items = [
+      {..._follow('https://poll.test/users/second'), 'ts': 1760000000001},
+      ...items
+    ];
     await tester.pump(const Duration(seconds: 15));
     await tester.pumpAndSettle();
     expect(find.text('second'), findsOneWidget);

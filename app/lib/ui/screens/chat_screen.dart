@@ -53,7 +53,8 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _loadThreads(reset: true));
     _markSeen();
-    _poll = AppActivity.periodic(const Duration(seconds: 10), (_) => _loadThreads(reset: true));
+    _poll = AppActivity.periodic(
+        const Duration(seconds: 10), (_) => _loadThreads(reset: true));
     _activity = AppActivity.changes.listen((foreground) {
       if (foreground && mounted) _loadThreads(reset: true);
     });

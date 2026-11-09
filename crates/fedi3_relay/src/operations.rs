@@ -559,14 +559,7 @@ mod tests {
 
     #[test]
     fn automatic_pool_needs_host_and_credentials() {
-        assert!(build_turn_pool(
-            "",
-            3478,
-            "relay".into(),
-            "secret".into(),
-            Vec::new()
-        )
-        .is_none());
+        assert!(build_turn_pool("", 3478, "relay".into(), "secret".into(), Vec::new()).is_none());
         assert!(build_turn_pool(
             "relay.example",
             3478,

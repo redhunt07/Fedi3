@@ -2680,8 +2680,8 @@ impl SocialDb {
     pub fn list_following_ids(&self, limit: u32) -> Result<Vec<String>> {
         let conn = self.connect()?;
         let limit = limit.max(1).min(10_000) as i64;
-        let mut stmt = conn
-            .prepare("SELECT actor_id FROM following ORDER BY created_at_ms DESC LIMIT ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT actor_id FROM following ORDER BY created_at_ms DESC LIMIT ?1")?;
         let rows = stmt
             .query_map(params![limit], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -3727,8 +3727,7 @@ async fn forward_to_user_inner(
                 if let Ok(Some(json)) = db.get_collection_cache(&user, kind).await {
                     let body = if kind == "outbox" {
                         let base = user_base_url(&state.cfg, &user);
-                        let actor_url =
-                            format!("{}/users/{user}", base.trim_end_matches('/'));
+                        let actor_url = format!("{}/users/{user}", base.trim_end_matches('/'));
                         normalize_outbox_actors(&json, &actor_url).unwrap_or(json)
                     } else {
                         json
@@ -3916,11 +3915,8 @@ async fn forward_to_user_inner(
                 if let Some(kind) = collection_kind_from_path(&user, path) {
                     if kind == "outbox" {
                         let base = user_base_url(&state.cfg, &user);
-                        let actor_url =
-                            format!("{}/users/{user}", base.trim_end_matches('/'));
-                        if let Some(normalized) =
-                            normalize_outbox_actors(&actor_json, &actor_url)
-                        {
+                        let actor_url = format!("{}/users/{user}", base.trim_end_matches('/'));
+                        if let Some(normalized) = normalize_outbox_actors(&actor_json, &actor_url) {
                             actor_json = normalized;
                             resp.body_b64 = B64.encode(actor_json.as_bytes());
                         }
@@ -4860,10 +4856,7 @@ fn normalize_outbox_actors(json: &str, actor_url: &str) -> Option<String> {
         if !activity.is_object() {
             return;
         }
-        let ty = activity
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
+        let ty = activity.get("type").and_then(|t| t.as_str()).unwrap_or("");
         if ty != "Create" && ty != "Announce" {
             return;
         }
@@ -4876,10 +4869,7 @@ fn normalize_outbox_actors(json: &str, actor_url: &str) -> Option<String> {
     }
 
     let mut value: serde_json::Value = serde_json::from_str(json).ok()?;
-    if let Some(items) = value
-        .get_mut("orderedItems")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(items) = value.get_mut("orderedItems").and_then(|v| v.as_array_mut()) {
         for item in items {
             rewrite(item, actor_url);
         }
