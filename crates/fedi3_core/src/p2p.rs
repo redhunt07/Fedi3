@@ -570,6 +570,7 @@ where
 
     metrics.set_p2p_enabled(true);
     let peer_id = PeerId::from(keypair.public());
+    info!(%peer_id, "p2p task starting");
     let exchange_enabled = cfg.peer_exchange_enable.unwrap_or(true);
     let public_enabled = cfg.public_discovery_enable.unwrap_or(true);
     let mut peer_book = PeerBook::load(social.data_dir(), peer_id, now_ms());
@@ -595,12 +596,35 @@ where
     let auto_relay_allowed = !force_relay_only && auto_force_relay_only && has_any_relay;
 
     // Circuit relay transport must be combined at the "raw" (pre-upgrade) layer, then upgraded.
-    let raw_tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
-    let raw_ws = websocket::Config::new(tcp::tokio::Transport::new(
-        tcp::Config::default().nodelay(true),
-    ));
-    let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws, raw_tcp);
-    let raw_ws_or_tcp = libp2p::dns::tokio::Transport::system(raw_ws_or_tcp)?;
+    let raw_tcp = || tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
+    let raw_ws = || {
+        websocket::Config::new(tcp::tokio::Transport::new(
+            tcp::Config::default().nodelay(true),
+        ))
+    };
+    let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp());
+    // The hickory system resolver reads Android's DNS servers through
+    // ndk-context and *panics* when the host app never initialised it. Losing
+    // DNS must not disable P2P: IP multiaddresses (including the relay
+    // infrastructure address) still work.
+    let dns_transport = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        libp2p::dns::tokio::Transport::system(raw_ws_or_tcp)
+    }));
+    let raw_ws_or_tcp = match dns_transport {
+        Ok(Ok(transport)) => transport.boxed(),
+        Ok(Err(e)) => {
+            tracing::warn!(
+                error = %e,
+                "system DNS transport unavailable; using IP multiaddresses only"
+            );
+            libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp()).boxed()
+        }
+        Err(_) => {
+            tracing::warn!("system DNS resolver panicked; using IP multiaddresses only");
+            libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp()).boxed()
+        }
+    };
+    let relay_transport = relay_transport.boxed();
     let raw_stream =
         libp2p::core::transport::choice::OrTransport::new(relay_transport, raw_ws_or_tcp);
     let tcp_transport = raw_stream
@@ -610,6 +634,7 @@ where
         .timeout(Duration::from_secs(20))
         .boxed();
 
+    info!("p2p transport ready");
     let quic_transport = quic::tokio::Transport::new(quic::Config::new(&keypair));
     let transport =
         libp2p::core::transport::choice::OrTransport::new(quic_transport, tcp_transport)
@@ -620,10 +645,15 @@ where
             .boxed();
 
     let mdns = if cfg.mdns_enable.unwrap_or(true) {
-        Some(mdns::tokio::Behaviour::new(
-            mdns::Config::default(),
-            peer_id,
-        )?)
+        match mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id) {
+            Ok(behaviour) => Some(behaviour),
+            Err(e) => {
+                // Android may refuse the multicast socket; local discovery is
+                // optional and must not take the whole P2P stack down.
+                tracing::warn!(error = %e, "mDNS unavailable; continuing without local discovery");
+                None
+            }
+        }
     } else {
         None
     }
@@ -701,8 +731,16 @@ where
                 .map(|v| v.trim())
                 .filter(|v| !v.is_empty())
             {
-                let addr: Multiaddr = s.parse()?;
-                swarm.listen_on(addr)?;
+                // A single bad listen address (for example an IPv6 bind on a
+                // device without IPv6) must not abort the whole P2P stack.
+                match s.parse::<Multiaddr>() {
+                    Ok(addr) => {
+                        if let Err(e) = swarm.listen_on(addr.clone()) {
+                            tracing::warn!(%addr, error = %e, "p2p listen failed");
+                        }
+                    }
+                    Err(e) => tracing::warn!(listen = s, error = %e, "invalid p2p listen address"),
+                }
             }
         }
     }

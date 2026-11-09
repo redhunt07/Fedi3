@@ -247,14 +247,72 @@ fn data_dir_for(cfg: &CoreStartConfig) -> Result<std::path::PathBuf> {
 /// Start the core. This function returns `Ok(handle)` only after the local server is
 /// actually bound to `cfg.bind` and the database has been opened successfully.
 /// Appends tracing output to a file; Android drops native stdout, so the core
-/// keeps a log next to its database for diagnostics.
-struct FileWriter(Arc<std::fs::File>);
+/// keeps a log next to its database and mirrors it to logcat for diagnostics.
+struct FileWriter {
+    file: Option<Arc<std::fs::File>>,
+}
+
+struct FileWriterStream {
+    file: Option<Arc<std::fs::File>>,
+}
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriter {
-    type Writer = &'a std::fs::File;
+    type Writer = FileWriterStream;
 
     fn make_writer(&'a self) -> Self::Writer {
-        &self.0
+        FileWriterStream {
+            file: self.file.clone(),
+        }
+    }
+}
+
+impl std::io::Write for FileWriterStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(file) = &self.file {
+            let mut file = &**file;
+            let _ = std::io::Write::write_all(&mut file, buf);
+        }
+        #[cfg(target_os = "android")]
+        android_log::write("fedi3-core", buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(file) = &self.file {
+            let mut file = &**file;
+            let _ = std::io::Write::flush(&mut file);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "android")]
+mod android_log {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int};
+
+    #[link(name = "log")]
+    extern "C" {
+        fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+    }
+
+    /// Android drops native stdout/stderr, so mirror tracing output to logcat.
+    pub fn write(tag: &str, line: &[u8]) {
+        let text: Vec<u8> = line
+            .iter()
+            .copied()
+            .filter(|b| *b != 0 && *b != b'\x1b')
+            .collect();
+        // Drop the "[0m" tails left behind when only the ESC byte is removed.
+        let text = String::from_utf8_lossy(&text).replace("[0m", "");
+        let Ok(text) = CString::new(text.as_bytes()) else {
+            return;
+        };
+        let Ok(tag) = CString::new(tag) else { return };
+        // ANDROID_LOG_INFO = 4.
+        unsafe {
+            __android_log_write(4, tag.as_ptr(), text.as_ptr());
+        }
     }
 }
 
@@ -278,14 +336,29 @@ fn init_tracing(data_dir: Option<&std::path::Path>) {
             }
             options.open(path).ok()
         })
-        .map(|file| FileWriter(Arc::new(file)));
+        .map(|file| Arc::new(file));
     let builder = tracing_subscriber::fmt().with_env_filter(filter);
     match file_writer {
-        Some(writer) => {
-            builder.with_writer(writer).try_init().ok();
+        Some(file) => {
+            builder
+                .with_writer(FileWriter { file: Some(file) })
+                .try_init()
+                .ok();
         }
         None => {
-            builder.try_init().ok();
+            // Without a log file, keep stdout on desktop; Android has neither,
+            // so it still mirrors to logcat.
+            #[cfg(target_os = "android")]
+            {
+                builder
+                    .with_writer(FileWriter { file: None })
+                    .try_init()
+                    .ok();
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                builder.try_init().ok();
+            }
         }
     }
 }
@@ -307,6 +380,22 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
     }
     let addr: SocketAddr = cfg.bind.parse().context("parse bind address")?;
     let data_dir = data_dir_for(&cfg)?;
+
+    // A panic in a background worker is otherwise silent on Android, where
+    // native stderr is dropped. Route it through tracing (logcat + file).
+    std::panic::set_hook(Box::new(|info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("unknown panic");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        error!("panic at {location}: {message}");
+    }));
 
     // Starting twice with the same bind address and data directory is not an
     // error: the FFI runtime survives a Dart isolate restart (for example when
@@ -538,6 +627,11 @@ fn run_core(
         }
 
         let mut p2p_cfg = cfg.p2p.clone().unwrap_or_default();
+        info!(
+            enable = p2p_cfg.enable,
+            relay_reserve = p2p_cfg.relay_reserve.as_ref().map(|v| v.len()).unwrap_or(0),
+            "p2p configuration"
+        );
         // The relay advertises its P2P infrastructure address. Reserve a circuit
         // on it so the actor document publishes a dialable relayed address even
         // when the device is behind NAT (the usual situation for mobile clients).

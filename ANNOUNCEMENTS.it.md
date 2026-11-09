@@ -12,7 +12,10 @@ di un token ogni due minuti. Il core chiede una sola prenotazione per relay
 (quella risposta copre già TCP e QUIC), riprova con backoff esponenziale da 5
 secondi fino a 2 minuti e riscopre periodicamente l'indirizzo P2P del relay,
 così un telefono avviato prima che la rete fosse pronta diventa raggiungibile
-senza riavviare l'app. Build 0.11.10 (2013).
+senza riavviare l'app. Su Android il resolver DNS di sistema andava in panico
+perché il contesto NDK non è inizializzato: il core ora intercetta il panico e
+continua con indirizzi IP, quindi il P2P mobile si avvia davvero. Build 0.11.10
+(2013).
 
 ## 2026-11-09 — Rilasciata Fedi3 0.11.9
 

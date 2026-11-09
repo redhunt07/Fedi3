@@ -148,6 +148,14 @@ di libp2p, che ricarica un solo token ogni due minuti. Il core chiede una sola
 prenotazione per relay e applica un backoff esponenziale quando viene chiusa,
 quindi un riavvio del relay non produce più un ciclo di rifiuti.
 
+Su Android il core replica l'output di tracing su logcat con il tag
+`fedi3-core` (`adb logcat -s fedi3-core`), perché il file di log nativo si
+trova nella directory privata dell'app. La piattaforma non ha
+`/etc/resolv.conf` e il resolver hickory va in panico quando il contesto NDK
+non è inizializzato; il core intercetta il panico e continua con indirizzi IP.
+Se un telefono non pubblica alcun indirizzo relayed, controlla in logcat
+`p2p task starting` e `p2p listening` prima di dare la colpa al relay.
+
 La chiamata deve mostrare connessione effettiva, non soltanto l'accettazione
 dell'invito. Nei log `Fedi3 call media` riporta i byte RTP inviati e ricevuti:
 i contatori devono aumentare sui due dispositivi. Non viene registrato il

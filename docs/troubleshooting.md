@@ -148,6 +148,14 @@ refills only one token every two minutes. The core asks for a single
 reservation per relay and backs off exponentially when it is closed, so a
 relay restart no longer produces a denial loop.
 
+On Android the core mirrors its tracing output to logcat under the
+`fedi3-core` tag (`adb logcat -s fedi3-core`), because the native log file
+lives in the app's private directory. The platform has no `/etc/resolv.conf`
+and the hickory resolver panics when the NDK context is not initialised; the
+core catches that panic and keeps going with IP multiaddresses. If a phone
+publishes no relayed address, check logcat for `p2p task starting` and
+`p2p listening` before blaming the relay.
+
 The call must show an actual connection, not only acceptance
 of the invite. In the logs `Fedi3 call media` reports the RTP bytes sent and received:
 the counters must increase on both devices. The audio/video content is not recorded.
