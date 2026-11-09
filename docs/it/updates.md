@@ -1,5 +1,8 @@
 # Aggiornamenti del client
 
+Fedi3 può controllare le release GitHub per una versione stabile più recente e
+verificarne il SHA256 prima di installarla.
+
 Configurazioni → Aggiornamenti del client controlla l’ultima release stabile
 GitHub di `redhunt07/Fedi3`. Le build release controllano anche dopo l’avvio e
 ogni sei ore mentre l’app è in primo piano, con un avviso per versione a
@@ -9,8 +12,9 @@ Le richieste HTTPS sono in sola lettura: non inviano token, log o telemetria.
 La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
-La prima versione pubblicata con questo sistema è `0.10.0+1`, successiva alla
-release storica `0.9.19`. I vecchi client richiedono un primo aggiornamento manuale.
+Il sistema di aggiornamento è stato introdotto nella `0.10.0+1`; la linea di
+release corrente è `0.11.9+2012`. I client precedenti alla `0.10.0` richiedono un
+primo aggiornamento manuale.
 
 ## Installazione
 

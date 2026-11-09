@@ -595,6 +595,9 @@ Tests written before the fixes must be marked `#[ignore]` with a comment citing 
 
 ---
 
+> Counts refer to the 2026-11-01 suite. CI runs the same suite on every push and on release tags; the 0.11.9 verification is in [audit/release_0.11.9_2026-11-09.md](audit/release_0.11.9_2026-11-09.md).
+
+
 ## 11. Implementation status
 
 Implemented on 2026-10-31 and 2026-11-01 in three iterations. Real counts verified by running the final suite:

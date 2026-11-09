@@ -6,6 +6,10 @@ to verify that a Fedi3 identity with an anchor (`anchor_actor_url`) can be follo
 verified and exchange activities with third-party federated software, both inbound and
 outbound.
 
+> This report was produced on 2026-11-07 against Mastodon 4.7.4 and Misskey 2026.10.1. The matrix can be reproduced with `scripts/ap_compat_matrix.py`; the current client is 0.11.9.
+
+> This report was produced on 2026-11-07 against Mastodon 4.7.4 and Misskey 2026.10.1. The matrix can be reproduced with `scripts/ap_compat_matrix.py`; the current client is 0.11.9.
+
 > Result: **test passed in both directions** with both implementations.
 > The test also found a real bug in the outbound HTTP signature, fixed in
 > `crates/fedi3_core/src/delivery.rs`.
@@ -316,3 +320,10 @@ Two fixes that emerged from this check are included in the code:
 - **Media URLs on the relay**: the core mirrors media to the relay and returns URLs on the
   relay host; if a single public host is needed, rewrite the host of the URLs or serve the media through
   the identity proxy (both paths were verified).
+
+## Related documents
+
+- [decentralization.md](decentralization.md) — anchored identity and relay mesh.
+- [test_plan.md](test_plan.md#12-real-interoperability-manual) — automated coverage and
+  the manual interoperability gate.
+- [p2p_network.md](p2p_network.md) — transport and discovery behind the client checks.

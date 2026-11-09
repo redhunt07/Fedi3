@@ -1,24 +1,26 @@
-# Deploy core (runtime locale)
+# Deploy del core (runtime locale)
 
-Il core è un server locale usato dall’app, non va esposto pubblicamente.
+Il core è un server locale usato dall’app. Per impostazione predefinita ascolta su `127.0.0.1` e non va esposto pubblicamente.
 
 ## Avvio tramite app
 
-L’app avvia il core automaticamente al login.
+L’app avvia il core automaticamente quando parte e lo riavvia dopo una modifica della configurazione.
 
 ## Avvio manuale (dev)
 
-```
+```bash
 scripts/build_core.ps1
 scripts/build_core.sh
 ```
 
 Il binario viene caricato dalla app via FFI.
 
-## Config importanti
+## Configurazione importante
 
-- `internal_token` per proteggere endpoints UI/internal.
+- `internal_token` per proteggere gli endpoint UI/internal.
 - `public_base_url` e `relay_ws` coerenti con il relay.
+- `relay_token` quando si usa un tunnel verso il relay (almeno 16 caratteri).
+- `data_dir` per sostituire la directory dati predefinita.
 
 ## Health/metrics
 
@@ -48,3 +50,9 @@ risultante nel documento actor. Questo mantiene raggiungibili i peer dietro
 NAT. Se il relay lascia vuoti `FEDI3_P2P_INFRA_PEER_ID` e
 `FEDI3_P2P_INFRA_MULTIADDRS`, il core pubblica solo gli indirizzi `announce`
 configurati.
+
+## Documentazione correlata
+
+- [app_guide.md](app_guide.md) — configurazione del client e primo avvio
+- [deploy_server.md](deploy_server.md) — relay e infrastruttura P2P
+- [troubleshooting.md](troubleshooting.md) — diagnosi di core e P2P

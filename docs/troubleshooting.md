@@ -1,5 +1,9 @@
 # Troubleshooting
 
+This page covers the most common relay, core, app and P2P failures. For
+deployment steps see [deploy_relay.md](deploy_relay.md) and
+[deploy_server.md](deploy_server.md).
+
 ## Caddy: ACME error
 
 - Invalid domain or DNS not propagated.
@@ -17,7 +21,7 @@
 
 ## Federated requests rejected (401)
 
-Since 0.1.1 verification is mandatory. Typical causes:
+HTTP signature verification is mandatory. Typical causes:
 
 - the remote instance does not sign the request, or signs only `(request-target)` and `host` without `date`/`digest`;
 - the `Digest` does not match the body (proxy rewriting the body, undeclared compression);
@@ -158,6 +162,8 @@ the call; a test recording with a flat level meter points at the wrong input.
 `libsystemd.so.0: version LIBSYSTEMD_251 not found` indicates a packaging conflict,
 not profile corruption or a missing executable permission. Version 0.10.0 bundled
 older copies of dependencies used by the host GLib. The fix is published in
-[0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1); install the replacement. Keep all existing data and keyring
-credentials. Rebuilding with the corrected `scripts/build_appimage.sh` also
-applies the fix. SHA256 integrity checks alone cannot detect this ABI mismatch.
+[0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1) and is included
+in current packages (0.11.9). Install 0.10.1 or newer, or rebuild with the
+corrected `scripts/build_appimage.sh`. Keep all existing data and keyring
+credentials. SHA256 integrity checks alone cannot detect this ABI mismatch. See
+[client updates](updates.md) for the upgrade procedure.

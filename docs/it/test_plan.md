@@ -595,6 +595,9 @@ I test scritti prima dei fix devono essere marcati come `#[ignore]` con un comme
 
 ---
 
+> I conteggi si riferiscono alla suite del 2026-11-01. La CI esegue la stessa suite a ogni push e sui tag di release; la verifica della 0.11.9 è in [audit/release_0.11.9_2026-11-09.md](audit/release_0.11.9_2026-11-09.md).
+
+
 ## 11. Stato di implementazione
 
 Implementato il 2026-10-31 e il 2026-11-01 in tre iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:

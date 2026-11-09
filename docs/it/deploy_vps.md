@@ -1,9 +1,12 @@
 # Deploy relay e infrastruttura P2P su VPS
 
 Questa guida descrive il deployment attivo su `fedi3.redhunt07.ovh`
-(IPv4 `51.210.42.24`). Il relay è raggiungibile solo via HTTPS su Caddy;
-PostgreSQL, Redis/Dragonfly e Meilisearch restano sulla rete Docker interna.
-P2P e TURN sono esposti pubblicamente.
+(IPv4 `51.210.42.24`). Integra l'[installazione automatica del server](deploy_server.md)
+e la [configurazione manuale del relay](deploy_relay.md).
+
+Il relay è raggiungibile solo via HTTPS su Caddy; PostgreSQL, Dragonfly
+(compatibile Redis) e Meilisearch restano sulla rete Docker interna. P2P e TURN
+sono esposti pubblicamente.
 
 ## DNS e TLS
 
@@ -22,8 +25,9 @@ Il deployment usa `docker-compose.yml` nella directory
 `/home/rocky/fedi3` sul VPS:
 
 - `caddy`: TLS e reverse proxy verso il relay.
-- `relay`: servizio Fedi3, database PostgreSQL, media locali.
-- `postgres`, `dragonfly`, `meilisearch`: backend interni.
+- `relay`: servizio Fedi3 e media locali.
+- `postgres`, `dragonfly`, `meilisearch`: backend interni (database, cache
+  compatibile Redis e ricerca opzionale).
 - `p2p_infra`: nodo libp2p con relay server, Kademlia e mailbox.
 - `turn`: coturn con credenziali, IP esterno e range UDP.
 
@@ -78,11 +82,12 @@ bash scripts/relay_smoke_test.sh https://fedi3.redhunt07.ovh "$(grep ADMIN_TOKEN
 Verifiche rapide:
 
 ```bash
-curl -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" \
-  https://fedi3.redhunt07.ovh/healthz
+curl -fsS https://fedi3.redhunt07.ovh/healthz
+curl -fsS https://fedi3.redhunt07.ovh/readyz
+curl -fsS https://fedi3.redhunt07.ovh/_fedi3/relay/stats
 
 curl -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" \
-  https://fedi3.redhunt07.ovh/_fedi3/relay/stats
+  https://fedi3.redhunt07.ovh/_fedi3/relay/metrics.prom | head
 
 curl -fsS -H 'Accept: application/activity+json' \
   https://fedi3.redhunt07.ovh/users/alice
@@ -103,7 +108,7 @@ ls -lh /home/rocky/backups
 ```
 
 I backup non sono cifrati: proteggere la directory o copiarla su storage
-cifrato. Per un ripristino seguire `docs/ops_backup_restore.md`.
+cifrato. Per un ripristino vedi [ops_backup_restore.md](ops_backup_restore.md).
 
 ## Manutenzione
 

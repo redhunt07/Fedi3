@@ -43,3 +43,23 @@ Meglio di no. Metti il relay dietro un reverse proxy TLS e lascia `FEDI3_RELAY_B
 ## Come faccio un backup?
 
 Vedi [ops_backup_restore.md](ops_backup_restore.md). Gli script leggono la configurazione da `.env`, verificano l'archivio e applicano una retention. Il backup dell'app esporta solo configurazione e preferenze, non la chiave privata.
+
+## Come aggiorno il client?
+
+Apri **Impostazioni → Aggiornamenti del client**: l'app controlla le release stabili su GitHub e verifica lo SHA256 prima di installare. Gli AppImage Linux x86_64 si sostituiscono conservando un backup, Windows x64 scarica uno ZIP verificato e Android installa l'APK solo quando il certificato di firma coincide. I client precedenti alla 0.10.0 richiedono un primo aggiornamento manuale. Vedi [aggiornamenti del client](updates.md).
+
+## Android mantiene le notifiche quando l'app è chiusa?
+
+Sì. Un servizio foreground keep-alive mantiene vivo un engine Flutter headless per le notifiche di timeline, chat e chiamate in arrivo, con suoni distinti per attività, chat e chiamate. Da Android 14 dichiara `remoteMessaging` e sotto usa `dataSync`; Android 15 limita i servizi `dataSync` a sei ore al giorno. Un'ottimizzazione batteria aggressiva può ritardare la consegna: consenti a Fedi3 di restare attiva in background. Vedi la [guida dell'app](app_guide.md).
+
+## Perché le chiamate richiedono TURN e come viene instradato l'audio?
+
+Le chiamate derivano gli endpoint coturn dall'host del relay quando il relay pubblica `FEDI3_RELAY_TURN_*`; le chiamate solo STUN falliscono se un peer è dietro VPN o NAT carrier-grade. Su desktop **Impostazioni → Audio** seleziona e prova microfono e uscita, e la condivisione schermo invia microfono e audio di sistema del PC come tracce separate. Le videochiamate mobile possono passare dalla fotocamera anteriore a quella posteriore. Vedi la [guida dell'app](app_guide.md).
+
+## Quali lingue sono disponibili?
+
+L'interfaccia del client è disponibile in inglese e italiano; la cambi in **Impostazioni → Aspetto e lingua**. La documentazione è bilingue: inglese in `docs/`, italiano in `docs/it/`.
+
+## Come migro un account su un altro relay?
+
+Avvia il core con `previous_public_base_url` e `previous_relay_token` (oppure `legacy_aliases` per i vecchi URL dell'actor). Le attività migrate dell'outbox vengono riscritte sull'actor corrente nel core e nel proxy del relay, così le istanze classiche vedono l'autore corretto. Vedi [core locale e modalità P2P](deploy_core.md).

@@ -88,8 +88,27 @@ The relay remains a trust point for: availability, media, relay-wide moderation 
 
 ## 6. Residual risks and next steps
 
-- **Mobile**: the core lives in the app process; on Android/iOS the tunnel dies when the system suspends the app. Push via relay and an explicit spool retention policy are needed.
-- **Redirects and SSRF**: the network guard checks the initial URL; a redirect to a hostname that resolves to a private IP is not re-evaluated (documented in `SECURITY.md`).
-- **Replication of public content**: public notes still live on the relay outbox; the next step is gossip replication between cores, with the relay only as bootstrap.
-- **Community TURN**: symmetric NAT needs pools of TURN relays managed by the community, not a single centralized service.
-- **Accountability**: transparency logs of forwards and verifiable receipts are already possible; a public transparency page for each relay is missing.
+- **Mobile**: the core lives in the app process; on Android/iOS the system can
+  suspend the app. Push provisioning through the relay and a configurable spool
+  retention are implemented, but OS delivery remains discretionary.
+- **Redirects and SSRF**: the network guard resolves and checks the exact
+  addresses used by the connector, rejects private, loopback and link-local
+  targets, and bounds redirects. See the outbound destination enforcement section
+  in `SECURITY.md`.
+- **Replication of public content**: public notes still live on the relay outbox.
+  Signed gossipsub on `/fedi3/global/1` already replicates public activity between
+  connected cores, but it is best-effort and not a complete historical
+  replication; the relay remains the bootstrap and the durable store.
+- **Community TURN**: symmetric NAT needs pools of TURN relays managed by the
+  community, not a single centralized service. The relay can publish a private
+  operator pool, but no operator is activated by default.
+- **Accountability**: `/transparency` and the signed forward journal exist, with
+  independently verifiable receipts. Independent witnesses and automatic
+  cross-relay checkpoint comparison are still missing.
+
+## Related documents
+
+- [p2p_network.md](p2p_network.md) — discovery, DHT and direct transport.
+- [network_resilience.md](network_resilience.md) — spool, TURN, push and transparency.
+- [push_forward_receipts.md](push_forward_receipts.md) — receipt formats and verification.
+- [interop.md](interop.md) — real Mastodon/Misskey tests of the anchored identity.

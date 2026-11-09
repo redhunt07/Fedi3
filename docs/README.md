@@ -1,8 +1,8 @@
 # FEDI3 documentation
 
 English is the default documentation language. Every document has an Italian
-counterpart under [`it/`](it/README.md). Historical audit reports are kept under
-[`audit/`](audit/).
+counterpart under [`it/`](it/README.md). Historical audit and verification
+reports are kept under [`audit/`](audit/).
 
 ## Start here
 
@@ -10,6 +10,7 @@ counterpart under [`it/`](it/README.md). Historical audit reports are kept under
 - [FAQ](faq.md)
 - [App guide](app_guide.md)
 - [Troubleshooting](troubleshooting.md)
+- [Screenshots](../README.md#screenshots) of the desktop and Android clients
 
 ## Deployment and operations
 
@@ -27,17 +28,24 @@ counterpart under [`it/`](it/README.md). Historical audit reports are kept under
 
 - [Decentralization model](decentralization.md)
 - [P2P network](p2p_network.md)
+- [Network resilience](network_resilience.md)
+- [Push-forward receipts](push_forward_receipts.md)
 - [Interoperability](interop.md)
 - [Protocol compatibility](../PROTOCOL_COMPATIBILITY.md)
 
 ## Client
 
 - [Linux build](build_linux.md)
+- [App guide](app_guide.md)
+- [Client updates](updates.md)
 - [Client UX plan](client_ux_plan.md)
 
-## Quality
+## Quality and verification
 
 - [Test plan](test_plan.md)
+- [Release verification 0.11.9](audit/release_0.11.9_2026-11-09.md)
+- [Network resilience verification, 7 November 2026](network_resilience_verification_2026-11-07.md)
+- [Push-forward receipts verification, 7 November 2026](push_forward_receipts_verification_2026-11-07.md)
 
 ## Historical audits
 
@@ -49,6 +57,13 @@ counterpart under [`it/`](it/README.md). Historical audit reports are kept under
 - [Network test, 4 November 2026](audit/network-test-2026-11-04.md)
 - [ActivityPub compatibility report](audit/activitypub_compat_report.md)
 - [ActivityPub compatibility matrix](audit/activitypub_compatibility_matrix.md)
+- [Crypto compatibility, 8 November 2026](audit/crypto_compatibility_2026-11-08.md)
+- [Client updates, 7 November 2026](audit/client_updates_2026-11-07.md)
+- [Release verification 0.10.0](audit/release_0.10.0_2026-11-08.md)
+- [Release verification 0.10.1](audit/release_0.10.1_2026-11-08.md)
+- [Release verification 0.11.0](audit/release_0.11.0_2026-11-08.md)
+- [Release verification 0.11.1](audit/release_0.11.1_2026-11-08.md)
+- [Release verification 0.11.9](audit/release_0.11.9_2026-11-09.md)
 
 ## Italian
 

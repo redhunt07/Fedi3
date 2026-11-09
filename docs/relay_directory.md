@@ -71,9 +71,10 @@ HTTPS, unique hosts, matching WebSocket hosts, valid dates and entry ordering.
 
 The Flutter client:
 
-- downloads the directory from
+- tries the relay-hosted mirror
+  `https://fedi3.redhunt07.ovh/_fedi3/relay/directory` first, then
   `https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json`
-  and falls back to the jsDelivr mirror;
+  and the jsDelivr mirror;
 - caches the last good copy under the application support directory, so the
   first-run screen can show relays even when GitHub is unreachable;
 - falls back to `app/assets/relays.json`, a copy of the directory bundled with

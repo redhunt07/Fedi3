@@ -1,6 +1,6 @@
 # Compilare FEDI3 su Linux
 
-Questa pagina riguarda la build dell'app desktop Linux e del core nativo. Per il relay vedi [deploy_relay.md](deploy_relay.md).
+Questa pagina riguarda la build dell'app desktop Linux e del core nativo. Per il relay vedi [deploy_relay.md](deploy_relay.md); per l'uso del client vedi [app_guide.md](app_guide.md).
 
 ## Requisiti di sistema
 
@@ -11,6 +11,7 @@ sudo pacman -Syu --needed \
   base-devel git curl unzip xz zip \
   clang cmake ninja pkgconf \
   gtk3 gsettings-desktop-schemas libsecret jsoncpp \
+  webkit2gtk-4.1 gstreamer gst-plugins-base gst-plugins-good \
   libxkbcommon libxss libxrandr libxcursor libxinerama libxi \
   mesa libglvnd \
   pango cairo gdk-pixbuf2 glib2 \
@@ -24,7 +25,10 @@ Su Debian/Ubuntu:
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-  libmpv-dev libasound2-dev libpulse-dev libsecret-1-dev libjsoncpp-dev curl unzip xz-utils
+  libwebkit2gtk-4.1-dev libmpv-dev libasound2-dev libpulse-dev \
+  libsecret-1-dev libjsoncpp-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  curl unzip xz-utils
 ```
 
 Il salvataggio delle credenziali richiede anche un Secret Service nella sessione
@@ -71,20 +75,24 @@ Il bundle finito è in `app/build/linux/x64/release/bundle/`.
 
 ## Creare l'AppImage
 
-Lo script ufficiale fa tutto: core, bundle Flutter, AppRun, icone e AppImage.
+Lo script compila il core e il bundle Flutter, crea l'AppRun, include `libmpv`
+e chiama `appimagetool`. Se `appimagetool` manca, lo scarica in `.cache/`;
+`linuxdeploy` non è necessario.
 
 ```bash
-yay -S --needed linuxdeploy linuxdeploy-plugin-gtk appimagetool
 scripts/build_appimage.sh release
 ```
 
-Il risultato è in `dist/Fedi3-release-x86_64.AppImage`.
+Un'esecuzione diretta dello script produce `dist/Fedi3-release-x86_64.AppImage`.
+La pipeline di release (`scripts/release_full_linux.sh` o
+`scripts/release_build_linux.sh`) scrive invece
+`dist/Fedi3-linux-x86_64.AppImage` e `checksums.txt`.
 
 Note:
 
-- `linuxdeploy` va eseguito solo su una macchina con le dipendenze GTK installate.
-- `libmpv` deve essere presente nel bundle o nel sistema: senza di esso i video non partono.
-- L'AppRun generato dallo script abilita il backend media (`FEDI3_ENABLE_MEDIA_KIT_LINUX=1`).
+- `libmpv` deve essere presente sulla macchina di build: lo script lo include nell'AppImage. Senza di esso i video non partono.
+- L'app inizializza `media_kit` all'avvio, quindi il `libmpv` incluso viene usato automaticamente.
+- L'AppRun generato abilita il rendering software per impostazione predefinita (`FEDI3_SOFTWARE_RENDERING=1`). Imposta `FEDI3_SOFTWARE_RENDERING=0` per usare la GPU.
 
 ## Verifica del bundle
 

@@ -1,9 +1,10 @@
 # Directory relay
 
 La scoperta dei relay Fedi3 parte da una lista pubblica condivisa:
-[`relays/relays.json`](../relays/relays.json). Il file vive in questo repository
-ed è mantenuto tramite pull request. Non esiste un server della directory, un
-database o un account da creare.
+[`relays/relays.json`](../../relays/relays.json). Il file vive in questo repository
+ed è mantenuto tramite pull request. Il relay serve un mirror pacchettizzato su
+`/_fedi3/relay/directory` accanto alle fonti GitHub/jsDelivr. L'app include
+inoltre il file per il ripiego offline. Non serve un account per la directory.
 
 Il client legge la lista, misura ogni relay dal dispositivo dell'utente e mostra
 i risultati ordinati per latenza misurata in millisecondi. Il core Rust legge la
@@ -55,7 +56,7 @@ utenti. La directory indica solo dove i relay esistono.
 
 ## Aggiungere un relay
 
-La guida completa è in [`relays/README.md`](../relays/README.md). In breve:
+La guida completa è in [`relays/README.md`](../../relays/README.md). In breve:
 
 1. Rendi il relay raggiungibile pubblicamente via HTTPS con un certificato
    valido e `GET /healthz` che risponde `200 ok`.
@@ -70,9 +71,10 @@ host univoci, host WebSocket coerenti, date valide e ordinamento delle voci.
 
 Il client Flutter:
 
-- scarica la directory da
+- prova prima il mirror servito dal relay
+  `https://fedi3.redhunt07.ovh/_fedi3/relay/directory`, poi
   `https://raw.githubusercontent.com/redhunt07/Fedi3/main/relays/relays.json`
-  e ripiega sul mirror jsDelivr;
+  e il mirror jsDelivr;
 - salva l'ultima copia valida nella directory di supporto dell'applicazione,
   così la schermata iniziale può mostrare i relay anche se GitHub non è
   raggiungibile;

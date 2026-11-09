@@ -1,9 +1,13 @@
 # Fedi3 — Client relaunch plan (UX/IA)
 
-Date: 2026-11-01
-Status: proposal, to be validated before implementing.
+Date: 2026-11-01. Last status update: 2026-11-09, client 0.11.9+2012.
+Status: adopted; steps 0–7 are implemented in the 0.11.x client, step 8 is in
+progress. Sections 1–9 preserve the original plan; sections 10–12 track the
+current client and the remaining work.
 
 ## 1. Honest assessment
+
+This section describes the client at the start of the relaunch (2026-11-01).
 
 The current client **is not yet appealing** for a user coming from Mastodon,
 Misskey or mainstream social networks. Not because of Flutter: because of the product.
@@ -175,18 +179,70 @@ If the constraint is "copy Misskey", the sequence remains valid: copy the
 taxonomy and the flows, not the density, and keep Flutter until the IA is
 stable.
 
-## 10. Progress status (2026-11-01)
+## 10. Current client (0.11.9+2012)
+
+The shipped client is a Misskey-inspired desktop and mobile app built on the
+Aurora design system: deep neutral surfaces, violet/cyan accents, an overlaid
+profile header and a navigation rail with Timeline, Search, Chat, Notifications,
+Relays, Settings and Account. It is no longer the administrator panel described
+in §1.
+
+| Desktop | Android |
+|---|---|
+| ![Fedi3 desktop timeline](assets/screenshots/desktop-timeline.png) | ![Fedi3 Android timeline](assets/screenshots/android-timeline.png) |
+| ![Fedi3 desktop end-to-end encrypted chat](assets/screenshots/desktop-chat.png) | ![Fedi3 Android chat](assets/screenshots/android-chat.png) |
+
+Current behaviour by area:
+
+| Area | Behaviour |
+|---|---|
+| Timeline | Home, Following, Discover and Federated tabs; filters; infinite scroll; federated media; composer with visibility, attachments and MFM toolbar. |
+| Profiles | Banner behind the avatar, clickable counters, Posts/Replies/Media tabs, paginated outbox and follower/following lists with follow/unfollow. |
+| Chat | Telegram-style bubbles with delivery/read check marks, E2E badge, recipient picker from mutual followers, group creation from the same screen, owner/admin/member roles, rename only for groups, message deletion, attachments, reactions, replies, forwarding, pinned messages, invite links, typing and presence. |
+| Calls | E2E 1:1 and group audio/video calls over WebRTC, automatic TURN from the relay, screen sharing with microphone and PC system audio as separate tracks, selectable audio devices, ICE restart and a manual Retry action. Android/iOS switch between front and back camera; the Linux bridge reports `NotImplemented` for that switch. |
+| Notifications | Grouped and filterable notifications, mark-as-read, real-time updates and three bundled sounds: timeline activity, chat and incoming call (Discord-style tones). Android uses a keep-alive foreground service with Android 15-compatible types. |
+| Settings | Hub with Account, Profile, Privacy, Security, Moderation, Networking, Relays, UI, Translation, Audio, Backup, Advanced, Updates and Announcements; push is under Security on mobile. |
+| Search | Posts, users and hashtags; all/local/relay source filter; persistent history with chips and clearing; global chat search. |
+| Mobile | Android and iOS builds, UnifiedPush/APNs provisioning, notification sounds, single-task navigation, camera switching in video calls. |
+| Updates | Verified client updates (SHA256) for the Linux AppImage, Windows ZIP and Android APK. |
+| Accessibility | Keyboard shortcuts (Ctrl+1…7, Ctrl+N, Ctrl+F, Esc), accessible rail labels and empty/error states. |
+| Localization | Bilingual English/Italian UI with ARB parity. |
+
+More screens:
+
+| | |
+|---|---|
+| ![Fedi3 desktop notifications](assets/screenshots/desktop-notifications.png) | ![Fedi3 desktop settings](assets/screenshots/desktop-settings.png) |
+| ![Fedi3 composer](assets/screenshots/desktop-composer.png) | ![Fedi3 Android profile](assets/screenshots/android-profile.png) |
+
+![Fedi3 desktop tour](assets/screenshots/fedi3-desktop-tour.gif)
+
+## 11. Progress status (2026-11-09)
 
 | Step | Status | Notes |
 |---|---|---|
-| 0 — Audit, design tokens, skeleton, startup gate | completed | Aurora theme, custom rail, existing routes, empty states; a real declarative router is missing |
-| 1 — Guided registration/login, recovery | completed | onboarding with identity/relay in the foreground, quick login from URL+token, collapsed advanced options and recovery dialog with code copying |
-| 2 — Single home with tabs | completed (base) | default tab layout on desktop, Home/Following/Discover/Federated tabs; full-screen composer from the sidebar and mobile FAB |
-| 3 — Own/other profiles | completed (base) | banner, clickable counters, Post/Replies/Media tabs, media grid, outbox pagination; advanced media filters are missing |
-| 4 — Settings | completed (visual) | grouped hub with icons and sections; internal search is missing |
-| 5 — Search | completed (base) | post/user/hashtag search, source filter (all/local/relay), persistent history with chips and clearing; time filters are missing |
-| 6 — Notifications | partial | filters, mark-all-read and grouping by date; grouping by actor/type is missing |
-| 7 — Chat | completed (base) | threads, attachments with preview, reactions, read state, E2E badge; E2E calls, audio/video notes, complete and global search, forwarding, pinned messages and invite links completed |
-| 8 — Finish | partial | Ctrl+1..7/Ctrl+N/Ctrl+F/Esc shortcuts, accessible rail with hints, advanced composer, fixed logo with particles, announcements from maintainers with periodic alert, mesh profile banner, tabbed chat and Telegram-style bubbles with check marks, compact notifications, posts saved offline, composer with drag&drop, online/busy/AFK/offline presence; contrast audit and full keyboard navigation remain |
+| 0 — Audit, design tokens, skeleton, startup gate | completed | Aurora theme, custom rail, routes, empty states; a declarative router is still missing. |
+| 1 — Guided registration/login, recovery | completed | identity/relay in the foreground, quick login from URL+token, collapsed advanced options and recovery code dialog. |
+| 2 — Single home with tabs | completed | Home/Following/Discover/Federated, full-screen composer from the rail and mobile FAB. |
+| 3 — Own/other profiles | completed (base) | banner overlay, counters, Posts/Replies/Media tabs, media grid, outbox pagination; advanced media filters are missing. |
+| 4 — Settings | completed (visual) | grouped hub with icons and subpages; internal settings search is missing. |
+| 5 — Search | completed (base) | posts/users/hashtags, source filter, persistent history; time filters are missing. |
+| 6 — Notifications | completed | filters, mark-all-read, grouping by actor/type and date, real-time badge. |
+| 7 — Chat | completed | threads, attachments with preview, reactions, read state, E2E badge, E2E calls, audio/video notes, search, forwarding, pinned messages, invite links, Telegram-style bubbles, group roles and deletion. |
+| 8 — Finish | partial | shortcuts, accessible rail, particles, announcements, compact notifications, saved offline posts, drag-and-drop composer and presence; a full contrast audit and complete keyboard navigation remain. |
 
-Recommended next step: web client on the OpenAPI specification, then a full contrast/accessibility audit and end-to-end chat testing with two real identities.
+Delivered in the 0.11.x cycle also includes: neon logo and launcher icons,
+continuous particle effects in the navigation rail, federation consistency for
+pending follows and profile pages, migrated outbox normalization and relayed P2P
+addresses.
+
+## 12. Next steps
+
+- Publish the web client on the OpenAPI specification and keep it a second client,
+  not a rewrite of the desktop.
+- Run a full contrast/accessibility audit and complete keyboard navigation.
+- Add internal settings search, advanced media filters and time filters in search.
+- Verify external TURN bridges and 1:1/group calls on real networks and devices.
+- Keep Android battery and background-notification work measurable (CPU, GPU, RAM)
+  without weakening the P2P/relay security model.
+

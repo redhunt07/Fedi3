@@ -7,6 +7,30 @@ FEDI3 è composta da due parti che girano sulla tua macchina:
 
 Il core ascolta su `127.0.0.1` ed è protetto da un token interno generato automaticamente. Il relay è opzionale: senza relay puoi comunque usare P2P e chat, ma non sei raggiungibile dalle istanze del fediverso tradizionale.
 
+## Screenshot
+
+Client desktop (AppImage Linux, interfaccia in inglese):
+
+| Timeline | Federata | Chat |
+| :---: | :---: | :---: |
+| <img src="../assets/screenshots/desktop-timeline.png" width="360" alt="Timeline del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-federated.png" width="360" alt="Timeline federata del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-chat.png" width="360" alt="Chat cifrata end-to-end del client desktop Fedi3"> |
+| **Ricerca** | **Notifiche** | **Profilo** |
+| <img src="../assets/screenshots/desktop-search.png" width="360" alt="Ricerca del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-notifications.png" width="360" alt="Notifiche del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-profile.png" width="360" alt="Profilo del client desktop Fedi3"> |
+| **Relay** | **Impostazioni** | **Composer** |
+| <img src="../assets/screenshots/desktop-relays.png" width="360" alt="Relay del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-settings.png" width="360" alt="Impostazioni del client desktop Fedi3"> | <img src="../assets/screenshots/desktop-composer.png" width="360" alt="Composer del client desktop Fedi3"> |
+
+Client Android:
+
+| Timeline | Chat | Profilo |
+| :---: | :---: | :---: |
+| <img src="../assets/screenshots/android-timeline.png" width="220" alt="Timeline del client Android Fedi3"> | <img src="../assets/screenshots/android-chat-conversation.png" width="220" alt="Chat del client Android Fedi3"> | <img src="../assets/screenshots/android-profile.png" width="220" alt="Profilo del client Android Fedi3"> |
+| **Elenco chat** | **Impostazioni** | |
+| <img src="../assets/screenshots/android-chat.png" width="220" alt="Elenco chat del client Android Fedi3"> | <img src="../assets/screenshots/android-settings.png" width="220" alt="Impostazioni del client Android Fedi3"> | |
+
+Tour animato del client desktop:
+
+![Tour del client desktop Fedi3](../assets/screenshots/fedi3-desktop-tour.gif)
+
 ## Primo avvio
 
 1. Apri l'app. Se non esiste una configurazione, viene mostrata la schermata di benvenuto.
@@ -89,16 +113,16 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - **Sicurezza**: token del relay, rotazione della chiave, visibilità del profilo.
 - **Privacy**: consenso alla telemetria (opzionale), cache dei media, blocco per dominio.
 - **Moderazione**: liste di attori e domini bloccati.
-- **Backup**: esporta e importa configurazione e preferenze in JSON. Il backup **non** contiene la chiave privata: quella vive nella directory dati del core e va salvata separatamente se vuoi poter migrare.
+- **Backup**: esporta e importa configurazione e preferenze come file JSON cifrato (AES-GCM, passphrase di almeno 12 caratteri). Il backup **non** contiene la chiave privata: quella vive nella directory dati del core e va salvata separatamente se vuoi poter migrare.
 - **Lingua**: italiano e inglese.
 
 Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se il nuovo valore non funziona, l'app ripristina la configurazione precedente.
 
-## Installazione Android 0.11.0
+## Installazione Android 0.11.9
 
-Dalla [release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0) scarica
-`Fedi3-android-arm64-v8a.apk` per telefoni ARM a 64 bit o
-`Fedi3-android-x86_64.apk` per emulatori x86_64 e verifica il relativo SHA256 in
+Dalla [release v0.11.9](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) scarica
+`app-arm64-v8a-release.apk` per telefoni ARM a 64 bit o
+`app-x86_64-release.apk` per emulatori x86_64 e verifica il relativo SHA256 in
 `checksums.txt`. Sono build per installazione manuale, firmate con la chiave di
 debug locale; non sono distribuzioni Play Store. Per aggiornare una vecchia
 installazione serve lo stesso certificato. Esporta prima un backup dalle

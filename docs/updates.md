@@ -1,5 +1,8 @@
 # Client updates
 
+Fedi3 can check GitHub Releases for a newer stable client and verify its SHA256
+before installing it.
+
 Settings → Client updates checks the latest stable GitHub Release of
 `redhunt07/Fedi3`. Release builds also check after startup and every six hours
 while the app is in the foreground. A version is announced once per session.
@@ -8,9 +11,9 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
-foreign download URLs and incompatible architectures are rejected. The first
-version containing this updater is published as `0.10.0+1`, above the historical
-`0.9.19` release. Older clients require a manual first upgrade.
+foreign download URLs and incompatible architectures are rejected. The updater
+was introduced in `0.10.0+1`; the current release line is `0.11.9+2012`. Clients
+older than `0.10.0` require a manual first upgrade.
 
 ## Installation
 

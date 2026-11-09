@@ -1,5 +1,12 @@
 # Fedi3 network and public infrastructures
 
+This page describes the P2P discovery and transport implemented in the Rust
+core, the public IPFS infrastructure used only as support, and the settings that
+control them. For the relay side, see [decentralization.md](decentralization.md)
+and [network_resilience.md](network_resilience.md).
+
+**Status (0.11.9):** discovery and transport are implemented in the local core; relay-to-relay peering is HTTP-based (see [relay_directory.md](relay_directory.md)) and no libp2p relay mesh runtime is running. The public IPFS DHT is used only as a discovery aid, together with signed announcements between Fedi3 peers.
+
 ## Implemented discovery
 
 The core uses four independent sources: contacts stored on the device,
@@ -111,11 +118,11 @@ resolution of any username.
 ## Audio/video and external bridges
 
 Calls use WebRTC. Fedi3 signaling exchanges SDP and ICE; the media stream
-has its own connection. The new automatic ICE values use the public STUN servers
-Cloudflare and Google, without deriving STUN/TURN from the ActivityPub relay domain.
-The circuit relay list is no longer automatically compiled starting from
-that domain. Values explicitly saved in existing profiles remain
-usable; they are not proof that traffic passes outside our server.
+has its own connection. The automatic ICE values use the public STUN servers Cloudflare and Google,
+without deriving STUN/TURN from the ActivityPub relay domain. The circuit relay
+list is no longer automatically compiled starting from that domain. Values
+explicitly saved in existing profiles remain usable; they are not proof that
+traffic passes outside our server.
 
 STUN helps find a direct path, but does not relay media. When that
 path is impossible a TURN is needed, or the call must fail.
@@ -133,8 +140,8 @@ ICE URL, TURN user and TURN credential fields of the Fedi3 configuration. Enter
 the TURN credential returned by the service, not the API administrative key.
 The current model accepts one user/credential pair shared by the configured TURN URLs;
 providers with different credentials require a richer ICE model.
-The external bridge still has to be verified with a real call. Previous tests
-between Alice and Peppenamir have not yet demonstrated a working RTP flow.
+The external bridge still requires verification with a real call; earlier tests
+between Alice and Peppenamir did not demonstrate a working RTP flow.
 
 ## Reproducible checks
 

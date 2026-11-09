@@ -1,6 +1,6 @@
 # Getting started
 
-This guide is as short as possible so you can start right away.
+This guide gets you from a clean checkout to a running relay and client as quickly as possible.
 
 ## What FEDI3 is
 
@@ -8,8 +8,9 @@ FEDI3 is a federated social network with a P2P component. The app uses a local c
 
 ## Prerequisites
 
-- Docker + Docker Compose (for the relay).
-- Flutter >= 3.38 and stable Rust (to build the app and the core).
+- Docker Engine and Docker Compose v2.20 or newer for the relay (the installer checks the Compose version).
+- Flutter 3.38 or newer and a stable Rust toolchain to build the app and the core.
+- For prebuilt packages see [release packages](#release-packages).
 
 ## One-command server installation
 
@@ -23,7 +24,7 @@ sudo bash scripts/install_server.sh
 ```
 
 See [server installation](deploy_server.md) for the step-by-step guide; on
-YunoHost use [install_yunohost.sh](deploy_yunohost.md).
+YunoHost use the [YunoHost installation](deploy_yunohost.md).
 
 ## Quick start (relay)
 
@@ -47,6 +48,10 @@ flutter run
 ```
 
 To build the native core and the AppImage see [build_linux.md](build_linux.md).
+
+## Release packages
+
+Prebuilt packages are published on the [v0.11.9 release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9): `Fedi3-linux-x86_64.AppImage` for Linux x86_64 and `app-arm64-v8a-release.apk` or `app-x86_64-release.apk` for Android. Verify each file against `checksums.txt` before running it. Android APKs are sideload builds signed with the local debug key; see [app_guide.md](app_guide.md) for installation details.
 
 ## Environment verification
 

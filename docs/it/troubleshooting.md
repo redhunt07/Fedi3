@@ -1,6 +1,10 @@
-# Troubleshooting
+# Diagnostica
 
-## Caddy: ACME error
+Questa pagina copre i guasti più comuni di relay, core, app e P2P. Per i passaggi
+di deploy vedi [deploy_relay.md](deploy_relay.md) e
+[deploy_server.md](deploy_server.md).
+
+## Caddy: errore ACME
 
 - Dominio non valido o DNS non propagato.
 - Porte 80/443 chiuse.
@@ -17,7 +21,7 @@
 
 ## Richieste federate rifiutate (401)
 
-Dal 0.1.1 la verifica è obbligatoria. Cause tipiche:
+La verifica delle firme HTTP è obbligatoria. Cause tipiche:
 
 - l'istanza remota non firma la richiesta, oppure firma solo `(request-target)` e `host` senza `date`/`digest`;
 - il `Digest` non corrisponde al body (proxy che riscrive il body, compressione non dichiarata);
@@ -159,6 +163,9 @@ l’indicatore fermo a zero indica l’ingresso sbagliato.
 `libsystemd.so.0: version LIBSYSTEMD_251 not found` indica un conflitto del
 pacchetto, non un profilo corrotto o permessi di esecuzione mancanti. La 0.10.0
 includeva vecchie dipendenze usate dalla GLib di sistema. La correzione è pubblicata
-nella [0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1): installa il pacchetto sostitutivo e conserva dati
-e credenziali nel portachiavi. Anche una build con `scripts/build_appimage.sh`
-corretto applica la soluzione. Il controllo SHA256 non rileva questo conflitto ABI.
+nella [0.10.1](https://github.com/redhunt07/Fedi3/releases/tag/v0.10.1) ed è
+inclusa nei pacchetti correnti (0.11.9). Installa la 0.10.1 o una versione
+successiva, oppure ricompila con `scripts/build_appimage.sh` corretto. Conserva
+dati e credenziali nel portachiavi. Il controllo SHA256 non rileva questo
+conflitto ABI. Vedi [aggiornamenti del client](updates.md) per la procedura di
+aggiornamento.

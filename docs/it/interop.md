@@ -6,6 +6,8 @@ verificare che un'identità Fedi3 con ancoraggio (`anchor_actor_url`) possa esse
 verificata e scambiare attività con software federato di terze parti, sia in ingresso sia in
 uscita.
 
+> Questo report è stato prodotto il 2026-11-07 contro Mastodon 4.7.4 e Misskey 2026.10.1. La matrice si può riprodurre con `scripts/ap_compat_matrix.py`; il client corrente è 0.11.9.
+
 > Esito: **test superato in entrambe le direzioni** con entrambe le implementazioni.
 > Il test ha inoltre individuato un bug reale nella firma HTTP in uscita, corretto in
 > `crates/fedi3_core/src/delivery.rs`.
@@ -316,3 +318,10 @@ Due correzioni emerse da questa verifica sono incluse nel codice:
 - **URL media sul relay**: il core specchia i media sul relay e restituisce URL sull'host del
   relay; se serve un solo host pubblico, riscrivere l'host delle URL o servire i media tramite
   il proxy dell'identità (entrambe le strade sono state verificate).
+
+## Documenti correlati
+
+- [decentralization.md](decentralization.md) — identità ancorata e mesh dei relay.
+- [test_plan.md](test_plan.md#12-interoperabilità-reale-manuale) — copertura automatica e
+  gate manuale di interoperabilità.
+- [p2p_network.md](p2p_network.md) — trasporto e discovery dietro le verifiche del client.

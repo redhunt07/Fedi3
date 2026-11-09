@@ -1,14 +1,14 @@
 # Deploy core (local runtime)
 
-The core is a local server used by the app; it must not be exposed publicly.
+The core is a local server used by the app. It binds to `127.0.0.1` by default and must not be exposed publicly.
 
 ## Starting through the app
 
-The app starts the core automatically at login.
+The app starts the core automatically when it starts and restarts it after a configuration change.
 
 ## Manual start (dev)
 
-```
+```bash
 scripts/build_core.ps1
 scripts/build_core.sh
 ```
@@ -19,6 +19,8 @@ The binary is loaded by the app via FFI.
 
 - `internal_token` to protect UI/internal endpoints.
 - `public_base_url` and `relay_ws` consistent with the relay.
+- `relay_token` when using a relay tunnel (at least 16 characters).
+- `data_dir` to override the default data directory.
 
 ## Health/metrics
 
@@ -47,3 +49,9 @@ reserves a circuit on that relay and advertises the resulting `/p2p-circuit`
 address in the actor document. This keeps peers reachable behind NAT. If the
 relay leaves `FEDI3_P2P_INFRA_PEER_ID` and `FEDI3_P2P_INFRA_MULTIADDRS` empty,
 the core advertises only its configured `announce` addresses.
+
+## Related documentation
+
+- [app_guide.md](app_guide.md) — client setup and first start
+- [deploy_server.md](deploy_server.md) — relay and P2P infrastructure
+- [troubleshooting.md](troubleshooting.md) — core and P2P diagnostics

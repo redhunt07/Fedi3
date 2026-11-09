@@ -1,77 +1,82 @@
-# Verifica e distribuzione — 7 novembre 2026
+# Verification and distribution — 7 November 2026
 
-Client locale e relay pubblico aggiornati. Backup verificati prima della sostituzione.
+Local client and public relay updated. Backups verified before replacement.
 
-## Correzioni operative
+## Operational fixes
 
-- Directory pubblicata anche su `https://fedi3.redhunt07.ovh/_fedi3/relay/directory`.
-  Il pulsante Scopri usa cache/copia inclusa quando tutte le fonti remote falliscono.
-  Il vecchio dominio ritirato non è ripristinato e TLS resta verificato.
-- SSRF: resolver condiviso core/relay filtra gli indirizzi effettivamente usati dal
-  connettore, anche dopo redirect a hostname. Test verifica che localhost non sia
-  contattato. Proxy HTTP ambientali disabilitati per la federazione; servizi di
-  storage/ricerca configurati dall'operatore usano client separati senza redirect.
-- Spool: scadenza verificata prima della consegna; quota/evizione atomica con
-  transazioni SQLite e lock della riga utente in PostgreSQL. L'inbox condivisa
-  offline passa dal percorso cifrato quando la chiave dell'utente è disponibile.
-- Riconnessioni: una vecchia autenticazione completata in ritardo non sostituisce
-  un tunnel più recente. Regressione emersa nella suite e corretta.
-- Pagina pubblica `https://fedi3.redhunt07.ovh/transparency` e snapshot di politica
-  firmato su `/_fedi3/relay/transparency`, senza elenchi utenti o contenuti.
+- Directory also published at `https://fedi3.redhunt07.ovh/_fedi3/relay/directory`.
+  The Discover button uses the cache/bundled copy when all remote sources fail.
+  The retired old domain is not restored and TLS remains verified.
+- SSRF: shared core/relay resolver filters the addresses actually used by the
+  connector, including after redirects to a hostname. The test verifies that
+  localhost is not contacted. Ambient HTTP proxies disabled for federation;
+  storage/search services configured by the operator use separate clients
+  without redirects.
+- Spool: expiry verified before delivery; atomic quota/eviction with SQLite
+  transactions and PostgreSQL user-row lock. The shared inbox offline path uses
+  the encrypted path when the user's key is available.
+- Reconnections: an old authentication completed late does not replace a newer
+  tunnel. Regression found in the suite and fixed.
+- Public page `https://fedi3.redhunt07.ovh/transparency` and signed policy
+  snapshot at `/_fedi3/relay/transparency`, without user lists or content.
 
-## Predisposizioni e limiti
+## Preparations and limits
 
-- Push: API autenticata di registrazione/revoca e contratto gateway configurabile,
-  disattivati in produzione come richiesto. I connettori nativi UnifiedPush/APNs,
-  i relativi callback/background handler e il gateway provider restano da implementare
-  e provare su dispositivi. Nessuna garanzia di tunnel mobile permanente.
-- TURN: file privato con più operatori e credenziali distinte, endpoint autenticato
-  e integrazione ICE nelle chiamate Flutter. Nessun nuovo operatore comunitario o
-  servizio gratuito è stato attivato. Rotazione, quote e disponibilità richiedono
-  accordi con operatori reali; manca ICE restart automatico per chiamate già avviate.
-- Gossip: era già presente; verificata trasmissione fra due nodi libp2p locali e
-  persistenza su SQLite senza relay. Il test copre trasporto e storage del ricevente;
-  non costituisce prova tra due client completi dietro NAT fisici differenti né
-  di disponibilità storica completa con autore offline. Le firme del trasporto
-  non equivalgono alla verifica indipendente dell'attore ActivityPub.
-- Trasparenza: lo snapshot firmato rende verificabile la politica dichiarata.
-  Un registro append-only dei forward, testimoni indipendenti e ricevute firmate
-  dai destinatari restano da realizzare; la pagina non li presenta come esistenti.
+- Push: authenticated registration/revocation API and configurable gateway
+  contract, disabled in production as requested. Native UnifiedPush/APNs
+  connectors, their callbacks/background handlers and the provider gateway
+  remain to be implemented and tested on devices. No guarantee of a permanent
+  mobile tunnel.
+- TURN: private file with multiple operators and distinct credentials,
+  authenticated endpoint and ICE integration in Flutter calls. No new community
+  operator or free service was activated. Rotation, quotas and availability
+  require agreements with real operators; automatic ICE restart for calls
+  already started is missing.
+- Gossip: already present; transmission between two local libp2p nodes and
+  persistence to SQLite without a relay verified. The test covers transport and
+  receiver storage; it is not proof between two complete clients behind
+  different physical NATs, nor of complete historical availability with an
+  offline author. Transport signatures are not equivalent to independent
+  verification of the ActivityPub actor.
+- Transparency: the signed snapshot makes the declared policy verifiable. An
+  append-only forward log, independent witnesses and receipts signed by
+  recipients remain to be implemented; the page does not present them as
+  existing.
 
-## Verifiche
+## Verifications
 
-- Workspace Rust: 285 passati, 2 ignorati (bootstrap pubblico IPFS e PostgreSQL).
-- PostgreSQL 16 isolato su VPS: test esplicito passato; quota media, 8 inserimenti
-  spool concorrenti, password con caratteri speciali e cancellazione account.
-  Container e tunnel di prova rimossi. Il database di produzione non è stato usato
-  per questi test. Il primo stress con 20 richieste via SSH ha raggiunto il limite
-  di attesa del dispatcher; la prova finale usa 8 scritture concorrenti.
-- Flutter: suite completa 154 passati; 12 test directory ripetuti dopo l'aggiunta
-  del mirror. Analyze fatal-infos e Clippy all-targets senza errori.
-- Compose/OpenAPI validati; immagine candidata provata prima del deploy:
-  directory, firma, retention, autorizzazione e credenziali TURN distinte,
-  registrazione push disabilitata. Firma ricontrollata indipendentemente.
-- Produzione: health/readiness, directory e trasparenza HTTP 200 con TLS valido;
-  firma verificata; client riconnesso; chiave dell'attore uguale a quella locale.
-  Relay/P2P/TURN healthy, nessun panic o errore di inizializzazione ricerca.
+- Rust workspace: 285 passed, 2 ignored (public IPFS bootstrap and PostgreSQL).
+- Isolated PostgreSQL 16 on VPS: explicit test passed; media quota, 8 concurrent
+  spool inserts, passwords with special characters and account deletion.
+  Test container and tunnel removed. The production database was not used for
+  these tests. The first stress with 20 requests over SSH hit the dispatcher
+  wait limit; the final run uses 8 concurrent writes.
+- Flutter: full suite 154 passed; 12 directory tests repeated after adding the
+  mirror. Analyze fatal-infos and Clippy all-targets without errors.
+- Compose/OpenAPI validated; candidate image tested before deployment:
+  directory, signature, retention, authorization and distinct TURN credentials,
+  push registration disabled. Signature independently rechecked.
+- Production: health/readiness, directory and transparency HTTP 200 with valid
+  TLS; signature verified; client reconnected; actor key equal to the local one.
+  Relay/P2P/TURN healthy, no panic or search initialization error.
 
-## Distribuzione e recupero
+## Distribution and recovery
 
-- AppImage: `dist/Fedi3-release-x86_64.AppImage`, in esecuzione con il nuovo core.
-- Relay: immagine `fedi3-relay:network-resilience-20261107`.
+- AppImage: `dist/Fedi3-release-x86_64.AppImage`, running with the new core.
+- Relay: image `fedi3-relay:network-resilience-20261107`.
 - Rollback: `fedi3-relay:before-network-resilience-20261107`.
-- Backup VPS: `/home/rocky/fedi3-backups/network-resilience-20261107/`;
-  dump PostgreSQL verificato, configurazione privata e sorgenti precedenti.
-- Backup locale cifrato: `~/.cache/fedi3-audit/alice-before-network-resilience-20261107.aesgcm`;
-  chiave nel Secret Service, attributi application=fedi3,
-  backup=fedi3-network-resilience-20261107. Formato nonce 12 byte + AES-GCM,
+- VPS backup: `/home/rocky/fedi3-backups/network-resilience-20261107/`;
+  verified PostgreSQL dump, private configuration and previous sources.
+- Local encrypted backup: `~/.cache/fedi3-audit/alice-before-network-resilience-20261107.aesgcm`;
+  key in the Secret Service, attributes application=fedi3,
+  backup=fedi3-network-resilience-20261107. Format nonce 12 bytes + AES-GCM,
   AAD `fedi3-network-resilience-20261107`.
-- Identità locale, identità P2P infra e `.env` del server preservati.
-  P2P infra e TURN non richiedevano una nuova immagine e non sono stati ricreati.
+- Local identity, P2P infra identity and server `.env` preserved.
+  P2P infra and TURN did not require a new image and were not recreated.
 
-Configurazione e protocolli: [network_resilience.md](network_resilience.md).
+Configuration and protocols: [network_resilience.md](network_resilience.md).
 
-## Hash artefatti
+## Artifact hashes
 
 - Core: `1746c56dc3b8eae221aba302bd34b73ac998df2236a592918bff4cdf3545db53`
 - AppImage: `d9a4fc697524fc57499fc71bbf62a563b2ce714303f3b508787c2263500ba5e4`

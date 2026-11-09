@@ -1,6 +1,11 @@
 # Backup e ripristino
 
-Tutti gli script leggono la configurazione da `.env` (utente e database PostgreSQL inclusi), verificano l'integrità dell'archivio e applicano una retention (`BACKUP_KEEP`, default 7 copie). Non richiedono che l'utente o il database si chiamino `fedi3`.
+Questi script eseguono il backup e il ripristino del database PostgreSQL del
+relay e dei media locali. Leggono la configurazione da `.env` (utente e database
+PostgreSQL inclusi), verificano l'integrità dell'archivio e applicano una
+retention (`BACKUP_KEEP`, default 7 copie). Non richiedono che l'utente o il
+database si chiamino `fedi3`. Vedi [deploy_server.md](deploy_server.md) per la
+struttura del deployment.
 
 Il file `.env` viene letto come dati, senza `source` o `eval`: sono supportate
 assegnazioni letterali `KEY=VALUE`, anche con virgolette esterne. Comandi shell
@@ -56,26 +61,30 @@ cat crates/fedi3_relay/sql/postgres_schema.sql | \
   docker compose exec -T postgres psql -U "$FEDI3_RELAY_PG_USER" -d "$FEDI3_RELAY_PG_DB"
 ```
 
-## Backup dell'app (client)
+## Backup delle impostazioni del client
 
-L'app esporta solo configurazione e preferenze in JSON. **Non** contiene la chiave privata: se vuoi poter migrare l'account, salva anche la directory dati del core (`FEDI3_DATA_DIR`).
-
-## Se usi S3/WebDAV
-
-Con `FEDI3_RELAY_MEDIA_BACKEND=s3` o `webdav`, il backup dei media è a carico del provider: `backup_relay_media.sh` archivia solo la directory locale. Verifica che la retention e la replica del bucket siano configurate.
-
-
-## Backup delle impostazioni del client (v2)
-
-La schermata Backup esporta ora impostazioni cifrate con AES-GCM e una
-passphrase di almeno 12 caratteri. La passphrase non viene salvata nel file:
-conservarla separatamente. Un file modificato o una password errata impediscono
+La schermata **Backup** dell'app esporta configurazione e preferenze dell'interfaccia.
+Il formato v2 cifra il JSON con AES-GCM e PBKDF2-SHA256; la passphrase deve
+essere di almeno 12 caratteri e non viene salvata nel file, quindi va conservata
+separatamente. Un file modificato o una passphrase errata impediscono
 l'importazione. I vecchi JSON v1 sono ancora importabili e devono essere trattati
 come segreti in chiaro.
 
-Questo export non contiene chiavi RSA/libp2p, database dei messaggi o media.
-Per migrare la stessa identità fra computer, arrestare il client e conservare
-anche una copia cifrata della directory dati del core. Non basta il solo JSON
-config: i token della configurazione corrente risiedono nel portachiavi del
-sistema e il file contiene soltanto un riferimento. L'export cifrato dall'app
-include i valori necessari delle impostazioni per il trasferimento.
+Questo export non contiene chiavi RSA/libp2p, database dei messaggi o media. Per
+migrare la stessa identità fra computer, arrestare il client e conservare anche
+una copia cifrata della directory dati del core (`FEDI3_DATA_DIR`). Non basta il
+solo JSON config: i token della configurazione corrente risiedono nel portachiavi
+del sistema e il file contiene soltanto un riferimento. L'export cifrato
+dall'app include i valori necessari delle impostazioni per il trasferimento.
+
+## Media su S3/WebDAV
+
+Con `FEDI3_RELAY_MEDIA_BACKEND=s3` o `webdav`, il backup dei media è a carico del
+provider: `backup_relay_media.sh` archivia solo la directory locale. Verifica che
+la retention e la replica del bucket siano configurate.
+
+## Documentazione correlata
+
+- [deploy_server.md](deploy_server.md) — installazione automatica del server
+- [deploy_relay.md](deploy_relay.md) — configurazione e monitoraggio del relay
+- [troubleshooting.md](troubleshooting.md) — diagnosi

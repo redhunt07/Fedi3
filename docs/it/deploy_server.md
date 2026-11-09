@@ -1,5 +1,9 @@
 # Installazione del server (Debian e derivate Arch)
 
+Questa pagina riguarda l'installer automatico. Per lo stack manuale del relay
+vedi [deploy_relay.md](deploy_relay.md); per il deployment di riferimento su VPS
+vedi [deploy_vps.md](deploy_vps.md).
+
 `scripts/install_server.sh` installa un server Fedi3 in un solo passaggio e
 permette di scegliere cosa eseguire:
 
@@ -45,8 +49,9 @@ identità P2P) e avvia la nuova selezione.
 - Debian 12+ / Ubuntu 22.04+ (o una derivata compatibile) con `apt`, oppure una
   derivata Arch con `pacman`.
 - Almeno 1 GB di RAM per `p2p`, 4 GB per `relay`, 6 GB consigliati per `full`
-  (il file Compose applica limiti di memoria). Almeno 20 GB liberi per la prima
-  build delle immagini e per i volumi di database e media.
+  (il file Compose applica limiti di memoria). L'installer avvisa sotto 768 MB,
+  3 GB e 4 GB rispettivamente. Almeno 20 GB liberi per la prima build delle
+  immagini e per i volumi di database e media; l'installer avvisa sotto 10 GB.
 - Per `full` e `relay`: un dominio reale con un record A/AAAA che punta al
   server, le porte 80 e 443 raggiungibili da Internet e nessun altro web server
   in ascolto su quelle porte. Caddy ottiene e rinnova il certificato tramite
@@ -82,8 +87,9 @@ L'installer chiede, nell'ordine:
 1. **Modalità**: `1` relay + P2P, `2` solo relay, `3` solo P2P.
 2. **Dominio** per le modalità 1 e 2 (ad esempio `relay.example.org`). Per la
    modalità 3 il dominio è opzionale e può essere lasciato vuoto.
-3. **TURN**: se installare coturn. Per le modalità relay il valore predefinito
-   è sì quando viene rilevato un IPv4 pubblico.
+3. **TURN**: se installare coturn. Nelle esecuzioni interattive il valore
+   predefinito è sì per le modalità relay quando viene rilevato un IPv4
+   pubblico; le esecuzioni non interattive usano no salvo `--turn`.
 4. **Meilisearch**: se usarlo al posto del backend di ricerca PostgreSQL.
 5. **Relay seed**: URL di relay separati da virgola, opzionali, per la mesh HTTP.
 6. **Conferma** del piano.
@@ -181,9 +187,10 @@ il piano senza avviare i container.
   operatori, tra cui token admin, token telemetria, password PostgreSQL,
   credenziali TURN, chiave Meilisearch e, dopo il primo avvio, peer id e
   multiaddr P2P.
-- Volumi Docker nominati: database del relay, media, certificati Caddy e
-  identità P2P. Sopravvivono a `docker compose down`; vengono eliminati solo con
-  `docker compose down -v`.
+- Volumi Docker nominati: database del relay (`relay_pg_data`), media
+  (`relay_data`), certificati Caddy (`caddy_data`, `caddy_config`) e identità
+  P2P (`p2p_infra_data`). Sopravvivono a `docker compose down`; vengono
+  eliminati solo con `docker compose down -v`.
 
 Rieseguire l'installer conserva i segreti esistenti, a meno che non si passi
 `--rotate-secrets`. Il token admin può essere impostato anche con
@@ -384,7 +391,7 @@ Per la diagnostica specifica del relay vedi [deploy_relay.md](deploy_relay.md) e
 | `--mode full\|relay\|p2p` | Seleziona la modalità di installazione. |
 | `--domain DOMAIN` | Dominio pubblico del relay. Obbligatorio per `full`/`relay`. |
 | `--turn` / `--no-turn` | Abilita o disabilita coturn. |
-| `--search db\|meili` | Backend di ricerca. |
+| `--search db\|meili` | Backend di ricerca (alias: `--meili`). |
 | `--seed-relays LIST` | URL di relay separati da virgola per la mesh. |
 | `--public-ip IP` | Sovrascrive il rilevamento dell'IPv4 pubblico. |
 | `--dir PATH` | Directory di deploy (predefinita: il checkout, altrimenti `/opt/fedi3`). |

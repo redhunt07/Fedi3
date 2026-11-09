@@ -1,9 +1,13 @@
 # Deploy relay and P2P infrastructure on a VPS
 
 This guide describes the active deployment on `fedi3.redhunt07.ovh`
-(IPv4 `51.210.42.24`). The relay is reachable only via HTTPS through Caddy;
-PostgreSQL, Redis/Dragonfly and Meilisearch stay on the internal Docker network.
-P2P and TURN are exposed publicly.
+(IPv4 `51.210.42.24`). It complements the automated
+[server installation](deploy_server.md) and the manual
+[relay configuration](deploy_relay.md).
+
+The relay is reachable only via HTTPS through Caddy; PostgreSQL, Dragonfly
+(Redis-compatible) and Meilisearch stay on the internal Docker network. P2P and
+TURN are exposed publicly.
 
 ## DNS and TLS
 
@@ -22,8 +26,9 @@ The deployment uses `docker-compose.yml` in the directory
 `/home/rocky/fedi3` on the VPS:
 
 - `caddy`: TLS and reverse proxy to the relay.
-- `relay`: Fedi3 service, PostgreSQL database, local media.
-- `postgres`, `dragonfly`, `meilisearch`: internal backends.
+- `relay`: Fedi3 service and local media.
+- `postgres`, `dragonfly`, `meilisearch`: internal backends (database,
+  Redis-compatible cache and optional search).
 - `p2p_infra`: libp2p node with relay server, Kademlia and mailbox.
 - `turn`: coturn with credentials, external IP and UDP range.
 
@@ -78,11 +83,12 @@ bash scripts/relay_smoke_test.sh https://fedi3.redhunt07.ovh "$(grep ADMIN_TOKEN
 Quick checks:
 
 ```bash
-curl -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" \
-  https://fedi3.redhunt07.ovh/healthz
+curl -fsS https://fedi3.redhunt07.ovh/healthz
+curl -fsS https://fedi3.redhunt07.ovh/readyz
+curl -fsS https://fedi3.redhunt07.ovh/_fedi3/relay/stats
 
 curl -fsS -H "Authorization: Bearer <ADMIN_TOKEN>" \
-  https://fedi3.redhunt07.ovh/_fedi3/relay/stats
+  https://fedi3.redhunt07.ovh/_fedi3/relay/metrics.prom | head
 
 curl -fsS -H 'Accept: application/activity+json' \
   https://fedi3.redhunt07.ovh/users/alice
@@ -103,7 +109,7 @@ ls -lh /home/rocky/backups
 ```
 
 The backups are not encrypted: protect the directory or copy it to
-encrypted storage. For a restore follow `docs/ops_backup_restore.md`.
+encrypted storage. For a restore follow [ops_backup_restore.md](ops_backup_restore.md).
 
 ## Maintenance
 

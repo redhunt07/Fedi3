@@ -7,6 +7,30 @@ FEDI3 is made of two parts that run on your machine:
 
 The core listens on `127.0.0.1` and is protected by an automatically generated internal token. The relay is optional: without a relay you can still use P2P and chat, but you are not reachable from traditional fediverse instances.
 
+## Screenshots
+
+Desktop client (Linux AppImage, English UI):
+
+| Timeline | Federated | Chat |
+| :---: | :---: | :---: |
+| <img src="assets/screenshots/desktop-timeline.png" width="360" alt="Fedi3 desktop timeline"> | <img src="assets/screenshots/desktop-federated.png" width="360" alt="Fedi3 desktop federated timeline"> | <img src="assets/screenshots/desktop-chat.png" width="360" alt="Fedi3 desktop end-to-end encrypted chat"> |
+| **Search** | **Notifications** | **Profile** |
+| <img src="assets/screenshots/desktop-search.png" width="360" alt="Fedi3 desktop search"> | <img src="assets/screenshots/desktop-notifications.png" width="360" alt="Fedi3 desktop notifications"> | <img src="assets/screenshots/desktop-profile.png" width="360" alt="Fedi3 desktop profile"> |
+| **Relays** | **Settings** | **Composer** |
+| <img src="assets/screenshots/desktop-relays.png" width="360" alt="Fedi3 desktop relays"> | <img src="assets/screenshots/desktop-settings.png" width="360" alt="Fedi3 desktop settings"> | <img src="assets/screenshots/desktop-composer.png" width="360" alt="Fedi3 desktop composer"> |
+
+Android client:
+
+| Timeline | Chat | Profile |
+| :---: | :---: | :---: |
+| <img src="assets/screenshots/android-timeline.png" width="220" alt="Fedi3 Android timeline"> | <img src="assets/screenshots/android-chat-conversation.png" width="220" alt="Fedi3 Android chat"> | <img src="assets/screenshots/android-profile.png" width="220" alt="Fedi3 Android profile"> |
+| **Chat list** | **Settings** | |
+| <img src="assets/screenshots/android-chat.png" width="220" alt="Fedi3 Android chat list"> | <img src="assets/screenshots/android-settings.png" width="220" alt="Fedi3 Android settings"> | |
+
+Animated tour of the desktop client:
+
+![Fedi3 desktop tour](assets/screenshots/fedi3-desktop-tour.gif)
+
 ## First start
 
 1. Open the app. If no configuration exists, the welcome screen is shown.
@@ -89,16 +113,16 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - **Security**: relay token, key rotation, profile visibility.
 - **Privacy**: telemetry consent (optional), media cache, per-domain blocking.
 - **Moderation**: lists of blocked actors and domains.
-- **Backup**: export and import configuration and preferences in JSON. The backup does **not** contain the private key: that lives in the core data directory and must be saved separately if you want to be able to migrate.
+- **Backup**: export and import configuration and preferences as an encrypted JSON file (AES-GCM, passphrase of at least 12 characters). The backup does **not** contain the private key: that lives in the core data directory and must be saved separately if you want to be able to migrate.
 - **Language**: Italian and English.
 
 Every change to the configuration restarts the core and waits for it to be ready. If the new value does not work, the app restores the previous configuration.
 
-## Installing Android 0.11.0
+## Installing Android 0.11.9
 
-From the [release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0), download
-`Fedi3-android-arm64-v8a.apk` for 64-bit ARM phones or
-`Fedi3-android-x86_64.apk` for x86_64 emulators and verify its SHA256 against
+From the [v0.11.9 release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9), download
+`app-arm64-v8a-release.apk` for 64-bit ARM phones or
+`app-x86_64-release.apk` for x86_64 emulators and verify its SHA256 against
 `checksums.txt`. These are sideload builds signed with the local debug key,
 not Play Store distributions. Updating an existing installation requires the
 same certificate. Export a backup from settings first if you need to change

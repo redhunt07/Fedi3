@@ -158,10 +158,13 @@ sudo docker compose ps
 curl -fsS https://relay.example.org/healthz
 curl -fsS https://relay.example.org/readyz
 
-# Admin-only stats
+# Public relay statistics
+curl -fsS https://relay.example.org/_fedi3/relay/stats
+
+# Admin metrics
 TOKEN=$(sudo grep '^FEDI3_RELAY_ADMIN_TOKEN=' relay-secrets.txt | cut -d= -f2-)
 curl -fsS -H "Authorization: Bearer $TOKEN" \
-  https://relay.example.org/_fedi3/relay/stats
+  https://relay.example.org/_fedi3/relay/metrics.prom | head
 
 # P2P identity
 sudo grep -E '^FEDI3_P2P_(PEER_ID|MULTIADDRS|BOOTSTRAP)=' relay-secrets.txt .env
@@ -219,8 +222,8 @@ YunoHost's backup does not include `/opt/fedi3` or the Docker volumes by
 default. Back up:
 
 - `/opt/fedi3/.env` and `/opt/fedi3/relay-secrets.txt` (mode 600);
-- the `relay_data`, `caddy_data` (if Caddy was ever used), `p2p_infra_data` and
-  media volumes;
+- the `relay_data` (media), `relay_pg_data` (PostgreSQL), `p2p_infra_data` and,
+  if Caddy was ever used, `caddy_data`/`caddy_config` volumes;
 - optionally the repository scripts/configuration.
 
 The project's `scripts/backup_relay_pg.sh` and `scripts/backup_relay_media.sh`

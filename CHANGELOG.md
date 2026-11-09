@@ -5,6 +5,89 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-11-09
+
+### Linux client
+
+- Filter only the benign ATK critical about the missing plug ID in the Linux
+  runner, so the startup log is clean while other accessibility diagnostics stay
+  visible.
+- Upgrade the SQLite binding used by the client.
+
+## [0.11.8] - 2026-11-09
+
+### Client
+
+- Keep the navigation rail particle field and the brand mark animating
+  continuously instead of stopping after a few turns; Flutter still mutes
+  tickers while the app is not visible, so background battery use is unchanged.
+
+## [0.11.7] - 2026-11-09
+
+### Client and Android
+
+- Remove the duplicate file picker and MFM cheatsheet actions from the
+  composer on Android and desktop; the attachment action remains in the media
+  area and toolbar.
+- Keep the presence selector on one row on narrow phones.
+- Android uses a single task and the keep-alive notification reuses it, so the
+  recent-apps screen no longer shows a second offline Fedi3 session.
+- Start the keep-alive foreground service in time during `onPause`, before the
+  Android `startForeground` window can expire.
+
+### Federation and relay
+
+- Reserve a circuit on the relay P2P infrastructure and publish the relayed
+  address in the actor document, so peers behind NAT can be dialled directly.
+- Normalize migrated outbox activities to the current actor in the core and in
+  the relay proxy, so classic instances see the right author.
+- Poll public posts from accounts with a pending follow request into the
+  federated timeline, and keep profile pages limited to the posts authored by
+  that account.
+
+## [0.11.6] - 2026-11-09
+
+### Android
+
+- Start the keep-alive foreground service from `onCreate` and while the app is
+  still in the foreground, fixing slow Flutter engine teardown on Android 14+.
+
+## [0.11.5] - 2026-11-09
+
+### Client
+
+- Render profile banners behind the avatar in the profile header, using the
+  default gradient only when the account has no banner.
+- Keep migrated accounts consistent: the outbox rewrites old activity
+  authorship to the current actor and profiles merge only the posts authored by
+  that account.
+
+## [0.11.4] - 2026-11-09
+
+### Client
+
+- Adopt the neon retro F over an orbital globe as the Fedi3 mark on the welcome
+  screen and in the shell, and as the launcher icon for desktop, Android, iOS,
+  macOS and Windows (with an adaptive icon and monochrome notification icon on
+  Android).
+
+## [0.11.3] - 2026-11-09
+
+### Client and calls
+
+- Use Discord message, mention and call-ring tones for notification and call
+  sounds.
+- Keep the microphone and the PC system audio as separate tracks while sharing
+  the screen, and show camera frames with their native aspect ratio.
+- Add desktop **Settings > Audio** to choose and test the microphone and output
+  used by calls.
+
+## [0.11.2] - 2026-11-09
+
+### Android and iOS
+
+- Add a front/back camera switch to mobile video calls.
+
 ## [0.11.1] - 2026-11-08
 
 ### Android calls, notifications and chat

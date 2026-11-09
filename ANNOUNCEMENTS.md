@@ -4,6 +4,10 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Fedi3 0.11.9 released
+
+Build 0.11.9 (2012) is available on the [release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) with the Linux x86_64 AppImage, the Android arm64-v8a and x86_64 APKs and SHA256 checksums. It collects the fixes published since 0.11.1: composer cleanup, single Android task, relayed P2P addresses, migrated outbox normalization, profile banners, the neon logo, continuous navigation particles and a clean Linux startup log. Windows x64 keeps the previous ZIP until the next Windows build. [Changelog](CHANGELOG.md) · [Screenshots](README.md#screenshots).
+
 ## 2026-11-09 — Clean Linux startup output
 
 The Linux client no longer prints the benign ATK critical about a missing plug

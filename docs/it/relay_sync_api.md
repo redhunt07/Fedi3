@@ -1,152 +1,100 @@
-# Relay Sync API
+# API di sync del relay
 
-API incrementali del relay per la convergenza verso backend `relay-authoritative`.
+Questa pagina documenta gli endpoint di sync esposti oggi dal relay e dal core.
+Non sono un modello di lettura relay-first: i client leggono timeline, notifiche
+e chat tramite l'API del core locale, mentre i relay usano questi endpoint per
+scambiare note pubbliche e recuperare attività perse dagli outbox.
 
-## Auth
+## Sync note tra relay peer
 
-Tutti gli endpoint richiedono:
+`GET /_fedi3/relay/sync/notes`
 
-- `Authorization: Bearer <user_token>`
-- oppure token admin relay
+Endpoint pubblico usato dai relay peer per scaricare le note conservate da un
+relay. Non richiede token, ma è limitato per IP client con lo stesso bucket del
+forward (`FEDI3_RELAY_RL_FORWARD_PER_MIN`, predefinito `240`).
 
-La query deve includere `username=<local-user>`.
+Parametri di query:
 
-## Endpoints
+| Parametro | Tipo | Note |
+|---|---|---|
+| `limit` | intero | Elementi per pagina, `1`–`200`; predefinito `200`. |
+| `since` | intero | Restituisce le note create dopo questo timestamp Unix in millisecondi. |
+| `cursor` | intero | Restituisce le note create prima di questo timestamp Unix in millisecondi (dalla più recente). |
 
-### `GET /sync/bootstrap`
+Risposta:
 
-Restituisce snapshot iniziale e cursori correnti:
+```json
+{
+  "items": [
+    {
+      "note": {"id": "https://relay.example.com/objects/abc", "type": "Note"},
+      "created_at_ms": 1790000000000
+    }
+  ],
+  "next": "1789990000000"
+}
+```
 
-- `events`
-- `notifications`
-- `chat`
-- `timeline.home`
+`next` è il cursore per la pagina successiva ed è presente solo quando la pagina
+è piena. Se vengono inviati sia `since` sia `cursor`, prevale `since`. La mesh dei
+relay usa questo endpoint per sincronizzare le note pubbliche tra relay peer;
+vedere [decentralization.md](decentralization.md#3-relay-mesh).
 
-Query principali:
+L'endpoint è descritto in [`openapi.yaml`](../openapi.yaml) alla voce
+`/_fedi3/relay/sync/notes`.
 
-- `username`
-- `event_limit`
-- `notification_limit`
-- `chat_limit`
-- `timeline_limit`
+## Sync legacy degli outbox nel core
 
-### `GET /sync/events`
+`POST /_fedi3/sync/legacy`
 
-Stream incrementale generico degli eventi relay-first.
+Chiede al core locale di scaricare gli outbox degli attori seguiti per recuperare
+attività perse. È un endpoint interno: richiede il token interno del core
+(`X-Fedi3-Internal`) e risponde subito `202 Accepted`, mentre il sync gira in
+background.
 
-Query:
+Parametri di query:
 
-- `username`
-- `limit`
-- `since_id`
-- `cursor_id`
+| Parametro | Tipo | Note |
+|---|---|---|
+| `pages` | intero | Pagine massime di collection per attore, `1`–`40`; predefinito `6`. |
+| `items` | intero | Elementi massimi per attore, `20`–`2000`; predefinito `200`. |
 
-### `GET /sync/stream`
+Il client lo chiama dal percorso di aggiornamento della timeline. Il core esegue
+lo stesso sync anche ogni 300 secondi in autonomia.
 
-Stream realtime SSE relay-first. Eventi principali:
+## Sync pubblico degli outbox (P2P)
 
-- `snapshot`
-- `events`
-- `timeline.home`
-- `notifications`
-- `chat.envelope`
-- `chat.ack`
-- `chat.message.deleted`
-- `chat.thread.deleted`
-- `object.update`
-- `object.delete`
-- `resync`
+`GET /.fedi3/sync/outbox`
 
-Header/query:
+Endpoint peer-to-peer usato per replicare l'attività pubblica degli outbox.
+Restituisce solo attività pubbliche; i messaggi diretti sono esclusi.
 
-- `Authorization: Bearer ...`
-- `username`
-- `since_id` opzionale
-- `Last-Event-ID` opzionale (resume)
+Parametri di query:
 
-### `GET /sync/timeline/home`
+| Parametro | Tipo | Note |
+|---|---|---|
+| `limit` | intero | Elementi per pagina, `1`–`200`; predefinito `50`. |
+| `since` | intero | Restituisce attività dopo questo timestamp Unix in millisecondi; predefinito `0`. |
 
-Read model server-side della home timeline.
+Risposta:
 
-Query:
+```json
+{
+  "items": [{"id": "https://relay.example.com/activities/abc", "type": "Create"}],
+  "latest_ms": 1790000000000
+}
+```
 
-- `username`
-- `limit`
-- `since`
-- `cursor`
+## Note
 
-### `GET /sync/notifications`
-
-Read model server-side delle notifiche.
-
-Query:
-
-- `username`
-- `limit`
-- `since_id`
-- `cursor_id`
-
-### `GET /sync/chat`
-
-Replay incrementale degli envelope chat cifrati.
-
-Query:
-
-- `username`
-- `limit`
-- `since_id`
-- `cursor_id`
-
-### `POST /sync/chat/envelope`
-
-Persistenza relay-side di envelope chat E2EE.
-
-Body:
-
-- `username`
-- `thread_id`
-- `message_id`
-- `sender_actor`
-- `sender_user` opzionale
-- `recipient_users`
-- `envelope`
-- `created_at_ms` opzionale
-
-### `POST /sync/chat/ack`
-
-Ack per device dei messaggi chat.
-
-Body:
-
-- `username`
-- `device_id`
-- `message_id`
-- `acked_at_ms` opzionale
-
-### `POST /sync/chat/delete`
-
-Soft-delete user scoped di un messaggio chat relay-first.
-
-Body:
-
-- `username`
-- `thread_id`
-- `message_id`
-- `deleted_at_ms` opzionale
-
-### `POST /sync/chat/thread/delete`
-
-Soft-delete user scoped dell'intero thread relay-first.
-
-Body:
-
-- `username`
-- `thread_id`
-- `deleted_at_ms` opzionale
-
-## Notes
-
-- `event_id` e `cursor_id` sono monotoni per `relay_event_log` e `relay_chat_envelopes`.
-- La home timeline usa il read model `relay_legacy_feed` e cursori basati su `inserted_at_ms`.
-- Gli eventi ActivityPub in ingresso vengono scritti nel `relay_event_log` e proiettati nelle notifiche e nello stato oggetti prima del consumo client.
-- Limite dedicato `/sync/*`: `FEDI3_RELAY_RL_SYNC_PER_MIN` (default `1200`).
+- Questi endpoint sono additivi e versionati dal percorso; i client devono
+  ignorare i campi JSON sconosciuti.
+- La semantica di `event_id` e dei cursori dipende dall'endpoint: il sync note del
+  relay usa `created_at_ms`, l'outbox del core usa `since`/`latest_ms`.
+- L'attività ActivityPub in ingresso viene scritta nel database del core prima di
+  essere esposta tramite l'API del core; il relay conserva le note dei peer in
+  `relay_notes`.
+- Nel codice attuale non esistono gli endpoint relay `/sync/bootstrap`,
+  `/sync/events` o `/sync/stream` SSE: quei modelli di lettura sono stati
+  sostituiti dall'API del core e non fanno parte della superficie relay
+  distribuita.

@@ -88,8 +88,29 @@ Il relay resta un punto di fiducia per: disponibilità, media, moderazione relay
 
 ## 6. Rischi residui e prossimi passi
 
-- **Mobile**: il core vive nel processo dell'app; su Android/iOS il tunnel muore quando il sistema sospende l'app. Servono push via relay e una politica di retention dello spool esplicita.
-- **Redirect e SSRF**: la guardia di rete controlla l'URL iniziale; un redirect verso un hostname che risolve a un IP privato non viene rivalutato (documentato in `SECURITY.md`).
-- **Replicazione dei contenuti pubblici**: le note pubbliche vivono ancora sull'outbox del relay; il passo successivo è la replica gossip tra core, con il relay solo come bootstrap.
-- **TURN comunitario**: per l'NAT simmetrico servono pool di relay TURN gestiti dalla comunità, non un unico servizio centralizzato.
-- **Accountability**: log di trasparenza dei forward e ricevute verificabili sono già possibili; manca una pagina pubblica di trasparenza per ogni relay.
+- **Mobile**: il core vive nel processo dell'app; su Android/iOS il sistema può
+  sospendere l'app. Il provisioning push tramite il relay e una retention dello
+  spool configurabile sono implementati, ma la consegna da parte del sistema
+  operativo resta discrezionale.
+- **Redirect e SSRF**: la guardia di rete risolve e controlla gli indirizzi esatti
+  usati dal connettore, rifiuta destinazioni private, loopback e link-local e
+  limita i redirect. Vedere la sezione sull'enforcement delle destinazioni in
+  uscita in `SECURITY.md`.
+- **Replicazione dei contenuti pubblici**: le note pubbliche vivono ancora
+  sull'outbox del relay. Il gossipsub firmato su `/fedi3/global/1` replica già
+  l'attività pubblica tra core connessi, ma è best-effort e non una replicazione
+  storica completa; il relay resta il bootstrap e lo store durevole.
+- **TURN comunitario**: per l'NAT simmetrico servono pool di relay TURN gestiti
+  dalla comunità, non un unico servizio centralizzato. Il relay può pubblicare un
+  pool privato di operatori, ma nessun operatore è attivo per impostazione
+  predefinita.
+- **Accountability**: `/transparency` e il registro firmato dei forward esistono,
+  con ricevute verificabili in modo indipendente. Mancano ancora testimoni
+  indipendenti e il confronto automatico tra checkpoint di relay differenti.
+
+## Documenti correlati
+
+- [p2p_network.md](p2p_network.md) — discovery, DHT e trasporto diretto.
+- [network_resilience.md](network_resilience.md) — spool, TURN, push e trasparenza.
+- [push_forward_receipts.md](push_forward_receipts.md) — formati delle ricevute e verifica.
+- [interop.md](interop.md) — test reali con Mastodon/Misskey dell'identità ancorata.

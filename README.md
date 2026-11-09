@@ -1,6 +1,6 @@
 # FEDI3
 
-[![CI](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml) [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Rust workspace](https://img.shields.io/badge/core-Rust-f97316.svg)](Cargo.toml) [![Flutter client](https://img.shields.io/badge/client-Flutter-38bdf8.svg)](app)
+[![CI](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/redhunt07/Fedi3?include_prereleases&label=release)](https://github.com/redhunt07/Fedi3/releases) [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Rust workspace](https://img.shields.io/badge/core-Rust-f97316.svg)](Cargo.toml) [![Flutter client](https://img.shields.io/badge/client-Flutter-38bdf8.svg)](app)
 
 Maintainer: **[RedHunt07](https://github.com/redhunt07)** · **English** · [Italiano](README.it.md)
 
@@ -8,19 +8,42 @@ Maintainer: **[RedHunt07](https://github.com/redhunt07)** · **English** · [Ita
 
 FEDI3 is a federated social platform with a peer-to-peer layer: privacy-first,
 interoperable with the fediverse and resilient without giving up compatibility
-with classic ActivityPub instances.
+with classic ActivityPub instances. It is a Flutter client backed by a local
+Rust core, plus an optional public relay for federation and offline delivery.
 
-> **Status: pre-1.0; [release 0.11.0](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.0).**
-> Includes the Android client work and the 0.10.1 AppImage startup fixes.
-> This release ships Linux x86_64 and Android ARM64/x86_64 packages with SHA256.
-> Android APKs are sideload builds signed with the local debug key, not Play Store
-> packages. [Verification and limits](docs/audit/release_0.11.0_2026-11-08.md).
-> Historical audits remain in [docs/audit](docs/audit).
+> **Status: pre-1.0 — current release [0.11.9](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) (build 2012).**
+> Linux x86_64, Android arm64-v8a/x86_64 and Windows x64 builds are published on
+> the release page with SHA256 checksums. Android APKs are sideload builds signed
+> with the local debug key; iOS and macOS are buildable from source but are not
+> part of the published packages. See [release verification](docs/audit/release_0.11.9_2026-11-09.md).
+
+## Screenshots
+
+Desktop client (Linux AppImage, English UI):
+
+| Timeline | Chat |
+| :---: | :---: |
+| <img src="docs/assets/screenshots/desktop-timeline.png" width="420" alt="Fedi3 desktop timeline"> | <img src="docs/assets/screenshots/desktop-chat.png" width="420" alt="Fedi3 desktop end-to-end encrypted chat"> |
+| **Profile** | **Relays and telemetry** |
+| <img src="docs/assets/screenshots/desktop-profile.png" width="420" alt="Fedi3 desktop profile page"> | <img src="docs/assets/screenshots/desktop-relays.png" width="420" alt="Fedi3 relay telemetry and known relays"> |
+| **Settings** | **Composer** |
+| <img src="docs/assets/screenshots/desktop-settings.png" width="420" alt="Fedi3 desktop settings"> | <img src="docs/assets/screenshots/desktop-composer.png" width="420" alt="Fedi3 composer with MFM toolbar"> |
+
+Android client:
+
+| Timeline | Chat | Profile |
+| :---: | :---: | :---: |
+| <img src="docs/assets/screenshots/android-timeline.png" width="230" alt="Fedi3 Android timeline"> | <img src="docs/assets/screenshots/android-chat-conversation.png" width="230" alt="Fedi3 Android chat"> | <img src="docs/assets/screenshots/android-profile.png" width="230" alt="Fedi3 Android profile"> |
+
+Animated tour of the desktop client:
+
+![Fedi3 desktop tour](docs/assets/screenshots/fedi3-desktop-tour.gif)
 
 ## Contents
 
 - [What it is](#what-it-is)
-- [Repository layout](#repository-layout)
+- [Features](#features)
+- [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Quick start: relay](#quick-start-relay)
 - [Client installation](#client-installation)
@@ -36,9 +59,9 @@ FEDI3 combines a local Rust core, a Flutter client and a public relay:
 
 | Component | Path | Responsibility |
 | :--- | :--- | :--- |
-| Flutter client | `app/` | UI, timelines, composer, chat, media, settings |
-| Local Rust core | `crates/fedi3_core` | ActivityPub, HTTP signatures, E2E chat, cache, P2P transport, relay tunnel; loaded by the app through `dart:ffi` |
-| Public relay | `crates/fedi3_relay` | Legacy federation compatibility, routing, media, search, spool for offline users |
+| Flutter client | `app/` | UI, timelines, composer, chat, calls, media, settings |
+| Local Rust core | `crates/fedi3_core` | ActivityPub, HTTP signatures, end-to-end chat, cache, P2P transport, relay tunnel; loaded by the app through `dart:ffi` |
+| Public relay | `crates/fedi3_relay` | Federation compatibility, routing, media, search, spool for offline users, relay mesh |
 | Shared protocol | `crates/fedi3_protocol` | Types and models shared by core and relay |
 | P2P infrastructure | `crates/fedi3_p2p_infra` | Mailbox and circuit-relay services |
 | Deployment assets | `deploy/` | PostgreSQL, Meilisearch, Redis, coturn, P2P node, TLS |
@@ -48,18 +71,66 @@ core. Federated ingress requires a valid HTTP signature bound to the declared
 actor, and the local core is protected by an internal token and listens on
 loopback by default.
 
-## Repository layout
+## Features
 
-```text
-app/                     Flutter client (Linux, Android, iOS, macOS, Windows)
-crates/fedi3_core/       Local core (FFI, ActivityPub, P2P, chat, storage)
-crates/fedi3_relay/      Relay service and database layer
-crates/fedi3_protocol/   Shared protocol types
-crates/fedi3_p2p_infra/  Mailbox and circuit-relay infrastructure
-deploy/                  Compose files, Dockerfiles, TLS and TURN assets
-docs/                    English documentation (Italian in docs/it/)
-scripts/                 Build, install, backup and diagnostic scripts
+**Client**
+
+- Home, following, discover and federated timelines with media, reply and boost
+  filters; profile pages with banner, avatar, fields and paginated posts.
+- Composer with MFM formatting, content warnings, sensitive-media flags and
+  multi-media attachments; visibility controls for public, unlisted, followers
+  and direct notes.
+- End-to-end encrypted 1:1 and group chat with reactions, stickers, files, read
+  receipts, presence and Telegram-style conversation creation.
+- Audio and video calls with ICE/TURN fallback, screen sharing with system audio
+  on desktop, and front/back camera switching on Android and iOS.
+- Notifications for activity, chat and incoming calls, with distinct sounds and
+  a keep-alive service that survives when the app is closed on Android.
+- Saved posts available offline, global search, hashtag discovery and an
+  integrated media viewer.
+- Settings for appearance and language, privacy, moderation, networking, audio
+  devices, backup/export and verified client updates.
+
+**Network**
+
+- Local core with ActivityPub actor, outbox/inbox, HTTP signatures and media
+  storage; a P2P-only mode works without a relay.
+- libp2p transport: identify, DHT, relay reservation, DCUtR, AutoNAT, mDNS,
+  gossip and peer exchange, with known-peer persistence.
+- Relay mesh over HTTP for relay-to-relay discovery and note sync, plus a shared
+  [relay directory](relays/relays.json) with latency ranking.
+- Relay compatibility for classic fediverse instances, including migrated
+  accounts and outbox normalization.
+
+**Security**
+
+- Private keys stay on the device; the relay never sees them.
+- Federated ingress requires a valid HTTP signature bound to the declared actor.
+- The local core is protected by an internal token and binds to loopback by
+  default; client tokens live in the OS keyring.
+- Chat is end-to-end encrypted with AES-256-GCM and Kyber768-derived keys
+  (no forward secrecy: documented limitation).
+- Outbound federation fetches enforce SSRF protection, bounded redirects and
+  body caps.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  App["Flutter client"] -->|FFI| Core["Local Rust core"]
+  Core -->|ActivityPub / HTTPS| Relay["Public relay"]
+  Core -->|libp2p| Peers["Fedi3 peers"]
+  Relay -->|HTTP peering| Mesh["Relay mesh"]
+  Relay -->|ActivityPub| Fediverse["Classic fediverse"]
+  Relay --> Media["Media and search services"]
 ```
+
+The client talks to the local core over FFI; the core owns identity, signing,
+encryption and storage, and reaches the network through the relay tunnel or
+direct P2P. The relay is a stateless federation front end with a database and a
+media backend; it can be deployed alone, with P2P infrastructure, or behind
+YunoHost. Read [decentralization](docs/decentralization.md),
+[P2P network](docs/p2p_network.md) and [interoperability](docs/interop.md).
 
 ## Requirements
 
@@ -130,16 +201,16 @@ The client stores tokens in the OS keyring: Linux builds require `libsecret`
 and a running Secret Service. An AppImage can be built locally with
 `scripts/build_appimage.sh release`.
 
-Android: download `Fedi3-android-arm64-v8a.apk` for a 64-bit ARM phone or
-`Fedi3-android-x86_64.apk` for an x86_64 emulator from the release page, verify
-`checksums.txt`, then allow installation from that source. Android installs updates
-only when signing certificates match; keep the existing local signing key for
-future builds. iOS/macOS packages are not included in this release.
+Android: download `app-arm64-v8a-release.apk` for a 64-bit ARM phone or
+`app-x86_64-release.apk` for an x86_64 emulator from the release page, verify
+`checksums.txt`, then allow installation from that source. Android installs
+updates only when signing certificates match; keep the existing local signing
+key for future builds. iOS/macOS packages are not included in this release.
 
-Available since 0.10.0: Settings → Client updates checks stable releases and verifies
-SHA256 downloads. Linux x86_64 AppImages can replace themselves with a backup;
-Windows x64 uses a verified ZIP and guided installation. Earlier clients need a
-manual first upgrade. See [client updates](docs/updates.md).
+Available since 0.10.0: Settings → Client updates checks stable releases and
+verifies SHA256 downloads. Linux x86_64 AppImages can replace themselves with a
+backup; Windows x64 uses a verified ZIP and guided installation. Earlier clients
+need a manual first upgrade. See [client updates](docs/updates.md).
 
 ## Development and testing
 
@@ -162,7 +233,8 @@ bash scripts/verify_platform_config.sh
 
 The suite does not require Docker or external services: the relay is tested
 against SQLite and remote peers are in-process HTTP servers. The optional
-PostgreSQL quota test runs in CI with an ephemeral database.
+PostgreSQL quota test runs in CI with an ephemeral database. Deployment scripts
+and the OpenAPI contract are validated by `scripts/tests/` in CI.
 
 ## Documentation
 
@@ -177,12 +249,12 @@ English (default):
 - [VPS deployment](docs/deploy_vps.md)
 - [Decentralization model](docs/decentralization.md)
 - [P2P network](docs/p2p_network.md)
+- [Network resilience](docs/network_resilience.md)
+- [Push-forward receipts](docs/push_forward_receipts.md)
 - [Interoperability](docs/interop.md)
 - [Linux build](docs/build_linux.md)
 - [App guide](docs/app_guide.md)
 - [Client updates](docs/updates.md)
-- [Current crypto compatibility verification](docs/audit/crypto_compatibility_2026-11-08.md)
-- [Announcements](ANNOUNCEMENTS.md) and [changelog](CHANGELOG.md)
 - [Client UX plan](docs/client_ux_plan.md)
 - [Backup and restore](docs/ops_backup_restore.md)
 - [Troubleshooting](docs/troubleshooting.md)
@@ -190,6 +262,8 @@ English (default):
 - [Test plan](docs/test_plan.md)
 - [Relay sync API](docs/relay_sync_api.md)
 - [OpenAPI specification](docs/openapi.yaml)
+- [Announcements](ANNOUNCEMENTS.md) and [changelog](CHANGELOG.md)
+- [Release verification 0.11.9](docs/audit/release_0.11.9_2026-11-09.md)
 
 Italian counterparts: [`docs/it/`](docs/it/README.md).
 
@@ -200,6 +274,7 @@ Italian counterparts: [`docs/it/`](docs/it/README.md).
 - The local core is protected by an internal token and binds to loopback by default.
 - Chat is end-to-end encrypted without forward secrecy (documented limitation).
 - Outbound federation fetches enforce SSRF protection, bounded redirects and body caps.
+- Client tokens are stored in the OS keyring; Linux needs a running Secret Service.
 
 Please report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
@@ -207,7 +282,8 @@ Please report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Useful
 contributions include reproducible bug reports, protocol/interop tests,
-documentation fixes and focused, reviewable changes. This project follows the
+documentation fixes and focused, reviewable changes. Documentation is bilingual:
+English in `docs/`, Italian in `docs/it/`. This project follows the
 [Contributor Covenant](CODE_OF_CONDUCT.md).
 
 ## License

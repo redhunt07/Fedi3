@@ -9,13 +9,14 @@ the app, core and relays alongside the repository mirrors. The raw GitHub and js
 is published on the remote default branch. Both first-run preview and manual
 onboarding discovery use the bundled/cached directory when refresh fails.
 The directory supplies candidates, not trust: the device probes their health.
+See [relay_directory.md](relay_directory.md) for the file format and ranking.
 
 ## Mobile: configurable provisioning, not a background tunnel guarantee
 
 Android/iOS can suspend or terminate the app and its embedded core. Do not rely
 on a permanent tunnel. Reconnection flushes the relay's durable spool.
 `RelayCapabilities.registerPush` / `unregisterPush` and these relay endpoints
-provide the provisioning contract for future native platform connectors:
+provide the provisioning contract used by the native platform connectors:
 
 - `PUT /_fedi3/relay/push/{username}` with the account's relay Bearer token and
   `{"provider":"unifiedpush","token":"opaque endpoint or device token"}`
@@ -36,7 +37,7 @@ key or account relay token enters that JSON. The gateway learns the destination.
 Relay attempts are limited to one/account/minute and bounded to four seconds;
 failures leave the spool intact. Gateway redirects are disabled.
 
-Native Android UnifiedPush and iOS APNs connectors are now implemented. See
+Native Android UnifiedPush and iOS APNs connectors are implemented. See
 [push_forward_receipts.md](push_forward_receipts.md) for platform behavior,
 provider configuration, build/signing requirements and verification limits.
 No external push gateway is activated by default.
@@ -51,10 +52,12 @@ Core envelope verification still caps the extended signature date window at seve
 days: use at most seven days for interoperable delivery. Expired items are never
 replayed, even between physical cleanup passes. Cleanup frequency is
 `FEDI3_RELAY_WEBRTC_SIGNAL_CLEANUP_INTERVAL_SECS`, minimum 10 seconds.
-Per-account default limits are 500 rows and 67108864 body bytes. Zero disables
-that corresponding quota. Insertion/oldest-item eviction is atomic (SQLite
-IMMEDIATE transaction, PostgreSQL user-row lock). Items larger than the complete
-byte allowance are rejected. Expired items are removed before quota evaluation.
+Per-account quotas default to 5000 rows and 67108864 body bytes when the
+environment does not set them; the shipped `.env.example` uses 500 rows and the
+same byte cap. Zero disables that corresponding quota. Insertion/oldest-item
+eviction is atomic (SQLite IMMEDIATE transaction, PostgreSQL user-row lock).
+Items larger than the complete byte allowance are rejected. Expired items are
+removed before quota evaluation.
 
 Overflow evicts oldest items: this is a bounded best-effort queue, not guaranteed
 archival. A core HTTP success deletes an item; this is not a human read receipt.
@@ -128,7 +131,7 @@ tokens, content or IP addresses. Base64-decode `payload_b64` and verify those ex
 bytes against `signature_b64` and `public_key_b64`. Pin the relay's public key
 independently: a self-signed snapshot alone does not establish trust.
 
-The snapshot now anchors a transactional forward journal. Public commitments and
+The snapshot anchors a transactional forward journal. Public commitments and
 private, signed forward receipts are implemented, including independently signed
 core acknowledgments. See [push_forward_receipts.md](push_forward_receipts.md).
 Human read receipts and independent witnesses are not implemented.

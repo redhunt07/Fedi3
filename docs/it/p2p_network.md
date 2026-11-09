@@ -1,5 +1,12 @@
 # Rete Fedi3 e infrastrutture pubbliche
 
+Questa pagina descrive la discovery e il trasporto P2P implementati nel core
+Rust, l'infrastruttura IPFS pubblica usata solo come supporto e le impostazioni
+che li controllano. Per il lato relay, vedere [decentralization.md](decentralization.md)
+e [network_resilience.md](network_resilience.md).
+
+**Stato (0.11.9):** discovery e trasporto sono implementati nel core locale; il peering tra relay è su HTTP (vedi [relay_directory.md](relay_directory.md)) e non esiste un runtime mesh libp2p dei relay. La DHT pubblica IPFS è usata solo come ausilio alla discovery, insieme agli annunci firmati tra peer Fedi3.
+
 ## Discovery implementata
 
 Il core usa quattro sorgenti indipendenti: contatti conservati sul dispositivo,
@@ -111,7 +118,7 @@ la risoluzione di qualunque nome utente.
 ## Audio/video e bridge esterni
 
 Le chiamate usano WebRTC. Il signaling Fedi3 scambia SDP e ICE; il flusso media
-ha una propria connessione. I nuovi valori automatici ICE usano gli STUN pubblici
+ha una propria connessione. I valori automatici ICE usano gli STUN pubblici
 Cloudflare e Google, senza dedurre STUN/TURN dal dominio del relay ActivityPub.
 Non viene più compilata automaticamente la lista circuit relay a partire da
 quel dominio. I valori esplicitamente salvati nei profili esistenti rimangono
@@ -133,8 +140,8 @@ campi URL ICE, utente TURN e credenziale TURN della configurazione Fedi3. Inseri
 la credenziale TURN restituita dal servizio, non la chiave amministrativa API.
 Il modello attuale accetta una coppia utente/credenziale condivisa dagli URL TURN
 configurati; provider con credenziali diverse richiedono un modello ICE più ricco.
-Il bridge esterno va ancora verificato con una chiamata reale. I test precedenti
-fra Alice e Peppenamir non hanno ancora dimostrato un flusso RTP funzionante.
+Il bridge esterno richiede ancora una verifica con una chiamata reale; i test
+precedenti fra Alice e Peppenamir non hanno dimostrato un flusso RTP funzionante.
 
 ## Verifiche riproducibili
 

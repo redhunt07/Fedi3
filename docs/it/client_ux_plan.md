@@ -1,12 +1,13 @@
 # Fedi3 — Piano di rilancio del client (UX/IA)
 
-Data: 2026-11-01
-Stato: proposta, da validare prima di implementare.
+Data: 2026-11-01. Ultimo aggiornamento di stato: 2026-11-09, client 0.11.9+2012.
+Stato: adottato; gli step 0–7 sono implementati nel client 0.11.x, lo step 8 è in
+corso. Le sezioni 1–9 conservano il piano originale; le sezioni 10–12 tracciano
+il client attuale e il lavoro rimanente.
 
 ## 1. Valutazione onesta
 
-Il client attuale **non è ancora appetibile** per un utente che arriva da Mastodon,
-Misskey o dai social mainstream. Non per Flutter: per prodotto.
+Questa sezione descrive il client all'inizio del rilancio (2026-11-01).
 
 Difetti osservati nella verifica live:
 
@@ -190,3 +191,16 @@ stabile.
 | 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato, logo fisso con particelle, annunci dai maintainer con alert periodico, banner profilo mesh, chat a schede e bolle stile Telegram con spunte, notifiche compatte, post salvati offline, composer con drag&drop, presenza online/occupato/AFK/offline; restano audit contrasto e navigazione da tastiera completa |
 
 Prossimo passo consigliato: client web sulla specifica OpenAPI, poi audit di contrasto/accessibilità completo e test end-to-end della chat con due identità reali.
+
+## 11. Aggiornamento di stato (2026-11-09)
+
+Dal quadro del 2026-11-01 il client è arrivato alla 0.11.9 (build 2012). In questo ciclo sono stati consegnati:
+
+- Client Android con notifiche keep-alive per attività, chat e chiamate, navigazione a task unico e tipi di servizio foreground compatibili con Android 15.
+- Chiamate end-to-end con TURN automatico dal relay, selezione dei dispositivi audio su desktop, condivisione schermo che invia microfono e audio di sistema come tracce separate, cambio fotocamera su mobile e suoni di notifica e chiamata in stile Discord.
+- Dinamiche di chat in stile Telegram: creazione dai follower reciproci, gruppi, ruoli, eliminazione dei messaggi, inoltro, messaggi fissati e ricerca globale.
+- Identità visiva: logo Fedi3 neon e icone di avvio, banner del profilo dietro l'avatar, effetti particellari continui nella barra di navigazione, pagine profilo e impostazioni in stile Misskey, interfaccia bilingue inglese/italiano.
+- Coerenza della federazione: timeline federata dai follow in attesa, pagine profilo limitate ai post dell'autore, normalizzazione dell'outbox migrato e indirizzi P2P relayed.
+- Aggiornamenti verificati del client (SHA256) per AppImage Linux, ZIP Windows e APK Android.
+
+Restano aperti: un audit completo di contrasto e navigazione da tastiera, il raggruppamento delle notifiche per attore/tipo, filtri media avanzati, filtri temporali nella ricerca e il client web opzionale sulla specifica OpenAPI. Gli screenshot nella [guida dell'app](app_guide.md#screenshot) mostrano l'interfaccia attuale.

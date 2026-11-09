@@ -1,6 +1,6 @@
-# Getting started
+# Per iniziare
 
-Questa guida è la più breve possibile per partire subito.
+Questa guida porta da un checkout pulito a un relay e un client funzionanti nel minor tempo possibile.
 
 ## Cos'è FEDI3
 
@@ -8,8 +8,9 @@ FEDI3 è un social federato con componente P2P. L'app usa un core locale (Rust) 
 
 ## Prerequisiti
 
-- Docker + Docker Compose (per il relay).
-- Flutter >= 3.38 e Rust stabile (per compilare l'app e il core).
+- Docker Engine e Docker Compose v2.20 o successivo per il relay (l'installer verifica la versione di Compose).
+- Flutter 3.38 o successivo e Rust stabile per compilare app e core.
+- Per i pacchetti precompilati vedi [pacchetti di release](#pacchetti-di-release).
 
 ## Installazione del server con un comando
 
@@ -23,9 +24,9 @@ sudo bash scripts/install_server.sh
 ```
 
 Vedi [installazione del server](deploy_server.md) per la guida passo passo; su
-YunoHost usa [install_yunohost.sh](deploy_yunohost.md).
+YunoHost usa l'[installazione su YunoHost](deploy_yunohost.md).
 
-## Quick start (relay)
+## Avvio rapido (relay)
 
 ```bash
 cp .env.example .env
@@ -38,7 +39,7 @@ docker compose up -d --build
 scripts/relay_smoke_test.sh https://<tuo-dominio> <ADMIN_TOKEN>
 ```
 
-## Quick start (app)
+## Avvio rapido (app)
 
 ```bash
 cd app
@@ -48,6 +49,10 @@ flutter run
 
 Per compilare il core nativo e l'AppImage vedi [build_linux.md](build_linux.md).
 
+## Pacchetti di release
+
+I pacchetti precompilati sono pubblicati nella [release v0.11.9](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9): `Fedi3-linux-x86_64.AppImage` per Linux x86_64 e `app-arm64-v8a-release.apk` oppure `app-x86_64-release.apk` per Android. Verifica ogni file con `checksums.txt` prima di eseguirlo. Gli APK Android sono build per installazione manuale, firmate con la chiave di debug locale; vedi [app_guide.md](app_guide.md) per i dettagli sull'installazione.
+
 ## Verifica dell'ambiente
 
 ```bash
@@ -56,7 +61,7 @@ cd app && flutter analyze && flutter test
 scripts/verify_platform_config.sh
 ```
 
-## Docs principali
+## Documentazione principale
 
 - [deploy_server.md](deploy_server.md) — installazione automatica del server per Debian e Arch
 - [deploy_yunohost.md](deploy_yunohost.md) — installazione su YunoHost con nginx esterno

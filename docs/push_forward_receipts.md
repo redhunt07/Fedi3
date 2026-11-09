@@ -1,5 +1,12 @@
 # Native push and verifiable forwards
 
+Fedi3 supports opt-in native push notifications on Android and iOS, and a
+transactional forward journal whose entries can be verified independently of the
+relay operator. This page covers the mobile connectors, the relay/gateway
+contract, the receipt formats and the verification tools. For the relay-side
+retention and transparency policy, see
+[network_resilience.md](network_resilience.md).
+
 ## Mobile connectors
 
 Push is opt-in in **Settings → Security → Push notifications**. The relay must
