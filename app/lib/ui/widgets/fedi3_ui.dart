@@ -61,85 +61,57 @@ class _BrandMarkState extends State<BrandMark>
   @override
   Widget build(BuildContext context) {
     final size = widget.size;
-    final radius = BorderRadius.circular(size * 0.32);
+    final radius = BorderRadius.circular(size * 0.28);
     return Semantics(
       label: 'Fedi3',
-      button: true,
+      image: true,
       child: Container(
         width: size,
         height: size,
         decoration: BoxDecoration(
           borderRadius: radius,
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(UiTokens.brandViolet),
-              Color(0xFF5B8DF6),
-              Color(UiTokens.brandCyan),
-            ],
-            stops: [0, 0.55, 1],
-          ),
-          border: Border.all(color: Colors.white.withAlpha(36)),
+          color: const Color(UiTokens.darkSurfaceAlt),
+          border: Border.all(color: Colors.white.withAlpha(32)),
           boxShadow: widget.showGlow
               ? [
                   BoxShadow(
-                    color: const Color(UiTokens.brandViolet).withAlpha(90),
-                    blurRadius: size * 0.75,
-                    offset: const Offset(0, 6),
+                    color: const Color(UiTokens.brandViolet).withAlpha(70),
+                    blurRadius: size * 0.6,
+                    offset: const Offset(0, 4),
                   ),
                   BoxShadow(
-                    color: const Color(UiTokens.brandCyan).withAlpha(45),
-                    blurRadius: size * 0.45,
-                    offset: const Offset(0, 2),
+                    color: const Color(UiTokens.brandCyan).withAlpha(40),
+                    blurRadius: size * 0.4,
+                    offset: const Offset(0, 1),
                   ),
                 ]
               : null,
         ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: Stack(
-            children: [
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Padding(
+                padding: EdgeInsets.all(size * 0.05),
+                child: Image.asset(
+                  'assets/branding/fedi3_logo.png',
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
+              ),
+            ),
+            if (widget.animated)
               Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(-0.35, -0.45),
-                      radius: 0.9,
-                      colors: [
-                        Colors.white.withAlpha(46),
-                        Colors.white.withAlpha(0),
-                      ],
+                child: IgnorePointer(
+                  child: AnimatedBuilder(
+                    animation: _c,
+                    builder: (context, _) => CustomPaint(
+                      painter: _BrandParticlesPainter(progress: _c.value),
                     ),
                   ),
                 ),
               ),
-              if (widget.animated)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedBuilder(
-                      animation: _c,
-                      builder: (context, _) => CustomPaint(
-                        painter: _BrandParticlesPainter(progress: _c.value),
-                      ),
-                    ),
-                  ),
-                ),
-              Center(
-                child: Icon(
-                  Icons.hub_rounded,
-                  color: Colors.white,
-                  size: size * 0.52,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black.withAlpha(70),
-                      blurRadius: size * 0.08,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          ],
         ),
       ),
     );

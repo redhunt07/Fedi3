@@ -17,6 +17,14 @@ Il core ascolta su `127.0.0.1` ed è protetto da un token interno generato autom
    - **Relay**: URL del relay (`https://relay.example.org`) e token ottenuto dalla registrazione. Puoi lasciarlo vuoto per una modalità solo-P2P.
 3. Premi **Avvia**. L'app attende che il core sia effettivamente in ascolto prima di mostrare la timeline. Se il core non parte, l'errore viene mostrato nella schermata di setup.
 
+## Marchio
+
+Il marchio di Fedi3 è la F neon retrò su un globo orbitale. Compare nella
+schermata di benvenuto e nella shell, ed è l'icona di avvio su desktop, Android,
+iOS, macOS e Windows.
+
+## Salvataggio della configurazione
+
 La configurazione viene salvata in modo atomico nella directory dati dell'app, con permessi `600` su POSIX. Se il file è corrotto, l'app prova a recuperarlo dal backup e, se non ci riesce, ti avvisa invece di sovrascrivere silenziosamente.
 
 ## Timeline

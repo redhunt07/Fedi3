@@ -4,6 +4,15 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Fedi3 0.11.4: new logo and app icons
+
+The Fedi3 mark is now the neon retro F over an orbital globe. It replaces the
+placeholder hub mark on the welcome screen and in the shell, and it is the
+launcher icon for the desktop AppImage, Android, iOS, macOS and Windows. The
+Android build is 0.11.4 (2007). Android also gets an adaptive icon and a
+monochrome notification icon.
+[Docs](docs/app_guide.md).
+
 ## 2026-11-09 — Calls: screen share keeps the microphone and camera framing
 
 Sharing the screen no longer silences the operator: the call sends the

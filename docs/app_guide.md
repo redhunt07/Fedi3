@@ -17,6 +17,14 @@ The core listens on `127.0.0.1` and is protected by an automatically generated i
    - **Relay**: relay URL (`https://relay.example.org`) and the token obtained from registration. You can leave it empty for a P2P-only mode.
 3. Press **Start**. The app waits for the core to actually be listening before showing the timeline. If the core does not start, the error is shown in the setup screen.
 
+## Branding
+
+The Fedi3 mark is the neon retro F over an orbital globe. It appears on the
+welcome screen and in the shell, and it is the launcher icon on desktop,
+Android, iOS, macOS and Windows.
+
+## Configuration storage
+
 The configuration is saved atomically in the app data directory, with `600` permissions on POSIX. If the file is corrupted, the app tries to recover it from the backup and, if it fails, warns you instead of silently overwriting.
 
 ## Timeline

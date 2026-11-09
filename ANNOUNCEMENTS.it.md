@@ -4,6 +4,15 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Fedi3 0.11.4: nuovo logo e icone delle app
+
+Il marchio di Fedi3 è ora la F neon retrò su un globo orbitale. Sostituisce il
+marchio segnaposto nella schermata di benvenuto e nella shell, ed è l'icona di
+avvio per l'AppImage desktop, Android, iOS, macOS e Windows. La build Android è
+0.11.4 (2007). Android ha anche un'icona adattiva e un'icona monocromatica per
+le notifiche.
+[Documentazione](docs/it/app_guide.md).
+
 ## 2026-11-09 — Chiamate: la condivisione schermo mantiene il microfono e il formato della webcam
 
 Condividere lo schermo non silenzia più chi parla: la chiamata invia microfono

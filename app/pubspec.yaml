@@ -1,7 +1,7 @@
 name: fedi3
 description: Personal ActivityPub instance client (Flutter UI + Rust core)
 publish_to: "none"
-version: 0.11.3+2006
+version: 0.11.4+2007
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -50,5 +50,6 @@ flutter:
   generate: true
   uses-material-design: true
   assets:
+    - assets/branding/
     - assets/sounds/
     - assets/relays.json

@@ -27,7 +27,7 @@ class NotificationService {
 
   static Future<void> init() async {
     if (_ready) return;
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const android = AndroidInitializationSettings('@drawable/ic_notification');
     const darwin = DarwinInitializationSettings();
     const linux = LinuxInitializationSettings(defaultActionName: 'Open');
     const settings = InitializationSettings(
