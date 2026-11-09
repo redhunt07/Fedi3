@@ -11,12 +11,12 @@ il fediverso e resiliente senza rinunciare alla compatibilità con le istanze
 ActivityPub classiche. È un client Flutter sostenuto da un core Rust locale, con
 un relay pubblico opzionale per federazione e consegna offline.
 
-> **Stato: pre-1.0 — release corrente [0.11.9](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) (build 2012).**
+> **Stato: pre-1.0 — release corrente [0.11.10](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.10) (build 2013).**
 > I pacchetti Linux x86_64, Android arm64-v8a/x86_64 e Windows x64 sono pubblicati
 > nella pagina delle release con checksum SHA256. Gli APK Android sono build per
 > installazione manuale firmate con la chiave di debug locale; iOS e macOS si
 > compilano dai sorgenti ma non fanno parte dei pacchetti pubblicati. Vedi
-> [verifica della release](docs/it/audit/release_0.11.9_2026-11-09.md).
+> [verifica della release](docs/it/audit/release_0.11.10_2026-11-09.md).
 
 ## Screenshot
 
@@ -266,7 +266,7 @@ Italiano:
 - [API di sync del relay](docs/it/relay_sync_api.md)
 - [Specifica OpenAPI](docs/openapi.yaml)
 - [Annunci](ANNOUNCEMENTS.it.md) e [changelog](CHANGELOG.md)
-- [Verifica della release 0.11.9](docs/it/audit/release_0.11.9_2026-11-09.md)
+- [Verifica della release 0.11.10](docs/it/audit/release_0.11.10_2026-11-09.md)
 
 Documentazione inglese (default): [`docs/`](docs/README.md).
 

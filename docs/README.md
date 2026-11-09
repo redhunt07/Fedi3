@@ -43,7 +43,7 @@ reports are kept under [`audit/`](audit/).
 ## Quality and verification
 
 - [Test plan](test_plan.md)
-- [Release verification 0.11.9](audit/release_0.11.9_2026-11-09.md)
+- [Release verification 0.11.10](audit/release_0.11.10_2026-11-09.md)
 - [Network resilience verification, 7 November 2026](network_resilience_verification_2026-11-07.md)
 - [Push-forward receipts verification, 7 November 2026](push_forward_receipts_verification_2026-11-07.md)
 
@@ -63,7 +63,7 @@ reports are kept under [`audit/`](audit/).
 - [Release verification 0.10.1](audit/release_0.10.1_2026-11-08.md)
 - [Release verification 0.11.0](audit/release_0.11.0_2026-11-08.md)
 - [Release verification 0.11.1](audit/release_0.11.1_2026-11-08.md)
-- [Release verification 0.11.9](audit/release_0.11.9_2026-11-09.md)
+- [Release verification 0.11.10](audit/release_0.11.10_2026-11-09.md)
 
 ## Italian
 

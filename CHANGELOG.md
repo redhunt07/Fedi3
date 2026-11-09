@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-11-09
+
+### Relay
+
+- Raise the per-peer reservation budget to 8 (configurable up to 128) and
+  replace the libp2p reservation limiter with token buckets that refill over
+  time, so a reconnecting client is no longer rejected in a loop.
+
+### Core and P2P
+
+- Ask for a single reservation per relay peer: the reservation response already
+  carries both TCP and QUIC addresses, so listening on both duplicated the
+  request and exhausted the relay budget.
+- Retry a closed reservation with exponential backoff (5 seconds up to 2
+  minutes) and re-discover the relay P2P infrastructure periodically, so a
+  phone that starts before its network is ready becomes reachable without an
+  app restart.
+- Keep P2P running on Android when the system DNS resolver panics because the
+  NDK context is not initialised, falling back to IP multiaddresses; tolerate
+  mDNS and listen failures instead of aborting the whole stack.
+- Mirror core tracing output to Android logcat under the `fedi3-core` tag and
+  report panics through tracing.
+
+### Client
+
+- Bump the client to 0.11.10 (build 2013).
+
 ## [0.11.9] - 2026-11-09
 
 ### Linux client

@@ -43,7 +43,7 @@ delle verifiche sono in [`audit/`](audit/).
 ## Qualità e verifiche
 
 - [Piano dei test](test_plan.md)
-- [Verifica della release 0.11.9](audit/release_0.11.9_2026-11-09.md)
+- [Verifica della release 0.11.10](audit/release_0.11.10_2026-11-09.md)
 - [Verifica della resilienza di rete, 7 novembre 2026](network_resilience_verification_2026-11-07.md)
 - [Verifica dei push-forward receipts, 7 novembre 2026](push_forward_receipts_verification_2026-11-07.md)
 
@@ -63,7 +63,7 @@ delle verifiche sono in [`audit/`](audit/).
 - [Verifica della release 0.10.1](audit/release_0.10.1_2026-11-08.md)
 - [Verifica della release 0.11.0](audit/release_0.11.0_2026-11-08.md)
 - [Verifica della release 0.11.1](audit/release_0.11.1_2026-11-08.md)
-- [Verifica della release 0.11.9](audit/release_0.11.9_2026-11-09.md)
+- [Verifica della release 0.11.10](audit/release_0.11.10_2026-11-09.md)
 
 ## Inglese
 
