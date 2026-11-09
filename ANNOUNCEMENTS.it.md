@@ -15,9 +15,10 @@ la propria voce attraverso il loopback.
 Le immagini della webcam ora rispettano il formato nativo invece di essere
 tagliate alla forma del riquadro, e le chiamate uno-a-uno occupano lo spazio
 disponibile. Su Android e iOS le videochiamate hanno un pulsante per passare
-dalla fotocamera frontale a quella posteriore; la build Android è 0.11.2
-(2005). **Impostazioni > Audio** su desktop mostra lo stesso suggerimento di
-routing.
+dalla fotocamera frontale a quella posteriore; la build Android è 0.11.3
+(2006). I suoni di notifica e chiamata ora usano i toni di messaggio, menzione e
+squillo di Discord. **Impostazioni > Audio** su desktop mostra lo stesso
+suggerimento di routing.
 [Documentazione](docs/it/app_guide.md).
 
 ## 2026-11-08 — Chiamate: TURN automatico e impostazioni audio desktop

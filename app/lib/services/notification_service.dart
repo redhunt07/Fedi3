@@ -41,6 +41,15 @@ class NotificationService {
           .initialize(settings, onDidReceiveNotificationResponse: _onTap)
           .timeout(const Duration(seconds: 3));
       _ready = true;
+      if (Platform.isAndroid) {
+        // Channels keep the sound they were created with; drop the previous
+        // generation so the Discord tones take effect on upgraded installs.
+        final android = _plugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        await android?.deleteNotificationChannel('fedi3_activity_v2');
+        await android?.deleteNotificationChannel('fedi3_chat_v2');
+        await android?.deleteNotificationChannel('fedi3_call_v2');
+      }
       final launch = await _plugin.getNotificationAppLaunchDetails();
       if (launch?.didNotificationLaunchApp ?? false) {
         final response = launch?.notificationResponse;
@@ -66,7 +75,7 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_activity_v2',
+        'fedi3_activity_v3',
         'Activity',
         channelDescription: 'Timeline activity',
         importance: Importance.defaultImportance,
@@ -94,7 +103,7 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_chat_v2',
+        'fedi3_chat_v3',
         'Chat',
         channelDescription: 'Chat messages',
         importance: Importance.high,
@@ -124,7 +133,7 @@ class NotificationService {
     if (!_ready) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'fedi3_call_v2',
+        'fedi3_call_v3',
         'Calls',
         channelDescription: 'Incoming calls',
         importance: Importance.max,

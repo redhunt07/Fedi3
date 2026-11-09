@@ -14,7 +14,8 @@ the share, so the other side does not hear its own voice through the loopback. C
 shown with their native aspect ratio instead of being cropped to the tile, and
 one-to-one calls fit the available area. On Android and iOS, video calls have a
 button to switch between the front and back camera; the Android build is
-0.11.2 (2005). Desktop **Settings > Audio** shows the same routing hint.
+0.11.3 (2006). Notification and call sounds now use Discord's message, mention
+and call-ring tones. Desktop **Settings > Audio** shows the same routing hint.
 [Docs](docs/app_guide.md).
 
 ## 2026-11-08 — Calls: automatic TURN and desktop audio settings
