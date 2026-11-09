@@ -139,6 +139,15 @@ change them with `FEDI3_P2P_RELAY_MAX_CIRCUITS`,
 `FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES` and `FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS`.
 Invalid values prevent startup; per-peer and per-IP limits remain active.
 
+Reservations are a separate budget: `relay reservation denied` in the
+infrastructure log means the client ran out of reservation slots or hit the
+reservation rate limiter, not that the circuit itself is too small. Keep
+`FEDI3_P2P_RELAY_MAX_RESERVATIONS_PER_PEER` at 8 or higher (maximum 128) and
+do not replace the reservation rate limiter with the libp2p default, which
+refills only one token every two minutes. The core asks for a single
+reservation per relay and backs off exponentially when it is closed, so a
+relay restart no longer produces a denial loop.
+
 The call must show an actual connection, not only acceptance
 of the invite. In the logs `Fedi3 call media` reports the RTP bytes sent and received:
 the counters must increase on both devices. The audio/video content is not recorded.

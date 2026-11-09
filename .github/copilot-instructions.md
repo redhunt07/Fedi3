@@ -10,7 +10,7 @@
 - **Primary data flow:** UI ⇄ local core over HTTP/FFI; the core federates
   through the relay tunnel and P2P transport. The relay is deployed with the
   root `docker-compose.yml`.
-- **Project state:** pre-1.0; current release 0.11.9 (build 2012), supported
+- **Project state:** pre-1.0; current release 0.11.10 (build 2013), supported
   line 0.11.x. Read `README.md` and `AGENTS.md` for the authoritative layout and
   commands; do not duplicate them here.
 - **Documentation:** English is the default (`docs/`); every document has an

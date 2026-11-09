@@ -118,9 +118,9 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 Ogni modifica alla configurazione riavvia il core e attende che sia pronto. Se il nuovo valore non funziona, l'app ripristina la configurazione precedente.
 
-## Installazione Android 0.11.9
+## Installazione Android 0.11.10
 
-Dalla [release v0.11.9](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) scarica
+Dalla [release v0.11.10](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.10) scarica
 `app-arm64-v8a-release.apk` per telefoni ARM a 64 bit o
 `app-x86_64-release.apk` per emulatori x86_64 e verifica il relativo SHA256 in
 `checksums.txt`. Sono build per installazione manuale, firmate con la chiave di

@@ -4,6 +4,16 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Stable relay reservations and reachable mobile P2P
+
+The relay no longer refuses client reservations in a loop: the per-peer budget
+is raised to 8 and the reservation rate limiter refills over time instead of one
+token every two minutes. The core requests a single reservation per relay (the
+response already covers both TCP and QUIC), retries with exponential backoff
+from 5 seconds up to 2 minutes, and periodically re-discovers the relay's P2P
+address, so a phone that started before its network was ready becomes reachable
+without restarting the app. Build 0.11.10 (2013).
+
 ## 2026-11-09 — Fedi3 0.11.9 released
 
 Build 0.11.9 (2012) is available on the [release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) with the Linux x86_64 AppImage, the Windows x64 ZIP, the Android arm64-v8a and x86_64 APKs and SHA256 checksums. It collects the fixes published since 0.11.1: composer cleanup, single Android task, relayed P2P addresses, migrated outbox normalization, profile banners, the neon logo, continuous navigation particles and a clean Linux startup log. The Windows ZIP is built by CI from the same tag. [Changelog](CHANGELOG.md) · [Screenshots](README.md#screenshots).

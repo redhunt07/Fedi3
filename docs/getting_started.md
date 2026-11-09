@@ -51,7 +51,7 @@ To build the native core and the AppImage see [build_linux.md](build_linux.md).
 
 ## Release packages
 
-Prebuilt packages are published on the [v0.11.9 release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9): `Fedi3-linux-x86_64.AppImage` for Linux x86_64 and `app-arm64-v8a-release.apk` or `app-x86_64-release.apk` for Android. Verify each file against `checksums.txt` before running it. Android APKs are sideload builds signed with the local debug key; see [app_guide.md](app_guide.md) for installation details.
+Prebuilt packages are published on the [v0.11.10 release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.10): `Fedi3-linux-x86_64.AppImage` for Linux x86_64 and `app-arm64-v8a-release.apk` or `app-x86_64-release.apk` for Android. Verify each file against `checksums.txt` before running it. Android APKs are sideload builds signed with the local debug key; see [app_guide.md](app_guide.md) for installation details.
 
 ## Environment verification
 

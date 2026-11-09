@@ -40,6 +40,21 @@ use discovery::{PeerBook, SignedContact};
 /// Maximum accepted P2P frame size (H-06).
 pub const MAX_P2P_FRAME: usize = 4 * 1024 * 1024;
 
+/// Relay peer ID encoded in a circuit multiaddress, when present.
+fn relay_peer_of(addr: &Multiaddr) -> Option<PeerId> {
+    addr.iter()
+        .filter_map(|p| match p {
+            Protocol::P2p(peer) => Some(peer),
+            _ => None,
+        })
+        .last()
+}
+
+/// Exponential retry delay for a relay reservation that keeps closing.
+fn relay_retry_delay(attempts: u32) -> Duration {
+    Duration::from_secs(5u64.saturating_mul(1u64 << attempts.min(5))).min(Duration::from_secs(120))
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct P2pConfig {
     pub enable: bool,
@@ -534,6 +549,7 @@ async fn run_p2p_with_shutdown<S>(
     social: Arc<SocialDb>,
     metrics: Arc<NetMetrics>,
     mut out_rx: mpsc::Receiver<OutboundMsg>,
+    mut relay_updates: Option<mpsc::Receiver<Vec<String>>>,
     handler: S,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()>
@@ -695,21 +711,41 @@ where
     // the swarm from being polled and cannot establish a connection.
     let mut relay_listeners = HashMap::new();
     let mut relay_retry = HashMap::new();
+    let mut relay_attempts: HashMap<PeerId, u32> = HashMap::new();
+    let mut relay_listener_started: HashMap<ListenerId, tokio::time::Instant> = HashMap::new();
+    // One reservation per relay peer. A reservation response already carries
+    // every external address of the relay, so listening on both its TCP and
+    // QUIC multiaddrs would open duplicate reservations and exhaust the
+    // relay's per-peer reservation budget.
+    let mut relay_choice: HashMap<PeerId, Multiaddr> = HashMap::new();
     for s in cfg.relay_reserve.iter().flatten() {
-        if let Ok(mut addr) = s.trim().parse::<Multiaddr>() {
-            if !matches!(addr.iter().last(), Some(Protocol::P2p(_))) {
-                tracing::warn!(%addr, "relay reservation requires a terminal peer ID");
-                continue;
+        let Ok(addr) = s.trim().parse::<Multiaddr>() else {
+            continue;
+        };
+        let Some(relay_peer) = relay_peer_of(&addr) else {
+            tracing::warn!(%addr, "relay reservation requires a terminal peer ID");
+            continue;
+        };
+        let prefer_tcp = addr.iter().any(|p| matches!(p, Protocol::Tcp(_)));
+        match relay_choice.get(&relay_peer) {
+            Some(existing) if existing.iter().any(|p| matches!(p, Protocol::Tcp(_))) => {}
+            Some(_) if !prefer_tcp => {}
+            _ => {
+                relay_choice.insert(relay_peer, addr);
             }
-            addr.push(Protocol::P2pCircuit);
-            match swarm.listen_on(addr.clone()) {
-                Ok(id) => {
-                    relay_listeners.insert(id, addr);
-                }
-                Err(e) => {
-                    tracing::warn!(%addr, error=%e, "relay reservation listen failed");
-                    relay_retry.insert(addr, tokio::time::Instant::now() + Duration::from_secs(10));
-                }
+        }
+    }
+    for (relay_peer, mut addr) in relay_choice {
+        addr.push(Protocol::P2pCircuit);
+        match swarm.listen_on(addr.clone()) {
+            Ok(id) => {
+                relay_listener_started.insert(id, tokio::time::Instant::now());
+                relay_listeners.insert(id, addr);
+            }
+            Err(e) => {
+                tracing::warn!(%addr, error=%e, "relay reservation listen failed");
+                relay_retry.insert(addr, tokio::time::Instant::now() + Duration::from_secs(5));
+                *relay_attempts.entry(relay_peer).or_insert(0) += 1;
             }
         }
     }
@@ -978,6 +1014,45 @@ where
                     _ => {}
                 }
             }
+            update = async {
+                match relay_updates.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending::<Option<Vec<String>>>().await,
+                }
+            } => {
+                if let Some(addrs) = update {
+                    let now = tokio::time::Instant::now();
+                    for raw in addrs {
+                        let Ok(mut addr) = raw.trim().parse::<Multiaddr>() else {
+                            continue;
+                        };
+                        let Some(relay_peer) = relay_peer_of(&addr) else {
+                            continue;
+                        };
+                        let already = relay_listeners
+                            .values()
+                            .any(|a| relay_peer_of(a) == Some(relay_peer))
+                            || relay_retry
+                                .keys()
+                                .any(|a| relay_peer_of(a) == Some(relay_peer));
+                        if already {
+                            continue;
+                        }
+                        addr.push(Protocol::P2pCircuit);
+                        match swarm.listen_on(addr.clone()) {
+                            Ok(id) => {
+                                relay_listener_started.insert(id, now);
+                                relay_listeners.insert(id, addr);
+                            }
+                            Err(e) => {
+                                tracing::warn!(%addr, error=%e, "relay reservation listen failed");
+                                relay_retry.insert(addr, now + Duration::from_secs(5));
+                                *relay_attempts.entry(relay_peer).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+            }
             _ = relay_tick.tick() => {
                 let now = tokio::time::Instant::now();
                 let due: Vec<_> = relay_retry.iter()
@@ -985,10 +1060,20 @@ where
                 for addr in due {
                     relay_retry.remove(&addr);
                     match swarm.listen_on(addr.clone()) {
-                        Ok(id) => { relay_listeners.insert(id, addr); }
+                        Ok(id) => {
+                            relay_listener_started.insert(id, now);
+                            relay_listeners.insert(id, addr);
+                        }
                         Err(e) => {
                             tracing::warn!(%addr, error=%e, "relay reservation retry failed");
-                            relay_retry.insert(addr, now + Duration::from_secs(10));
+                            let attempts = relay_peer_of(&addr)
+                                .map(|peer| {
+                                    let counter = relay_attempts.entry(peer).or_insert(0);
+                                    *counter = counter.saturating_add(1);
+                                    *counter
+                                })
+                                .unwrap_or(1);
+                            relay_retry.insert(addr, now + relay_retry_delay(attempts));
                         }
                     }
                 }
@@ -1146,7 +1231,7 @@ where
                             let prefix = addr.to_string();
                             base_self_addrs.retain(|a| !a.starts_with(&prefix));
                             self_record.addrs.retain(|a| !a.starts_with(&prefix));
-                            let relay_peer = addr.iter().filter_map(|p| if let Protocol::P2p(peer) = p { Some(peer) } else { None }).last();
+                            let relay_peer = relay_peer_of(&addr);
                             if let Some(peer) = relay_peer.filter(|p| public_relays.remove(p)) {
                                 // Public relays can reject reservations when full. Try
                                 // other discovered servers instead of pinning both slots
@@ -1154,8 +1239,31 @@ where
                                 public_relay_cooldowns.insert(peer, tokio::time::Instant::now() + Duration::from_secs(600));
                                 continue;
                             }
-                            tracing::warn!(%addr, ?reason, "relay reservation closed; scheduling retry");
-                            relay_retry.insert(addr, tokio::time::Instant::now() + Duration::from_secs(10));
+                            let now = tokio::time::Instant::now();
+                            let lived = relay_listener_started
+                                .remove(&listener_id)
+                                .map(|started| now.saturating_duration_since(started))
+                                .unwrap_or_default();
+                            let attempts = relay_peer
+                                .map(|peer| {
+                                    let counter = relay_attempts.entry(peer).or_insert(0);
+                                    // A reservation that stayed up for a while is
+                                    // not part of a failure loop: restart the backoff.
+                                    if lived >= Duration::from_secs(300) {
+                                        *counter = 0;
+                                    }
+                                    *counter = counter.saturating_add(1);
+                                    *counter
+                                })
+                                .unwrap_or(1);
+                            let delay = relay_retry_delay(attempts);
+                            tracing::warn!(
+                                %addr,
+                                ?reason,
+                                retry_in_secs = delay.as_secs(),
+                                "relay reservation closed; scheduling retry"
+                            );
+                            relay_retry.insert(addr, now + delay);
                         }
                     }
                     SwarmEvent::ListenerError { listener_id, error } => {
@@ -1254,6 +1362,8 @@ where
                         // Never assume that an IPFS bootstrap is also a relay.
                         if public_enabled && public_relays.len() < 2 && !public_relays.contains(&remote_peer)
                             && !configured_relays.contains(&remote_peer)
+                            && !relay_listeners.values().any(|a| relay_peer_of(a) == Some(remote_peer))
+                            && !relay_retry.keys().any(|a| relay_peer_of(a) == Some(remote_peer))
                             && public_relay_cooldowns.get(&remote_peer).map(|until| *until <= tokio::time::Instant::now()).unwrap_or(true)
                             && info.protocols.iter().any(|p| p.as_ref() == "/libp2p/circuit/relay/0.2.0/hop") {
                             let addrs = info.listen_addrs.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -1261,6 +1371,7 @@ where
                                 let mut circuit = addr.parse::<Multiaddr>()?;
                                 circuit.push(Protocol::P2pCircuit);
                                 if let Ok(id) = swarm.listen_on(circuit.clone()) {
+                                    relay_listener_started.insert(id, tokio::time::Instant::now());
                                     relay_listeners.insert(id, circuit);
                                     public_relays.insert(remote_peer);
                                 }
@@ -1534,6 +1645,51 @@ where
         >,
     S::Future: Send,
 {
+    start_p2p_with_relay_updates(
+        cfg,
+        keypair,
+        did,
+        self_actor_url,
+        internal_token,
+        private_key_pem,
+        social,
+        metrics,
+        handler,
+        shutdown,
+        None,
+    )
+}
+
+/// Starts P2P with an optional channel of relay multiaddresses.
+///
+/// The relay infrastructure address is discovered over HTTP, which can fail
+/// while a mobile device is still bringing its network up. The channel lets
+/// the runtime keep retrying that discovery and hand new addresses to the
+/// running swarm instead of requiring an app restart.
+pub fn start_p2p_with_relay_updates<S>(
+    cfg: P2pConfig,
+    keypair: identity::Keypair,
+    did: String,
+    self_actor_url: String,
+    internal_token: String,
+    private_key_pem: String,
+    social: Arc<SocialDb>,
+    metrics: Arc<NetMetrics>,
+    handler: S,
+    shutdown: watch::Receiver<bool>,
+    relay_updates: Option<mpsc::Receiver<Vec<String>>>,
+) -> Result<Option<P2pHandle>>
+where
+    S: Clone
+        + Send
+        + 'static
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
+    S::Future: Send,
+{
     if !cfg.enable {
         return Ok(None);
     }
@@ -1551,6 +1707,7 @@ where
             social,
             metrics,
             rx,
+            relay_updates,
             handler,
             shutdown,
         )
@@ -1769,6 +1926,7 @@ mod connectivity_tests {
             db,
             metrics.clone(),
             rx,
+            None,
             Router::new().route("/echo", get(|| async { "echo" })),
             shutdown,
         ));

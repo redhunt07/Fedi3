@@ -51,6 +51,15 @@ NAT. Se il relay lascia vuoti `FEDI3_P2P_INFRA_PEER_ID` e
 `FEDI3_P2P_INFRA_MULTIADDRS`, il core pubblica solo gli indirizzi `announce`
 configurati.
 
+La prenotazione viene richiesta una sola volta per peer relay: una prenotazione
+riuscita copre già tutti gli indirizzi di quel relay, quindi ascoltare sia il
+multiaddr TCP sia quello QUIC aprirebbe prenotazioni duplicate. Se il relay
+chiude la prenotazione, il core riprova con backoff esponenziale (da 5 secondi
+fino a 2 minuti) invece di riconnettersi in un ciclo stretto. L'indirizzo
+dell'infrastruttura viene inoltre riscoperto periodicamente, così un core
+avviato prima che la rete fosse pronta (tipico su mobile) diventa raggiungibile
+senza riavviare l'app.
+
 ## Documentazione correlata
 
 - [app_guide.md](app_guide.md) — configurazione del client e primo avvio

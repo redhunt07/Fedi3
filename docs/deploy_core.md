@@ -50,6 +50,14 @@ address in the actor document. This keeps peers reachable behind NAT. If the
 relay leaves `FEDI3_P2P_INFRA_PEER_ID` and `FEDI3_P2P_INFRA_MULTIADDRS` empty,
 the core advertises only its configured `announce` addresses.
 
+The reservation is requested once per relay peer: a successful reservation
+already covers every address of that relay, so listening on both its TCP and
+QUIC multiaddresses would open duplicate reservations. If the relay closes the
+reservation, the core retries with exponential backoff (5 seconds up to
+2 minutes) instead of reconnecting in a tight loop. The infrastructure address
+is also re-discovered periodically, so a core that started before its network
+was ready (typical on mobile) still becomes reachable without an app restart.
+
 ## Related documentation
 
 - [app_guide.md](app_guide.md) — client setup and first start

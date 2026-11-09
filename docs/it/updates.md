@@ -13,7 +13,7 @@ La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
 Il sistema di aggiornamento è stato introdotto nella `0.10.0+1`; la linea di
-release corrente è `0.11.9+2012`. I client precedenti alla `0.10.0` richiedono un
+release corrente è `0.11.10+2013`. I client precedenti alla `0.10.0` richiedono un
 primo aggiornamento manuale.
 
 ## Installazione

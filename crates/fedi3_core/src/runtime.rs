@@ -53,6 +53,41 @@ pub struct RelayP2pInfra {
     pub multiaddrs: Vec<String>,
 }
 
+/// Fetches the relay's P2P multiaddresses, normalized with the relay peer ID.
+async fn fetch_relay_infra(http: &reqwest::Client, url: &str) -> Option<Vec<String>> {
+    let response = http
+        .get(url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let info: RelayP2pInfra = response.json().await.ok()?;
+    let relay_peer = info.peer_id.as_deref()?.trim().to_string();
+    if relay_peer.is_empty() {
+        return None;
+    }
+    let mut addrs = Vec::new();
+    for addr in info
+        .multiaddrs
+        .iter()
+        .map(|a| a.trim())
+        .filter(|a| !a.is_empty())
+    {
+        let full = if addr.contains("/p2p/") {
+            addr.to_string()
+        } else {
+            format!("{addr}/p2p/{relay_peer}")
+        };
+        if !addrs.contains(&full) {
+            addrs.push(full);
+        }
+    }
+    (!addrs.is_empty()).then_some(addrs)
+}
+
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct CoreStartConfig {
     pub username: String,
@@ -506,49 +541,58 @@ fn run_core(
         // The relay advertises its P2P infrastructure address. Reserve a circuit
         // on it so the actor document publishes a dialable relayed address even
         // when the device is behind NAT (the usual situation for mobile clients).
-        if p2p_cfg.enable {
-            let base = public_base_url.trim_end_matches('/');
+        // The first fetch is best-effort: a mobile core can start before its
+        // network is ready, so a background task keeps retrying and hands new
+        // addresses to the running swarm.
+        let relay_infra_url = if p2p_cfg.enable {
+            let base = public_base_url.trim_end_matches('/').to_string();
             let is_loopback = base.contains("127.0.0.1") || base.contains("localhost");
-            if !is_loopback {
-                let url = format!("{base}/_fedi3/relay/p2p_infra");
-                match http
-                    .get(&url)
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send()
-                    .await
-                {
-                    Ok(resp) if resp.status().is_success() => {
-                        if let Ok(info) = resp.json::<RelayP2pInfra>().await {
-                            if let Some(relay_peer) = info
-                                .peer_id
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|p| !p.is_empty())
-                            {
-                                let reserve =
-                                    p2p_cfg.relay_reserve.get_or_insert_with(Vec::new);
-                                for addr in info
-                                    .multiaddrs
-                                    .iter()
-                                    .map(|a| a.trim())
-                                    .filter(|a| !a.is_empty())
-                                {
-                                    let full = if addr.contains("/p2p/") {
-                                        addr.to_string()
-                                    } else {
-                                        format!("{addr}/p2p/{relay_peer}")
-                                    };
-                                    if !reserve.iter().any(|r| r.trim() == full) {
-                                        reserve.push(full);
-                                    }
-                                }
-                            }
+            (!is_loopback).then(|| format!("{base}/_fedi3/relay/p2p_infra"))
+        } else {
+            None
+        };
+        if let Some(url) = relay_infra_url.as_deref() {
+            match fetch_relay_infra(&http, url).await {
+                Some(addrs) => {
+                    let reserve = p2p_cfg.relay_reserve.get_or_insert_with(Vec::new);
+                    for addr in addrs {
+                        if !reserve.iter().any(|r| r.trim() == addr) {
+                            reserve.push(addr);
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => tracing::debug!(%url, "relay p2p infra fetch failed: {e}"),
                 }
+                None => tracing::debug!(%url, "relay p2p infra fetch failed; will retry"),
             }
+        }
+        let (relay_update_tx, relay_update_rx) = tokio::sync::mpsc::channel::<Vec<String>>(4);
+        let mut relay_refresh = None;
+        if let Some(url) = relay_infra_url.clone() {
+            let http = http.clone();
+            let mut shutdown = shutdown_rx.clone();
+            relay_refresh = Some(tokio::spawn(async move {
+                let mut delay = 5u64;
+                loop {
+                    let addrs = fetch_relay_infra(&http, &url).await;
+                    let succeeded = addrs.is_some();
+                    if let Some(addrs) = addrs {
+                        if relay_update_tx.send(addrs).await.is_err() {
+                            break;
+                        }
+                    }
+                    let sleep_for = if succeeded { 300 } else { delay };
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(sleep_for)) => {}
+                        _ = shutdown.changed() => {
+                            if *shutdown.borrow() { break; }
+                        }
+                    }
+                    if !succeeded {
+                        delay = (delay * 2).min(300);
+                    } else {
+                        delay = 5;
+                    }
+                }
+            }));
         }
         let p2p_keypair = if p2p_cfg.enable {
             Some(crate::p2p::load_or_generate_keypair(&data_dir)?)
@@ -1058,7 +1102,7 @@ fn run_core(
             .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
             .layer(TraceLayer::new_for_http());
             if let Some(handle) =
-                crate::p2p::start_p2p(
+                crate::p2p::start_p2p_with_relay_updates(
                     p2p_cfg,
                     kp,
                     did.clone(),
@@ -1069,6 +1113,7 @@ fn run_core(
                     net.clone(),
                     router3,
                     shutdown_rx.clone(),
+                    Some(relay_update_rx),
                 )?
             {
                 state.delivery.set_p2p(Some(handle)).await;
@@ -1083,6 +1128,9 @@ fn run_core(
                     shutdown_handles.push(h);
                 }
             }
+        }
+        if let Some(h) = relay_refresh {
+            shutdown_handles.push(h);
         }
 
         // WebRTC (ICE/TURN) fallback for “zero-setup” NAT traversal.

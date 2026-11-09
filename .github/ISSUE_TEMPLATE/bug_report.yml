@@ -32,7 +32,7 @@ body:
     attributes:
       label: Version or commit
       description: Release tag, the version in `app/pubspec.yaml`, or the commit hash.
-      placeholder: "0.11.9+2012 or 850ffa9"
+      placeholder: "0.11.10+2013 or <commit>"
     validations:
       required: true
   - type: dropdown

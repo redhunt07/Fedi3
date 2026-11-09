@@ -139,6 +139,15 @@ modificarli con `FEDI3_P2P_RELAY_MAX_CIRCUITS`,
 `FEDI3_P2P_RELAY_MAX_CIRCUIT_BYTES` e `FEDI3_P2P_RELAY_MAX_CIRCUIT_SECS`.
 I valori non validi impediscono l'avvio; restano attivi limiti per peer e IP.
 
+Le prenotazioni sono un budget separato: `relay reservation denied` nel log
+dell'infrastruttura significa che il client ha esaurito gli slot di prenotazione
+o ha colpito il rate limiter delle prenotazioni, non che il circuito sia troppo
+piccolo. Mantieni `FEDI3_P2P_RELAY_MAX_RESERVATIONS_PER_PEER` a 8 o più (massimo
+128) e non sostituire il rate limiter delle prenotazioni con quello predefinito
+di libp2p, che ricarica un solo token ogni due minuti. Il core chiede una sola
+prenotazione per relay e applica un backoff esponenziale quando viene chiusa,
+quindi un riavvio del relay non produce più un ciclo di rifiuti.
+
 La chiamata deve mostrare connessione effettiva, non soltanto l'accettazione
 dell'invito. Nei log `Fedi3 call media` riporta i byte RTP inviati e ricevuti:
 i contatori devono aumentare sui due dispositivi. Non viene registrato il
