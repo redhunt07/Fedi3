@@ -4,6 +4,13 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — I banner dei profili dietro l'avatar
+
+I banner dei profili ora riempiono l'intestazione del profilo dietro l'avatar
+invece di una scheda separata sotto. Il gradiente predefinito viene usato solo
+se l'account non ha un'immagine di banner. La build Android è 0.11.5 (2008).
+[Documentazione](docs/it/app_guide.md).
+
 ## 2026-11-09 — Fedi3 0.11.4: nuovo logo e icone delle app
 
 Il marchio di Fedi3 è ora la F neon retrò su un globo orbitale. Sostituisce il

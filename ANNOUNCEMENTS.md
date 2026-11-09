@@ -4,6 +4,13 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Profile banners sit behind the avatar
+
+Profile banners now fill the profile header behind the avatar instead of a
+separate card below it. The default gradient is only used when the account has
+no banner image. The Android build is 0.11.5 (2008).
+[Docs](docs/app_guide.md).
+
 ## 2026-11-09 — Fedi3 0.11.4: new logo and app icons
 
 The Fedi3 mark is now the neon retro F over an orbital globe. It replaces the

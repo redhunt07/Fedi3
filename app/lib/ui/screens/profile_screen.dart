@@ -110,7 +110,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     Future<void> count(String url, bool followers) async {
       if (url.isEmpty) return;
       try {
-        final value = await ActorRepository.instance.fetchCollectionCount(url, config: widget.appState.config);
+        final value = await ActorRepository.instance
+            .fetchCollectionCount(url, config: widget.appState.config);
         if (!mounted) return;
         setState(() {
           if (followers) {
@@ -553,17 +554,47 @@ class _ProfileHeader extends StatelessWidget {
             Stack(
               clipBehavior: Clip.none,
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(UiTokens.radiusCardSm),
-                  child: SizedBox(
-                    height: 118,
-                    width: double.infinity,
-                    child: CustomPaint(
-                      painter: _ProfileBannerPainter(
-                        primary: Theme.of(context).colorScheme.primary,
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Keep the 3:1 banner proportion while bounding the header
+                    // on wide desktop layouts.
+                    final bannerHeight =
+                        (constraints.maxWidth / 3).clamp(140.0, 280.0);
+                    return ClipRRect(
+                      borderRadius:
+                          BorderRadius.circular(UiTokens.radiusCardSm),
+                      child: SizedBox(
+                        height: bannerHeight,
+                        width: double.infinity,
+                        child: profile.imageUrl.trim().isNotEmpty
+                            ? Image.network(
+                                profile.imageUrl,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (context, child, progress) {
+                                  if (progress == null) return child;
+                                  return CustomPaint(
+                                    painter: _ProfileBannerPainter(
+                                      primary:
+                                          Theme.of(context).colorScheme.primary,
+                                    ),
+                                  );
+                                },
+                                errorBuilder: (_, __, ___) => CustomPaint(
+                                  painter: _ProfileBannerPainter(
+                                    primary:
+                                        Theme.of(context).colorScheme.primary,
+                                  ),
+                                ),
+                              )
+                            : CustomPaint(
+                                painter: _ProfileBannerPainter(
+                                  primary:
+                                      Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
                 Positioned(
                   left: 16,
@@ -606,19 +637,6 @@ class _ProfileHeader extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 40),
-            if (profile.imageUrl.trim().isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: AspectRatio(
-                  aspectRatio: 3 / 1,
-                  child: Image.network(
-                    profile.imageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                ),
-              ),
-            if (profile.imageUrl.trim().isNotEmpty) const SizedBox(height: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
