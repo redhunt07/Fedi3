@@ -39,3 +39,11 @@ as the app's internal token in Security settings before starting `dev_client`.
 When this variable is absent or blank, the development core generates a new
 random token at each startup. Alternatively, stop the standalone process and
 start the app-managed core. Keep existing profile credentials intact.
+
+## Relayed P2P addresses
+
+When P2P is enabled and the relay exposes `/_fedi3/relay/p2p_infra`, the core
+reserves a circuit on that relay and advertises the resulting `/p2p-circuit`
+address in the actor document. This keeps peers reachable behind NAT. If the
+relay leaves `FEDI3_P2P_INFRA_PEER_ID` and `FEDI3_P2P_INFRA_MULTIADDRS` empty,
+the core advertises only its configured `announce` addresses.

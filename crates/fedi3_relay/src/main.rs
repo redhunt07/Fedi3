@@ -3893,6 +3893,7 @@ async fn forward_to_user_inner(
             }
             Ok(Ok(resp)) => resp,
         };
+    let mut resp = resp;
 
     // Any retryable failure is queued for the next reconnect instead of being
     // lost (H-11 / C4). GETs are cache/fetch probes and are not spooled, so a
@@ -3903,7 +3904,20 @@ async fn forward_to_user_inner(
 
     if method == Method::GET && resp.status == 200 {
         if let Ok(bytes) = B64.decode(resp.body_b64.as_bytes()) {
-            if let Ok(actor_json) = String::from_utf8(bytes) {
+            if let Ok(mut actor_json) = String::from_utf8(bytes) {
+                if let Some(kind) = collection_kind_from_path(&user, path) {
+                    if kind == "outbox" {
+                        let base = user_base_url(&state.cfg, &user);
+                        let actor_url =
+                            format!("{}/users/{user}", base.trim_end_matches('/'));
+                        if let Some(normalized) =
+                            normalize_outbox_actors(&actor_json, &actor_url)
+                        {
+                            actor_json = normalized;
+                            resp.body_b64 = B64.encode(actor_json.as_bytes());
+                        }
+                    }
+                }
                 let db = state.db.clone();
                 if path == format!("/users/{user}") {
                     let _ = db.upsert_actor_cache(&user, &actor_json).await;
@@ -4828,6 +4842,41 @@ fn audit_meta_from_headers(headers: &HeaderMap) -> AuditMeta {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string()),
     }
+}
+
+/// Migrated accounts can keep activities authored by their previous actor URL
+/// in the outbox. The relay serves the current actor, so rewrite authorship
+/// before caching and forwarding to classic instances.
+fn normalize_outbox_actors(json: &str, actor_url: &str) -> Option<String> {
+    fn rewrite(activity: &mut serde_json::Value, actor_url: &str) {
+        if !activity.is_object() {
+            return;
+        }
+        let ty = activity
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        if ty != "Create" && ty != "Announce" {
+            return;
+        }
+        activity["actor"] = serde_json::Value::String(actor_url.to_string());
+        if let Some(obj) = activity.get_mut("object") {
+            if obj.is_object() {
+                obj["attributedTo"] = serde_json::Value::String(actor_url.to_string());
+            }
+        }
+    }
+
+    let mut value: serde_json::Value = serde_json::from_str(json).ok()?;
+    if let Some(items) = value
+        .get_mut("orderedItems")
+        .and_then(|v| v.as_array_mut())
+    {
+        for item in items {
+            rewrite(item, actor_url);
+        }
+    }
+    serde_json::to_string(&value).ok()
 }
 
 fn build_response(resp: RelayHttpResponse) -> Response {

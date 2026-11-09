@@ -4,6 +4,15 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — P2P relayed addresses and migrated outbox authorship
+
+Cores now reserve a circuit on the relay's P2P infrastructure and publish the
+relayed address in the actor document, so peers behind NAT can dial each other
+directly through the relay. Migrated outbox activities are rewritten to the
+current actor in the core and in the relay proxy, so classic instances see the
+right author. The Alice → RedHunt07 follow is accepted in the current test
+accounts, so followers-only posts are delivered too.
+
 ## 2026-11-09 — Timelines: federated posts and profile consistency
 
 Public posts from accounts whose follow request is still pending are now polled

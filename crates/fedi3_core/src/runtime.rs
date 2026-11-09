@@ -46,6 +46,13 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct RelayP2pInfra {
+    pub peer_id: Option<String>,
+    #[serde(default)]
+    pub multiaddrs: Vec<String>,
+}
+
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct CoreStartConfig {
     pub username: String,
@@ -495,7 +502,54 @@ fn run_core(
             storage_cfg.media_max_local_cache_bytes = media_cfg.max_local_cache_bytes;
         }
 
-        let p2p_cfg = cfg.p2p.clone().unwrap_or_default();
+        let mut p2p_cfg = cfg.p2p.clone().unwrap_or_default();
+        // The relay advertises its P2P infrastructure address. Reserve a circuit
+        // on it so the actor document publishes a dialable relayed address even
+        // when the device is behind NAT (the usual situation for mobile clients).
+        if p2p_cfg.enable {
+            let base = public_base_url.trim_end_matches('/');
+            let is_loopback = base.contains("127.0.0.1") || base.contains("localhost");
+            if !is_loopback {
+                let url = format!("{base}/_fedi3/relay/p2p_infra");
+                match http
+                    .get(&url)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(info) = resp.json::<RelayP2pInfra>().await {
+                            if let Some(relay_peer) = info
+                                .peer_id
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|p| !p.is_empty())
+                            {
+                                let reserve =
+                                    p2p_cfg.relay_reserve.get_or_insert_with(Vec::new);
+                                for addr in info
+                                    .multiaddrs
+                                    .iter()
+                                    .map(|a| a.trim())
+                                    .filter(|a| !a.is_empty())
+                                {
+                                    let full = if addr.contains("/p2p/") {
+                                        addr.to_string()
+                                    } else {
+                                        format!("{addr}/p2p/{relay_peer}")
+                                    };
+                                    if !reserve.iter().any(|r| r.trim() == full) {
+                                        reserve.push(full);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::debug!(%url, "relay p2p infra fetch failed: {e}"),
+                }
+            }
+        }
         let p2p_keypair = if p2p_cfg.enable {
             Some(crate::p2p::load_or_generate_keypair(&data_dir)?)
         } else {

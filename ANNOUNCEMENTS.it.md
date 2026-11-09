@@ -4,6 +4,16 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Indirizzi P2P relayed e paternità degli outbox migrati
+
+I core ora prenotano un circuito sull'infrastruttura P2P del relay e pubblicano
+l'indirizzo relayed nel documento actor, così i peer dietro NAT possono
+chiamarsi direttamente attraverso il relay. Le attività degli outbox migrati
+vengono riscritte sull'actor corrente nel core e nel proxy del relay, così le
+istanze classiche vedono l'autore giusto. Il follow Alice → RedHunt07 è
+accettato negli account di test attuali, quindi arrivano anche i post riservati
+ai follower.
+
 ## 2026-11-09 — Timeline: post federati e coerenza dei profili
 
 I post pubblici degli account con richiesta di follow ancora in attesa vengono

@@ -39,3 +39,12 @@ del token interno dell’app nelle impostazioni di sicurezza. Se la variabile è
 assente o vuota, il client di sviluppo genera un nuovo token casuale a ogni
 avvio. In alternativa, arresta il processo autonomo e avvia il core dall’app.
 Conserva le credenziali del profilo esistente.
+
+## Indirizzi P2P relayed
+
+Con il P2P attivo e il relay che espone `/_fedi3/relay/p2p_infra`, il core
+prenota un circuito su quel relay e pubblica l'indirizzo `/p2p-circuit`
+risultante nel documento actor. Questo mantiene raggiungibili i peer dietro
+NAT. Se il relay lascia vuoti `FEDI3_P2P_INFRA_PEER_ID` e
+`FEDI3_P2P_INFRA_MULTIADDRS`, il core pubblica solo gli indirizzi `announce`
+configurati.
