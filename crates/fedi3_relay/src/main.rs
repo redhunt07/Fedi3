@@ -3725,10 +3725,18 @@ async fn forward_to_user_inner(
                 }
             } else if let Some(kind) = collection_kind_from_path(&user, path) {
                 if let Ok(Some(json)) = db.get_collection_cache(&user, kind).await {
+                    let body = if kind == "outbox" {
+                        let base = user_base_url(&state.cfg, &user);
+                        let actor_url =
+                            format!("{}/users/{user}", base.trim_end_matches('/'));
+                        normalize_outbox_actors(&json, &actor_url).unwrap_or(json)
+                    } else {
+                        json
+                    };
                     return (
                         StatusCode::OK,
                         [("Content-Type", "application/activity+json; charset=utf-8")],
-                        json,
+                        body,
                     )
                         .into_response();
                 }
