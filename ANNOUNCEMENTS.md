@@ -4,6 +4,14 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Composer cleanup, presence layout and single Android task
+
+The composer no longer repeats the file picker and MFM cheatsheet buttons; the
+attachment action remains in the media area and toolbar. The presence selector
+keeps all four states on one row on narrow phones. Android now uses a single
+task (`singleTask`) and the keep-alive notification reuses it, so recent apps
+no longer shows a second offline Fedi3 session. Build 0.11.7 (2010).
+
 ## 2026-11-09 — Android keep-alive service start fix
 
 The keep-alive foreground service now enters the foreground from `onCreate` and

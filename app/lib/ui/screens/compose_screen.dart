@@ -18,7 +18,6 @@ import '../widgets/emoji_picker.dart';
 import '../widgets/rich_composer.dart';
 import '../../state/emoji_recent_store.dart';
 import '../../state/direct_recipient_store.dart';
-import '../widgets/mfm_cheatsheet.dart';
 import '../../utils/mfm_codec.dart';
 
 class ComposeScreen extends StatefulWidget {
@@ -165,12 +164,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
                       runSpacing: 10,
                       children: [
                         OutlinedButton.icon(
-                          onPressed:
-                              widget.appState.isRunning ? _pickFiles : null,
-                          icon: const Icon(Icons.attach_file),
-                          label: Text(context.l10n.composeChooseFiles),
-                        ),
-                        OutlinedButton.icon(
                           onPressed: () async {
                             final picked = await EmojiPicker.show(context,
                                 prefs: widget.appState.prefs);
@@ -180,11 +173,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
                           },
                           icon: const Icon(Icons.emoji_emotions_outlined),
                           label: Text(context.l10n.composeEmojiButton),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => MfmCheatsheet.show(context),
-                          icon: const Icon(Icons.text_snippet_outlined),
-                          label: Text(context.l10n.composeMfmCheatsheet),
                         ),
                         FilterChip(
                           label: Text(context.l10n.composeContentWarningTitle),

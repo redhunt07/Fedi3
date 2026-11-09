@@ -26,18 +26,29 @@ class PresenceSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: compact ? 6 : 8,
-      runSpacing: 8,
-      children: [
-        for (final status in PresenceStatus.values)
-          _PresencePill(
-            status: status,
-            selected: status == selected,
-            compact: compact,
-            onTap: () => onChanged(status),
-          ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Keep the four states on one line even on narrow phones. The pills
+        // share the available width and their content scales down instead of
+        // wrapping the last option onto a second row.
+        final tight = compact || constraints.maxWidth < 460;
+        const statuses = PresenceStatus.values;
+        return Row(
+          children: [
+            for (var i = 0; i < statuses.length; i++) ...[
+              if (i > 0) SizedBox(width: tight ? 4 : 6),
+              Expanded(
+                child: _PresencePill(
+                  status: statuses[i],
+                  selected: statuses[i] == selected,
+                  compact: tight,
+                  onTap: () => onChanged(statuses[i]),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
@@ -119,40 +130,43 @@ class _PresencePill extends StatelessWidget {
                   ]
                 : null,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: compact ? 7 : 8,
-                height: compact ? 7 : 8,
-                decoration: BoxDecoration(
-                  color: dot,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: selected
-                        ? Colors.white.withAlpha(180)
-                        : Colors.transparent,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: compact ? 7 : 8,
+                  height: compact ? 7 : 8,
+                  decoration: BoxDecoration(
+                    color: dot,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected
+                          ? Colors.white.withAlpha(180)
+                          : Colors.transparent,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 7),
-              Text(
-                _label(context),
-                style: TextStyle(
-                  color: foreground,
-                  fontSize: compact ? 11 : 12,
-                  fontWeight: FontWeight.w700,
+                const SizedBox(width: 7),
+                Text(
+                  _label(context),
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: compact ? 11 : 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              if (selected) ...[
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.check_rounded,
-                  size: compact ? 12 : 14,
-                  color: foreground,
-                ),
+                if (selected) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.check_rounded,
+                    size: compact ? 12 : 14,
+                    color: foreground,
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -81,10 +81,18 @@ class KeepAliveService : Service() {
         } else {
             Notification.Builder(this)
         }
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            // singleTask in the manifest plus CLEAR_TOP keeps one Fedi3 task:
+            // the notification must not spawn a second activity whose core
+            // would start from scratch and appear offline.
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
         val openApp = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification: Notification = builder

@@ -4,6 +4,15 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Pulizia composer, layout presenza e task Android unico
+
+Il composer non ripete più i pulsanti di scelta file e MFM cheatsheet; l'azione
+di allegato resta nell'area media e nella toolbar. Il selettore di presenza
+tiene tutti e quattro gli stati su una sola riga sui telefoni stretti. Android
+ora usa un task unico (`singleTask`) e la notifica keep-alive lo riutilizza,
+quindi nei processi recenti non compare più una seconda sessione Fedi3 offline.
+Build 0.11.7 (2010).
+
 ## 2026-11-09 — Correzione avvio del servizio keep-alive Android
 
 Il servizio foreground keep-alive ora entra in foreground da `onCreate` e viene
