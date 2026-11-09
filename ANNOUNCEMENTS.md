@@ -4,6 +4,13 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Clean Linux startup output
+
+The Linux client no longer prints the benign ATK critical about a missing plug
+ID. Flutter's embedder calls `atk_socket_embed` before ATK can provide a plug
+ID; the runner now filters only that message, so other accessibility
+diagnostics remain visible. Build 0.11.9 (2012).
+
 ## 2026-11-09 — Continuous particle effects in the navigation rail
 
 The selected section's particle field and the brand mark now animate

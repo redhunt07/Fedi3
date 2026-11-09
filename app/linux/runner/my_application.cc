@@ -19,6 +19,24 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// Flutter's Linux embedder calls atk_socket_embed() with a NULL AtkPlug ID
+// before ATK can provide one, so ATK logs a harmless critical at startup:
+//   Atk-CRITICAL **: atk_socket_embed: assertion 'plug_id != NULL' failed
+// Upstream issue: https://github.com/flutter/flutter/issues/187566
+// Filter only that message; every other Atk diagnostic keeps the default
+// handler so real accessibility problems are still visible.
+static void fedi3_atk_log_handler(const gchar* log_domain,
+                                  GLogLevelFlags log_level,
+                                  const gchar* message,
+                                  gpointer user_data) {
+  if ((log_level & G_LOG_LEVEL_CRITICAL) != 0 &&
+      g_strcmp0(message,
+                "atk_socket_embed: assertion 'plug_id != NULL' failed") == 0) {
+    return;
+  }
+  g_log_default_handler(log_domain, log_level, message, user_data);
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
@@ -119,6 +137,11 @@ static void my_application_startup(GApplication* application) {
   // MyApplication* self = MY_APPLICATION(object);
 
   // Perform any actions required at application startup.
+  g_log_set_handler(
+      "Atk",
+      static_cast<GLogLevelFlags>(G_LOG_LEVEL_MASK | G_LOG_FLAG_FATAL |
+                                  G_LOG_FLAG_RECURSION),
+      fedi3_atk_log_handler, nullptr);
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
 }

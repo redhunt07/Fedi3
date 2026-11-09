@@ -4,6 +4,13 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Avvio Linux senza avvisi superflui
+
+Il client Linux non stampa più il critical ATK innocuo sull'ID del plug
+mancante. L'embedder di Flutter chiama `atk_socket_embed` prima che ATK possa
+fornire un plug ID; il runner ora filtra solo quel messaggio, quindi gli altri
+diagnostici di accessibilità restano visibili. Build 0.11.9 (2012).
+
 ## 2026-11-09 — Effetti particellari continui nella barra di navigazione
 
 Il campo di particelle della sezione selezionata e il marchio ora si animano in
