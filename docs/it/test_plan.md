@@ -595,32 +595,35 @@ I test scritti prima dei fix devono essere marcati come `#[ignore]` con un comme
 
 ---
 
-> I conteggi si riferiscono alla suite del 2026-11-01. La CI esegue la stessa suite a ogni push e sui tag di release; la verifica della 0.11.9 è in [audit/release_0.11.9_2026-11-09.md](audit/release_0.11.9_2026-11-09.md).
-
+> I conteggi seguenti sono stati verificati il 2026-11-09 sul workspace attuale.
+> La CI esegue la stessa suite a ogni push e sui tag di release; l'audit della
+> release 0.11.9 è in [audit/release_0.11.9_2026-11-09.md](audit/release_0.11.9_2026-11-09.md).
 
 ## 11. Stato di implementazione
 
-Implementato il 2026-10-31 e il 2026-11-01 in tre iterazioni. Conteggi reali verificati con l'esecuzione della suite finale:
+Implementato il 2026-10-31 e il 2026-11-01, poi esteso nel ciclo 0.11.x. Conteggi reali verificati eseguendo la suite attuale il 2026-11-09:
 
 | Area | Casi implementati | Dove |
 |---|---|---|
-| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy, anchor) | 42 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
-| Integrazione core — ActivityPub e sicurezza | 41 | `crates/fedi3_core/tests/ap_security.rs` |
-| Integrazione core — database e coda di consegna | 19 | `crates/fedi3_core/tests/db_queue.rs` |
-| Integrazione core — FFI e runtime | 12 | `crates/fedi3_core/tests/runtime_ffi.rs` |
-| Integrazione core — tunnel | 4 | `crates/fedi3_core/tests/tunnel.rs` |
-| Integrazione core — gap semantici (chat, outbox, account bloccati, media, permessi DB) | 19 | `crates/fedi3_core/tests/semantics.rs` |
-| Integrazione core — policy di rete e cap dei corpi | 6 | `crates/fedi3_core/tests/net_policy.rs` |
-| Unit relay | 35 | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
-| Integrazione relay | 29 | `crates/fedi3_relay/tests/relay_http.rs` |
+| Unit core (keys, http_sig, ffi, net_metrics, tunnel, relay_bridge, p2p, net_policy, anchor, chat, receipts) | 86 | `crates/fedi3_core/src/*.rs` (mod `tests`) |
+| Integrazione core — ActivityPub e sicurezza | 47 | `crates/fedi3_core/tests/ap_security.rs` |
+| Integrazione core — database e coda di consegna | 20 | `crates/fedi3_core/tests/db_queue.rs` |
+| Integrazione core — FFI e runtime | 13 | `crates/fedi3_core/tests/runtime_ffi.rs` |
+| Integrazione core — tunnel | 5 | `crates/fedi3_core/tests/tunnel.rs` |
+| Integrazione core — gap semantici (chat, outbox, account bloccati, media, permessi DB) | 24 | `crates/fedi3_core/tests/semantics.rs` |
+| Integrazione core — policy di rete, cap dei corpi e media fetch policy | 7 | `crates/fedi3_core/tests/net_policy.rs`, `media_fetch_policy.rs` |
+| Integrazione core — chat P2P | 3 | `crates/fedi3_core/tests/p2p_chat.rs` |
+| Unit protocollo | 6 | `crates/fedi3_protocol/src/*.rs` |
+| Unit P2P infra | 4 | `crates/fedi3_p2p_infra/src/main.rs` |
+| Unit relay | 61 (1 ignorato) | `crates/fedi3_relay/src/main.rs` (mod `tests`) |
+| Integrazione relay | 35 | `crates/fedi3_relay/tests/relay_http.rs` |
 | **End-to-end federazione (relay reale + due core reali)** | **1** | `crates/fedi3_relay/tests/e2e_federation.rs` |
 | **End-to-end identità anchor + spool cieco** | **1** | `crates/fedi3_relay/tests/e2e_anchor_spool.rs` |
 | **Integrazione mesh relay + moderazione** | **1** | `crates/fedi3_relay/tests/mesh_moderation.rs` |
-| **Totale Rust** | **210** | |
-| Unit app (modelli, MFM, store, core API, stato, follow request, anchor) | 30 | `app/test/unit/` |
-| Widget app (onboarding, timeline, compose, note card, impostazioni, chat, notifiche, media viewer, primo avvio, richieste di follow, networking/anchor) | 49 | `app/test/widget/`, `app/test/widget_test.dart` |
-| l10n e configurazione di piattaforma | 9 | `app/test/l10n/`, `app/test/platform_config_test.dart` |
-| **Totale Flutter** | **88** | |
+| **End-to-end ricevute forward** | **1** | `crates/fedi3_relay/tests/e2e_forward_receipts.rs` |
+| **Totale Rust** | **315 passati, 4 ignorati** | |
+| Flutter (unit, widget, l10n, configurazione piattaforma) | 205 | `app/test/` |
+| **Totale Flutter** | **205** | |
 
 ### Scenario end-to-end implementato (X-01…X-07)
 
@@ -652,23 +655,26 @@ Il test ha fatto emergere due difetti reali (deadlock del tunnel su fetch annida
 3. una blocklist relay-wide e una per-utente bloccano il mittente con `202`, senza forward né spool;
 4. il token errato viene rifiutato e un utente sconosciuto resta `404` (nessun loop di hop).
 
-Gate eseguiti con output reale sullo stato finale:
+`crates/fedi3_relay/tests/e2e_forward_receipts.rs` verifica il registro firmato dei
+forward e le conferme indipendenti del core tramite relay e core reali.
+
+Gate eseguiti con output reale sullo stato finale (2026-11-09):
 
 | Gate | Comando | Esito |
 |---|---|---|
 | Formattazione Rust | `cargo fmt --all -- --check` | ✅ |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warning |
 | Build | `cargo build --workspace --locked` | ✅ |
-| Test Rust | `cargo test --workspace --locked` | ✅ 210/210 |
-| End-to-end | `cargo test -p fedi3_relay --test e2e_federation --test e2e_anchor_spool --test mesh_moderation` | ✅ 3/3 |
+| Test Rust | `cargo test --workspace --locked` | ✅ 315 passati, 4 ignorati |
+| End-to-end | `cargo test -p fedi3_relay --test e2e_federation --test e2e_anchor_spool --test mesh_moderation --test e2e_forward_receipts` | ✅ 4/4 |
 | Analisi app | `flutter analyze --fatal-infos` | ✅ |
 | Formattazione app | `dart format --set-exit-if-changed lib test` | ✅ |
-| Test app | `flutter test` | ✅ 88/88 |
+| Test app | `flutter test` | ✅ 205/205 |
 | Configurazione piattaforma | `scripts/verify_platform_config.sh` | ✅ 9/9 |
 
 ### Scostamenti dal piano
 
-- I casi di integrazione del relay sono 29: i casi di configurazione, token, `client_ip`, rate limiter, firme e migrazioni sono coperti come unit test dentro `main.rs` (35 casi), quindi la copertura delle sezioni §4.1–§4.10 è completa anche se distribuita diversamente.
+- I casi di integrazione del relay sono 35: i casi di configurazione, token, `client_ip`, rate limiter, firme e migrazioni sono coperti come unit test dentro `main.rs` (61 casi), quindi la copertura delle sezioni §4.1–§4.10 è completa anche se distribuita diversamente.
 - X-01…X-07 sono ora coperti dal test end-to-end reale, non solo indirettamente.
 - Il Dockerfile del relay non è stato costruito (Docker non disponibile nell'ambiente): il tag `rust:1.99-bookworm` è stato verificato esistente sul registry e allineato al toolchain usato per i test.
 - La migrazione PostgreSQL è coperta da asserzioni sul testo SQL, non da un database live.

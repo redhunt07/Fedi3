@@ -201,7 +201,7 @@ Current behaviour by area:
 | Chat | Telegram-style bubbles with delivery/read check marks, E2E badge, recipient picker from mutual followers, group creation from the same screen, owner/admin/member roles, rename only for groups, message deletion, attachments, reactions, replies, forwarding, pinned messages, invite links, typing and presence. |
 | Calls | E2E 1:1 and group audio/video calls over WebRTC, automatic TURN from the relay, screen sharing with microphone and PC system audio as separate tracks, selectable audio devices, ICE restart and a manual Retry action. Android/iOS switch between front and back camera; the Linux bridge reports `NotImplemented` for that switch. |
 | Notifications | Grouped and filterable notifications, mark-as-read, real-time updates and three bundled sounds: timeline activity, chat and incoming call (Discord-style tones). Android uses a keep-alive foreground service with Android 15-compatible types. |
-| Settings | Hub with Account, Profile, Privacy, Security, Moderation, Networking, Relays, UI, Translation, Audio, Backup, Advanced, Updates and Announcements; push is under Security on mobile. |
+| Settings | Hub with Account, Profile, Privacy, Security, Moderation, Networking, Relays, UI, Translation, Audio, Backup, Advanced and Updates; push is under Security on mobile. Announcements open from the app bar. |
 | Search | Posts, users and hashtags; all/local/relay source filter; persistent history with chips and clearing; global chat search. |
 | Mobile | Android and iOS builds, UnifiedPush/APNs provisioning, notification sounds, single-task navigation, camera switching in video calls. |
 | Updates | Verified client updates (SHA256) for the Linux AppImage, Windows ZIP and Android APK. |

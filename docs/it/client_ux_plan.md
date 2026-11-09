@@ -176,31 +176,72 @@ Se il vincolo è "copiare Misskey", la sequenza resta valida: si copia la
 tassonomia e i flussi, non la densità, e si tiene Flutter finché l'IA non è
 stabile.
 
-## 10. Stato di avanzamento (2026-11-01)
+## 10. Client attuale (0.11.9+2012)
+
+Il client distribuito è un'app desktop e mobile ispirata a Misskey, costruita sul
+design system Aurora: superfici neutre profonde, accenti viola/ciano, header del
+profilo sovrapposto e una rail di navigazione con Timeline, Ricerca, Chat,
+Notifiche, Relay, Impostazioni e Account. Non è più il pannello amministrativo
+descritto nella §1.
+
+| Desktop | Android |
+|---|---|
+| ![Timeline desktop Fedi3](../assets/screenshots/desktop-timeline.png) | ![Timeline Android Fedi3](../assets/screenshots/android-timeline.png) |
+| ![Chat E2E desktop Fedi3](../assets/screenshots/desktop-chat.png) | ![Chat Android Fedi3](../assets/screenshots/android-chat.png) |
+
+Comportamento attuale per area:
+
+| Area | Comportamento |
+|---|---|
+| Timeline | Tab Home, Seguiti, Scopri e Federata; filtri; scroll infinito; media federati; composer con visibilità, allegati e toolbar MFM. |
+| Profili | Banner dietro l'avatar, contatori cliccabili, tab Post/Risposte/Media, outbox paginato e liste follower/seguiti con follow/unfollow. |
+| Chat | Bolle stile Telegram con spunte di consegna/lettura, badge E2E, selettore destinatari dai follower reciproci, creazione gruppi dalla stessa schermata, ruoli owner/admin/member, rinomina solo per i gruppi, eliminazione messaggi, allegati, reazioni, risposte, inoltro, messaggi fissati, link invito, digitazione e presenza. |
+| Chiamate | Chiamate audio/video E2E 1:1 e di gruppo su WebRTC, TURN automatico dal relay, condivisione schermo con microfono e audio di sistema PC come tracce separate, dispositivi audio selezionabili, ICE restart e azione Retry manuale. Android/iOS commutano tra fotocamera anteriore e posteriore; il bridge Linux riporta `NotImplemented` per quel cambio. |
+| Notifiche | Notifiche raggruppate e filtrabili, mark-as-read, aggiornamenti in tempo reale e tre suoni inclusi: attività della timeline, chat e chiamata in arrivo (toni in stile Discord). Android usa un servizio foreground keep-alive con tipi compatibili con Android 15. |
+| Impostazioni | Hub con Account, Profilo, Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione, Audio, Backup, Avanzate e Aggiornamenti; il push è sotto Sicurezza su mobile. Gli annunci si aprono dalla barra dell'app. |
+| Ricerca | Post, utenti e hashtag; filtro fonte tutti/locale/relay; cronologia persistente con chip e cancellazione; ricerca globale nella chat. |
+| Mobile | Build Android e iOS, provisioning UnifiedPush/APNs, suoni di notifica, navigazione a task unico, cambio fotocamera nelle videochiamate. |
+| Aggiornamenti | Aggiornamenti verificati del client (SHA256) per AppImage Linux, ZIP Windows e APK Android. |
+| Accessibilità | Scorciatoie da tastiera (Ctrl+1…7, Ctrl+N, Ctrl+F, Esc), etichette accessibili della rail e stati vuoti/errore. |
+| Localizzazione | Interfaccia bilingue inglese/italiano con parità ARB. |
+
+Altre schermate:
+
+| | |
+|---|---|
+| ![Notifiche desktop Fedi3](../assets/screenshots/desktop-notifications.png) | ![Impostazioni desktop Fedi3](../assets/screenshots/desktop-settings.png) |
+| ![Composer Fedi3](../assets/screenshots/desktop-composer.png) | ![Profilo Android Fedi3](../assets/screenshots/android-profile.png) |
+
+![Tour desktop Fedi3](../assets/screenshots/fedi3-desktop-tour.gif)
+
+## 11. Stato di avanzamento (2026-11-09)
 
 | Step | Stato | Note |
 |---|---|---|
-| 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route esistenti, empty state; manca un vero router dichiarativo |
-| 1 — Registrazione/login guidati, recovery | completato | onboarding con identità/relay in primo piano, login rapido da URL+token, avanzate collassate e dialog di recovery con copia dei codici |
-| 2 — Home unica con tab | completato (base) | layout a tab predefinito su desktop, tab Home/Seguiti/Scopri/Federata; composer full-screen da sidebar e FAB mobile |
-| 3 — Profilo proprio/altrui | completato (base) | banner, contatori cliccabili, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati |
-| 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sezioni; manca ricerca interna |
-| 5 — Ricerca | completato (base) | ricerca post/utenti/hashtag, filtro fonte (tutti/locale/relay), cronologia persistente con chip e cancellazione; mancano filtri temporali |
-| 6 — Notifiche | parziale | filtri, mark-all-read e raggruppamento per data; manca il raggruppamento per attore/tipo |
-| 7 — Chat | completato (base) | thread, allegati con anteprima, reazioni, read state, badge E2E; chiamate E2E, note audio/video, ricerca completa e globale, inoltro, messaggi fissati e link invito completati |
-| 8 — Finitura | parziale | scorciatoie Ctrl+1..7/Ctrl+N/Ctrl+F/Esc, rail accessibile con hint, composer avanzato, logo fisso con particelle, annunci dai maintainer con alert periodico, banner profilo mesh, chat a schede e bolle stile Telegram con spunte, notifiche compatte, post salvati offline, composer con drag&drop, presenza online/occupato/AFK/offline; restano audit contrasto e navigazione da tastiera completa |
+| 0 — Audit, design token, skeleton, gate di avvio | completato | tema Aurora, rail custom, route, empty state; manca un router dichiarativo. |
+| 1 — Registrazione/login guidati, recovery | completato | identità/relay in primo piano, login rapido da URL+token, avanzate collassate e dialog del codice di recovery. |
+| 2 — Home unica con tab | completato | Home/Seguiti/Scopri/Federata, composer full-screen dalla rail e FAB mobile. |
+| 3 — Profilo proprio/altrui | completato (base) | banner sovrapposto, contatori, tab Post/Risposte/Media, griglia media, paginazione outbox; mancano filtri media avanzati. |
+| 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sottopagine; manca la ricerca interna nelle impostazioni. |
+| 5 — Ricerca | completato (base) | post/utenti/hashtag, filtro fonte, cronologia persistente; mancano filtri temporali. |
+| 6 — Notifiche | completato | filtri, mark-all-read, raggruppamento per attore/tipo e data, badge in tempo reale. |
+| 7 — Chat | completato | thread, allegati con anteprima, reazioni, read state, badge E2E, chiamate E2E, note audio/video, ricerca, inoltro, messaggi fissati, link invito, bolle stile Telegram, ruoli di gruppo ed eliminazione. |
+| 8 — Finitura | parziale | scorciatoie, rail accessibile, particelle, annunci, notifiche compatte, post salvati offline, composer con drag&drop e presenza; restano audit completo del contrasto e navigazione da tastiera completa. |
 
-Prossimo passo consigliato: client web sulla specifica OpenAPI, poi audit di contrasto/accessibilità completo e test end-to-end della chat con due identità reali.
+Nel ciclo 0.11.x sono stati consegnati anche: logo neon e icone di avvio, effetti
+particellari continui nella rail, coerenza della federazione per follow in attesa
+e pagine profilo, normalizzazione dell'outbox migrato e indirizzi P2P relayed.
 
-## 11. Aggiornamento di stato (2026-11-09)
+## 12. Prossimi passi
 
-Dal quadro del 2026-11-01 il client è arrivato alla 0.11.9 (build 2012). In questo ciclo sono stati consegnati:
+- Pubblicare il client web sulla specifica OpenAPI e mantenerlo un secondo client,
+  non una riscrittura del desktop.
+- Eseguire un audit completo di contrasto/accessibilità e completare la navigazione
+  da tastiera.
+- Aggiungere ricerca interna nelle impostazioni, filtri media avanzati e filtri
+  temporali nella ricerca.
+- Verificare i bridge TURN esterni e le chiamate 1:1/di gruppo su reti e dispositivi
+  reali.
+- Mantenere misurabile il lavoro su batteria e notifiche in background Android
+  (CPU, GPU, RAM) senza indebolire il modello di sicurezza P2P/relay.
 
-- Client Android con notifiche keep-alive per attività, chat e chiamate, navigazione a task unico e tipi di servizio foreground compatibili con Android 15.
-- Chiamate end-to-end con TURN automatico dal relay, selezione dei dispositivi audio su desktop, condivisione schermo che invia microfono e audio di sistema come tracce separate, cambio fotocamera su mobile e suoni di notifica e chiamata in stile Discord.
-- Dinamiche di chat in stile Telegram: creazione dai follower reciproci, gruppi, ruoli, eliminazione dei messaggi, inoltro, messaggi fissati e ricerca globale.
-- Identità visiva: logo Fedi3 neon e icone di avvio, banner del profilo dietro l'avatar, effetti particellari continui nella barra di navigazione, pagine profilo e impostazioni in stile Misskey, interfaccia bilingue inglese/italiano.
-- Coerenza della federazione: timeline federata dai follow in attesa, pagine profilo limitate ai post dell'autore, normalizzazione dell'outbox migrato e indirizzi P2P relayed.
-- Aggiornamenti verificati del client (SHA256) per AppImage Linux, ZIP Windows e APK Android.
-
-Restano aperti: un audit completo di contrasto e navigazione da tastiera, il raggruppamento delle notifiche per attore/tipo, filtri media avanzati, filtri temporali nella ricerca e il client web opzionale sulla specifica OpenAPI. Gli screenshot nella [guida dell'app](app_guide.md#screenshot) mostrano l'interfaccia attuale.
