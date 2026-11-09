@@ -247,7 +247,8 @@ jobs:
             libharfbuzz0b libsecret-1-0 libffi8 libpcre2-8-0 libmount1 libblkid1 \
             libsystemd0 libudev1 libexpat1 zlib1g libgl1 libegl1 libgles2 \
             libgl1-mesa-dri libopengl0 libgbm1 libdrm2 libxshmfence1 \
-            libwayland-client0 libwayland-server0 libwayland-cursor0 libwayland-egl1
+            libwayland-client0 libwayland-server0 libwayland-cursor0 libwayland-egl1 \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0
       - name: Require the packaged client to render its first frame
         run: dbus-run-session -- xvfb-run -a python3 scripts/tests/smoke_appimage.py release-assets/Fedi3-linux-x86_64.AppImage
 
