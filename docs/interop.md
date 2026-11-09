@@ -8,8 +8,6 @@ outbound.
 
 > This report was produced on 2026-11-07 against Mastodon 4.7.4 and Misskey 2026.10.1. The matrix can be reproduced with `scripts/ap_compat_matrix.py`; the current client is 0.11.9.
 
-> This report was produced on 2026-11-07 against Mastodon 4.7.4 and Misskey 2026.10.1. The matrix can be reproduced with `scripts/ap_compat_matrix.py`; the current client is 0.11.9.
-
 > Result: **test passed in both directions** with both implementations.
 > The test also found a real bug in the outbound HTTP signature, fixed in
 > `crates/fedi3_core/src/delivery.rs`.

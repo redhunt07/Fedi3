@@ -540,6 +540,8 @@ Da creare una volta e riusare:
 | rust-clippy | `cargo clippy --workspace --all-targets -- -D warnings` | sì |
 | rust-build | `cargo build --workspace --locked` | sì |
 | rust-test | `cargo test --workspace --locked` | sì |
+| legacy-webrtc | `python3 scripts/verify_legacy_webrtc.py` | sì |
+| postgres-quota | test quota ignorato con servizio PostgreSQL | sì |
 | rust-audit | `cargo audit` (o `cargo deny check`) | no (warning) |
 | flutter-analyze | `flutter analyze --fatal-infos` | sì |
 | flutter-test | `flutter test` | sì |
@@ -557,7 +559,7 @@ scripts/verify_platform_config.sh
 
 ### 8.3 Vincoli
 
-- Nessun test richiede Docker, Postgres, Redis o Meilisearch.
+- La suite predefinita non richiede Docker, Postgres, Redis o Meilisearch. Un test ignorato gira contro PostgreSQL in un job CI dedicato (`postgres_media_quota_reservation_is_atomic`).
 - Il relay nei test usa `FEDI3_RELAY_DB_DRIVER=sqlite`, `SEARCH_BACKEND=db`, Redis assente.
 - Ogni test ha timeout esplicito; nessun test dura più di 30 s.
 - I test di rete usano porte effimere assegnate dal SO.
@@ -568,8 +570,8 @@ scripts/verify_platform_config.sh
 
 | Metrica | Soglia |
 |---|---|
-| Test Rust totali | ≥ 120 casi, tutti verdi |
-| Test Flutter totali | ≥ 40 casi, tutti verdi |
+| Test Rust totali | ≥ 300 casi, tutti verdi |
+| Test Flutter totali | ≥ 200 casi, tutti verdi |
 | Aree funzionali coperte | 100% delle aree elencate nelle sezioni 3–5 |
 | Test di sicurezza | 15/15 implementati e verdi |
 | Test e2e | 7/7 implementati e verdi |
@@ -720,7 +722,7 @@ Il client desktop è stato avviato contro relay, core, Misskey e Mastodon reali 
 su loopback nei test locali) e `FEDI3_DATA_DIR` puntato alla stessa identità del dev client.
 
 | Verifica UI | Esito |
-| Timeline Home/Locale/Federata con contenuti federati; Sociale vuota con P2P off | pass |
+| Timeline Home, Seguiti e Federata con contenuti federati | pass |
 | Pubblicazione nota dal client visibile su Mastodon e Misskey | pass |
 | Thread con padre e risposta annidata; risposta dal client con `in_reply_to_id` corretto | pass |
 | Like, Announce, EmojiReact dal client persistiti e federati | pass |

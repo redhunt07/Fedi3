@@ -540,6 +540,8 @@ To be created once and reused:
 | rust-clippy | `cargo clippy --workspace --all-targets -- -D warnings` | yes |
 | rust-build | `cargo build --workspace --locked` | yes |
 | rust-test | `cargo test --workspace --locked` | yes |
+| legacy-webrtc | `python3 scripts/verify_legacy_webrtc.py` | yes |
+| postgres-quota | ignored quota test with a PostgreSQL service | yes |
 | rust-audit | `cargo audit` (or `cargo deny check`) | no (warning) |
 | flutter-analyze | `flutter analyze --fatal-infos` | yes |
 | flutter-test | `flutter test` | yes |
@@ -557,7 +559,7 @@ scripts/verify_platform_config.sh
 
 ### 8.3 Constraints
 
-- No test requires Docker, Postgres, Redis or Meilisearch.
+- The default suite requires no Docker, Postgres, Redis or Meilisearch. One ignored test runs against PostgreSQL in a dedicated CI job (`postgres_media_quota_reservation_is_atomic`).
 - The relay in the tests uses `FEDI3_RELAY_DB_DRIVER=sqlite`, `SEARCH_BACKEND=db`, Redis absent.
 - Every test has an explicit timeout; no test lasts more than 30 s.
 - Network tests use ephemeral ports assigned by the OS.
@@ -568,8 +570,8 @@ scripts/verify_platform_config.sh
 
 | Metric | Threshold |
 |---|---|
-| Total Rust tests | ≥ 120 cases, all green |
-| Total Flutter tests | ≥ 40 cases, all green |
+| Total Rust tests | ≥ 300 cases, all green |
+| Total Flutter tests | ≥ 200 cases, all green |
 | Functional areas covered | 100% of the areas listed in sections 3–5 |
 | Security tests | 15/15 implemented and green |
 | E2E tests | 7/7 implemented and green |
@@ -720,7 +722,7 @@ The desktop client was started against real relay, core, Misskey and Mastodon wi
 to loopback in local tests) and `FEDI3_DATA_DIR` pointed to the same identity as the dev client.
 
 | UI check | Outcome |
-| Home/Local/Federated timeline with federated content; Social empty with P2P off | pass |
+| Home, Following and Federated timelines with federated content | pass |
 | Note published from the client visible on Mastodon and Misskey | pass |
 | Thread with parent and nested reply; reply from the client with correct `in_reply_to_id` | pass |
 | Like, Announce, EmojiReact from the client persisted and federated | pass |

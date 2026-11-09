@@ -1,5 +1,8 @@
 # Verification and distribution — 7 November 2026
 
+This report records the state on 7 November 2026; later work is documented in
+[network_resilience.md](network_resilience.md).
+
 Local client and public relay updated. Backups verified before replacement.
 
 ## Operational fixes

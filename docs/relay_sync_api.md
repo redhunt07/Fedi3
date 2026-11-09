@@ -10,14 +10,14 @@ public notes and to pull missed outbox activity.
 `GET /_fedi3/relay/sync/notes`
 
 Public endpoint used by peer relays to pull the notes a relay stores. It requires
-no token, but it is rate limited per client IP with the same bucket as forwarding
+no token, but it is rate limited per client IP with the forwarding limit
 (`FEDI3_RELAY_RL_FORWARD_PER_MIN`, default `240`).
 
 Query parameters:
 
 | Parameter | Type | Notes |
 |---|---|---|
-| `limit` | integer | Items per page, `1`–`200`; default `200`. |
+| `limit` | integer | Items per page, max `200`; default `200`. |
 | `since` | integer | Return notes created after this Unix timestamp in milliseconds. |
 | `cursor` | integer | Return notes created before this Unix timestamp in milliseconds (newest first). |
 
@@ -73,7 +73,7 @@ Query parameters:
 
 | Parameter | Type | Notes |
 |---|---|---|
-| `limit` | integer | Items per page, `1`–`200`; default `50`. |
+| `limit` | integer | Items per page, max `200`; default `50`. |
 | `since` | integer | Return activity after this Unix timestamp in milliseconds; default `0`. |
 
 Response:
@@ -89,7 +89,7 @@ Response:
 
 - These endpoints are additive and versioned by their path; clients must ignore
   unknown JSON fields.
-- `event_id` and cursor semantics are endpoint-specific: relay note sync uses
+- Cursor semantics are endpoint-specific: relay note sync uses
   `created_at_ms`, the core outbox uses `since`/`latest_ms`.
 - Incoming ActivityPub activity is written to the core database before it is
   exposed through the core API; the relay stores peer notes in `relay_notes`.

@@ -13,7 +13,7 @@ With `anchor_actor_url` the core publishes a canonical identity on a static doma
 - the relay redirects `GET /users/<user>` to the anchor and the relay WebFinger points to the canonical actor;
 - the core writes the static documents to `<data_dir>/anchor/actor.json` and `<data_dir>/anchor/webfinger` and exposes them on `GET /_fedi3/anchor`.
 
-### Why it works with Mastodon
+### Why it works with third-party servers
 
 ActivityPub does not require `inbox` to be on the same host as the `id`. A remote server:
 
@@ -37,7 +37,7 @@ Any static host is fine (GitHub Pages, Netlify, Cloudflare Pages, an S3 bucket).
 
 ## 2. Blind spool (the relay does not read pending messages)
 
-When a core is offline the relay keeps incoming requests. Before this change it did so in plaintext; now:
+When a core is offline the relay keeps incoming requests encrypted:
 
 1. the relay reads the user's public key from the actor cache;
 2. it generates a one-time AES-256-GCM key, encrypts the body and the key with RSA-OAEP-SHA256;

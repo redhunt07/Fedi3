@@ -62,7 +62,7 @@ si collegano e scambiano contatti; i nodi raggiungibili possono partecipare alla
 DHT Fedi3. Un normale client non viene trasformato in un server TURN o in un
 circuit relay per terzi.
 
-Il servizio `fedi3_p2p_infra` aggiornato supporta il nuovo protocollo e il nome
+Il servizio `fedi3_p2p_infra` supporta il nuovo protocollo e il nome
 DHT precedente per consentire l'aggiornamento progressivo. Va aggiornato insieme
 ai nuovi client per mantenere il servizio dei record della rete Fedi3.
 
@@ -70,7 +70,7 @@ ai nuovi client per mantenere il servizio dei record della rete Fedi3.
 
 In **Impostazioni → Rete** si possono attivare/disattivare discovery IPFS e
 memoria/scambio dei peer, e inserire bootstrap Fedi3 indipendenti. Queste opzioni
-richiedono P2P attivo. La creazione di un nuovo profilo propone ora P2P attivo;
+richiedono P2P attivo. La creazione di un nuovo profilo propone P2P attivo;
 i profili esistenti mantengono la propria scelta.
 
 Configurazione avanzata del core:
@@ -119,10 +119,11 @@ la risoluzione di qualunque nome utente.
 
 Le chiamate usano WebRTC. Il signaling Fedi3 scambia SDP e ICE; il flusso media
 ha una propria connessione. I valori automatici ICE usano gli STUN pubblici
-Cloudflare e Google, senza dedurre STUN/TURN dal dominio del relay ActivityPub.
-Non viene più compilata automaticamente la lista circuit relay a partire da
-quel dominio. I valori esplicitamente salvati nei profili esistenti rimangono
-utilizzabili; non sono una prova che il traffico passi fuori dal nostro server.
+Cloudflare e Google. Quando sono configurate credenziali TURN senza un URL
+`turn:` esplicito, il client deriva endpoint `turn:` UDP/TCP dall'host del relay
+(vedi [network_resilience.md](network_resilience.md)). I valori esplicitamente
+salvati nei profili esistenti rimangono utilizzabili; non sono una prova che il
+traffico passi fuori dal nostro server.
 
 STUN aiuta a individuare un percorso diretto, ma non inoltra media. Quando quel
 percorso è impossibile serve un TURN, oppure la chiamata deve fallire.

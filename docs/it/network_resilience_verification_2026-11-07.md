@@ -1,5 +1,8 @@
 # Verifica e distribuzione — 7 novembre 2026
 
+Questo report registra lo stato al 7 novembre 2026; il lavoro successivo è
+documentato in [network_resilience.md](network_resilience.md).
+
 Client locale e relay pubblico aggiornati. Backup verificati prima della sostituzione.
 
 ## Correzioni operative

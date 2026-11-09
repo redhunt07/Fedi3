@@ -14,12 +14,12 @@ mesh HTTP dalla lista.
 
 ## Perché esiste la directory
 
-Prima di questo meccanismo il client conosceva un solo relay di bootstrap.
-Quando quel relay era offline o il suo certificato TLS non corrispondeva al
-nome configurato, la scoperta falliva del tutto e l'app mostrava un errore di
-handshake grezzo (ad esempio `TLSV1_ALERT_UNRECOGNIZED_NAME`). La directory
-rimuove quel singolo punto di rottura: la lista è servita dalla CDN del
-repository e ogni relay viene misurato in modo indipendente.
+Un client che dipende da un solo relay di bootstrap fallisce del tutto quando
+quel relay è offline o il suo certificato TLS non corrisponde al nome
+configurato, mostrando un errore di handshake grezzo (ad esempio
+`TLSV1_ALERT_UNRECOGNIZED_NAME`). La directory rimuove quel singolo punto di
+rottura: la lista è servita dalla CDN del repository e ogni relay viene misurato
+in modo indipendente.
 
 ## Formato del file
 

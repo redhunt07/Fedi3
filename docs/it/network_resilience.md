@@ -5,11 +5,9 @@
 Il relay attivo è `https://fedi3.redhunt07.ovh` (WSS sullo stesso host).
 `relay.fedi3.com` è ritirato. Non disattivare la validazione TLS per usarlo.
 Il relay serve anche un mirror pacchettizzato su `/_fedi3/relay/directory`, usato
-dall'app, dal core e dai relay accanto ai mirror del repository. Gli URL raw
-GitHub e jsDelivr della directory possono restituire 404 finché la directory non
-è pubblicata sul branch predefinito remoto. Sia l'anteprima al primo avvio sia la
-scoperta manuale nell'onboarding usano la directory inclusa/cache quando il
-refresh fallisce. La directory fornisce candidati, non fiducia: il dispositivo ne
+dall'app, dal core e dai relay accanto ai mirror del repository (GitHub raw e
+jsDelivr). Sia l'anteprima al primo avvio sia la scoperta manuale nell'onboarding
+usano la directory inclusa/cache quando il refresh fallisce. La directory fornisce candidati, non fiducia: il dispositivo ne
 verifica la salute. Vedere [relay_directory.md](relay_directory.md) per il
 formato del file e la classifica.
 
@@ -34,7 +32,8 @@ piattaforme:
 Servono sia `FEDI3_RELAY_PUSH_GATEWAY_URL` (HTTPS pubblico) sia
 `FEDI3_RELAY_PUSH_GATEWAY_TOKEN` (almeno 32 caratteri casuali). Senza di essi la
 registrazione restituisce 503 e non viene tentato alcun push. Il gateway riceve
-JSON autenticato: `provider`, `token`, `event:"sync"`, `ttl_secs`. Deve validare
+JSON autenticato: `provider`, `token`, `event:"sync"`, `ttl_secs` e, per
+UnifiedPush, `webpush_keys`. Deve validare
 gli endpoint dei dispositivi, unire le notifiche, scartare i job scaduti e
 implementare il protocollo del provider. Nessun contenuto, mittente, nome
 dell'account, chiave privata o token relay dell'account entra in quel JSON. Il

@@ -13,7 +13,7 @@ Con `anchor_actor_url` il core pubblica un'identità canonica su un dominio stat
 - il relay reindirizza `GET /users/<user>` all'anchor e il WebFinger del relay punta all'actor canonico;
 - il core scrive i documenti statici in `<data_dir>/anchor/actor.json` e `<data_dir>/anchor/webfinger` e li espone su `GET /_fedi3/anchor`.
 
-### Perché funziona con Mastodon
+### Perché funziona con server di terze parti
 
 ActivityPub non richiede che `inbox` stia sullo stesso host dell'`id`. Un server remoto:
 
@@ -37,7 +37,7 @@ Qualsiasi host statico va bene (GitHub Pages, Netlify, Cloudflare Pages, un buck
 
 ## 2. Spool cieco (il relay non legge i messaggi in attesa)
 
-Quando un core è offline il relay conserva le richieste in arrivo. Prima di questa modifica lo faceva in chiaro; ora:
+Quando un core è offline il relay conserva le richieste in arrivo cifrate:
 
 1. il relay legge la chiave pubblica dell'utente dall'actor cache;
 2. genera una chiave AES-256-GCM usa-e-getta, cifra il corpo e la chiave con RSA-OAEP-SHA256;

@@ -10,10 +10,11 @@ e lo stato delle funzioni.
 
 ## Che aspetto ha il client?
 
-Il client è un'app desktop e mobile ispirata a Misskey, costruita sul design
-system Aurora: una rail di navigazione con Timeline, Ricerca, Chat, Notifiche,
-Relay, Impostazioni e Account, un header del profilo sovrapposto e timeline a
-schede. Gli screenshot qui sotto mostrano l'interfaccia attuale.
+Il client è un'app desktop e mobile con un'interfaccia strutturata a schede,
+costruita sul design system Aurora: una rail di navigazione con Timeline,
+Ricerca, Chat, Notifiche, Relay, Impostazioni e Account, un header del profilo
+sovrapposto e timeline a schede. Gli screenshot qui sotto mostrano l'interfaccia
+attuale.
 
 | Desktop | Android |
 |---|---|
@@ -53,14 +54,14 @@ ciphertext esistenti sono preservati. Non c'è una garanzia completa di
 ratcheting/forward secrecy. RSA-OAEP è usato per gli envelope HTTP di
 compatibilità e per lo spool offline, separatamente dal KEM della chat.
 
-## La chat è in stile Telegram?
+## La chat mostra lo stato di consegna e lettura?
 
-Sì. Le chat dirette mostrano il nome dell'interlocutore, bolle in stile Telegram
-con spunte di consegna/lettura e badge E2E. Puoi avviare una chat dai follower
-reciproci, creare un gruppo dalla stessa schermata, allegare media, reagire,
-rispondere, inoltrare, fissare messaggi, copiare un link invito ed eliminare
-messaggi. Solo i gruppi possono essere rinominati; le chat dirette mantengono il
-nome dell'interlocutore. I gruppi hanno ruoli owner/admin/member.
+Sì. Le chat dirette mostrano il nome dell'interlocutore, bolle con spunte di
+consegna/lettura e badge E2E. Puoi avviare una chat dai follower reciproci,
+creare un gruppo dalla stessa schermata, allegare media, reagire, rispondere,
+inoltrare, fissare messaggi, copiare un link invito ed eliminare messaggi. Solo i
+gruppi possono essere rinominati; le chat dirette mantengono il nome
+dell'interlocutore. I gruppi hanno ruoli owner/admin/member.
 
 ## Le chiamate sono cifrate end-to-end?
 
@@ -74,8 +75,8 @@ quando un percorso diretto è impossibile.
 ## Ci sono suoni di notifica?
 
 Sì. Il client include tre suoni: attività della timeline, messaggi di chat e
-chiamate in arrivo (toni in stile Discord). Su Android un servizio foreground
-keep-alive mantiene le notifiche quando l'app è chiusa; il push è opt-in in
+chiamate in arrivo. Su Android un servizio foreground keep-alive mantiene le
+notifiche quando l'app è chiusa; il push è opt-in in
 **Impostazioni → Sicurezza → Notifiche push** e richiede un gateway configurato
 sul relay.
 
@@ -90,10 +91,10 @@ in background. Vedi la [guida dell'app](app_guide.md).
 
 ## Dove sono le impostazioni?
 
-Le impostazioni sono un hub con sottopagine: Account, Profilo, Privacy, Sicurezza,
-Moderazione, Rete, Relay, UI, Traduzione, Audio, Backup, Avanzate e Aggiornamenti.
-Gli annunci si aprono dalla barra dell'app. Su mobile, le impostazioni push sono
-sotto Sicurezza.
+Le impostazioni sono un hub con sottopagine: Account, Profilo, Richieste di
+follow, Salvati, Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione,
+Audio, Backup, Avanzate e Aggiornamenti. Gli annunci si aprono dalla barra
+dell'app. Su mobile, le impostazioni push sono sotto Sicurezza.
 
 ## Come scopro un relay?
 

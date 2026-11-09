@@ -13,12 +13,11 @@ is unreachable. Relays can also seed their HTTP mesh from the list.
 
 ## Why the directory exists
 
-Before this mechanism the client knew exactly one bootstrap relay. When that
-relay was down or its TLS certificate did not match the configured hostname,
-discovery failed completely and the app showed a raw handshake error
-(for example `TLSV1_ALERT_UNRECOGNIZED_NAME`). The directory removes that single
-point of failure: the list is served by the repository CDN, and each relay is
-measured independently.
+A client that relies on a single bootstrap relay fails completely when that
+relay is down or its TLS certificate does not match the configured hostname,
+showing a raw handshake error (for example `TLSV1_ALERT_UNRECOGNIZED_NAME`). The
+directory removes that single point of failure: the list is served by the
+repository CDN, and each relay is measured independently.
 
 ## File format
 

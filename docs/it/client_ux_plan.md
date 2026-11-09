@@ -2,60 +2,63 @@
 
 Data: 2026-11-01. Ultimo aggiornamento di stato: 2026-11-09, client 0.11.9+2012.
 Stato: adottato; gli step 0–7 sono implementati nel client 0.11.x, lo step 8 è in
-corso. Le sezioni 1–9 conservano il piano originale; le sezioni 10–12 tracciano
-il client attuale e il lavoro rimanente.
+corso. Le sezioni 1–9 descrivono il piano; le sezioni 10–12 tracciano il client
+attuale e il lavoro rimanente.
 
-## 1. Valutazione onesta
+## 1. Punto di partenza
 
 Questa sezione descrive il client all'inizio del rilancio (2026-11-01).
 
+Il client **non era ancora appetibile**. Il problema non era Flutter: era il
+prodotto.
+
 Difetti osservati nella verifica live:
 
-- l'onboarding è un pannello da amministratore (bind, internal token, relay WS,
+- l'onboarding era un pannello da amministratore (bind, internal token, relay WS,
   dominio) invece di un flusso "scegli un nome e inizia";
-- la timeline desktop apre quattro colonne con etichette fuorvianti: la colonna
-  "Locale" mostra in realtà il feed dei follow, "Sociale" è vuota senza P2P;
-- il profilo mostra attività grezze (`EmojiReact`, `Like`, `Follow`) mescolate alle
-  note, senza tab Post/Risposte/Media;
-- mancavano liste follower/seguiti (aggiunte ora), paginazione, empty state utili;
+- la timeline desktop apriva quattro colonne con etichette fuorvianti: la colonna
+  "Locale" mostrava in realtà il feed dei follow, "Sociale" era vuota senza P2P;
+- il profilo mostrava attività grezze (`EmojiReact`, `Like`, `Follow`) mescolate
+  alle note, senza tab Post/Risposte/Media;
+- mancavano liste follower/seguiti, paginazione ed empty state utili;
 - impostazioni presenti ma poco discoverabili, senza ricerca interna né gerarchia
   chiara;
 - nessuna identità visiva, nessun onboarding guidato, nessun percorso di recupero
   account spiegato all'utente;
-- la chat è tecnicamente E2E ma povera rispetto a Misskey (allega file, react,
-  thread, stato di lettura).
+- la chat era tecnicamente E2E ma incompleta: mancavano allegati, reazioni,
+  thread e stato di lettura.
 
-Il problema non è "il linguaggio sbagliato": è **architettura dell'informazione,
-flussi e finitura**. Riscrivere in un altro linguaggio senza risolvere questi punti
-produrrebbe lo stesso prodotto con costi maggiori.
+Il problema era **architettura dell'informazione, flussi e finitura**, non il
+linguaggio. Riscrivere senza risolvere questi punti avrebbe prodotto lo stesso
+prodotto con costi maggiori.
 
-## 2. Cosa copiare da Misskey e cosa no
+## 2. Principi di progettazione
 
-Misskey è un riferimento utile per **struttura**, non per densità.
+L'obiettivo è un client strutturato e leggibile, non denso.
 
-Da copiare:
+Adottare:
 
-- tassonomia delle impostazioni (Account, Profilo, Privacy, Sicurezza, Moderazione,
-  Rete, Aspetto, Notifiche, Lingua, Backup, Informazioni) con sottopagine e ricerca;
-- profilo con tab (Post, Risposte, Media, Reazioni) e contatori cliccabili;
-- deck/colonne **opzionale**, non layout predefinito;
-- composer sempre raggiungibile, con visibilità, allegati, emoji, sondaggi;
+- tassonomia delle impostazioni (Account, Profilo, Richieste di follow, Salvati,
+  Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione, Audio, Backup,
+  Avanzate, Aggiornamenti) con sottopagine;
+- profilo con tab (Post, Risposte, Media) e contatori cliccabili;
+- layout a più colonne opzionale, non predefinito;
+- composer sempre raggiungibile, con visibilità, allegati, emoji e toolbar MFM;
 - ricerca unificata con filtri e cronologia;
 - notifiche raggruppate e filtrabili;
 - chat con allegati, reazioni, thread e stato di lettura.
 
-Da non copiare acriticamente:
+Evitare:
 
-- la densità visiva e la quantità di opzioni in prima vista: Misskey è per power
-  user; un nuovo utente si perde;
-- la dipendenza da un server multi-utente centralizzato: Fedi3 è single-user per
+- densità visiva e troppe opzioni in prima vista: un nuovo utente si perde;
+- dipendenza da un server multi-utente centralizzato: Fedi3 è single-user per
   core, quindi "login/registrazione" vanno ridefiniti (vedi §4);
 - il modello tutto-web: Fedi3 ha un core locale e un relay; il client desktop è
   un vantaggio, non un limite.
 
-Posizionamento consigliato: **IA ispirata a Misskey, semplicità iniziale da
-Mastodon, deck mode per chi la vuole**. Il vantaggio competitivo di Fedi3 resta
-P2P/relay: il client deve sembrare normale prima di raccontarlo.
+Posizionamento target: architettura dell'informazione strutturata, flussi iniziali
+semplici e layout avanzato opzionale. Il vantaggio di Fedi3 resta P2P/relay: il
+client deve sembrare normale prima di raccontarlo.
 
 ## 3. Linguaggio e piattaforma: proposta
 
@@ -83,18 +86,19 @@ endpoint interni.
 
 Oggi Fedi3 è **single-user per core**: l'identità è una chiave, non un account con
 password. L'app e il core girano sulla stessa macchina e condividono un token
-interno. Questo non è il modello Misskey (multi-utente, sessioni web).
+interno. Questo non è un modello multi-utente con sessioni web.
 
 Tre opzioni, in ordine di costo:
 
 1. **Profilo locale (consigliata ora)**: "registrazione" = creazione identità
-   (username + relay, opzioni avanzate nascoste); "login" = import backup oppure
-   connessione a un'istanza esistente (URL + token/backup). Il client gestisce più
-   profili locali con switcher. Nessuna modifica al core.
+   (username + relay, opzioni avanzate nascoste); "login" = import di un backup
+   oppure connessione a un'istanza esistente (URL + token). Viene salvato un solo
+   profilo locale per installazione; uno switcher di profili non è ancora esposto.
+   Nessuna modifica al core.
 2. **Accesso remoto al core**: il core espone un'API client autenticata con bearer
    token su TLS, così un client web può collegarsi a un'istanza remota. Richiede
    CORS, token dedicati, OpenAPI e revoca.
-3. **Multi-utente nel core**: il vero modello Misskey, ma è un cambio di backend
+3. **Multi-utente nel core**: un cambio di backend multi-utente
    (identità multiple, sessioni, permessi). Rinviabile.
 
 Raccomandazione: partire da (1), progettare l'API per rendere possibile (2), non
@@ -108,16 +112,17 @@ Route e schermate, in ordine di implementazione:
 - `/signup` — username, relay consigliato, avanzate collassate, recovery code
   obbligatorio e scaricabile.
 - `/login` — import backup, connect URL+token, recovery code.
-- `/home` — feed unico con tab Home/Locale/Federata, composer persistente,
-  scroll infinito, filtri, media.
+- `/home` — feed unico con tab Home/Seguiti/Scopri/Federata, composer
+  persistente, scroll infinito, filtri, media.
 - `/explore` — ricerca unificata (post, utenti, hashtag), filtri, cronologia.
 - `/notifications` — gruppi per tipo, filtri, segna come letto, real-time.
 - `/messages` — lista conversazioni, thread, allegati, reazioni, stato lettura.
 - `/@user` — profilo pubblico con tab Post/Risposte/Media, follow, muta, blocca,
   segnala.
 - `/me` — profilo personale con tab e modifica, liste follower/seguiti paginate.
-- `/settings` — hub con sottosezioni: Account, Profilo, Privacy, Sicurezza,
-  Moderazione, Rete, Aspetto, Notifiche, Lingua, Backup, Informazioni, Avanzate.
+- `/settings` — hub con sottosezioni: Account, Profilo, Richieste di follow,
+  Salvati, Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione, Audio,
+  Backup, Avanzate, Aggiornamenti.
 - `/settings/*` — una pagina per categoria, con salvataggio esplicito e riavvio
   core dove serve.
 
@@ -145,15 +150,15 @@ Totale ≈ 28 giorni; i primi tre step (0–2) danno già un client presentabile
 
 ## 7. Lavoro backend necessario in parallelo
 
-- **API client stabile e documentata** (OpenAPI): endpoint, errori tipizzati,
-  paginazione a cursore, versioning. È il prerequisito per qualsiasi client futuro.
-- **Auth per accesso remoto**: bearer token dedicato, CORS, revoca, rotazione.
-- **Paginazione** per follower/seguiti e notifiche (oggi il client carica la prima
-  pagina).
-- **Feed profilo filtrato** lato API o client: solo Note, con tab.
-- **Notifiche raggruppate** e mark-read lato server.
-- **Chat**: allegati e stato di lettura se non già presenti.
-- **Moderazione**: mute/block/report esposti in modo uniforme.
+| Voce | Stato | Note |
+|---|---|---|
+| API client stabile e documentata (OpenAPI) | parziale | [`openapi.yaml`](../openapi.yaml) copre core e relay; errori tipizzati, versioning ed endpoint specifici del client richiedono ancora lavoro. È il prerequisito per qualsiasi client futuro. |
+| Auth per accesso remoto | aperto | Bearer token dedicato, CORS, revoca e rotazione. |
+| Paginazione per follower/seguiti e notifiche | consegnato | Outbox del profilo e relazioni sono paginati; le notifiche usano un cursore server. |
+| Feed profilo filtrato | consegnato | Tab Note, risposte e media. |
+| Notifiche raggruppate e mark-read | consegnato | Raggruppamento per attore/tipo e data, mark-all-read. |
+| Allegati e stato di lettura nella chat | consegnato | Allegati con anteprima, reazioni e read state. |
+| Moderazione | parziale | Attori/domini bloccati sono configurabili; mute/block/report per attore non sono ancora uniformi nella UI. |
 
 ## 8. Rischi e metriche
 
@@ -165,24 +170,24 @@ Metriche da misurare: tempo al primo post, successo dei task principali
 (post, follow, risposta, ricerca), crash-free sessions, retention D1/D7,
 tempo medio per trovare un'impostazione.
 
-## 9. Proposta immediata
+## 9. Cancello d'ingresso consegnato
 
-Partire dallo **Step 0 + Step 1** (skeleton di navigazione + registrazione/login
-guidati), perché sono il cancello d'ingresso e il difetto più visibile. In
-parallelo, scrivere la specifica OpenAPI minima dell'API client: senza quella,
-lo Step 2 rischia di consolidare endpoint interni.
+Gli step 0–2 sono stati consegnati: skeleton di navigazione, registrazione/login
+guidati e home a schede. Erano il cancello d'ingresso e il difetto più visibile.
+La specifica OpenAPI è stata avviata in parallelo; gli endpoint specifici del
+client richiedono ancora lavoro prima che il client sia completamente
+disaccoppiato dagli endpoint interni.
 
-Se il vincolo è "copiare Misskey", la sequenza resta valida: si copia la
-tassonomia e i flussi, non la densità, e si tiene Flutter finché l'IA non è
-stabile.
+La sequenza resta valida: mantenere la tassonomia e i flussi, non la densità, e
+tenere Flutter finché l'IA non è stabile.
 
 ## 10. Client attuale (0.11.9+2012)
 
-Il client distribuito è un'app desktop e mobile ispirata a Misskey, costruita sul
-design system Aurora: superfici neutre profonde, accenti viola/ciano, header del
-profilo sovrapposto e una rail di navigazione con Timeline, Ricerca, Chat,
-Notifiche, Relay, Impostazioni e Account. Non è più il pannello amministrativo
-descritto nella §1.
+Il client distribuito è un'app desktop e mobile con un'interfaccia strutturata a
+schede, costruita sul design system Aurora: superfici neutre profonde, accenti
+viola/ciano, header del profilo sovrapposto e una rail di navigazione con
+Timeline, Ricerca, Chat, Notifiche, Relay, Impostazioni e Account. Non è più il
+pannello amministrativo descritto nella §1.
 
 | Desktop | Android |
 |---|---|
@@ -195,10 +200,10 @@ Comportamento attuale per area:
 |---|---|
 | Timeline | Tab Home, Seguiti, Scopri e Federata; filtri; scroll infinito; media federati; composer con visibilità, allegati e toolbar MFM. |
 | Profili | Banner dietro l'avatar, contatori cliccabili, tab Post/Risposte/Media, outbox paginato e liste follower/seguiti con follow/unfollow. |
-| Chat | Bolle stile Telegram con spunte di consegna/lettura, badge E2E, selettore destinatari dai follower reciproci, creazione gruppi dalla stessa schermata, ruoli owner/admin/member, rinomina solo per i gruppi, eliminazione messaggi, allegati, reazioni, risposte, inoltro, messaggi fissati, link invito, digitazione e presenza. |
+| Chat | Bolle con spunte di consegna/lettura, badge E2E, selettore destinatari dai follower reciproci, creazione gruppi dalla stessa schermata, ruoli owner/admin/member, rinomina solo per i gruppi, eliminazione messaggi, allegati, reazioni, risposte, inoltro, messaggi fissati, link invito, digitazione e presenza. |
 | Chiamate | Chiamate audio/video E2E 1:1 e di gruppo su WebRTC, TURN automatico dal relay, condivisione schermo con microfono e audio di sistema PC come tracce separate, dispositivi audio selezionabili, ICE restart e azione Retry manuale. Android/iOS commutano tra fotocamera anteriore e posteriore; il bridge Linux riporta `NotImplemented` per quel cambio. |
-| Notifiche | Notifiche raggruppate e filtrabili, mark-as-read, aggiornamenti in tempo reale e tre suoni inclusi: attività della timeline, chat e chiamata in arrivo (toni in stile Discord). Android usa un servizio foreground keep-alive con tipi compatibili con Android 15. |
-| Impostazioni | Hub con Account, Profilo, Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione, Audio, Backup, Avanzate e Aggiornamenti; il push è sotto Sicurezza su mobile. Gli annunci si aprono dalla barra dell'app. |
+| Notifiche | Notifiche raggruppate e filtrabili, mark-as-read, aggiornamenti in tempo reale e tre suoni inclusi: attività della timeline, chat e chiamata in arrivo. Android usa un servizio foreground keep-alive con tipi compatibili con Android 15. |
+| Impostazioni | Hub con Account, Profilo, Richieste di follow, Salvati, Privacy, Sicurezza, Moderazione, Rete, Relay, UI, Traduzione, Audio, Backup, Avanzate e Aggiornamenti; il push è sotto Sicurezza su mobile. Gli annunci si aprono dalla barra dell'app. |
 | Ricerca | Post, utenti e hashtag; filtro fonte tutti/locale/relay; cronologia persistente con chip e cancellazione; ricerca globale nella chat. |
 | Mobile | Build Android e iOS, provisioning UnifiedPush/APNs, suoni di notifica, navigazione a task unico, cambio fotocamera nelle videochiamate. |
 | Aggiornamenti | Aggiornamenti verificati del client (SHA256) per AppImage Linux, ZIP Windows e APK Android. |
@@ -225,7 +230,7 @@ Altre schermate:
 | 4 — Impostazioni | completato (visual) | hub raggruppato con icone e sottopagine; manca la ricerca interna nelle impostazioni. |
 | 5 — Ricerca | completato (base) | post/utenti/hashtag, filtro fonte, cronologia persistente; mancano filtri temporali. |
 | 6 — Notifiche | completato | filtri, mark-all-read, raggruppamento per attore/tipo e data, badge in tempo reale. |
-| 7 — Chat | completato | thread, allegati con anteprima, reazioni, read state, badge E2E, chiamate E2E, note audio/video, ricerca, inoltro, messaggi fissati, link invito, bolle stile Telegram, ruoli di gruppo ed eliminazione. |
+| 7 — Chat | completato | thread, allegati con anteprima, reazioni, read state, badge E2E, chiamate E2E, note audio/video, ricerca, inoltro, messaggi fissati, link invito, bolle con spunte, ruoli di gruppo ed eliminazione. |
 | 8 — Finitura | parziale | scorciatoie, rail accessibile, particelle, annunci, notifiche compatte, post salvati offline, composer con drag&drop e presenza; restano audit completo del contrasto e navigazione da tastiera completa. |
 
 Nel ciclo 0.11.x sono stati consegnati anche: logo neon e icone di avvio, effetti
@@ -234,7 +239,7 @@ e pagine profilo, normalizzazione dell'outbox migrato e indirizzi P2P relayed.
 
 ## 12. Prossimi passi
 
-- Pubblicare il client web sulla specifica OpenAPI e mantenerlo un secondo client,
+- Costruire il client web sulla specifica OpenAPI e mantenerlo un secondo client,
   non una riscrittura del desktop.
 - Eseguire un audit completo di contrasto/accessibilità e completare la navigazione
   da tastiera.

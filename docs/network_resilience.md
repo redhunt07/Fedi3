@@ -5,9 +5,9 @@
 The active relay is `https://fedi3.redhunt07.ovh` (WSS on the same host).
 `relay.fedi3.com` is retired. Do not suppress TLS validation to use it.
 The relay also serves a packaged mirror at `/_fedi3/relay/directory`, used by
-the app, core and relays alongside the repository mirrors. The raw GitHub and jsDelivr directory URLs can return 404 until the directory
-is published on the remote default branch. Both first-run preview and manual
-onboarding discovery use the bundled/cached directory when refresh fails.
+the app, core and relays alongside the repository mirrors (GitHub raw and
+jsDelivr). Both first-run preview and manual onboarding discovery use the
+bundled/cached directory when refresh fails.
 The directory supplies candidates, not trust: the device probes their health.
 See [relay_directory.md](relay_directory.md) for the file format and ranking.
 
@@ -30,7 +30,8 @@ provide the provisioning contract used by the native platform connectors:
 Both `FEDI3_RELAY_PUSH_GATEWAY_URL` (public HTTPS) and
 `FEDI3_RELAY_PUSH_GATEWAY_TOKEN` (at least 32 random characters) are required.
 Without them registration returns 503 and no pushes are attempted. The gateway
-receives authenticated JSON: `provider`, `token`, `event:"sync"`, `ttl_secs`.
+receives authenticated JSON: `provider`, `token`, `event:"sync"`, `ttl_secs`
+and, for UnifiedPush, `webpush_keys`.
 It must validate device endpoints, coalesce notifications, discard expired jobs,
 and implement the provider protocol. No content, sender, account name, private
 key or account relay token enters that JSON. The gateway learns the destination.

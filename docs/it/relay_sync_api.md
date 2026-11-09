@@ -10,14 +10,14 @@ scambiare note pubbliche e recuperare attività perse dagli outbox.
 `GET /_fedi3/relay/sync/notes`
 
 Endpoint pubblico usato dai relay peer per scaricare le note conservate da un
-relay. Non richiede token, ma è limitato per IP client con lo stesso bucket del
-forward (`FEDI3_RELAY_RL_FORWARD_PER_MIN`, predefinito `240`).
+relay. Non richiede token, ma è limitato per IP client con il limite del forward
+(`FEDI3_RELAY_RL_FORWARD_PER_MIN`, predefinito `240`).
 
 Parametri di query:
 
 | Parametro | Tipo | Note |
 |---|---|---|
-| `limit` | intero | Elementi per pagina, `1`–`200`; predefinito `200`. |
+| `limit` | intero | Elementi per pagina, massimo `200`; predefinito `200`. |
 | `since` | intero | Restituisce le note create dopo questo timestamp Unix in millisecondi. |
 | `cursor` | intero | Restituisce le note create prima di questo timestamp Unix in millisecondi (dalla più recente). |
 
@@ -73,7 +73,7 @@ Parametri di query:
 
 | Parametro | Tipo | Note |
 |---|---|---|
-| `limit` | intero | Elementi per pagina, `1`–`200`; predefinito `50`. |
+| `limit` | intero | Elementi per pagina, massimo `200`; predefinito `50`. |
 | `since` | intero | Restituisce attività dopo questo timestamp Unix in millisecondi; predefinito `0`. |
 
 Risposta:
@@ -89,7 +89,7 @@ Risposta:
 
 - Questi endpoint sono additivi e versionati dal percorso; i client devono
   ignorare i campi JSON sconosciuti.
-- La semantica di `event_id` e dei cursori dipende dall'endpoint: il sync note del
+- La semantica dei cursori dipende dall'endpoint: il sync note del
   relay usa `created_at_ms`, l'outbox del core usa `since`/`latest_ms`.
 - L'attività ActivityPub in ingresso viene scritta nel database del core prima di
   essere esposta tramite l'API del core; il relay conserva le note dei peer in

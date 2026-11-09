@@ -62,7 +62,7 @@ connect and exchange contacts; reachable nodes can participate in the
 Fedi3 DHT. A normal client is not turned into a TURN server or a
 circuit relay for third parties.
 
-The updated `fedi3_p2p_infra` service supports the new protocol and the previous
+The `fedi3_p2p_infra` service supports the new protocol and the previous
 DHT name to allow progressive upgrading. It must be updated together
 with the new clients to maintain the Fedi3 network record service.
 
@@ -70,7 +70,7 @@ with the new clients to maintain the Fedi3 network record service.
 
 In **Settings → Network** you can enable/disable IPFS discovery and
 peer memory/exchange, and enter independent Fedi3 bootstraps. These options
-require P2P active. Creating a new profile now proposes P2P active;
+require P2P active. Creating a new profile proposes P2P active;
 existing profiles keep their own choice.
 
 Advanced core configuration:
@@ -118,11 +118,12 @@ resolution of any username.
 ## Audio/video and external bridges
 
 Calls use WebRTC. Fedi3 signaling exchanges SDP and ICE; the media stream
-has its own connection. The automatic ICE values use the public STUN servers Cloudflare and Google,
-without deriving STUN/TURN from the ActivityPub relay domain. The circuit relay
-list is no longer automatically compiled starting from that domain. Values
-explicitly saved in existing profiles remain usable; they are not proof that
-traffic passes outside our server.
+has its own connection. The automatic ICE values use the public STUN servers
+Cloudflare and Google. When TURN credentials are configured without an explicit
+`turn:` URL, the client derives UDP/TCP `turn:` endpoints from the relay host
+(see [network_resilience.md](network_resilience.md)). Values explicitly saved in
+existing profiles remain usable; they are not proof that traffic passes outside
+our server.
 
 STUN helps find a direct path, but does not relay media. When that
 path is impossible a TURN is needed, or the call must fail.

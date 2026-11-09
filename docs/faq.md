@@ -10,10 +10,10 @@ UI and feature status.
 
 ## What does the client look like?
 
-The client is a Misskey-inspired desktop and mobile app built on the Aurora
-design system: a navigation rail with Timeline, Search, Chat, Notifications,
-Relays, Settings and Account, an overlaid profile header and tabbed timelines.
-The screenshots below show the current UI.
+The client is a desktop and mobile app with a structured, tabbed interface built
+on the Aurora design system: a navigation rail with Timeline, Search, Chat,
+Notifications, Relays, Settings and Account, an overlaid profile header and
+tabbed timelines. The screenshots below show the current UI.
 
 | Desktop | Android |
 |---|---|
@@ -53,9 +53,9 @@ ciphertext formats are preserved. There is no full ratcheting/forward-secrecy
 guarantee. RSA-OAEP is used for compatibility HTTP envelopes and offline spool,
 separately from the chat KEM.
 
-## Is the chat Telegram-style?
+## Does the chat show delivery and read status?
 
-Yes. Direct chats show the interlocutor's username, Telegram-style bubbles with
+Yes. Direct chats show the interlocutor's username, chat bubbles with
 delivery/read check marks and an E2E badge. You can start a chat from mutual
 followers, create a group from the same screen, attach media, react, reply,
 forward, pin messages, copy an invite link and delete messages. Only groups can
@@ -73,8 +73,8 @@ still required when a direct path is impossible.
 ## Are there notification sounds?
 
 Yes. The client bundles three sounds: timeline activity, chat messages and
-incoming calls (Discord-style tones). On Android a keep-alive foreground service
-keeps notifications running when the app is closed; push is opt-in under
+incoming calls. On Android a keep-alive foreground service keeps notifications
+running when the app is closed; push is opt-in under
 **Settings → Security → Push notifications** and requires a configured relay
 gateway.
 
@@ -89,10 +89,10 @@ the background. See the [app guide](app_guide.md).
 
 ## Where are the settings?
 
-Settings is a hub with subpages: Account, Profile, Privacy, Security,
-Moderation, Networking, Relays, UI, Translation, Audio, Backup, Advanced and
-Updates. Announcements open from the app bar. On mobile, push settings are under
-Security.
+Settings is a hub with subpages: Account, Profile, Follow requests, Saved,
+Privacy, Security, Moderation, Networking, Relays, UI, Translation, Audio, Backup,
+Advanced and Updates. Announcements open from the app bar. On mobile, push
+settings are under Security.
 
 ## How do I discover a relay?
 
