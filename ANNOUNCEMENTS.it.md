@@ -6,7 +6,7 @@ repository Git e il client la controlla periodicamente. La controparte inglese �
 
 ## 2026-11-09 — Rilasciata Fedi3 0.11.9
 
-La build 0.11.9 (2012) è disponibile nella [pagina delle release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) con l'AppImage Linux x86_64, gli APK Android arm64-v8a e x86_64 e i checksum SHA256. Raccoglie le correzioni pubblicate dalla 0.11.1: pulizia del composer, task Android unico, indirizzi P2P relayed, normalizzazione dell'outbox migrato, banner del profilo, logo neon, particelle di navigazione continue e avvio Linux pulito. Windows x64 mantiene lo ZIP precedente fino alla prossima build Windows. [Changelog](CHANGELOG.md) · [Screenshot](README.it.md#screenshot).
+La build 0.11.9 (2012) è disponibile nella [pagina delle release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.9) con l'AppImage Linux x86_64, lo ZIP Windows x64, gli APK Android arm64-v8a e x86_64 e i checksum SHA256. Raccoglie le correzioni pubblicate dalla 0.11.1: pulizia del composer, task Android unico, indirizzi P2P relayed, normalizzazione dell'outbox migrato, banner del profilo, logo neon, particelle di navigazione continue e avvio Linux pulito. Lo ZIP Windows è compilato dalla CI sullo stesso tag. [Changelog](CHANGELOG.md) · [Screenshot](README.it.md#screenshot).
 
 ## 2026-11-09 — Avvio Linux senza avvisi superflui
 
