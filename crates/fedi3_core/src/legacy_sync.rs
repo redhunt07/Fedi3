@@ -100,7 +100,9 @@ async fn run_once_with_limits(
     max_pages: usize,
     max_items_per_actor: usize,
 ) -> Result<()> {
-    let following = social.list_following_accepted_ids(5000).unwrap_or_default();
+    // Pending follows are polled too: their public posts belong in the
+    // federated timeline even before the follow request is accepted.
+    let following = social.list_following_ids(5000).unwrap_or_default();
     if following.is_empty() {
         return Ok(());
     }

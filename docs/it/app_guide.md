@@ -32,6 +32,8 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 - Le timeline federate, locali e "following" sono separate.
 - I filtri rapidi permettono di vedere solo media, solo risposte o solo boost.
 - Le azioni (like, boost, risposta, elimina) sono disponibili dal menu della nota.
+- La timeline federata raccoglie i post pubblici degli account seguiti, comprese le richieste di follow in attesa; la timeline home li mostra solo dopo l'accettazione.
+- Le pagine profilo tengono i post dell'account e uniscono i post pubblici già nella cache del core locale, ignorando le attività di un'altra identità.
 - I media si aprono nel viewer integrato: swipe per navigare, tap per il toggle audio.
 
 ## Pubblicare

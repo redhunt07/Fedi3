@@ -6394,6 +6394,17 @@ async fn empty_collection_get(
     json_activity(StatusCode::OK, accept, &body)
 }
 
+fn normalize_activity_actor(activity: &mut serde_json::Value, actor: &str) {
+    if activity.get("actor").and_then(|v| v.as_str()) != Some(actor) {
+        activity["actor"] = serde_json::Value::String(actor.to_string());
+    }
+    if let Some(obj) = activity.get_mut("object") {
+        if obj.is_object() {
+            obj["attributedTo"] = serde_json::Value::String(actor.to_string());
+        }
+    }
+}
+
 async fn outbox_get(
     state: &ApState,
     req: Request<Body>,
@@ -6457,6 +6468,13 @@ async fn outbox_get(
             Some("Create") | Some("Announce")
         )
     });
+    // Migrated outboxes can still contain activities authored by the previous
+    // actor URL. The outbox belongs to the current actor, so rewrite the
+    // authorship fields before serving it to classic instances.
+    let local_actor = format!("{base}/users/{}", state.cfg.username);
+    for item in &mut items {
+        normalize_activity_actor(item, &local_actor);
+    }
 
     let next = page
         .next

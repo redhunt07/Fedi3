@@ -4,6 +4,16 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Timelines: federated posts and profile consistency
+
+Public posts from accounts whose follow request is still pending are now polled
+into the federated timeline instead of being ignored until acceptance. Profile
+pages keep only the posts authored by that profile and merge the public posts
+the local core already cached, so a migrated account no longer shows another
+identity's posts. The outbox of a migrated account rewrites the authorship of
+old activities to the current actor. The Android build is 0.11.5 (2008).
+[Docs](docs/app_guide.md).
+
 ## 2026-11-09 — Profile banners sit behind the avatar
 
 Profile banners now fill the profile header behind the avatar instead of a

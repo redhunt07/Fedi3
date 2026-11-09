@@ -4,6 +4,17 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Timeline: post federati e coerenza dei profili
+
+I post pubblici degli account con richiesta di follow ancora in attesa vengono
+ora raccolti nella timeline federata invece di essere ignorati fino
+all'accettazione. Le pagine profilo tengono solo i post dell'account e uniscono
+i post pubblici già nella cache locale, così un account migrato non mostra più
+i post di un'altra identità. L'outbox di un account migrato riscrive la
+paternità delle vecchie attività sull'actor corrente. La build Android è 0.11.5
+(2008).
+[Documentazione](docs/it/app_guide.md).
+
 ## 2026-11-09 — I banner dei profili dietro l'avatar
 
 I banner dei profili ora riempiono l'intestazione del profilo dietro l'avatar

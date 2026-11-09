@@ -32,6 +32,8 @@ The configuration is saved atomically in the app data directory, with `600` perm
 - Federated, local and "following" timelines are separate.
 - Quick filters let you see only media, only replies or only boosts.
 - Actions (like, boost, reply, delete) are available from the note menu.
+- The federated timeline polls public posts from followed accounts, including pending follow requests; the home timeline shows them only after the follow is accepted.
+- Profile pages keep the posts authored by that account and merge the public posts cached by the local core, ignoring activities from another identity.
 - Media open in the integrated viewer: swipe to navigate, tap to toggle audio.
 
 ## Publishing

@@ -90,8 +90,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final page = await ActorRepository.instance
             .fetchOutboxPage(p!.outbox, limit: 20);
         if (!mounted) return;
+        // The remote outbox can contain activities from another identity
+        // (for example after a migration), so keep only the posts authored by
+        // this profile and merge the public posts the local core already
+        // cached for it.
+        final remote = page.items
+            .where((a) => _sameActor(_activityActor(a), p.id))
+            .toList();
+        final cached = await _cachedActorActivities(p.id);
+        if (!mounted) return;
+        final merged = <Map<String, dynamic>>[];
+        final seen = <String>{};
+        for (final a in [...remote, ...cached]) {
+          final id = a['id']?.toString() ?? '';
+          if (id.isNotEmpty && !seen.add(id)) continue;
+          merged.add(a);
+        }
+        merged.sort((a, b) => _published(b).compareTo(_published(a)));
         setState(() {
-          _outbox = page.items;
+          _outbox = merged;
           _outboxNext = page.next;
         });
       }
@@ -283,6 +300,62 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  String _activityActor(Map<String, dynamic> activity) {
+    final actor = activity['actor'];
+    if (actor is String && actor.trim().isNotEmpty) return actor.trim();
+    final obj = activity['object'];
+    if (obj is Map) {
+      final attributed = obj['attributedTo'];
+      if (attributed is String && attributed.trim().isNotEmpty) {
+        return attributed.trim();
+      }
+      if (attributed is List) {
+        for (final value in attributed) {
+          if (value is String && value.trim().isNotEmpty) return value.trim();
+        }
+      }
+    }
+    return '';
+  }
+
+  bool _sameActor(String a, String b) =>
+      a.trim().replaceFirst(RegExp(r'/+$'), '') ==
+      b.trim().replaceFirst(RegExp(r'/+$'), '');
+
+  String _published(Map<String, dynamic> activity) {
+    final obj = activity['object'];
+    if (obj is Map && obj['published'] is String) {
+      return obj['published'] as String;
+    }
+    final published = activity['published'];
+    return published is String ? published : '';
+  }
+
+  Future<List<Map<String, dynamic>>> _cachedActorActivities(
+      String actorUrl) async {
+    final cfg = widget.appState.config;
+    if (cfg == null || !widget.appState.isRunning) return const [];
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final kind in const ['home', 'federated']) {
+      try {
+        final api = CoreApi(config: cfg);
+        final resp = await api.fetchTimeline(kind, limit: 50);
+        for (final raw in (resp['items'] as List<dynamic>? ?? const [])) {
+          if (raw is! Map) continue;
+          final activity = raw.cast<String, dynamic>();
+          if (!_sameActor(_activityActor(activity), actorUrl)) continue;
+          final id = activity['id']?.toString() ?? '';
+          if (id.isNotEmpty && !seen.add(id)) continue;
+          out.add(activity);
+        }
+      } catch (_) {
+        // Best effort: the other feed may still succeed.
+      }
+    }
+    return out;
+  }
+
   Map<String, dynamic>? _noteMap(Map<String, dynamic> activity) {
     final obj = activity['object'];
     if (obj is String) return null;
@@ -322,7 +395,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         _outbox = [
           ..._outbox,
-          ...page.items.where((a) => seen.add(a['id']?.toString())),
+          ...page.items
+              .where((a) => _sameActor(_activityActor(a), p.id))
+              .where((a) => seen.add(a['id']?.toString())),
         ];
         _outboxNext = page.next;
       });

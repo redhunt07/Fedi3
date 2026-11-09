@@ -2674,6 +2674,20 @@ impl SocialDb {
         self.list_collection("following", limit, cursor)
     }
 
+    /// Every followed actor, including pending requests. Pending follows are
+    /// still useful for the federated timeline: their public outbox items can
+    /// be polled even though the home timeline waits for acceptance.
+    pub fn list_following_ids(&self, limit: u32) -> Result<Vec<String>> {
+        let conn = self.connect()?;
+        let limit = limit.max(1).min(10_000) as i64;
+        let mut stmt = conn
+            .prepare("SELECT actor_id FROM following ORDER BY created_at_ms DESC LIMIT ?1")?;
+        let rows = stmt
+            .query_map(params![limit], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn list_following_accepted_ids(&self, limit: u32) -> Result<Vec<String>> {
         let conn = self.connect()?;
         let limit = limit.max(1).min(10_000) as i64;
