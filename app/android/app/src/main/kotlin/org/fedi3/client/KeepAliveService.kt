@@ -59,6 +59,10 @@ class KeepAliveService : Service() {
             channel.description = "Keeps Fedi3 connected for notifications"
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
+        // Android gives startForegroundService() a five second window. Enter the
+        // foreground from onCreate, before onStartCommand and before the headless
+        // Flutter engine is created, so a busy main thread cannot miss the window.
+        startForegroundNotification(prefs(this).getString(KEY_TEXT, null))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -66,6 +70,12 @@ class KeepAliveService : Service() {
         if (text != null) {
             prefs(this).edit().putString(KEY_TEXT, text).apply()
         }
+        startForegroundNotification(text)
+        ensureEngine()
+        return START_STICKY
+    }
+
+    private fun startForegroundNotification(text: String?) {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -97,8 +107,6 @@ class KeepAliveService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        ensureEngine()
-        return START_STICKY
     }
 
     override fun onDestroy() {

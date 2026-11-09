@@ -4,6 +4,13 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-09 — Correzione avvio del servizio keep-alive Android
+
+Il servizio foreground keep-alive ora entra in foreground da `onCreate` e viene
+avviato mentre l'app è ancora in primo piano (`onPause`), così la finestra di
+cinque secondi di Android per `startForeground` non scade durante un lento
+teardown del motore Flutter. Build 0.11.6 (2009).
+
 ## 2026-11-09 — Indirizzi P2P relayed e paternità degli outbox migrati
 
 I core ora prenotano un circuito sull'infrastruttura P2P del relay e pubblicano

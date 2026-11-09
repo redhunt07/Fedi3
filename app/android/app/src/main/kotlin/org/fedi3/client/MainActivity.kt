@@ -47,11 +47,23 @@ class MainActivity : FlutterActivity() {
         KeepAliveService.stop(this)
     }
 
-    override fun onStop() {
-        super.onStop()
+    override fun onPause() {
+        // Start the foreground service while the app is still foreground, so
+        // the five second startForeground window cannot be lost behind a slow
+        // Flutter engine teardown in onStop.
         if (KeepAliveService.isEnabled(this)) {
             KeepAliveService.start(this, null)
         }
+        super.onPause()
+    }
+
+    override fun onStop() {
+        // Safety net when onPause was skipped (for example during a fast task
+        // switch); starting an already running service is harmless.
+        if (KeepAliveService.isEnabled(this)) {
+            KeepAliveService.start(this, null)
+        }
+        super.onStop()
     }
 
     private fun isServiceRunning(): Boolean {

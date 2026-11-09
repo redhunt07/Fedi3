@@ -4,6 +4,13 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-09 — Android keep-alive service start fix
+
+The keep-alive foreground service now enters the foreground from `onCreate` and
+is started while the app is still in the foreground (`onPause`), so Android's
+five second `startForeground` window cannot expire during a slow Flutter engine
+teardown. Build 0.11.6 (2009).
+
 ## 2026-11-09 — P2P relayed addresses and migrated outbox authorship
 
 Cores now reserve a circuit on the relay's P2P infrastructure and publish the
