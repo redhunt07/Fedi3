@@ -182,6 +182,20 @@ class IdentitySync {
         'relayWs': config.relayWs,
         'relayToken': config.relayToken,
         'anchorActorUrl': config.anchorActorUrl,
+        // Profile and moderation settings belong to the account: a linked
+        // client must look and behave like the original one.
+        'displayName': config.displayName,
+        'summary': config.summary,
+        'iconUrl': config.iconUrl,
+        'iconMediaType': config.iconMediaType,
+        'imageUrl': config.imageUrl,
+        'imageMediaType': config.imageMediaType,
+        'profileFields': config.profileFields.map((f) => f.toJson()).toList(),
+        'manuallyApprovesFollowers': config.manuallyApprovesFollowers,
+        'blockedDomains': config.blockedDomains,
+        'blockedActors': config.blockedActors,
+        'apRelays': config.apRelays,
+        'postDeliveryMode': config.postDeliveryMode,
       },
     };
   }
@@ -205,6 +219,22 @@ class IdentitySync {
       throw const FormatException('identity package config is incomplete');
     }
     final domain = config['domain']?.toString().trim() ?? '';
+    String text(Object? raw) => raw?.toString().trim() ?? '';
+    List<String> strings(Object? raw) => raw is List
+        ? raw
+            .map((item) => item.toString().trim())
+            .where((item) => item.isNotEmpty)
+            .toList(growable: false)
+        : const <String>[];
+    List<ProfileFieldKV> fields(Object? raw) => raw is List
+        ? raw
+            .whereType<Map>()
+            .map((item) => ProfileFieldKV.fromJson(
+                item.map((key, value) => MapEntry(key.toString(), value))))
+            .where((field) => field.name.isNotEmpty)
+            .toList(growable: false)
+        : const <ProfileFieldKV>[];
+    final postDeliveryMode = text(config['postDeliveryMode']);
     return CoreConfig(
       username: username,
       domain: domain.isEmpty ? Uri.parse(publicBaseUrl).host : domain,
@@ -214,17 +244,20 @@ class IdentitySync {
       bind: '127.0.0.1:8788',
       internalToken: CoreConfig.randomToken(),
       p2pEnable: true,
-      apRelays: const [],
-      displayName: '',
-      summary: '',
-      iconUrl: '',
-      iconMediaType: '',
-      imageUrl: '',
-      imageMediaType: '',
-      profileFields: const [],
-      manuallyApprovesFollowers: false,
-      blockedDomains: const [],
-      blockedActors: const [],
+      apRelays: strings(config['apRelays']),
+      displayName: text(config['displayName']),
+      summary: text(config['summary']),
+      iconUrl: text(config['iconUrl']),
+      iconMediaType: text(config['iconMediaType']),
+      imageUrl: text(config['imageUrl']),
+      imageMediaType: text(config['imageMediaType']),
+      profileFields: fields(config['profileFields']),
+      manuallyApprovesFollowers: config['manuallyApprovesFollowers'] == true,
+      blockedDomains: strings(config['blockedDomains']),
+      blockedActors: strings(config['blockedActors']),
+      postDeliveryMode: postDeliveryMode.isEmpty
+          ? CoreConfig.postDeliveryP2pRelay
+          : postDeliveryMode,
       identityPrivateKeyPem:
           package['identity_private_key_pem']?.toString().trim(),
       chatIdentityPublicB64:
@@ -245,6 +278,31 @@ class IdentitySync {
       return text.isEmpty ? null : text;
     }
 
+    List<String>? strings(Object? raw) {
+      if (raw is! List) return null;
+      final list = raw
+          .map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      return list.isEmpty ? null : list;
+    }
+
+    List<ProfileFieldKV>? fields(Object? raw) {
+      if (raw is! List) return null;
+      final list = raw
+          .whereType<Map>()
+          .map((item) => ProfileFieldKV.fromJson(
+              item.map((key, value) => MapEntry(key.toString(), value))))
+          .where((field) => field.name.isNotEmpty)
+          .toList(growable: false);
+      return list.isEmpty ? null : list;
+    }
+
+    final rawConfig = package['config'];
+    final shared = rawConfig is Map
+        ? rawConfig.map((key, value) => MapEntry(key.toString(), value))
+        : const <String, dynamic>{};
+    final approved = shared['manuallyApprovesFollowers'];
     return config.copyWith(
       identityPrivateKeyPem: value(package['identity_private_key_pem']) ??
           config.identityPrivateKeyPem,
@@ -252,6 +310,24 @@ class IdentitySync {
           config.chatIdentityPublicB64,
       chatIdentitySecretB64: value(package['chat_identity_secret_b64']) ??
           config.chatIdentitySecretB64,
+      // The published identity blob also carries the account profile, so a
+      // manual login on another client picks it up.
+      displayName: value(shared['displayName']) ?? config.displayName,
+      summary: value(shared['summary']) ?? config.summary,
+      iconUrl: value(shared['iconUrl']) ?? config.iconUrl,
+      iconMediaType: value(shared['iconMediaType']) ?? config.iconMediaType,
+      imageUrl: value(shared['imageUrl']) ?? config.imageUrl,
+      imageMediaType: value(shared['imageMediaType']) ?? config.imageMediaType,
+      profileFields: fields(shared['profileFields']) ?? config.profileFields,
+      manuallyApprovesFollowers: approved is bool
+          ? approved
+          : config.manuallyApprovesFollowers,
+      blockedDomains:
+          strings(shared['blockedDomains']) ?? config.blockedDomains,
+      blockedActors: strings(shared['blockedActors']) ?? config.blockedActors,
+      apRelays: strings(shared['apRelays']) ?? config.apRelays,
+      postDeliveryMode:
+          value(shared['postDeliveryMode']) ?? config.postDeliveryMode,
     );
   }
 

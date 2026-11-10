@@ -33,6 +33,10 @@ The identity package transferred to a new client contains:
   identity key pair;
 - the account configuration (username, domain, public base URL, relay
   WebSocket URL and relay token);
+- the account profile and moderation settings (display name, summary, avatar
+  and banner, profile fields, manually-approved followers, blocked domains and
+  actors, AP relays, post delivery mode), so the linked client looks and
+  behaves like the original one;
 - `chat_snapshot` (QR pairing only): the current chat state of the source
   client, so the new client starts with the same threads, messages, reactions,
   receipts, pins and call signals instead of an empty history.

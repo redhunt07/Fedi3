@@ -37,6 +37,10 @@ Il pacchetto di identità trasferito a un nuovo client contiene:
   di identità chat Kyber768;
 - la configurazione dell'account (username, dominio, URL base pubblico, URL
   WebSocket del relay e token del relay);
+- il profilo dell'account e le impostazioni di moderazione (nome visualizzato,
+  descrizione, avatar e banner, campi del profilo, approvazione manuale dei
+  follower, domini e attori bloccati, relay AP, modalità di consegna dei post),
+  così il client collegato si presenta e si comporta come quello originale;
 - `chat_snapshot` (solo per l'abbinamento QR): lo stato attuale delle chat del
   client di origine, così il nuovo client parte con gli stessi thread, messaggi,
   reazioni, ricevute, pin e segnali di chiamata invece di una cronologia vuota.

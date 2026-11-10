@@ -7,6 +7,7 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:fedi3/core/core_http.dart';
+import 'package:fedi3/model/core_config.dart';
 import 'package:fedi3/services/identity_sync.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -128,6 +129,58 @@ void main() {
       expect(rebuilt.chatIdentityPublicB64, 'exported-public');
       expect(rebuilt.chatIdentitySecretB64, 'exported-secret');
       expect(rebuilt.deviceSyncEnable, isTrue);
+    });
+
+    test('the package carries the account profile to the linked client', () {
+      final config = buildTestConfig().copyWith(
+        displayName: 'Bob',
+        summary: '<p>hello</p>',
+        iconUrl: 'https://example.test/avatar.png',
+        iconMediaType: 'image/png',
+        imageUrl: 'https://example.test/banner.png',
+        imageMediaType: 'image/jpeg',
+        profileFields: [ProfileFieldKV(name: 'site', value: 'https://bob')],
+        manuallyApprovesFollowers: true,
+        blockedDomains: const ['spam.example'],
+        blockedActors: const ['https://bad.example/users/evil'],
+        apRelays: const ['https://relay.misskey.io/actor'],
+        postDeliveryMode: CoreConfig.postDeliveryP2pOnly,
+      );
+      final package = IdentitySync.buildPackage(config, const {});
+      final rebuilt = IdentitySync.configFromPackage(package);
+
+      expect(rebuilt.displayName, 'Bob');
+      expect(rebuilt.summary, '<p>hello</p>');
+      expect(rebuilt.iconUrl, 'https://example.test/avatar.png');
+      expect(rebuilt.iconMediaType, 'image/png');
+      expect(rebuilt.imageUrl, 'https://example.test/banner.png');
+      expect(rebuilt.imageMediaType, 'image/jpeg');
+      expect(rebuilt.profileFields.single.name, 'site');
+      expect(rebuilt.profileFields.single.value, 'https://bob');
+      expect(rebuilt.manuallyApprovesFollowers, isTrue);
+      expect(rebuilt.blockedDomains, ['spam.example']);
+      expect(rebuilt.blockedActors, ['https://bad.example/users/evil']);
+      expect(rebuilt.apRelays, ['https://relay.misskey.io/actor']);
+      expect(rebuilt.postDeliveryMode, CoreConfig.postDeliveryP2pOnly);
+    });
+
+    test('mergeIdentity also restores the account profile', () {
+      final config = buildTestConfig();
+      final package = IdentitySync.buildPackage(
+        buildTestConfig().copyWith(
+          displayName: 'Bob',
+          iconUrl: 'https://example.test/avatar.png',
+          blockedDomains: const ['spam.example'],
+        ),
+        const {},
+      );
+      final merged = IdentitySync.mergeIdentity(config, package);
+      expect(merged.displayName, 'Bob');
+      expect(merged.iconUrl, 'https://example.test/avatar.png');
+      expect(merged.blockedDomains, ['spam.example']);
+      // Untouched local values survive when the package has no value.
+      expect(merged.username, config.username);
+      expect(merged.relayToken, config.relayToken);
     });
 
     test('buildPackage includes a non-empty chat snapshot', () async {

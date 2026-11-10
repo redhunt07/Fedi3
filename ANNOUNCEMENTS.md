@@ -14,6 +14,8 @@ Chat activity is replicated to every linked client through a relay spool: messag
 
 P2P-only accounts keep the existing direct delivery and do not use the spool. History older than the spool retention is available on a new client through the QR pairing snapshot. The new **Link a new device** entry in Settings starts the scanner on mobile or shows the QR on desktop, and **Sync activity across devices** in Networking controls activity replication.
 
+The pairing package also carries the account profile and moderation settings, so a linked client shows the same display name, summary, avatar, banner, profile fields, blocked lists, AP relays and delivery mode. Chat snapshots are imported in a single transaction and large histories get a longer client timeout; after a core restart the client drops stale keep-alive sockets and restarts the core when it is still running the previous configuration, so the first request after pairing no longer fails.
+
 ## 2026-11-09 — Stable relay reservations and reachable mobile P2P
 
 The relay no longer refuses client reservations in a loop: the per-peer budget

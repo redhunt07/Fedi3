@@ -14,6 +14,8 @@ L'attività delle chat viene replicata su ogni client collegato attraverso uno s
 
 Gli account solo P2P mantengono la consegna diretta esistente e non usano lo spool. La cronologia più vecchia della ritenzione dello spool è disponibile su un nuovo client tramite lo snapshot dell'abbinamento QR. La nuova voce **Collega un nuovo dispositivo** nelle Impostazioni avvia lo scanner su mobile o mostra il QR su desktop, e **Sincronizza attività tra dispositivi** in Rete controlla la replica dell'attività.
 
+Il pacchetto di abbinamento trasporta anche il profilo dell'account e le impostazioni di moderazione, così un client collegato mostra lo stesso nome visualizzato, descrizione, avatar, banner, campi del profilo, liste bloccate, relay AP e modalità di consegna. Gli snapshot delle chat vengono importati in un'unica transazione e le cronologie grandi ricevono un timeout più lungo; dopo il riavvio del core il client scarta le socket keep-alive stantie e riavvia il core se sta ancora girando con la configurazione precedente, così la prima richiesta dopo l'abbinamento non fallisce più.
+
 ## 2026-11-09 — Prenotazioni relay stabili e P2P mobile raggiungibile
 
 Il relay non rifiuta più a ripetizione le prenotazioni dei client: il budget per
