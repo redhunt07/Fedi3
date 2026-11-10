@@ -44,6 +44,19 @@ class CoreHttp {
     return IOClient(inner);
   }
 
+  /// Drops every pooled keep-alive connection.
+  ///
+  /// The local core binds the same port on each restart, so sockets pooled
+  /// against the previous core process are dead. Reusing one makes the next
+  /// request fail with a broken pipe (EPIPE) instead of reaching the new core.
+  /// Call this whenever the core process is stopped.
+  static void dropConnections() {
+    final pooled = _client;
+    if (pooled == null || identical(pooled, _testClient)) return;
+    _client = null;
+    pooled.close();
+  }
+
   /// Install a deterministic client for tests.
   @visibleForTesting
   static void useTestClient(http.Client testClient) {

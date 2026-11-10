@@ -276,6 +276,41 @@ void main() {
           jsonDecode(core.lastConfigJson!) as Map<String, dynamic>;
       expect(startJson['bind'], '127.0.0.1:9999');
     });
+
+    test('startCore replaces a core still running with a stale configuration',
+        () async {
+      final core = FakeCoreRuntime(handle: 5);
+      final first =
+          buildTestConfig(internalToken: 'first-token-0123456789abcdef');
+      final app = buildTestAppState(config: first, core: core);
+      await app.startCore();
+      expect(core.startCalls, 1);
+
+      // Simulate the watchdog winning the race against replaceConfig: the app
+      // config is new while the live core still runs the previous one.
+      final second =
+          buildTestConfig(internalToken: 'second-token-0123456789abcdef');
+      await app.saveConfig(second);
+      await app.startCore();
+
+      expect(core.startCalls, 2,
+          reason: 'the core must be restarted with the current configuration');
+      expect(core.stoppedHandles, contains(5));
+      final startJson =
+          jsonDecode(core.lastConfigJson!) as Map<String, dynamic>;
+      expect(startJson['internal_token'], 'second-token-0123456789abcdef');
+      expect(app.isRunning, isTrue);
+    });
+
+    test('startCore does not restart when the core already uses the config',
+        () async {
+      final core = FakeCoreRuntime();
+      final app = buildTestAppState(config: buildTestConfig(), core: core);
+      await app.startCore();
+      await app.startCore();
+      expect(core.startCalls, 1);
+      expect(core.stopCalls, 0);
+    });
   });
 
   group('load', () {

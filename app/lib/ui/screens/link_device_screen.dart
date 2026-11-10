@@ -97,7 +97,10 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
     });
     try {
       await _controller?.stop();
-      final api = CoreApi(config: config);
+      final api = CoreApi(
+        config: config,
+        totalTimeout: const Duration(seconds: 120),
+      );
       final exported = await api.exportIdentity();
       // History is a best-effort extra: the pairing must succeed even when the
       // snapshot endpoint is unavailable or the account has no chat yet.

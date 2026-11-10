@@ -187,7 +187,13 @@ class _PairingScreenState extends State<PairingScreen> {
           rawSnapshot is Map ? rawSnapshot.cast<String, dynamic>() : null;
       if (chatSnapshot != null && chatSnapshot.isNotEmpty) {
         try {
-          await CoreApi(config: config).importChatSnapshot(chatSnapshot);
+          // A large history import can take longer than the default API
+          // timeout; the core now imports it in one transaction, but the
+          // pairing must not give up while the snapshot is still loading.
+          await CoreApi(
+            config: config,
+            totalTimeout: const Duration(seconds: 120),
+          ).importChatSnapshot(chatSnapshot);
         } catch (e) {
           // Identity pairing already succeeded; history can be rebuilt from
           // the relay spool later.

@@ -5137,6 +5137,163 @@ impl SocialDb {
         )?;
         Ok(())
     }
+
+    /// Import a whole chat snapshot inside one SQLite transaction.
+    ///
+    /// The per-row helpers open a connection (and an implicit transaction) for
+    /// every insert, which made a large history import take minutes and time
+    /// out the pairing HTTP call. One transaction keeps the import fast and
+    /// atomic: a failed import leaves the local history untouched.
+    pub fn import_chat_snapshot(&self, snapshot: &crate::chat::ChatSnapshot) -> Result<()> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        for thread in &snapshot.threads {
+            let thread_id = thread.thread_id.trim();
+            if thread_id.is_empty() {
+                continue;
+            }
+            let kind = if thread.kind.trim().is_empty() {
+                "group"
+            } else {
+                thread.kind.trim()
+            };
+            tx.execute(
+                "INSERT OR IGNORE INTO chat_threads
+                   (thread_id, kind, title, created_at_ms, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    thread_id,
+                    kind,
+                    thread.title.as_deref(),
+                    thread.created_at_ms,
+                    thread.updated_at_ms
+                ],
+            )?;
+        }
+        for member in &snapshot.members {
+            let thread_id = member.thread_id.trim();
+            let actor_id = member.actor_id.trim();
+            if thread_id.is_empty() || actor_id.is_empty() {
+                continue;
+            }
+            let role = if member.role.trim().is_empty() {
+                "member"
+            } else {
+                member.role.trim()
+            };
+            tx.execute(
+                "INSERT INTO chat_members (thread_id, actor_id, role, added_at_ms)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(thread_id, actor_id)
+                 DO UPDATE SET role=excluded.role",
+                params![thread_id, actor_id, role, member.added_at_ms],
+            )?;
+        }
+        for message in &snapshot.messages {
+            if message.message_id.trim().is_empty() || message.thread_id.trim().is_empty() {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO chat_messages
+                   (message_id, thread_id, sender_actor, sender_device, created_at_ms, edited_at_ms, deleted, body_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    message.message_id,
+                    message.thread_id,
+                    message.sender_actor,
+                    message.sender_device,
+                    message.created_at_ms,
+                    message.edited_at_ms,
+                    if message.deleted { 1 } else { 0 },
+                    message.body_json
+                ],
+            )?;
+        }
+        for status in &snapshot.statuses {
+            if status.message_id.trim().is_empty()
+                || status.actor_id.trim().is_empty()
+                || status.status.trim().is_empty()
+            {
+                continue;
+            }
+            let updated_at_ms = if status.updated_at_ms > 0 {
+                status.updated_at_ms
+            } else {
+                now_ms()
+            };
+            tx.execute(
+                r#"
+                INSERT INTO chat_message_status (message_id, actor_id, status, updated_at_ms)
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(message_id, actor_id)
+                DO UPDATE SET status=excluded.status, updated_at_ms=excluded.updated_at_ms
+                WHERE (CASE excluded.status
+                    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 WHEN 'seen' THEN 3 ELSE -1 END)
+                    >= (CASE chat_message_status.status
+                    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 WHEN 'seen' THEN 3 ELSE -1 END)
+                "#,
+                params![status.message_id, status.actor_id, status.status, updated_at_ms],
+            )?;
+        }
+        for reaction in &snapshot.reactions {
+            if reaction.message_id.trim().is_empty()
+                || reaction.actor_id.trim().is_empty()
+                || reaction.reaction.trim().is_empty()
+            {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO chat_message_reactions
+                   (message_id, actor_id, reaction, created_at_ms)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    reaction.message_id,
+                    reaction.actor_id,
+                    reaction.reaction,
+                    reaction.created_at_ms
+                ],
+            )?;
+        }
+        for pin in &snapshot.pins {
+            if pin.thread_id.trim().is_empty() || pin.message_id.trim().is_empty() {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO chat_pins
+                   (thread_id, message_id, pinned_by, pinned_at_ms)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    pin.thread_id,
+                    pin.message_id,
+                    pin.pinned_by,
+                    pin.pinned_at_ms
+                ],
+            )?;
+        }
+        for signal in &snapshot.call_signals {
+            if signal.thread_id.trim().is_empty() || signal.call_id.trim().is_empty() {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO chat_call_signals
+                   (thread_id, from_actor, to_actor, call_id, action, data_json, created_at_ms)
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+                 WHERE NOT EXISTS (SELECT 1 FROM chat_call_signals WHERE thread_id=?1 AND from_actor=?2
+                   AND to_actor IS ?3 AND call_id=?4 AND action=?5 AND data_json=?6)",
+                params![
+                    signal.thread_id,
+                    signal.from_actor,
+                    signal.to_actor.as_deref(),
+                    signal.call_id,
+                    signal.action,
+                    signal.data_json,
+                    signal.created_at_ms
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[repr(u32)]

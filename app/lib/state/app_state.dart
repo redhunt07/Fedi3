@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../core/core_api.dart';
+import '../core/core_http.dart';
 import '../core/fedi3_core.dart';
 import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
@@ -75,6 +76,11 @@ class AppState extends ChangeNotifier {
   DateTime? _restartAfter;
   bool _disposed = false;
 
+  /// Configuration the running core was actually started with. The core binds
+  /// one port and keeps that configuration, so it must be compared before a
+  /// start request is treated as a no-op.
+  CoreConfig? _activeConfig;
+
   CoreConfig? get config => _config;
   UiPrefs get prefs => _prefs;
   int? get coreHandle => _coreHandle;
@@ -96,6 +102,7 @@ class AppState extends ChangeNotifier {
   void markCoreDead([String? error]) {
     final handle = _coreHandle;
     _coreHandle = null;
+    _activeConfig = null;
     if (handle != null) {
       final operation = _releaseHandle(handle).catchError((Object e) {
         TelemetryService.record('core_stop_failed', e.toString());
@@ -257,11 +264,30 @@ class AppState extends ChangeNotifier {
   Future<void> startCore() async {
     final stopping = _stopFuture;
     if (stopping != null) await stopping;
-    final cfg = _config;
-    if (cfg == null) return;
-    if (_coreHandle != null) return;
+    if (_config == null) return;
+
+    // AP-06: one FFI call at a time. A start already in flight keeps running
+    // with the configuration captured when it began, so wait for it and then
+    // re-read the configuration before trusting the running handle.
     final pending = _starting;
-    if (pending != null) return pending; // AP-06: one FFI call at a time
+    if (pending != null) await pending;
+    if (_config == null) return;
+
+    var cfg = _config!;
+    if (_coreHandle != null) {
+      final active = _activeConfig;
+      if (active != null &&
+          jsonEncode(active.toCoreStartJson()) ==
+              jsonEncode(cfg.toCoreStartJson())) {
+        return;
+      }
+      // The watchdog can restart the core while replaceConfig is still saving
+      // the new configuration, leaving the old one live. Replace it.
+      await stopCore();
+      final current = _config;
+      if (current == null) return;
+      cfg = current;
+    }
     if (!_restarting) {
       _restartAttempt = 0;
       _restartAfter = null;
@@ -335,11 +361,13 @@ class AppState extends ChangeNotifier {
         throw StateError('core start returned invalid handle ($handle)');
       }
       _coreHandle = handle;
+      _activeConfig = effective;
       _restartAttempt = 0;
       _startWatchdog();
     } catch (e) {
       // AP-02/P0-10: never keep a stale handle when FFI throws.
       _coreHandle = null;
+      _activeConfig = null;
       _lastError = e.toString();
       TelemetryService.record(
           'core_start_failed', _lastError ?? 'unknown error');
@@ -363,10 +391,12 @@ class AppState extends ChangeNotifier {
   Future<void> _stopCoreInner() async {
     final handle = _coreHandle;
     _coreHandle = null;
+    _activeConfig = null;
     _stopWatchdog();
     _lastError = null;
     if (handle == null) {
       _coreHandle = null;
+      CoreHttp.dropConnections();
       notifyListeners();
       return;
     }
@@ -379,6 +409,9 @@ class AppState extends ChangeNotifier {
     } finally {
       // AP-03: the handle is always cleared, even if the native stop failed.
       _coreHandle = null;
+      // The core binds the same port when it restarts: pooled keep-alive
+      // sockets point at the dead process and would fail the next request.
+      CoreHttp.dropConnections();
     }
     notifyListeners();
   }
@@ -483,6 +516,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     final handle = _coreHandle;
     _coreHandle = null;
+    _activeConfig = null;
     if (handle != null) {
       unawaited(_releaseHandle(handle).catchError((Object e) {
         TelemetryService.record('core_stop_failed', e.toString());
