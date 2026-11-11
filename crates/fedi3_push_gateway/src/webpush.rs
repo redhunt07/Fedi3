@@ -27,10 +27,12 @@ use hkdf::Hkdf;
 use p256::ecdh::EphemeralSecret;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
+use p256::elliptic_curve::Generate;
 use p256::{PublicKey, SecretKey};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng;
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
 use sha2::Sha256;
@@ -114,12 +116,13 @@ pub fn target(url: Url, keys: &WebPushKeys) -> Result<WakeTarget> {
 /// Encrypt one `aes128gcm` record for the subscription (RFC 8291).
 pub fn encrypt(target: &WakeTarget, payload: &[u8]) -> Result<Encrypted> {
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
-    let ephemeral = EphemeralSecret::random(&mut OsRng);
+    let mut rng = UnwrapErr(SysRng);
+    rng.fill_bytes(&mut salt);
+    let ephemeral = EphemeralSecret::generate();
     let server_pub = ephemeral.public_key();
     let shared = ephemeral.diffie_hellman(&target.client_pub);
-    let client_pub_bytes = target.client_pub.to_encoded_point(false).as_bytes().to_vec();
-    let server_pub_bytes = server_pub.to_encoded_point(false).as_bytes().to_vec();
+    let client_pub_bytes = target.client_pub.to_sec1_point(false).as_bytes().to_vec();
+    let server_pub_bytes = server_pub.to_sec1_point(false).as_bytes().to_vec();
     let mut info = b"WebPush: info\x00".to_vec();
     info.extend_from_slice(&client_pub_bytes);
     info.extend_from_slice(&server_pub_bytes);
@@ -167,7 +170,7 @@ impl VapidKey {
         let secret = SecretKey::from_slice(&bytes).context("invalid VAPID private key")?;
         let signing = SigningKey::from_slice(&bytes).context("invalid VAPID signing key")?;
         let public = secret.public_key();
-        let public_b64 = URL_SAFE_NO_PAD.encode(public.to_encoded_point(false).as_bytes());
+        let public_b64 = URL_SAFE_NO_PAD.encode(public.to_sec1_point(false).as_bytes());
         Ok(Self {
             signing,
             private_b64: private.to_owned(),
@@ -176,10 +179,10 @@ impl VapidKey {
     }
 
     pub fn generate() -> Self {
-        let secret = SecretKey::random(&mut OsRng);
+        let secret = SecretKey::generate();
         let signing = SigningKey::from_slice(secret.to_bytes().as_slice()).expect("valid scalar");
         let public = secret.public_key();
-        let public_b64 = URL_SAFE_NO_PAD.encode(public.to_encoded_point(false).as_bytes());
+        let public_b64 = URL_SAFE_NO_PAD.encode(public.to_sec1_point(false).as_bytes());
         let private_b64 = URL_SAFE_NO_PAD.encode(secret.to_bytes().as_slice());
         Self {
             signing,
@@ -261,7 +264,7 @@ mod tests {
     use super::*;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::VerifyingKey;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
 
     fn decode_jwt_part(part: &str) -> serde_json::Value {
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part).unwrap()).unwrap()
@@ -269,11 +272,11 @@ mod tests {
 
     #[test]
     fn round_trip_decrypts_with_the_subscription_private_key() {
-        let client_secret = EphemeralSecret::random(&mut OsRng);
+        let client_secret = EphemeralSecret::generate();
         let client_pub = client_secret.public_key();
         let auth = [7u8; 16];
         let keys = WebPushKeys {
-            pub_key: URL_SAFE_NO_PAD.encode(client_pub.to_encoded_point(false).as_bytes()),
+            pub_key: URL_SAFE_NO_PAD.encode(client_pub.to_sec1_point(false).as_bytes()),
             auth: URL_SAFE_NO_PAD.encode(auth),
         };
         let url = validate_endpoint("https://ntfy.example/up123").unwrap();
@@ -283,7 +286,10 @@ mod tests {
         let body = &encrypted.body;
         assert!(body.len() > 86);
         let salt = &body[0..16];
-        assert_eq!(u32::from_be_bytes(body[16..20].try_into().unwrap()), RECORD_SIZE);
+        assert_eq!(
+            u32::from_be_bytes(body[16..20].try_into().unwrap()),
+            RECORD_SIZE
+        );
         let idlen = body[20] as usize;
         assert_eq!(idlen, 65);
         let server_pub_bytes = &body[21..21 + idlen];
@@ -291,7 +297,7 @@ mod tests {
         let server_pub = PublicKey::from_sec1_bytes(server_pub_bytes).unwrap();
         let shared = client_secret.diffie_hellman(&server_pub);
         let mut info = b"WebPush: info\x00".to_vec();
-        info.extend_from_slice(client_pub.to_encoded_point(false).as_bytes());
+        info.extend_from_slice(client_pub.to_sec1_point(false).as_bytes());
         info.extend_from_slice(server_pub_bytes);
         let mut ikm = [0u8; 32];
         Hkdf::<Sha256>::new(Some(&auth), shared.raw_secret_bytes())
@@ -299,9 +305,11 @@ mod tests {
             .unwrap();
         let hk = Hkdf::<Sha256>::new(Some(salt), &ikm);
         let mut cek = [0u8; 16];
-        hk.expand(b"Content-Encoding: aes128gcm\x00", &mut cek).unwrap();
+        hk.expand(b"Content-Encoding: aes128gcm\x00", &mut cek)
+            .unwrap();
         let mut nonce = [0u8; 12];
-        hk.expand(b"Content-Encoding: nonce\x00", &mut nonce).unwrap();
+        hk.expand(b"Content-Encoding: nonce\x00", &mut nonce)
+            .unwrap();
         let plain = Aes128Gcm::new_from_slice(&cek)
             .unwrap()
             .decrypt(Nonce::from_slice(&nonce), ciphertext)
@@ -314,7 +322,9 @@ mod tests {
     fn vapid_header_is_a_valid_es256_jwt_for_the_endpoint_origin() {
         let vapid = VapidKey::generate();
         let url = Url::parse("https://ntfy.example/up123").unwrap();
-        let header = vapid.authorization(&url, "mailto:admin@example.com").unwrap();
+        let header = vapid
+            .authorization(&url, "mailto:admin@example.com")
+            .unwrap();
         let rest = header.strip_prefix("vapid t=").unwrap();
         let (jwt, k) = rest.split_once(", k=").unwrap();
         let parts: Vec<&str> = jwt.split('.').collect();

@@ -319,9 +319,8 @@ class IdentitySync {
       imageUrl: value(shared['imageUrl']) ?? config.imageUrl,
       imageMediaType: value(shared['imageMediaType']) ?? config.imageMediaType,
       profileFields: fields(shared['profileFields']) ?? config.profileFields,
-      manuallyApprovesFollowers: approved is bool
-          ? approved
-          : config.manuallyApprovesFollowers,
+      manuallyApprovesFollowers:
+          approved is bool ? approved : config.manuallyApprovesFollowers,
       blockedDomains:
           strings(shared['blockedDomains']) ?? config.blockedDomains,
       blockedActors: strings(shared['blockedActors']) ?? config.blockedActors,

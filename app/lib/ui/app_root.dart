@@ -43,13 +43,14 @@ class _AppRootState extends State<AppRoot> {
     final key = '${prefs.accent}|${prefs.density}';
     if (key != _themeKey) {
       _themeKey = key;
-      _lightTheme =
-          MisskeyTheme.light(accent: prefs.accentColor, density: prefs.visualDensity);
-      _darkTheme =
-          MisskeyTheme.dark(accent: prefs.accentColor, density: prefs.visualDensity);
+      _lightTheme = MisskeyTheme.light(
+          accent: prefs.accentColor, density: prefs.visualDensity);
+      _darkTheme = MisskeyTheme.dark(
+          accent: prefs.accentColor, density: prefs.visualDensity);
     }
     return (_lightTheme!, _darkTheme!);
   }
+
   @override
   void initState() {
     super.initState();

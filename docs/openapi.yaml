@@ -970,7 +970,7 @@ paths:
                         id: {type: integer}
                         envelope: {type: object, additionalProperties: true}
                   latest_id: {type: integer}
-    /_fedi3/reactions:
+  /_fedi3/reactions:
     get:
       tags: [core]
       summary: Reazioni a una nota

@@ -84,8 +84,8 @@ async fn main() -> Result<()> {
     if !route_path.starts_with('/') {
         bail!("FEDI3_PUSH_GATEWAY_PATH must start with /");
     }
-    let token = env::var("FEDI3_PUSH_GATEWAY_TOKEN")
-        .context("FEDI3_PUSH_GATEWAY_TOKEN is required")?;
+    let token =
+        env::var("FEDI3_PUSH_GATEWAY_TOKEN").context("FEDI3_PUSH_GATEWAY_TOKEN is required")?;
     if token.len() < 32 {
         bail!("FEDI3_PUSH_GATEWAY_TOKEN must be at least 32 characters");
     }
@@ -193,7 +193,12 @@ async fn wake(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byte
     let Some(token) = raw.strip_prefix("Bearer ") else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
-    if token.as_bytes().ct_eq(state.config.token.as_bytes()).unwrap_u8() != 1 {
+    if token
+        .as_bytes()
+        .ct_eq(state.config.token.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     }
     let request: WakeRequest = match serde_json::from_slice(&body) {

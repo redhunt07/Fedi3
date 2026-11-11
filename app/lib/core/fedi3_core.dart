@@ -151,8 +151,8 @@ class Fedi3Core implements CoreRuntime, AsyncCoreStop, PowerAwareCore {
       _lib.lookupFunction<_StartNative, _StartDart>('fedi3_core_start');
   late final _StopDart _stop =
       _lib.lookupFunction<_StopNative, _StopDart>('fedi3_core_stop');
-  late final _PowerModeDart _powerMode = _lib
-      .lookupFunction<_PowerModeNative, _PowerModeDart>(
+  late final _PowerModeDart _powerMode =
+      _lib.lookupFunction<_PowerModeNative, _PowerModeDart>(
           'fedi3_core_set_power_mode');
   late final _StringFreeDart _freeCString =
       _lib.lookupFunction<_StringFreeNative, _StringFreeDart>(

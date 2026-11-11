@@ -208,7 +208,8 @@ pub(super) async fn push_register(
             let valid = decode(&keys.pub_key).is_ok_and(|b| b.len() == 65 && b[0] == 4)
                 && decode(&keys.auth).is_ok_and(|b| b.len() == 16);
             if !valid {
-                return (StatusCode::BAD_REQUEST, "invalid webpush encryption keys").into_response();
+                return (StatusCode::BAD_REQUEST, "invalid webpush encryption keys")
+                    .into_response();
             }
         }
     } else if registration.token.len() < 32
