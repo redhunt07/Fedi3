@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../services/mobile_push_service.dart';
 import '../../l10n/l10n_ext.dart';
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Lightweight Markdown renderer for in-app documents (announcements).
 /// Supports headings, quotes, lists, code fences, dividers and inline marks.

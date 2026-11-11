@@ -5,7 +5,7 @@
 
 import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/ui/screens/client_updates_screen.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 

@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/state/config_store.dart';
 import 'package:fedi3/ui/screens/first_run_screen.dart';

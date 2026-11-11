@@ -9,7 +9,7 @@ import 'package:fedi3/ui/screens/search_screen.dart';
 import 'package:fedi3/ui/screens/timelines_screen.dart';
 import 'package:fedi3/ui/shell.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -17,6 +17,10 @@ import '../support/fake_core.dart';
 import '../support/fake_http.dart';
 import '../support/pump_app.dart';
 import '../support/test_config.dart';
+
+Finder _tooltip(String message) => find.byWidgetPredicate(
+      (widget) => widget is Tooltip && widget.message == message,
+    );
 
 Future<AppState> _runningApp() async {
   final app =
@@ -58,6 +62,7 @@ void main() {
 
     debugDefaultTargetPlatformOverride = null;
     await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 3));
   });
 
   testWidgets(
@@ -81,15 +86,16 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.byTooltip('Timeline (Ctrl+1)'), findsWidgets);
-    expect(find.byTooltip('Search (Ctrl+2)'), findsWidgets);
-    expect(find.byTooltip('Relays (Ctrl+5)'), findsWidgets);
-    expect(find.byTooltip('Settings (Ctrl+6)'), findsWidgets);
+    expect(_tooltip('Timeline (Ctrl+1)'), findsWidgets);
+    expect(_tooltip('Search (Ctrl+2)'), findsWidgets);
+    expect(_tooltip('Relays (Ctrl+5)'), findsWidgets);
+    expect(_tooltip('Settings (Ctrl+6)'), findsWidgets);
     expect(find.byType(NavigationBar), findsNothing);
 
     semantics.dispose();
     debugDefaultTargetPlatformOverride = null;
     await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 3));
   });
 
   testWidgets('AW-41b phone bottom bar keeps five readable sections',
@@ -111,14 +117,16 @@ void main() {
     await tester.pump();
 
     expect(find.byType(NavigationBar), findsOneWidget);
-    expect(find.byTooltip('Timeline (Ctrl+1)'), findsWidgets);
-    expect(find.byTooltip('Search (Ctrl+2)'), findsWidgets);
-    expect(find.byTooltip('Chat (Ctrl+3)'), findsWidgets);
-    expect(find.byTooltip('Notifications (Ctrl+4)'), findsWidgets);
-    expect(find.byTooltip('Account (Ctrl+7)'), findsWidgets);
+    expect(_tooltip('Timeline (Ctrl+1)'), findsWidgets);
+    expect(_tooltip('Search (Ctrl+2)'), findsWidgets);
+    expect(_tooltip('Chat (Ctrl+3)'), findsWidgets);
+    expect(_tooltip('Notifications (Ctrl+4)'), findsWidgets);
+    expect(_tooltip('Account (Ctrl+7)'), findsWidgets);
     // Relay management and settings are reachable from the account tab, so the
     // phone bar must not crowd them in.
-    expect(find.byTooltip('Relays (Ctrl+5)'), findsNothing);
-    expect(find.byTooltip('Settings (Ctrl+6)'), findsNothing);
+    expect(_tooltip('Relays (Ctrl+5)'), findsNothing);
+    expect(_tooltip('Settings (Ctrl+6)'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 3));
   });
 }

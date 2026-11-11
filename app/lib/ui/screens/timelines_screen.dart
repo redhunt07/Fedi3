@@ -6,8 +6,7 @@ import '../../services/app_activity.dart';
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';

@@ -4,11 +4,13 @@
  */
 
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'dart:ui' show AppExitResponse;
 import '../services/app_activity.dart';
 import '../services/mobile_push_service.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter_localizations/flutter_localizations.dart'
+    hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
 
 import '../core/fedi3_core.dart' show CorePowerMode;
 import '../model/ui_prefs.dart';

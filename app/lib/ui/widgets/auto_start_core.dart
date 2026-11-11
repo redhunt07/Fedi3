@@ -5,7 +5,7 @@
 
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../core/fedi3_core.dart' show CorePowerMode;
 import '../../services/app_activity.dart';

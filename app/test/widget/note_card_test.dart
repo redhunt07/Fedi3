@@ -10,7 +10,7 @@ import 'package:fedi3/model/note_models.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/widgets/note_card.dart';
 import 'package:fedi3/ui/widgets/status_avatar.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

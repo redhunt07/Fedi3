@@ -58,11 +58,27 @@ class CoreEventStream {
     String? kind,
     bool background = false,
     bool reconnect = false,
-  }) async* {
-    while (true) {
+  }) {
+    late final StreamController<CoreEvent> controller;
+    StreamSubscription<CoreEvent>? subscription;
+    StreamSubscription<bool>? lifecycle;
+    http.Client? activeClient;
+    Timer? retryTimer;
+    var cancelled = false;
+
+    void closeOwnedClient(http.Client client) {
+      if (_client == null && CoreHttp.ownsStreamClient(client)) {
+        client.close();
+      }
+    }
+
+    Future<void> connect() async {
+      if (cancelled) return;
       if (!background) await AppActivity.waitForForeground();
+      if (cancelled) return;
       final client = _client ?? CoreHttp.streamClient();
-      final lifecycle = AppActivity.changes.listen((foreground) {
+      activeClient = client;
+      lifecycle = AppActivity.changes.listen((foreground) {
         if (!background &&
             !foreground &&
             _client == null &&
@@ -70,21 +86,59 @@ class CoreEventStream {
           client.close();
         }
       });
-      try {
-        await for (final event in _connection(client, kind: kind)) {
-          yield event;
-        }
-      } catch (_) {
-        if (!reconnect && (background || AppActivity.foreground)) rethrow;
-      } finally {
-        await lifecycle.cancel();
-        if (_client == null && CoreHttp.ownsStreamClient(client)) {
-          client.close();
-        }
-      }
-      if (!reconnect && (background || AppActivity.foreground)) return;
-      if (reconnect) await Future<void>.delayed(const Duration(seconds: 2));
+      subscription = _connection(client, kind: kind).listen(
+        (event) {
+          if (!controller.isClosed) controller.add(event);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          lifecycle?.cancel();
+          lifecycle = null;
+          closeOwnedClient(client);
+          if (cancelled) return;
+          if (!reconnect && (background || AppActivity.foreground)) {
+            controller.addError(error, stackTrace);
+            controller.close();
+            return;
+          }
+          if (!reconnect) {
+            // A foreground stream paused in the background resumes once the
+            // app returns to the foreground.
+            connect();
+            return;
+          }
+          retryTimer = Timer(const Duration(seconds: 2), connect);
+        },
+        onDone: () {
+          lifecycle?.cancel();
+          lifecycle = null;
+          closeOwnedClient(client);
+          if (cancelled) return;
+          if (!reconnect && (background || AppActivity.foreground)) {
+            controller.close();
+            return;
+          }
+          if (!reconnect) {
+            connect();
+            return;
+          }
+          retryTimer = Timer(const Duration(seconds: 2), connect);
+        },
+        cancelOnError: true,
+      );
     }
+
+    controller = StreamController<CoreEvent>(
+      onListen: connect,
+      onCancel: () async {
+        cancelled = true;
+        retryTimer?.cancel();
+        await subscription?.cancel();
+        await lifecycle?.cancel();
+        final client = activeClient;
+        if (client != null) closeOwnedClient(client);
+      },
+    );
+    return controller.stream;
   }
 
   Stream<CoreEvent> _connection(http.Client client, {String? kind}) async* {

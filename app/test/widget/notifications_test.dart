@@ -9,7 +9,7 @@ import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/ui/screens/notifications_screen.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 

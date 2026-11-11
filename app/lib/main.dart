@@ -9,7 +9,7 @@ import 'dart:ui' show DartPluginRegistrant, PlatformDispatcher;
 
 import 'package:path_provider/path_provider.dart';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:media_kit/media_kit.dart';

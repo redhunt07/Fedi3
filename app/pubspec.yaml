@@ -42,6 +42,8 @@ dependencies:
   unifiedpush_platform_interface: ^4.0.0
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.5.0
+  material_ui: ^1.11.0
+  cupertino_ui: ^1.1.6
 
 dev_dependencies:
   flutter_test:
