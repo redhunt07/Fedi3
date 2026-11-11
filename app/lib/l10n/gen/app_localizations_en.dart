@@ -2664,43 +2664,46 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get pairingIntro =>
-      'Scan this QR code with a client that is already logged in to this account.';
-
-  @override
-  String get pairingInstanceUrl => 'Instance URL (https://...)';
-
-  @override
-  String get pairingGenerate => 'Show QR code';
+      'Show this QR code to the device you want to link. It expires in 10 minutes.';
 
   @override
   String get pairingRegenerate => 'New code';
 
   @override
-  String get pairingWaiting => 'Waiting for the other device…';
+  String get pairingWaiting =>
+      'QR ready. Scan it with the device you want to link.';
 
   @override
-  String get pairingConnected => 'Device linked. Starting the core…';
+  String get pairingPreparing => 'Preparing the QR code…';
+
+  @override
+  String get pairingLoginFirst => 'Log in on this device first.';
 
   @override
   String get pairingExpired => 'The pairing code expired. Generate a new one.';
 
   @override
-  String get pairingInvalidUrl => 'Enter the instance URL of your account.';
+  String get pairingInvalidUrl =>
+      'This account has no relay configured, so QR login is unavailable.';
 
   @override
   String pairingError(String error) {
-    return 'Pairing failed: $error';
+    return 'Could not prepare the QR code: $error';
   }
 
   @override
-  String get linkDeviceTitle => 'Link a new device';
+  String get linkDeviceTitle => 'Log in with QR';
 
   @override
   String get linkDeviceIntro =>
-      'Point the camera at the QR code shown on the other device.';
+      'Scan the QR code shown by the device that is already logged in to this account.';
 
   @override
-  String get linkDeviceSuccess => 'Device linked';
+  String get linkDeviceSuccess => 'Logged in. Syncing…';
+
+  @override
+  String get linkDeviceExpired =>
+      'This QR code expired. Ask the logged-in device for a new one.';
 
   @override
   String get linkDeviceInvalidCode =>
@@ -2708,7 +2711,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String linkDeviceError(String error) {
-    return 'Could not link the device: $error';
+    return 'Could not log in: $error';
   }
 
   @override

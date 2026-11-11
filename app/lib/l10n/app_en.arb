@@ -1219,15 +1219,14 @@
   "callSwitchCameraFailed": "Could not switch the camera.",
   "onboardingLoginWithQr": "Log in with QR",
   "pairingTitle": "Link a device",
-  "pairingIntro": "Scan this QR code with a client that is already logged in to this account.",
-  "pairingInstanceUrl": "Instance URL (https://...)",
-  "pairingGenerate": "Show QR code",
+  "pairingIntro": "Show this QR code to the device you want to link. It expires in 10 minutes.",
   "pairingRegenerate": "New code",
-  "pairingWaiting": "Waiting for the other device…",
-  "pairingConnected": "Device linked. Starting the core…",
+  "pairingWaiting": "QR ready. Scan it with the device you want to link.",
+  "pairingPreparing": "Preparing the QR code…",
+  "pairingLoginFirst": "Log in on this device first.",
   "pairingExpired": "The pairing code expired. Generate a new one.",
-  "pairingInvalidUrl": "Enter the instance URL of your account.",
-  "pairingError": "Pairing failed: {error}",
+  "pairingInvalidUrl": "This account has no relay configured, so QR login is unavailable.",
+  "pairingError": "Could not prepare the QR code: {error}",
   "@pairingError": {
     "placeholders": {
       "error": {
@@ -1235,11 +1234,12 @@
       }
     }
   },
-  "linkDeviceTitle": "Link a new device",
-  "linkDeviceIntro": "Point the camera at the QR code shown on the other device.",
-  "linkDeviceSuccess": "Device linked",
+  "linkDeviceTitle": "Log in with QR",
+  "linkDeviceIntro": "Scan the QR code shown by the device that is already logged in to this account.",
+  "linkDeviceSuccess": "Logged in. Syncing…",
+  "linkDeviceExpired": "This QR code expired. Ask the logged-in device for a new one.",
   "linkDeviceInvalidCode": "This QR code is not a Fedi3 pairing code.",
-  "linkDeviceError": "Could not link the device: {error}",
+  "linkDeviceError": "Could not log in: {error}",
   "@linkDeviceError": {
     "placeholders": {
       "error": {

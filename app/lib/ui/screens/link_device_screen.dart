@@ -15,9 +15,10 @@ import '../../services/identity_sync.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 
-/// Mobile side of the QR pairing flow: scans the code shown by the new client,
-/// exports the local account identity, seals it with the pairing code and
-/// uploads it to the relay so the new client can start with the same identity.
+/// Target side of the QR login flow: the device that is not logged in yet scans
+/// the QR shown by an already logged-in client, downloads the sealed identity
+/// package from the relay, starts the core with that account and imports the
+/// chat snapshot.
 class LinkDeviceScreen extends StatefulWidget {
   const LinkDeviceScreen({super.key, required this.appState});
 
@@ -88,8 +89,6 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
     required String relayBase,
     required String code,
   }) async {
-    final config = widget.appState.config;
-    if (config == null) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -97,46 +96,55 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
     });
     try {
       await _controller?.stop();
-      final api = CoreApi(
-        config: config,
-        totalTimeout: const Duration(seconds: 120),
-      );
-      final exported = await api.exportIdentity();
-      // History is a best-effort extra: the pairing must succeed even when the
-      // snapshot endpoint is unavailable or the account has no chat yet.
-      Map<String, dynamic>? chatSnapshot;
-      try {
-        chatSnapshot = await api.exportChatSnapshot();
-      } catch (_) {
-        chatSnapshot = null;
+      // The QR appears only after the source uploaded its package, but a scan
+      // can still race the upload. Retry briefly before giving up.
+      Map<String, dynamic>? sealed;
+      for (var attempt = 0; attempt < 5; attempt++) {
+        sealed = await IdentitySync.fetchPairingPackage(
+          relayBase: relayBase,
+          code: code,
+        );
+        if (sealed != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
       }
-      final package = IdentitySync.buildPackage(
-        config,
-        exported,
-        chatSnapshot: chatSnapshot,
-      );
-      final envelope = await IdentitySync.seal(package, code);
-      try {
-        await IdentitySync.uploadPairingPackage(
-          relayBase: relayBase,
-          code: code,
-          user: config.username,
-          token: config.relayToken,
-          envelope: envelope,
-        );
-      } catch (_) {
-        // The relay may reject a large snapshot envelope (e.g. 400): retry
-        // once without it so the identity pairing still succeeds.
-        if (chatSnapshot == null || chatSnapshot.isEmpty) rethrow;
-        final fallbackPackage = IdentitySync.buildPackage(config, exported);
-        final fallbackEnvelope = await IdentitySync.seal(fallbackPackage, code);
-        await IdentitySync.uploadPairingPackage(
-          relayBase: relayBase,
-          code: code,
-          user: config.username,
-          token: config.relayToken,
-          envelope: fallbackEnvelope,
-        );
+      if (!mounted) return;
+      if (sealed == null) {
+        setState(() {
+          _busy = false;
+          _error = context.l10n.linkDeviceExpired;
+        });
+        unawaited(_controller?.start());
+        return;
+      }
+      if (!IdentitySync.looksSealed(sealed)) {
+        throw const FormatException('invalid pairing envelope');
+      }
+      final package = await IdentitySync.open(sealed, code);
+      final config = IdentitySync.configFromPackage(package);
+      // replaceConfig stops a running core first, so this also works when the
+      // device already has a local profile and the user logs in again.
+      await widget.appState.replaceConfig(config);
+      if (!mounted) return;
+      if (!widget.appState.isRunning) {
+        throw StateError(
+            widget.appState.lastError ?? context.l10n.networkErrorTitle);
+      }
+      // The snapshot is only carried by the pairing package: it is not part of
+      // CoreConfig. Importing it is best-effort, login still succeeds.
+      final rawSnapshot = package['chat_snapshot'];
+      final chatSnapshot =
+          rawSnapshot is Map ? rawSnapshot.cast<String, dynamic>() : null;
+      if (chatSnapshot != null && chatSnapshot.isNotEmpty) {
+        try {
+          await CoreApi(
+            config: config,
+            totalTimeout: const Duration(seconds: 120),
+          ).importChatSnapshot(chatSnapshot);
+        } catch (e) {
+          // Identity login already succeeded; history can be rebuilt from the
+          // relay spool later.
+          debugPrint('Fedi3 pairing: chat snapshot import failed: $e');
+        }
       }
       if (!mounted) return;
       setState(() {

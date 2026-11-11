@@ -92,11 +92,12 @@ keys.
 - `GET /_fedi3/pair/:code`: return the sealed package without authentication
   (the code is a 128-bit secret) or `404`/`410` when missing/expired.
 
-The desktop client displays a QR code containing
-`fedi3://pair?relay=<relay-base>&code=<code>`. The already logged-in mobile
-client scans it, seals its identity package with the code and uploads it. The
-desktop polls the relay, decrypts the package and starts its core with the
-transferred identity.
+The already logged-in client displays a QR code containing
+`fedi3://pair?relay=<relay-base>&code=<code>`. Before showing it, that client
+exports its identity package (identity keys, account configuration and a chat
+snapshot), seals it with the code and uploads it to the relay. The device that
+is not logged in yet scans the QR, fetches the sealed package, decrypts it and
+starts its core with the transferred identity and chat snapshot.
 
 ### Chat delivery spool
 

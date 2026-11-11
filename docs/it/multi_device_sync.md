@@ -97,11 +97,12 @@ durante l'accesso manuale e avvia il core con le chiavi trasferite.
   autenticazione (il codice è un segreto di 128 bit) oppure `404`/`410` se
   manca/scaduto.
 
-Il client desktop mostra un codice QR contenente
-`fedi3://pair?relay=<relay-base>&code=<code>`. Il client mobile già autenticato
-lo scansiona, sigilla il proprio pacchetto di identità con il codice e lo carica.
-Il desktop interroga il relay, decifra il pacchetto e avvia il proprio core con
-l'identità trasferita e lo snapshot chat.
+Il client già autenticato mostra un codice QR contenente
+`fedi3://pair?relay=<relay-base>&code=<code>`. Prima di mostrarlo esporta il
+proprio pacchetto di identità (chiavi di identità, configurazione dell'account e
+snapshot chat), lo sigilla con il codice e lo carica sul relay. Il dispositivo
+non ancora autenticato scansiona il QR, scarica il pacchetto sigillato, lo
+decifra e avvia il proprio core con l'identità trasferita e lo snapshot chat.
 
 ### Spool di consegna chat
 

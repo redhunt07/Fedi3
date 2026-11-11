@@ -16,38 +16,27 @@ import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
 import '../widgets/fedi3_ui.dart';
 
-/// Desktop side of the QR pairing flow: shows a QR with a short-lived code and
-/// polls the relay until an already logged-in client uploads the sealed
-/// identity package. The received package starts the local core with the same
-/// account identity.
+/// Source side of the QR login flow: the already logged-in client shows a QR
+/// with a short-lived code, exports its account identity (and a chat snapshot),
+/// seals the package with that code and uploads it to the relay. The device that
+/// scans the QR fetches the package and starts with the same account.
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({
-    super.key,
-    required this.appState,
-    this.initialInstanceUrl,
-  });
+  const PairingScreen({super.key, required this.appState});
 
   final AppState appState;
-
-  /// Instance URL entered on the login screen or taken from the relay
-  /// directory, used to derive the relay HTTP base for polling.
-  final String? initialInstanceUrl;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  static const Duration _pollInterval = Duration(seconds: 2);
   static const Duration _sessionDuration = Duration(minutes: 10);
 
-  late final TextEditingController _instanceUrl;
   String? _code;
   String? _relayBase;
-  Timer? _pollTimer;
-  DateTime? _deadline;
-  bool _polling = false;
-  bool _starting = false;
+  Timer? _expiryTimer;
+  bool _busy = false;
+  bool _ready = false;
   String? _error;
   String? _status;
   int _generation = 0;
@@ -55,23 +44,14 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialInstanceUrl?.trim() ?? '';
-    _instanceUrl = TextEditingController(
-      text: initial.isNotEmpty
-          ? initial
-          : (widget.appState.config?.publicBaseUrl ?? ''),
-    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _instanceUrl.text.trim().isNotEmpty) {
-        unawaited(_startPairing());
-      }
+      if (mounted) unawaited(_startPairing());
     });
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
-    _instanceUrl.dispose();
+    _expiryTimer?.cancel();
     super.dispose();
   }
 
@@ -90,129 +70,114 @@ class _PairingScreenState extends State<PairingScreen> {
         },
       );
 
+  /// Exports this client's identity and publishes the sealed package under a
+  /// fresh code, then reveals the QR. The QR is shown only after the upload
+  /// succeeded, so a scan always finds the package on the relay.
   Future<void> _startPairing() async {
-    final relayBase =
-        IdentitySync.relayHttpBaseFromWs(_instanceUrl.text.trim());
-    if (relayBase.isEmpty) {
+    final config = widget.appState.config;
+    if (config == null || !widget.appState.isRunning) {
       setState(() {
-        _error = context.l10n.pairingInvalidUrl;
+        _code = null;
+        _ready = false;
+        _busy = false;
         _status = null;
+        _error = context.l10n.pairingLoginFirst;
       });
       return;
     }
-    _pollTimer?.cancel();
-    _generation++;
-    final generation = _generation;
-    setState(() {
-      _relayBase = relayBase;
-      _code = _randomCode();
-      _deadline = DateTime.now().add(_sessionDuration);
-      _error = null;
-      _status = context.l10n.pairingWaiting;
-      _starting = false;
-    });
-    _pollTimer = Timer.periodic(_pollInterval, (_) {
-      if (!mounted || generation != _generation) return;
-      unawaited(_pollOnce(generation));
-    });
-    unawaited(_pollOnce(generation));
-  }
-
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-  }
-
-  Future<void> _pollOnce(int generation) async {
-    if (!mounted ||
-        generation != _generation ||
-        _polling ||
-        _starting ||
-        _code == null ||
-        _relayBase == null) {
+    final relayBase = IdentitySync.relayHttpBaseFromWs(config.relayWs);
+    if (relayBase.isEmpty) {
+      setState(() {
+        _code = null;
+        _ready = false;
+        _busy = false;
+        _status = null;
+        _error = context.l10n.pairingInvalidUrl;
+      });
       return;
     }
-    final deadline = _deadline;
-    if (deadline != null && DateTime.now().isAfter(deadline)) {
-      _stopPolling();
+    _expiryTimer?.cancel();
+    _generation++;
+    final generation = _generation;
+    final code = _randomCode();
+    setState(() {
+      _code = code;
+      _relayBase = relayBase;
+      _ready = false;
+      _busy = true;
+      _error = null;
+      _status = context.l10n.pairingPreparing;
+    });
+    _expiryTimer = Timer(_sessionDuration, () {
+      if (!mounted || generation != _generation) return;
       setState(() {
+        _ready = false;
         _status = null;
         _error = context.l10n.pairingExpired;
       });
-      return;
-    }
-    _polling = true;
-    Map<String, dynamic>? sealed;
-    try {
-      sealed = await IdentitySync.fetchPairingPackage(
-        relayBase: _relayBase!,
-        code: _code!,
-      );
-    } catch (_) {
-      // A transient relay error must not end the session: keep polling.
-      sealed = null;
-    } finally {
-      _polling = false;
-    }
-    if (!mounted || generation != _generation || sealed == null) return;
-
-    _stopPolling();
-    setState(() {
-      _starting = true;
-      _error = null;
-      _status = context.l10n.pairingConnected;
     });
     try {
-      if (!IdentitySync.looksSealed(sealed)) {
-        throw const FormatException('invalid pairing envelope');
+      final api = CoreApi(
+        config: config,
+        totalTimeout: const Duration(seconds: 120),
+      );
+      final exported = await api.exportIdentity();
+      // History is a best-effort extra: the pairing must succeed even when the
+      // snapshot endpoint is unavailable or the account has no chat yet.
+      Map<String, dynamic>? chatSnapshot;
+      try {
+        chatSnapshot = await api.exportChatSnapshot();
+      } catch (_) {
+        chatSnapshot = null;
       }
-      final package = await IdentitySync.open(sealed, _code!);
-      final config = IdentitySync.configFromPackage(package);
-      // replaceConfig stops a running core first, so pairing also works from
-      // the settings screen of an already logged-in client.
-      await widget.appState.replaceConfig(config);
-      if (!mounted) return;
-      if (!widget.appState.isRunning) {
-        setState(() {
-          _error = context.l10n.pairingError(
-              widget.appState.lastError ?? context.l10n.networkErrorTitle);
-          _starting = false;
-        });
-        return;
+      final package = IdentitySync.buildPackage(
+        config,
+        exported,
+        chatSnapshot: chatSnapshot,
+      );
+      final envelope = await IdentitySync.seal(package, code);
+      try {
+        await IdentitySync.uploadPairingPackage(
+          relayBase: relayBase,
+          code: code,
+          user: config.username,
+          token: config.relayToken,
+          envelope: envelope,
+        );
+      } catch (_) {
+        // The relay may reject a large snapshot envelope (e.g. 400): retry
+        // once without it so the identity pairing still succeeds.
+        if (chatSnapshot == null || chatSnapshot.isEmpty) rethrow;
+        final fallbackPackage = IdentitySync.buildPackage(config, exported);
+        final fallbackEnvelope = await IdentitySync.seal(fallbackPackage, code);
+        await IdentitySync.uploadPairingPackage(
+          relayBase: relayBase,
+          code: code,
+          user: config.username,
+          token: config.relayToken,
+          envelope: fallbackEnvelope,
+        );
       }
-      // The snapshot is only carried by the pairing package: it is not part of
-      // CoreConfig. Importing it is best-effort, pairing still succeeds.
-      final rawSnapshot = package['chat_snapshot'];
-      final chatSnapshot =
-          rawSnapshot is Map ? rawSnapshot.cast<String, dynamic>() : null;
-      if (chatSnapshot != null && chatSnapshot.isNotEmpty) {
-        try {
-          // A large history import can take longer than the default API
-          // timeout; the core now imports it in one transaction, but the
-          // pairing must not give up while the snapshot is still loading.
-          await CoreApi(
-            config: config,
-            totalTimeout: const Duration(seconds: 120),
-          ).importChatSnapshot(chatSnapshot);
-        } catch (e) {
-          // Identity pairing already succeeded; history can be rebuilt from
-          // the relay spool later.
-          debugPrint('Fedi3 pairing: chat snapshot import failed: $e');
-        }
-      }
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
+      debugPrint('[pair] QR ready code=$code relay=$relayBase');
       setState(() {
+        _ready = true;
+        _busy = false;
+        _status = context.l10n.pairingWaiting;
+      });
+    } catch (e) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _ready = false;
+        _busy = false;
+        _status = null;
         _error = context.l10n.pairingError(e.toString());
-        _starting = false;
       });
     }
   }
 
   void _cancel() {
-    _stopPolling();
+    _expiryTimer?.cancel();
     Navigator.of(context).pop(false);
   }
 
@@ -232,34 +197,7 @@ class _PairingScreenState extends State<PairingScreen> {
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 18),
-          GlassPanel(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  key: const Key('pairingInstanceUrlField'),
-                  controller: _instanceUrl,
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
-                  enabled: !_starting,
-                  decoration: InputDecoration(
-                    labelText: context.l10n.pairingInstanceUrl,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                AuroraButton(
-                  label: _code == null
-                      ? context.l10n.pairingGenerate
-                      : context.l10n.pairingRegenerate,
-                  onPressed: _starting ? null : _startPairing,
-                  icon: Icons.qr_code_2_rounded,
-                  expand: true,
-                ),
-              ],
-            ),
-          ),
-          if (_code != null && _relayBase != null) ...[
-            const SizedBox(height: 18),
+          if (_ready && _code != null && _relayBase != null)
             Center(
               child: Container(
                 padding: const EdgeInsets.all(12),
@@ -275,7 +213,7 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
                 child: QrImageView(
                   data: _qrUri.toString(),
-                  size: 220,
+                  size: 240,
                   backgroundColor: Colors.white,
                   eyeStyle: const QrEyeStyle(
                     eyeShape: QrEyeShape.square,
@@ -287,7 +225,16 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               ),
+            )
+          else
+            const Center(
+              child: SizedBox(
+                width: 240,
+                height: 240,
+                child: Center(child: CircularProgressIndicator()),
+              ),
             ),
+          if (_ready && _relayBase != null) ...[
             const SizedBox(height: 12),
             Center(
               child: Text(
@@ -302,13 +249,13 @@ class _PairingScreenState extends State<PairingScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (_starting)
+                  if (_busy)
                     const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  if (_starting) const SizedBox(width: 8),
+                  if (_busy) const SizedBox(width: 8),
                   Flexible(child: Text(_status!)),
                 ],
               ),
@@ -323,6 +270,13 @@ class _PairingScreenState extends State<PairingScreen> {
             ),
           ],
           const SizedBox(height: 18),
+          AuroraButton(
+            label: context.l10n.pairingRegenerate,
+            onPressed: _busy ? null : _startPairing,
+            icon: Icons.refresh_rounded,
+            expand: true,
+          ),
+          const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _cancel,
             icon: const Icon(Icons.close_rounded),

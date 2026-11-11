@@ -1211,15 +1211,14 @@
   "callSwitchCameraFailed": "Impossibile cambiare fotocamera.",
   "onboardingLoginWithQr": "Accedi con QR",
   "pairingTitle": "Collega un dispositivo",
-  "pairingIntro": "Scansiona questo codice QR con un client già collegato a questo account.",
-  "pairingInstanceUrl": "URL istanza (https://...)",
-  "pairingGenerate": "Mostra codice QR",
+  "pairingIntro": "Mostra questo codice QR al dispositivo che vuoi collegare. Scade dopo 10 minuti.",
   "pairingRegenerate": "Nuovo codice",
-  "pairingWaiting": "In attesa dell’altro dispositivo…",
-  "pairingConnected": "Dispositivo collegato. Avvio del core…",
+  "pairingWaiting": "QR pronto. Scansionalo con il dispositivo che vuoi collegare.",
+  "pairingPreparing": "Preparazione del codice QR…",
+  "pairingLoginFirst": "Accedi prima su questo dispositivo.",
   "pairingExpired": "Il codice di accoppiamento è scaduto. Generane uno nuovo.",
-  "pairingInvalidUrl": "Inserisci l’URL dell’istanza del tuo account.",
-  "pairingError": "Accoppiamento non riuscito: {error}",
+  "pairingInvalidUrl": "Questo account non ha un relay configurato, quindi l’accesso con QR non è disponibile.",
+  "pairingError": "Impossibile preparare il codice QR: {error}",
   "@pairingError": {
     "placeholders": {
       "error": {
@@ -1227,11 +1226,12 @@
       }
     }
   },
-  "linkDeviceTitle": "Collega un nuovo dispositivo",
-  "linkDeviceIntro": "Inquadra il codice QR mostrato sull’altro dispositivo.",
-  "linkDeviceSuccess": "Dispositivo collegato",
+  "linkDeviceTitle": "Accedi con QR",
+  "linkDeviceIntro": "Scansiona il codice QR mostrato dal dispositivo già connesso a questo account.",
+  "linkDeviceSuccess": "Accesso eseguito. Sincronizzazione…",
+  "linkDeviceExpired": "Il codice QR è scaduto. Chiedine uno nuovo al dispositivo connesso.",
   "linkDeviceInvalidCode": "Questo codice QR non è un codice di accoppiamento Fedi3.",
-  "linkDeviceError": "Impossibile collegare il dispositivo: {error}",
+  "linkDeviceError": "Impossibile accedere: {error}",
   "@linkDeviceError": {
     "placeholders": {
       "error": {

@@ -4967,20 +4967,8 @@ abstract class AppLocalizations {
   /// No description provided for @pairingIntro.
   ///
   /// In en, this message translates to:
-  /// **'Scan this QR code with a client that is already logged in to this account.'**
+  /// **'Show this QR code to the device you want to link. It expires in 10 minutes.'**
   String get pairingIntro;
-
-  /// No description provided for @pairingInstanceUrl.
-  ///
-  /// In en, this message translates to:
-  /// **'Instance URL (https://...)'**
-  String get pairingInstanceUrl;
-
-  /// No description provided for @pairingGenerate.
-  ///
-  /// In en, this message translates to:
-  /// **'Show QR code'**
-  String get pairingGenerate;
 
   /// No description provided for @pairingRegenerate.
   ///
@@ -4991,14 +4979,20 @@ abstract class AppLocalizations {
   /// No description provided for @pairingWaiting.
   ///
   /// In en, this message translates to:
-  /// **'Waiting for the other device…'**
+  /// **'QR ready. Scan it with the device you want to link.'**
   String get pairingWaiting;
 
-  /// No description provided for @pairingConnected.
+  /// No description provided for @pairingPreparing.
   ///
   /// In en, this message translates to:
-  /// **'Device linked. Starting the core…'**
-  String get pairingConnected;
+  /// **'Preparing the QR code…'**
+  String get pairingPreparing;
+
+  /// No description provided for @pairingLoginFirst.
+  ///
+  /// In en, this message translates to:
+  /// **'Log in on this device first.'**
+  String get pairingLoginFirst;
 
   /// No description provided for @pairingExpired.
   ///
@@ -5009,32 +5003,38 @@ abstract class AppLocalizations {
   /// No description provided for @pairingInvalidUrl.
   ///
   /// In en, this message translates to:
-  /// **'Enter the instance URL of your account.'**
+  /// **'This account has no relay configured, so QR login is unavailable.'**
   String get pairingInvalidUrl;
 
   /// No description provided for @pairingError.
   ///
   /// In en, this message translates to:
-  /// **'Pairing failed: {error}'**
+  /// **'Could not prepare the QR code: {error}'**
   String pairingError(String error);
 
   /// No description provided for @linkDeviceTitle.
   ///
   /// In en, this message translates to:
-  /// **'Link a new device'**
+  /// **'Log in with QR'**
   String get linkDeviceTitle;
 
   /// No description provided for @linkDeviceIntro.
   ///
   /// In en, this message translates to:
-  /// **'Point the camera at the QR code shown on the other device.'**
+  /// **'Scan the QR code shown by the device that is already logged in to this account.'**
   String get linkDeviceIntro;
 
   /// No description provided for @linkDeviceSuccess.
   ///
   /// In en, this message translates to:
-  /// **'Device linked'**
+  /// **'Logged in. Syncing…'**
   String get linkDeviceSuccess;
+
+  /// No description provided for @linkDeviceExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'This QR code expired. Ask the logged-in device for a new one.'**
+  String get linkDeviceExpired;
 
   /// No description provided for @linkDeviceInvalidCode.
   ///
@@ -5045,7 +5045,7 @@ abstract class AppLocalizations {
   /// No description provided for @linkDeviceError.
   ///
   /// In en, this message translates to:
-  /// **'Could not link the device: {error}'**
+  /// **'Could not log in: {error}'**
   String linkDeviceError(String error);
 
   /// No description provided for @linkDeviceUnsupported.

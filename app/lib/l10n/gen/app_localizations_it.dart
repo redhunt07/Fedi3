@@ -2677,22 +2677,20 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get pairingIntro =>
-      'Scansiona questo codice QR con un client già collegato a questo account.';
-
-  @override
-  String get pairingInstanceUrl => 'URL istanza (https://...)';
-
-  @override
-  String get pairingGenerate => 'Mostra codice QR';
+      'Mostra questo codice QR al dispositivo che vuoi collegare. Scade dopo 10 minuti.';
 
   @override
   String get pairingRegenerate => 'Nuovo codice';
 
   @override
-  String get pairingWaiting => 'In attesa dell’altro dispositivo…';
+  String get pairingWaiting =>
+      'QR pronto. Scansionalo con il dispositivo che vuoi collegare.';
 
   @override
-  String get pairingConnected => 'Dispositivo collegato. Avvio del core…';
+  String get pairingPreparing => 'Preparazione del codice QR…';
+
+  @override
+  String get pairingLoginFirst => 'Accedi prima su questo dispositivo.';
 
   @override
   String get pairingExpired =>
@@ -2700,22 +2698,26 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get pairingInvalidUrl =>
-      'Inserisci l’URL dell’istanza del tuo account.';
+      'Questo account non ha un relay configurato, quindi l’accesso con QR non è disponibile.';
 
   @override
   String pairingError(String error) {
-    return 'Accoppiamento non riuscito: $error';
+    return 'Impossibile preparare il codice QR: $error';
   }
 
   @override
-  String get linkDeviceTitle => 'Collega un nuovo dispositivo';
+  String get linkDeviceTitle => 'Accedi con QR';
 
   @override
   String get linkDeviceIntro =>
-      'Inquadra il codice QR mostrato sull’altro dispositivo.';
+      'Scansiona il codice QR mostrato dal dispositivo già connesso a questo account.';
 
   @override
-  String get linkDeviceSuccess => 'Dispositivo collegato';
+  String get linkDeviceSuccess => 'Accesso eseguito. Sincronizzazione…';
+
+  @override
+  String get linkDeviceExpired =>
+      'Il codice QR è scaduto. Chiedine uno nuovo al dispositivo connesso.';
 
   @override
   String get linkDeviceInvalidCode =>
@@ -2723,7 +2725,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String linkDeviceError(String error) {
-    return 'Impossibile collegare il dispositivo: $error';
+    return 'Impossibile accedere: $error';
   }
 
   @override

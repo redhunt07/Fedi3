@@ -6,6 +6,8 @@
 import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../l10n/l10n_ext.dart';
@@ -18,7 +20,7 @@ import '../../services/backup_codec.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
 import '../widgets/relay_latency_badge.dart';
-import 'pairing_screen.dart';
+import 'link_device_screen.dart';
 
 enum OnboardingMode { loginExisting, createNew }
 
@@ -174,11 +176,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           onPressed: () => setState(() => _manualLogin = true),
                           child: Text(context.l10n.onboardingManualConfig),
                         ),
-                        TextButton.icon(
-                          onPressed: _openPairing,
-                          icon: const Icon(Icons.qr_code_2_rounded, size: 18),
-                          label: Text(context.l10n.onboardingLoginWithQr),
-                        ),
+                        if (_qrSupported)
+                          TextButton.icon(
+                            onPressed: _openPairing,
+                            icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                            label: Text(context.l10n.onboardingLoginWithQr),
+                          ),
                       ],
                     ),
                   ),
@@ -619,16 +622,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
+  bool get _qrSupported =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
   Future<void> _openPairing() async {
-    final entered = _quickUrl.text.trim().isNotEmpty
-        ? _quickUrl.text.trim()
-        : _publicBaseUrl.text.trim();
+    if (!_qrSupported) return;
+    // This device is the new one: it scans the QR shown by a client that is
+    // already logged in to the account.
     final paired = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => PairingScreen(
-          appState: widget.appState,
-          initialInstanceUrl: entered,
-        ),
+        builder: (_) => LinkDeviceScreen(appState: widget.appState),
       ),
     );
     if (paired == true && mounted) {

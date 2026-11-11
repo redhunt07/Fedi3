@@ -20,7 +20,6 @@ import 'client_updates_screen.dart';
 import 'dev_core_screen.dart';
 import 'edit_config_screen.dart';
 import 'follow_requests_screen.dart';
-import 'link_device_screen.dart';
 import 'moderation_settings_screen.dart';
 import 'networking_settings_screen.dart';
 import 'pairing_screen.dart';
@@ -419,17 +418,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _linkDevice(BuildContext context, CoreConfig cfg) {
-    final mobile = defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS;
-    _push(
-      context,
-      mobile
-          ? LinkDeviceScreen(appState: widget.appState)
-          : PairingScreen(
-              appState: widget.appState,
-              initialInstanceUrl: cfg.publicBaseUrl,
-            ),
-    );
+    // The already logged-in client shows the QR; the new device scans it.
+    _push(context, PairingScreen(appState: widget.appState));
   }
 
   void _push(BuildContext context, Widget page) {
