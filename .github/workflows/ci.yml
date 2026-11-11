@@ -127,6 +127,9 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install media test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+
       - name: pub get
         working-directory: app
         run: flutter pub get
