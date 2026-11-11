@@ -4,6 +4,10 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-12 — Rilasciata Fedi3 0.11.11
+
+La build 0.11.11 (4015) è disponibile sulla [pagina delle release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11) con l'AppImage Linux x86_64, lo ZIP Windows x64, gli APK Android arm64-v8a e x86_64 e i checksum SHA256. Raccoglie il lavoro pubblicato da 0.11.10: sincronizzazione chat multi-dispositivo con abbinamento QR, note vocali e video riproducibili, il servizio Android solo-push con minor consumo in background e sospensione P2P, e il push gateway self-hosted opzionale. La direzione del login QR è invertita: il client già loggato mostra il codice e il nuovo dispositivo lo scansiona. [Changelog](CHANGELOG.md) · [Screenshot](README.md#screenshots).
+
 ## 2026-11-11 — Servizio integrato solo-push: notifiche senza core in idle
 
 Il foreground service Android può ora funzionare in modalità solo-push, senza app di terze parti e senza core in idle. Mentre l'app è in background il servizio interroga solo lo spool chat del relay via HTTPS autenticato ogni 15 secondi e salva l'ultimo id visto; quando arriva qualcosa di nuovo avvia il core locale on-demand, svuota lo spool, mostra le notifiche di chat, chiamate e timeline, e ferma di nuovo il core dopo 30 secondi di quiete. In idle non ci sono swarm P2P né tunnel relay.

@@ -118,9 +118,9 @@ The configuration is saved atomically in the app data directory, with `600` perm
 
 Every change to the configuration restarts the core and waits for it to be ready. If the new value does not work, the app restores the previous configuration.
 
-## Installing Android 0.11.10
+## Installing Android 0.11.11
 
-From the [v0.11.10 release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.10), download
+From the [v0.11.11 release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11), download
 `app-arm64-v8a-release.apk` for 64-bit ARM phones or
 `app-x86_64-release.apk` for x86_64 emulators and verify its SHA256 against
 `checksums.txt`. These are sideload builds signed with the local debug key,

@@ -12,7 +12,7 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
 foreign download URLs and incompatible architectures are rejected. The updater
-was introduced in `0.10.0+1`; the current release line is `0.11.10+2013`. Clients
+was introduced in `0.10.0+1`; the current release line is `0.11.11+4015`. Clients
 older than `0.10.0` require a manual first upgrade.
 
 ## Installation

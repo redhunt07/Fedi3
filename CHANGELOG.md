@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-11-12
+
+### Android client
+
+- Add a push-only foreground service: while backgrounded it polls the relay
+  chat spool over authenticated HTTPS every 15 seconds and starts the local core
+  only when new items exist; the core stops after 30 seconds of quiet, calls
+  keep it alive through a heartbeat marker, and a boot/adoption probe stops an
+  orphan core left by a previous engine. Idle CPU is about 0.1-1 % of a core on
+  a Xiaomi 2201123G (Android 15) with the core stopped.
+- Add a process-wide core power profile (foreground/background/doze) and
+  stretch network cadences instead of polling at foreground rates; suspend the
+  P2P swarm while backgrounded when a relay tunnel can carry delivery, cap
+  libp2p connections, skip IPv6 dials without a route and disable mDNS on
+  mobile.
+- Slow UI timers and stop tickers on hidden pages.
+
+### Multi-device sync and QR login
+
+- Relay identity blobs, QR pair sessions, chat spool and endpoints; core
+  identity export, chat snapshot and spool polling.
+- Invert the QR login direction: the already logged-in client exports its
+  identity package (keys, account configuration, profile, moderation settings
+  and chat snapshot), seals it with a short-lived code and shows the QR; the new
+  device scans it from the login screen, imports the identity and snapshot and
+  starts the core with the transferred configuration.
+- Import chat snapshots in one transaction, drop pooled keep-alive sockets when
+  the core stops, restart a core left with a stale configuration and allow
+  large snapshots through the client timeout.
+
+### Media
+
+- Voice and video notes load and play on both sides: read the camelCase
+  `mediaType`, fall back to the file name or URL extension, show a play control
+  on the recipient bubble and keep the inline video player with its overlay; the
+  video recorder now enables the audio track.
+
+### Build and tooling
+
+- Migrate the Flutter client to `material_ui`/`cupertino_ui` and Flutter 3.50,
+  and cancel the SSE reconnect timer when the subscription is cancelled.
+- Android: Gradle 9.5.0, AGP 9.3.1, Kotlin 2.4.20 and `desktop_drop` 0.8.4.
+- Add the optional self-hosted push gateway (Web Push and ntfy) with per-relay
+  configuration.
+- CI: format checks, compose/OpenAPI contracts, `libmpv` for the media tests.
+
+### Client
+
+- Bump the client to 0.11.11 (build 4015).
+
 ## [0.11.10] - 2026-11-09
 
 ### Relay

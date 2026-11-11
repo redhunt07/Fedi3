@@ -4,6 +4,10 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-12 — Fedi3 0.11.11 released
+
+Build 0.11.11 (4015) is available on the [release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11) with the Linux x86_64 AppImage, the Windows x64 ZIP, the Android arm64-v8a and x86_64 APKs and SHA256 checksums. It collects the work published since 0.11.10: multi-device chat sync with QR pairing, playable voice and video notes, the push-only Android service with lower background drain and P2P suspension, and the optional self-hosted push gateway. The QR login direction is inverted: the already logged-in client shows the code and the new device scans it. [Changelog](CHANGELOG.md) · [Screenshots](README.md#screenshots).
+
 ## 2026-11-11 — Integrated push-only service: notifications without an idle core
 
 The Android foreground service can now run in push-only mode, with no third-party distributor and no idle core. While the app is backgrounded, the service only polls the relay chat spool over authenticated HTTPS every 15 seconds and stores the last seen id; when something new arrives it starts the local core on demand, drains the spool, shows chat, call and timeline notifications, and stops the core again after a 30-second quiet period. There is no P2P swarm and no relay tunnel while idle.
