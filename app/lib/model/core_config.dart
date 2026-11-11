@@ -5,6 +5,9 @@
 
 import 'dart:math';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
+
 class ProfileFieldKV {
   ProfileFieldKV({required this.name, required this.value});
 
@@ -399,7 +402,14 @@ class CoreConfig {
             webrtcIceCredential!.trim().isNotEmpty)
           'webrtc_ice_credential': webrtcIceCredential!.trim(),
         'device_sync_enable': deviceSyncEnable,
-        'device_sync_poll_secs': 3,
+        // Foreground cadence only: the native core stretches this while the
+        // client is backgrounded (see power.rs).
+        'device_sync_poll_secs': 5,
+        // mDNS keeps a multicast socket (and on Android a WiFi multicast
+        // wakelock) alive. Mobile clients find peers through relays and the
+        // DHT, so local discovery stays opt-in there.
+        'mdns_enable': !(defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS),
       },
     };
     if (identityPrivateKeyPem != null &&

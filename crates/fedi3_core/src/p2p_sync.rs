@@ -27,18 +27,21 @@ pub fn start_p2p_sync_worker(
         return None;
     }
     let interval_secs = cfg.sync_poll_secs.unwrap_or(30).max(5).min(3600);
+    // Outbox pulls are a network round-trip per followed peer. A backgrounded
+    // client can let them wait without losing anything: the next foreground
+    // sync catches up.
+    let background_secs = interval_secs.saturating_mul(4).min(1800);
+    let doze_secs = interval_secs.saturating_mul(10).min(3600);
     let batch_limit = cfg.sync_batch_limit.unwrap_or(50).max(1).min(200);
 
     Some(tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() { break; }
+                _ = crate::power::sleep(interval_secs, background_secs, doze_secs) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break; }
+                    continue;
                 }
-                _ = tick.tick() => {}
             }
             if *shutdown.borrow() {
                 break;

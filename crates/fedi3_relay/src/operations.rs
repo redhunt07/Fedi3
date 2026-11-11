@@ -201,13 +201,15 @@ pub(super) async fn push_register(
         {
             return (StatusCode::BAD_REQUEST, "invalid push endpoint").into_response();
         }
-        let valid = registration.webpush_keys.as_ref().is_some_and(|keys| {
+        // Web Push distributors return subscription keys; topic-style
+        // distributors (e.g. ntfy) accept the plain JSON wakeup and omit them.
+        if let Some(keys) = registration.webpush_keys.as_ref() {
             let decode = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s);
-            decode(&keys.pub_key).is_ok_and(|b| b.len() == 65 && b[0] == 4)
-                && decode(&keys.auth).is_ok_and(|b| b.len() == 16)
-        });
-        if !valid {
-            return (StatusCode::BAD_REQUEST, "webpush encryption keys required").into_response();
+            let valid = decode(&keys.pub_key).is_ok_and(|b| b.len() == 65 && b[0] == 4)
+                && decode(&keys.auth).is_ok_and(|b| b.len() == 16);
+            if !valid {
+                return (StatusCode::BAD_REQUEST, "invalid webpush encryption keys").into_response();
+            }
         }
     } else if registration.token.len() < 32
         || registration.token.len() > 512

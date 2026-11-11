@@ -743,7 +743,11 @@ pub async fn self_sync_chat_payload(
 }
 
 const CHAT_SPOOL_AFTER_META: &str = "chat_spool_after";
+/// Foreground chat latency. Background and doze clients poll far less often:
+/// this worker is one of the most expensive network wakeups on a phone.
 const CHAT_SPOOL_POLL_SECS: u64 = 3;
+const CHAT_SPOOL_BACKGROUND_SECS: u64 = 10;
+const CHAT_SPOOL_DOZE_SECS: u64 = 30;
 
 #[derive(Debug, serde::Deserialize)]
 struct ChatSpoolPage {
@@ -768,22 +772,27 @@ pub fn start_chat_spool_worker(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(CHAT_SPOOL_POLL_SECS));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first poll runs immediately so a client that just came online
+        // sees pending envelopes without waiting for the foreground cadence.
+        poll_chat_spool_once(&state, &relay_base, &relay_token).await;
         loop {
             tokio::select! {
-                _ = tick.tick() => {
-                    if *shutdown.borrow() {
-                        break;
-                    }
-                    poll_chat_spool_once(&state, &relay_base, &relay_token).await;
-                }
+                _ = crate::power::sleep(
+                    CHAT_SPOOL_POLL_SECS,
+                    CHAT_SPOOL_BACKGROUND_SECS,
+                    CHAT_SPOOL_DOZE_SECS,
+                ) => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         break;
                     }
+                    continue;
                 }
             }
+            if *shutdown.borrow() {
+                break;
+            }
+            poll_chat_spool_once(&state, &relay_base, &relay_token).await;
         }
     })
 }

@@ -17,6 +17,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../services/core_event_stream.dart';
 import '../../services/audio_devices.dart';
+import '../../services/call_activity_marker.dart';
 import '../../services/call_ice_config.dart';
 import '../../services/relay_capabilities.dart';
 import '../../services/screen_share_service.dart';
@@ -110,6 +111,8 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     CallScreen.active++;
+    widget.appState.holdCore();
+    unawaited(CallActivityMarker.start());
     // A banner already on screen would cover the call controls.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -125,6 +128,8 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _ended = true;
     CallScreen.active = (CallScreen.active - 1).clamp(0, 1 << 30);
+    widget.appState.releaseCore();
+    unawaited(CallActivityMarker.stop());
     _signalTimer?.cancel();
     _retrySignal?.cancel();
     _streamSub?.cancel();

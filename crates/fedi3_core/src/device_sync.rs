@@ -50,7 +50,14 @@ pub fn start_device_sync_worker(
     if !cfg.enable || !cfg.device_sync_enable.unwrap_or(false) {
         return None;
     }
-    let interval_secs = cfg.device_sync_poll_secs.unwrap_or(30).max(5).min(3600);
+    // Foreground cadence is configurable (linked clients want prompt chat
+    // replication); background and doze devices poll much more slowly so a
+    // phone does not keep the radio awake for a sync that can wait.
+    let interval_secs = cfg.device_sync_poll_secs.unwrap_or(5).max(2).min(300);
+    // Chat already replicates through the spool poll; device sync can wait a
+    // minute in the background without losing anything.
+    let background_secs = (interval_secs * 12).clamp(60, 1200);
+    let doze_secs = (interval_secs * 24).clamp(120, 3600);
     let batch_limit = cfg.sync_batch_limit.unwrap_or(50).max(1).min(200);
 
     let did = state
@@ -62,15 +69,13 @@ pub fn start_device_sync_worker(
     let did = did?;
 
     Some(tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() { break; }
+                _ = crate::power::sleep(interval_secs, background_secs, doze_secs) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break; }
+                    continue;
                 }
-                _ = tick.tick() => {}
             }
             if *shutdown.borrow() {
                 break;

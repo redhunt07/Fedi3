@@ -8,8 +8,9 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 /// Android foreground service that keeps the app process alive while the UI is
-/// in the background, so the local core and its event streams keep delivering
-/// notifications without a push provider.
+/// in the background. It polls the relay spool for new activity and starts the
+/// local core only when there is something to deliver, so notifications keep
+/// arriving without a push provider and without an idle core or P2P swarm.
 class BackgroundService {
   BackgroundService._();
 

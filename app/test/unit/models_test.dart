@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:fedi3/model/core_config.dart';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/services/backup_codec.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/test_config.dart';
@@ -166,7 +167,15 @@ void main() {
       expect(start['chat_identity_secret_b64'], 'c2VjcmV0');
       final p2p = start['p2p'] as Map;
       expect(p2p['device_sync_enable'], isFalse);
-      expect(p2p['device_sync_poll_secs'], 3);
+      expect(p2p['device_sync_poll_secs'], 5);
+      // `flutter test` defaults to the Android target platform, where the
+      // multicast wakelock-prone mDNS is off by default.
+      expect(p2p['mdns_enable'], isFalse);
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final desktopP2p =
+          decoded.toCoreStartJson()['p2p'] as Map<String, dynamic>;
+      expect(desktopP2p['mdns_enable'], isTrue);
 
       final defaults = CoreConfig.fromJson(<String, dynamic>{});
       expect(defaults.deviceSyncEnable, isTrue);

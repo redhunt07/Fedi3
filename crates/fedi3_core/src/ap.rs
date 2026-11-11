@@ -362,6 +362,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/net/metrics") => net_metrics_get(state, req).await,
         ("GET", "/_fedi3/net/metrics.prom") => net_metrics_prom(state, req).await,
         ("GET", "/_fedi3/health") => core_health(state, req).await,
+        ("POST", "/_fedi3/power") => power_set(state, req).await,
         ("GET", "/_fedi3/stream") => ui_stream_get(state, req).await,
         // P2P sync endpoints (peer-to-peer, public-only).
         ("GET", "/.fedi3/sync/outbox") => p2p_sync_outbox(state, req).await,
@@ -1282,6 +1283,31 @@ async fn relays_refresh_post(state: &ApState, req: Request<Body>) -> Response<Bo
         return resp;
     }
     let _ = crate::relay_sync::sync_once(state).await;
+    simple(StatusCode::OK, "ok")
+}
+
+/// Internal: switches the background polling profile. The Flutter client uses
+/// the FFI call on mobile; this endpoint keeps the same control available to
+/// desktop builds and to integration tests.
+async fn power_set(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let raw = parts
+        .uri
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("mode="))
+        .unwrap_or_default();
+    let Some(mode) = crate::power::parse_mode(raw) else {
+        return simple(
+            StatusCode::BAD_REQUEST,
+            "mode must be foreground, background or doze",
+        );
+    };
+    crate::power::set_mode(mode);
     simple(StatusCode::OK, "ok")
 }
 
@@ -3820,11 +3846,11 @@ pub fn start_chat_retry_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Chat and call signaling are latency-sensitive: a queued envelope
-        // must be retried within seconds, not tens of seconds.
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        // must be retried within seconds while the client is visible. A
+        // backgrounded client can retry less often; the queue is persistent.
         loop {
             tokio::select! {
-                _ = tick.tick() => {
+                _ = crate::power::sleep(5, 15, 30) => {
                     if *shutdown.borrow() {
                         break;
                     }
@@ -7166,7 +7192,7 @@ async fn ui_stream_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     Sse::new(stream)
         .keep_alive(
             KeepAlive::new()
-                .interval(Duration::from_secs(15))
+                .interval(Duration::from_secs(crate::power::interval_secs(15, 30, 60)))
                 .text("keepalive"),
         )
         .into_response()

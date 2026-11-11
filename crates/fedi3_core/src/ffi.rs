@@ -86,6 +86,24 @@ pub extern "C" fn fedi3_core_stop(handle: u64, out_err: *mut *mut c_char) -> c_i
     })
 }
 
+/// Switches the core polling profile (0 = foreground, 1 = background,
+/// 2 = doze). Mobile clients call this on every lifecycle change so network
+/// workers stop waking the radio at foreground cadence while the app is not
+/// visible. Returns 0 on success, 1 for an unknown handle, 2 for a bad mode.
+#[no_mangle]
+pub extern "C" fn fedi3_core_set_power_mode(handle: u64, mode: u32) -> c_int {
+    run_guarded(std::ptr::null_mut(), "fedi3_core_set_power_mode", || {
+        if !runtime::handle_exists(handle) {
+            return 1;
+        }
+        if crate::power::set_mode(mode as u8) {
+            0
+        } else {
+            2
+        }
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn fedi3_core_free_cstring(ptr: *mut c_char) {
     let _ = catch_unwind(AssertUnwindSafe(|| {

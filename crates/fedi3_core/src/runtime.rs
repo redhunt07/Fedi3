@@ -515,6 +515,16 @@ pub fn stop(handle: u64) -> Result<()> {
     Ok(())
 }
 
+/// True when `handle` still names a running core. Used to validate the FFI
+/// calls that do not need a full start/stop cycle (for example the power
+/// profile switch).
+pub fn handle_exists(handle: u64) -> bool {
+    let reg = REGISTRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reg.iter().any(|(h, _)| *h == handle)
+}
+
 fn run_core(
     cfg: CoreStartConfig,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -529,6 +539,9 @@ fn run_core(
 
     rt.block_on(async move {
         let relay_ws_enabled = !cfg.relay_ws.trim().is_empty();
+        // A relay tunnel can carry delivery while the UI is backgrounded, so
+        // the P2P swarm may be suspended. A P2P-only account keeps it alive.
+        crate::power::set_relay_available(relay_ws_enabled);
         let public_base_url = if cfg.public_base_url.trim().is_empty() {
             if relay_ws_enabled {
                 infer_http_base_from_relay_ws(&cfg.relay_ws)?

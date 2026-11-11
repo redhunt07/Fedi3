@@ -67,7 +67,6 @@ impl ObjectFetchWorker {
         http: reqwest::Client,
         signed: Option<SignedFetchConfig>,
     ) -> Result<()> {
-        let tick = Duration::from_secs(3);
         loop {
             if *shutdown.borrow() {
                 break;
@@ -82,7 +81,7 @@ impl ObjectFetchWorker {
             if jobs.is_empty() {
                 tokio::select! {
                     _ = self.notify.notified() => {}
-                    _ = tokio::time::sleep(tick) => {}
+                    _ = crate::power::sleep(3, 10, 30) => {}
                     _ = shutdown.changed() => {}
                 }
                 continue;

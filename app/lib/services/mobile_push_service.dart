@@ -208,14 +208,13 @@ class MobilePushService {
       UnifiedPushPlatform.instance.register(_scope, const [], 'Fedi3', _vapid);
 
   Future<void> _newEndpoint(PushEndpoint endpoint, String scope) async {
-    if (!enabled || scope != _scope || endpoint.pubKeySet == null) return;
+    if (!enabled || scope != _scope || endpoint.url.isEmpty) return;
+    final keys = endpoint.pubKeySet;
     _registration = {
       'provider': 'unifiedpush',
       'token': endpoint.url,
-      'webpush_keys': {
-        'pub_key': endpoint.pubKeySet!.pubKey,
-        'auth': endpoint.pubKeySet!.auth
-      }
+      if (keys != null)
+        'webpush_keys': {'pub_key': keys.pubKey, 'auth': keys.auth},
     };
     await _persist();
     await _registerRelay();
@@ -288,7 +287,9 @@ class MobilePushService {
 
   @visibleForTesting
   static bool validWake(List<int> content, {required bool decrypted}) {
-    if (!decrypted || content.isEmpty || content.length > 4096) return false;
+    // Web Push distributors decrypt the payload; topic distributors (ntfy)
+    // deliver the same opaque JSON in clear. Both are content-free wakeups.
+    if (content.isEmpty || content.length > 4096) return false;
     try {
       final value = jsonDecode(utf8.decode(content));
       return value is Map && value['event'] == 'sync';

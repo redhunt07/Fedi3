@@ -220,6 +220,48 @@ services:
         # enables relay together with caddy.
         required: false
 
+  push_gateway:
+    profiles: ["push"]
+    image: fedi3-push-gateway:latest
+    build:
+      context: .
+      dockerfile: deploy/push_gateway/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      - FEDI3_PUSH_GATEWAY_BIND=0.0.0.0:8090
+      - FEDI3_PUSH_GATEWAY_PATH=${FEDI3_PUSH_GATEWAY_PATH:-/push}
+      - FEDI3_PUSH_GATEWAY_TOKEN=${FEDI3_RELAY_PUSH_GATEWAY_TOKEN:?set FEDI3_RELAY_PUSH_GATEWAY_TOKEN in .env}
+      - FEDI3_PUSH_GATEWAY_VAPID_PRIVATE_KEY=${FEDI3_PUSH_GATEWAY_VAPID_PRIVATE_KEY:-}
+      - FEDI3_PUSH_GATEWAY_VAPID_SUBJECT=${FEDI3_PUSH_GATEWAY_VAPID_SUBJECT:-mailto:admin@localhost}
+      - FEDI3_PUSH_GATEWAY_PROVIDERS=${FEDI3_RELAY_PUSH_PROVIDERS:-unifiedpush}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging: *default-logging
+    mem_limit: 128m
+
+  ntfy:
+    profiles: ["push"]
+    image: binwiederhier/ntfy
+    restart: unless-stopped
+    command: serve
+    environment:
+      - NTFY_BASE_URL=${FEDI3_NTFY_BASE_URL:?set FEDI3_NTFY_BASE_URL in .env}
+      - NTFY_BEHIND_PROXY=true
+      - NTFY_LISTEN_HTTP=:80
+      - NTFY_CACHE_FILE=/var/lib/ntfy/cache.db
+      - NTFY_AUTH_FILE=/var/lib/ntfy/auth.db
+      - NTFY_AUTH_DEFAULT_ACCESS=read-write
+    volumes:
+      - ntfy_data:/var/lib/ntfy
+    logging: *default-logging
+    mem_limit: 128m
+
   p2p_infra:
     profiles: ["p2p"]
     stop_grace_period: 15s
@@ -305,3 +347,4 @@ volumes:
   relay_pg_data:
   relay_meili_data:
   p2p_infra_data:
+  ntfy_data:

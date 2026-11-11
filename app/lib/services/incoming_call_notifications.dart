@@ -39,7 +39,10 @@ class IncomingCallNotifications {
   bool _stopped = false;
 
   void start() {
-    _timer ??= Timer.periodic(const Duration(seconds: 2), (_) => poll());
+    // Loopback polling is cheap, but every tick still wakes this isolate.
+    // 5 s keeps an invite ringing promptly without a constant 2 s heartbeat;
+    // the core event stream also triggers an immediate poll on call signals.
+    _timer ??= Timer.periodic(const Duration(seconds: 5), (_) => poll());
     unawaited(poll());
   }
 

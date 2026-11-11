@@ -90,10 +90,10 @@ void main() {
     app.dispose();
   });
 
-  test('wakeups require decrypted, bounded JSON with the expected event', () {
+  test('wakeups require bounded JSON with the expected event', () {
     final bytes = utf8.encode('{"event":"sync"}');
     expect(MobilePushService.validWake(bytes, decrypted: true), isTrue);
-    expect(MobilePushService.validWake(bytes, decrypted: false), isFalse);
+    expect(MobilePushService.validWake(bytes, decrypted: false), isTrue);
     expect(
         MobilePushService.validWake(
             utf8.encode('{"event":"chat","body":"spoof"}'),

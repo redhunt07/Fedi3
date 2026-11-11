@@ -175,7 +175,6 @@ impl DeliveryQueue {
     ) -> Result<()> {
         info!("delivery queue db: {}", self.db_path.display());
 
-        let tick = Duration::from_secs(2);
         loop {
             if *shutdown.borrow() {
                 break;
@@ -207,7 +206,7 @@ impl DeliveryQueue {
             if jobs.is_empty() {
                 tokio::select! {
                     _ = self.notify.notified() => {}
-                    _ = tokio::time::sleep(tick) => {}
+                    _ = crate::power::sleep(2, 5, 15) => {}
                     _ = shutdown.changed() => {}
                 }
                 continue;

@@ -30,6 +30,16 @@ typedef _StopNative = ffi.Int32 Function(
     ffi.Uint64, ffi.Pointer<ffi.Pointer<ffi.Char>>);
 typedef _StopDart = int Function(int, ffi.Pointer<ffi.Pointer<ffi.Char>>);
 
+typedef _PowerModeNative = ffi.Int32 Function(ffi.Uint64, ffi.Uint32);
+typedef _PowerModeDart = int Function(int, int);
+
+/// Polling profiles understood by the native core.
+abstract final class CorePowerMode {
+  static const int foreground = 0;
+  static const int background = 1;
+  static const int doze = 2;
+}
+
 ffi.DynamicLibrary _openCoreLibrary() {
   if (Platform.isAndroid) return ffi.DynamicLibrary.open('libfedi3_core.so');
   if (Platform.isIOS) return ffi.DynamicLibrary.process();
@@ -121,7 +131,12 @@ abstract interface class AsyncCoreStop {
   Future<void> stopAsync(int handle);
 }
 
-class Fedi3Core implements CoreRuntime, AsyncCoreStop {
+/// Optional seam for cores that adapt their background polling cadence.
+abstract interface class PowerAwareCore {
+  void setPowerMode(int handle, int mode);
+}
+
+class Fedi3Core implements CoreRuntime, AsyncCoreStop, PowerAwareCore {
   Fedi3Core._(this._lib)
       : _version = _lib
             .lookupFunction<_VersionNative, _VersionDart>('fedi3_core_version'),
@@ -136,6 +151,9 @@ class Fedi3Core implements CoreRuntime, AsyncCoreStop {
       _lib.lookupFunction<_StartNative, _StartDart>('fedi3_core_start');
   late final _StopDart _stop =
       _lib.lookupFunction<_StopNative, _StopDart>('fedi3_core_stop');
+  late final _PowerModeDart _powerMode = _lib
+      .lookupFunction<_PowerModeNative, _PowerModeDart>(
+          'fedi3_core_set_power_mode');
   late final _StringFreeDart _freeCString =
       _lib.lookupFunction<_StringFreeNative, _StringFreeDart>(
           'fedi3_core_free_cstring');
@@ -148,6 +166,17 @@ class Fedi3Core implements CoreRuntime, AsyncCoreStop {
 
   @override
   Future<void> stopAsync(int handle) => stopInBackground(handle);
+
+  /// Switches the native polling profile. A core library built before this
+  /// entry point existed simply keeps its previous cadence.
+  @override
+  void setPowerMode(int handle, int mode) {
+    try {
+      _powerMode(handle, mode);
+    } catch (_) {
+      // Older core builds do not export the symbol.
+    }
+  }
 
   String version() {
     final ptr = _version();

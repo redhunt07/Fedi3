@@ -7,6 +7,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/fedi3_core.dart' show CorePowerMode;
+import '../../services/app_activity.dart';
 import '../../services/identity_sync.dart';
 import '../../state/app_state.dart';
 import '../../state/peer_presence_store.dart';
@@ -67,6 +69,17 @@ class _AutoStartCoreState extends State<AutoStartCore> {
     }
   }
 
+  /// A core started while the UI is visible must use the foreground cadence,
+  /// even when the previous owner (the Android keep-alive isolate) left it in
+  /// background mode.
+  void _applyPowerMode() {
+    widget.appState.setPowerMode(
+      AppActivity.foreground
+          ? CorePowerMode.foreground
+          : CorePowerMode.background,
+    );
+  }
+
   void _kick() {
     final cfg = widget.appState.config;
     if (!identical(cfg, _attemptedConfig)) _started = false;
@@ -82,6 +95,7 @@ class _AutoStartCoreState extends State<AutoStartCore> {
     if (widget.appState.isRunning) {
       _started = true;
       _wasRunning = true;
+      _applyPowerMode();
       return;
     }
     _started = true;
@@ -89,6 +103,7 @@ class _AutoStartCoreState extends State<AutoStartCore> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       await widget.appState.startCore();
+      if (mounted) _applyPowerMode();
       if (mounted && !widget.appState.isRunning) _started = false;
       final running = widget.appState.config;
       if (!mounted || !widget.appState.isRunning || running == null) return;

@@ -80,8 +80,9 @@ gateway.
 
 ## Does Android keep notifications when the app is closed?
 
-Yes. A keep-alive foreground service keeps a headless Flutter engine alive for
-timeline, chat and incoming-call notifications, with separate sounds for
+Yes. A keep-alive foreground service keeps a headless Flutter engine alive that
+polls the relay spool for timeline, chat and incoming-call activity and wakes the
+local core only when there is something to deliver, with separate sounds for
 activity, chat and calls. Android 14+ declares `remoteMessaging` and falls back
 to `dataSync` below; Android 15 caps `dataSync` services at six hours per day.
 Aggressive battery optimization can still delay delivery: allow Fedi3 to run in

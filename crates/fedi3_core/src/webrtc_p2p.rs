@@ -561,14 +561,19 @@ where
         let handler = handler.clone();
         let metrics = metrics.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(cfg.poll_secs));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Foreground calls need a fast signalling cadence. Backgrounded
+            // clients keep the same channel open but poll far less often: an
+            // idle relay round-trip every couple of seconds is pure radio
+            // drain on a phone. A repeated failure is logged once per minute
+            // instead of on every tick.
+            let mut last_warn_ms: i64 = 0;
             loop {
                 tokio::select! {
-                    _ = shutdown.changed() => {
-                        if *shutdown.borrow() { break; }
+                    _ = crate::power::sleep(cfg.poll_secs, 10, 30) => {}
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() { break; }
+                        continue;
                     }
-                    _ = tick.tick() => {}
                 }
                 if *shutdown.borrow() {
                     break;
@@ -589,9 +594,16 @@ where
                 );
                 let json =
                     match signed_get_json(&http, &cfg.private_key_pem, &cfg.key_id, &url).await {
-                        Ok(v) => v,
+                        Ok(v) => {
+                            last_warn_ms = 0;
+                            v
+                        }
                         Err(e) => {
-                            warn!("webrtc poll failed: {e:#}");
+                            let now = now_ms();
+                            if last_warn_ms == 0 || now.saturating_sub(last_warn_ms) >= 60_000 {
+                                warn!("webrtc poll failed: {e:#}");
+                                last_warn_ms = now;
+                            }
                             continue;
                         }
                     };

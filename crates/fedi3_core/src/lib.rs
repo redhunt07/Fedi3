@@ -51,6 +51,7 @@ pub mod net_policy;
 pub mod object_fetch;
 pub mod p2p;
 pub mod p2p_sync;
+pub mod power;
 pub mod relay_bridge;
 pub mod relay_sync;
 pub mod runtime;

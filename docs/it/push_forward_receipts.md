@@ -23,11 +23,13 @@ cifratura P-256/segreto auth. Solo JSON decifrato e limitato con
 `event: "sync"` è accettato come wakeup. Nessun mittente, conversazione o testo
 di messaggio è inserito nel payload push.
 
-Se Android avvia un motore Flutter headless, Fedi3 mostra una notifica generica e
-lascia lo spool durevole sul relay finché la UI non si apre. Non avvia un core
-nativo concorrente in un altro motore. Un motore UI già esistente può
-sincronizzare il proprio core. Il permesso per le notifiche viene richiesto
-durante l'attivazione esplicita; i callback in background controllano solo il
+Se Android avvia un motore Flutter headless, Fedi3 esegue il servizio solo-push
+descritto sotto: interroga lo spool chat del relay e avvia il core locale
+on-demand quando ci sono nuovi elementi, così mostra le notifiche reali di chat,
+chiamate e attività invece di un segnaposto generico. Un core lasciato attivo da
+un motore precedente viene adottato, non duplicato. Il permesso per le notifiche
+viene richiesto durante l'attivazione esplicita; i callback in background
+controllano solo il
 permesso e non tentano mai di mostrare un prompt.
 
 Su iOS, registrazione/rotazione del dispositivo APNs, fallimento della
@@ -84,23 +86,80 @@ Il gateway riceve una POST HTTPS autenticata con:
 {"provider":"unifiedpush","token":"https://push.example/opaque-endpoint","event":"sync","ttl_secs":86400,"webpush_keys":{"pub_key":"BASE64URL_P256","auth":"BASE64URL_AUTH"}}
 ```
 
-Deve cifrare i messaggi UnifiedPush secondo RFC 8291, traducendo `pub_key` nel
-`p256dh` della sottoscrizione Web Push, e usare la chiave privata VAPID
-configurata dove richiesto. Per APNs deve usare team/key/topic appropriati e
+Per le sottoscrizioni Web Push deve cifrare i messaggi UnifiedPush secondo
+RFC 8291, traducendo `pub_key` nel `p256dh` della sottoscrizione, e usare la
+chiave privata VAPID configurata dove richiesto. Quando `webpush_keys` è
+assente (distributori basati su topic come ntfy) deve inviare in chiaro
+`{"event":"sync"}` all'endpoint pubblico del topic, senza cifratura né VAPID.
+Per APNs deve usare team/key/topic appropriati e
 l'endpoint sandbox o production, con payload
 `{"aps":{"content-available":1},"fedi3":{"event":"sync"}}`,
 `apns-push-type: background`, priorità 5 e un identificatore di coalescing. Il
 gateway deve autenticare il chiamante, limitare le destinazioni, unire i retry e
 rispettare il TTL; conosce la destinazione del dispositivo, non i contenuti della
-chat né le credenziali dell'account. Questo repository definisce il contratto del
-gateway; non contiene né attiva un deployment di un gateway provider. I
+chat né le credenziali dell'account. Il repository include un gateway di
+riferimento in `crates/fedi3_push_gateway`; nessun gateway viene attivato se non
+sono configurati il profilo Compose `push` e le impostazioni push del relay. I
 fallimenti dei provider non eliminano lo spool.
+
+## Gateway self-hosted e ntfy
+
+`crates/fedi3_push_gateway` implementa il contratto qui sopra e supporta due
+trasporti UnifiedPush:
+
+- Distributori Web Push (ad esempio NextPush) che restituiscono
+  `pub_key`/`auth`: il gateway cifra il wakeup (RFC 8188/8291) e lo autentica
+  con VAPID.
+- Distributori basati su topic (ad esempio ntfy): l'endpoint è un URL pubblico
+  del topic e `webpush_keys` è omesso; il gateway invia `{"event":"sync"}` in
+  chiaro.
+
+Il relay accetta entrambi: `webpush_keys` viene validato se presente ed è
+opzionale altrimenti. Il client mobile registra endpoint senza chiavi e accetta
+sia wakeup decifrati sia wakeup in chiaro.
+
+Ogni relay esegue la propria istanza di gateway e ntfy, e ogni URL è specifico
+del relay. Il profilo Compose `push` avvia `push_gateway` e `ntfy`; impostare
+`FEDI3_NTFY_BASE_URL`, `FEDI3_PUSH_GATEWAY_PATH` e le impostazioni push del
+relay nel `.env` privato di quel relay. `deploy/push_gateway/Caddyfile.example`
+mostra due layout:
+
+- Sottodomini dedicati (richiedono record DNS): `ntfy.example.org` e
+  `push.example.org`.
+- Stesso dominio del relay, per relay senza sottodomini DNS: ntfy sotto `/ntfy`
+  e gateway sotto `/_fedi3/push`, con
+  `FEDI3_RELAY_PUSH_GATEWAY_URL=https://relay.example.org/_fedi3/push`.
+
+VAPID è opzionale per il trasporto ntfy in chiaro. Generare una coppia con
+`fedi3_push_gateway --generate-vapid` quando si usa anche un distributore Web
+Push, poi impostare la chiave privata sul gateway e la chiave pubblica
+corrispondente in `FEDI3_RELAY_PUSH_VAPID_PUBLIC_KEY` del relay.
 
 Il relay limita i tentativi di wakeup a uno per account al minuto. Un worker
 separato ritenta gli account offline in batch cursore di 64, otto richieste
 concorrenti, timeout HTTP di quattro secondi e nessun redirect. Non blocca la
 pulizia dello spool. Senza configurazione del gateway non viene tentato alcun
 wakeup in uscita.
+
+## Modalità solo-push integrata (senza app di terze parti)
+
+Android include anche una modalità integrata che non richiede alcun distributore:
+il foreground service dell'app funziona in modalità solo-push. Invece di tenere
+vivi il core locale e lo swarm P2P, il servizio interroga lo spool chat del relay
+via HTTPS autenticato ogni 15 secondi (`GET /_fedi3/chat/spool` con il Bearer
+token dell'account) e ricorda l'ultimo id visto in `relay_spool.json`. Quando il
+poll restituisce nuovi elementi il servizio avvia il core on-demand, lo adotta,
+svuota lo spool, mostra le notifiche di chat, chiamate e timeline, e ferma di
+nuovo il core dopo 30 secondi di quiete. In idle non ci sono core, tunnel relay
+né swarm P2P; su un Xiaomi 2201123G (Android 15) la CPU in idle del servizio è
+circa 0,1 % di un core.
+
+Le chiamate sono protette: la schermata di chiamata mantiene il core attivo
+finché la chiamata è in corso, così una chiamata avviata da una notifica non
+viene chiusa dal timer di quiete. Tornando alla UI il core riparte normalmente.
+Gli account solo-P2P (senza tunnel relay) tengono il core attivo, perché non c'è
+uno spool relay da interrogare. Il percorso UnifiedPush / gateway descritto sopra
+resta disponibile e opzionale; le due modalità possono coesistere.
 
 ## Build dei client mobile
 

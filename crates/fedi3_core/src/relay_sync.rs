@@ -57,16 +57,14 @@ pub fn start_relay_sync_worker(
     state: ApState,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    let interval_secs = 300;
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() { break; }
+                _ = crate::power::sleep(300, 900, 1800) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break; }
+                    continue;
                 }
-                _ = tick.tick() => {}
             }
             if *shutdown.borrow() {
                 break;

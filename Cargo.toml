@@ -5,6 +5,7 @@ members = [
   "crates/fedi3_protocol",
   "crates/fedi3_relay",
   "crates/fedi3_p2p_infra",
+  "crates/fedi3_push_gateway",
 ]
 
 [profile.release]

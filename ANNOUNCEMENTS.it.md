@@ -4,6 +4,36 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-11 — Servizio integrato solo-push: notifiche senza core in idle
+
+Il foreground service Android può ora funzionare in modalità solo-push, senza app di terze parti e senza core in idle. Mentre l'app è in background il servizio interroga solo lo spool chat del relay via HTTPS autenticato ogni 15 secondi e salva l'ultimo id visto; quando arriva qualcosa di nuovo avvia il core locale on-demand, svuota lo spool, mostra le notifiche di chat, chiamate e timeline, e ferma di nuovo il core dopo 30 secondi di quiete. In idle non ci sono swarm P2P né tunnel relay.
+
+Misurato su un Xiaomi 2201123G (Android 15): con lo spool stabilizzato il poller restituisce `items=0` e la CPU in idle del servizio è circa 0,1 % di un core, senza wakeup del core nei log. Un primo poll su un backlog ampio drena al massimo 50 elementi storici una volta sola e poi avanza il cursore. Le chiamate mantengono il core attivo per tutta la durata; gli account solo-P2P (senza tunnel relay) tengono il core attivo perché non c'è uno spool da interrogare. La modalità è opt-in in **Impostazioni → Sicurezza → Notifiche in background**, e il percorso UnifiedPush/gateway resta disponibile per chi preferisce un distributore.
+
+## 2026-11-11 — Gateway push self-hosted con ntfy, per ogni relay
+
+Fedi3 può ora risvegliare un telefono tramite un gateway push self-hosted invece di tenere vivo un servizio in background. Il nuovo `fedi3_push_gateway` (in `crates/fedi3_push_gateway`, distribuito con il profilo Compose `push` e un container ntfy) accetta i wakeup autenticati del relay e li consegna ai distributori UnifiedPush. Sono supportati due trasporti: distributori Web Push (NextPush) con `webpush_keys` e cifratura VAPID, e distributori basati su topic come ntfy, dove l'app registra un URL del topic senza chiavi e il gateway pubblica il wakeup in chiaro `{"event":"sync"}`. Il relay accetta registrazioni senza chiavi e il client mobile accetta wakeup in chiaro.
+
+Ogni relay esegue la propria istanza di gateway e ntfy. Ogni URL è specifico del relay, quindi la configurazione di un relay non influenza gli altri. I relay con sottodomini DNS usano host dedicati; quelli senza li montano sotto un percorso del dominio del relay (`/_fedi3/push`) e ntfy sotto `/ntfy`, configurati nel `.env` di quel relay. `deploy/push_gateway/Caddyfile.example` mostra entrambi i layout.
+
+Con un distributore installato e il push attivo, il client può fermare il proprio servizio in primo piano e lasciare che il distributore mantenga la connessione; le notifiche arrivano senza il core in esecuzione. La modalità FGS resta disponibile.
+
+## 2026-11-11 — Sospensione P2P in background: consumo inattivo vicino alle app mainstream
+
+Un client in background non tiene più viva l'intera mesh P2P. Quando la UI non è visibile e c'è un tunnel relay configurato, il core chiude le connessioni DHT e gossip e mantiene solo i peer relay che servono la mailbox store-and-forward e le nostre prenotazioni; i circuiti relay in ingresso restano aperti, così i peer che consegnano messaggi non vengono disconnessi a metà richiesta e costretti a riprovare. Tornando in foreground il core riavvia entrambi i DHT e ricollega subito i peer Fedi3 conosciuti, quindi il P2P riprende con la stessa raggiungibilità di prima. Gli account solo-P2P (senza tunnel relay) mantengono lo swarm attivo, perché il relay non copre la consegna.
+
+Sono state allungate anche le cadenze residue in background: device sync a 60 s, mailbox a 120 s, keep-alive SSE a 30 s e ping del tunnel a 30 s (60 s in doze), con il watchdog del pong adeguato.
+
+Su uno Xiaomi 2201123G (Android 15) la CPU del core in background è ora l'1,2-1,4 % di un core, rispetto al 5,6 % del giro precedente e a circa il 24 % prima dell'inizio dei lavori; l'app tiene 11 socket TCP (tunnel relay, HTTPS in pool e loopback della UI) invece di 138, il continuo viavai di circuiti relay che teneva sveglio il runtime è sparito e, una volta assestata la sincronizzazione, non si misura traffico radio in background. Timeline, chat, notifiche e ripresa del P2P in foreground sono state provate sul dispositivo.
+
+## 2026-11-10 — Meno consumo di batteria e meno calore su Android
+
+Il client non tiene più occupata la CPU del telefono mentre resta in background. Il core ora espone un profilo di alimentazione a livello di processo: l'app lo porta in foreground, background o doze seguendo il ciclo di vita dell'activity, e ogni poller di rete allunga la propria cadenza invece di girare a quella del foreground. I controlli dello spool chat passano da 3 s a 10 s (30 s in doze), la sincronizzazione dispositivi da 5 s a 30 s, la segnalazione WebRTC dall'intervallo configurato a 10 s, la mailbox P2P da 15 s a 60 s, la sincronizzazione relay e legacy a 15/30 minuti, e la coda di consegna, il fetch degli oggetti e la GC dello storage rallentano allo stesso modo. La latenza in foreground è invariata.
+
+Due consumi di background sono stati eliminati del tutto: mDNS è ora disattivato per impostazione predefinita su Android e iOS (il socket multicast aperto teneva un wakelock WiFi multicast per ore; relay e DHT forniscono già la scoperta) e lo swarm libp2p è limitato a 48 connessioni stabilite, al massimo 2 per peer, con dial pendenti limitati. Prima del limite il DHT pubblico continuava a contattare ogni peer conosciuto e lo swarm superava le 130 connessioni inattive su un telefono, ed era questo a tenere calda la CPU. Gli indirizzi IPv6 vengono filtrati quando il dispositivo non ha una rotta IPv6, l'heartbeat di gossipsub è di 5 s invece di 1 s e le schede inattive non fanno più girare le animazioni.
+
+Su uno Xiaomi 2201123G (Android 15) la CPU del core in background è scesa da circa il 24 % di un core (con picchi oltre il 60 %) al 5-10 %, il numero di connessioni resta tra 24 e 44 invece di salire oltre 130 e non viene più tenuto alcun wakelock multicast. Timeline, chat, notifiche e segnalazione WebRTC sono state provate sul dispositivo dopo la modifica.
+
 ## 2026-11-09 — Sincronizzazione multi-dispositivo, accesso QR e note vocali riproducibili
 
 Le note vocali e le video note ora si caricano e si riproducono su entrambi i lati: il client legge il campo camelCase `mediaType` scritto dai core più recenti, ripiega sul nome del file o sull'estensione dell'URL quando il tipo è vuoto o generico e mostra un controllo di riproduzione sulla bolla del destinatario invece di un semplice allegato. Le video note mantengono il player inline con l'overlay di riproduzione; le note audio mantengono la bolla vocale dedicata. Il registratore ora abilita anche la traccia audio per le video note, così il clip registrato contiene il suono.

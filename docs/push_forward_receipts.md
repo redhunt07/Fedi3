@@ -21,11 +21,13 @@ Fedi3 sends the endpoint and its P-256 encryption key/auth secret to its relay.
 Only decrypted, bounded JSON with `event: "sync"` is accepted as a wakeup.
 No sender, conversation or message text is placed in a push payload.
 
-If Android starts a headless Flutter engine, Fedi3 displays a generic notification
-and leaves the durable spool on the relay until the UI opens. It does not start
-a competing native core in another engine. An existing UI engine can synchronize
-its own core. Notifications permission is requested during explicit activation;
-background callbacks only check permission and never attempt a permission prompt.
+If Android starts a headless Flutter engine, Fedi3 runs the push-only service
+described below: it polls the relay chat spool and starts the local core on
+demand when new items exist, so the real chat, call and activity notifications
+are shown instead of a generic placeholder. A core left running by a previous
+engine is adopted rather than duplicated. Notifications permission is requested
+during explicit activation; background callbacks only check permission and never
+attempt a permission prompt.
 
 On iOS, APNs device registration/rotation, registration failure and background
 notification callbacks are implemented in `AppDelegate.swift`. Native callbacks
@@ -61,6 +63,9 @@ Set these in the relay's private `.env`, then recreate the relay service:
 {"provider":"unifiedpush","token":"https://push.example/opaque-endpoint","webpush_keys":{"pub_key":"BASE64URL_P256","auth":"BASE64URL_AUTH"}}
 ```
 
+`webpush_keys` may be omitted for topic-style distributors such as ntfy; the
+endpoint is then a public topic URL.
+
 For APNs use `{"provider":"apns","token":"HEX_DEVICE_TOKEN"}` without Web Push
 keys. Registration requires an enabled account, validates provider/token/key
 shape and rejects private HTTP push destinations. The endpoint is renewed for
@@ -73,21 +78,75 @@ The gateway receives an authenticated HTTPS POST with:
 {"provider":"unifiedpush","token":"https://push.example/opaque-endpoint","event":"sync","ttl_secs":86400,"webpush_keys":{"pub_key":"BASE64URL_P256","auth":"BASE64URL_AUTH"}}
 ```
 
-It must encrypt UnifiedPush messages according to RFC 8291, translating `pub_key`
-to the Web Push subscription's `p256dh`, and use its configured VAPID private key
-where required. For APNs it must use the appropriate team/key/topic and sandbox
+For Web Push subscriptions it must encrypt UnifiedPush messages according to
+RFC 8291, translating `pub_key` to the Web Push subscription's `p256dh`, and use
+its configured VAPID private key where required. When `webpush_keys` is absent
+(topic-style distributors such as ntfy), it must POST the plain `{"event":"sync"}`
+wakeup to the public topic endpoint without encryption or VAPID. For APNs it must use the appropriate team/key/topic and sandbox
 or production endpoint, with payload
 `{"aps":{"content-available":1},"fedi3":{"event":"sync"}}`,
 `apns-push-type: background`, priority 5 and a coalescing identifier. The gateway
 must authenticate the caller, restrict destinations, coalesce retries and respect
 TTL; it learns the device destination, not chat contents or account credentials.
-This repository defines the gateway contract; it does not contain or activate a
-provider gateway deployment. Provider failures do not delete the spool.
+The repository ships a reference gateway in `crates/fedi3_push_gateway`; no
+gateway is activated unless the `push` Compose profile and the relay push
+settings are configured. Provider failures do not delete the spool.
 
 The relay limits wake attempts to one/account/minute. A separate worker retries
 pending offline accounts in cursor-based batches of 64, eight concurrent requests,
 with four-second HTTP timeouts and no redirects. It does not hold up spool cleanup.
 Without gateway configuration no outbound wakeups are attempted.
+
+## Self-hosted gateway and ntfy
+
+`crates/fedi3_push_gateway` implements the contract above. It supports two
+UnifiedPush transports:
+
+- Web Push distributors (for example NextPush) that return `pub_key`/`auth`:
+  the gateway encrypts the wakeup (RFC 8188/8291) and authenticates it with
+  VAPID.
+- Topic-style distributors (for example ntfy): the endpoint is a public topic
+  URL and `webpush_keys` is omitted; the gateway POSTs `{"event":"sync"}` to it.
+
+The relay accepts both: `webpush_keys` is validated when present and optional
+otherwise. The mobile client registers keyless endpoints and accepts clear
+wakeups as well as decrypted ones.
+
+Each relay runs its own gateway and ntfy instance, and every URL is per relay.
+The `push` Compose profile starts `push_gateway` and `ntfy`; set
+`FEDI3_NTFY_BASE_URL`, `FEDI3_PUSH_GATEWAY_PATH` and the relay push settings in
+that relay's private `.env`. `deploy/push_gateway/Caddyfile.example` shows two
+layouts:
+
+- Dedicated subdomains (DNS records required): `ntfy.example.org` and
+  `push.example.org`.
+- Same domain as the relay, for relays without DNS subdomains: ntfy under
+  `/ntfy` and the gateway under `/_fedi3/push`, with
+  `FEDI3_RELAY_PUSH_GATEWAY_URL=https://relay.example.org/_fedi3/push`.
+
+VAPID is optional for the plain ntfy transport. Generate a key pair with
+`fedi3_push_gateway --generate-vapid` when a Web Push distributor is also used,
+then set the private key on the gateway and the matching public key in the
+relay's `FEDI3_RELAY_PUSH_VAPID_PUBLIC_KEY`.
+
+## Integrated push-only mode (no third-party app)
+
+Android also ships an integrated mode that needs no distributor: the app's own
+foreground service runs in push-only mode. Instead of keeping the local core and
+the P2P swarm alive, the service polls the relay chat spool over authenticated
+HTTPS every 15 seconds (`GET /_fedi3/chat/spool` with the account's Bearer
+token) and remembers the last seen id in `relay_spool.json`. When the poll
+returns new items the service starts the core on demand, adopts it, drains the
+spool, shows chat, call and timeline notifications, and stops the core again
+after a 30-second quiet period. While idle there is no core, no relay tunnel and
+no P2P swarm; on a Xiaomi 2201123G (Android 15) the service's idle CPU is about
+0.1 % of a core.
+
+Calls are protected: the call screen holds the core while a call is active, so a
+call started from a notification is not torn down by the quiet timer. Returning
+to the UI restarts the core normally. P2P-only accounts (no relay tunnel) keep
+the core running, because there is no relay spool to poll. The UnifiedPush /
+gateway path above remains available and optional; both modes can coexist.
 
 ## Building mobile clients
 

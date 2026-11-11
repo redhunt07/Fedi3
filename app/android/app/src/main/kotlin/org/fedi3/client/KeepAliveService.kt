@@ -16,14 +16,15 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
 
 /**
- * Keeps the app process (and therefore the local core plus its event streams)
- * alive while the UI is in the background, so notifications keep arriving
- * without waiting for a push provider.
+ * Keeps the app process alive while the UI is in the background so new activity
+ * still reaches the user without a push provider.
  *
  * The service hosts its own headless Flutter engine that runs the
- * `backgroundMain` entrypoint, so notifications keep working even after the
- * activity is destroyed or the task is swiped away. Measured cost is about
- * 16 MB of additional PSS and 0.2% of one core.
+ * `backgroundMain` entrypoint. That entrypoint is push-only: it polls the relay
+ * spool over HTTPS and starts the local core only when there is something to
+ * deliver, stopping it again after a quiet period. No core and no P2P swarm
+ * stay alive while the phone is idle. Measured idle cost is about 16 MB of
+ * additional PSS and well under 1% of one core.
  */
 class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -56,7 +57,7 @@ class KeepAliveService : Service() {
                 NotificationManager.IMPORTANCE_LOW
             )
             channel.setShowBadge(false)
-            channel.description = "Keeps Fedi3 connected for notifications"
+            channel.description = "Checks for new activity and wakes Fedi3 when needed"
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         // Android gives startForegroundService() a five second window. Enter the
@@ -97,7 +98,7 @@ class KeepAliveService : Service() {
         )
         val notification: Notification = builder
             .setContentTitle("Fedi3")
-            .setContentText(text ?: "Connected for notifications")
+            .setContentText(text ?: "Checking for new activity")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setContentIntent(openApp)

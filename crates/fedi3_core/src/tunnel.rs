@@ -249,8 +249,23 @@ where
         }
     });
 
-    let mut ping = tokio::time::interval(options.ping_interval);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The tunnel ping is the main radio wakeup while the app is backgrounded:
+    // a 5 s heartbeat keeps the phone's modem busy all day. Stretch it when
+    // the UI is away; a pong timeout above the interval keeps the watchdog
+    // meaningful without dropping a healthy tunnel.
+    fn scaled(
+        base: std::time::Duration,
+        background_secs: u64,
+        doze_secs: u64,
+    ) -> std::time::Duration {
+        let secs = match crate::power::mode() {
+            crate::power::FOREGROUND => return base,
+            crate::power::BACKGROUND => background_secs,
+            _ => doze_secs,
+        };
+        std::time::Duration::from_secs(secs).max(base)
+    }
+    let mut next_ping = tokio::time::Instant::now() + scaled(options.ping_interval, 30, 60);
     let mut last_pong = std::time::Instant::now();
 
     let mut result: anyhow::Result<()> = Ok(());
@@ -265,9 +280,11 @@ where
                     break;
                 }
             }
-            _ = ping.tick() => {
+            _ = tokio::time::sleep_until(next_ping) => {
+                next_ping = tokio::time::Instant::now() + scaled(options.ping_interval, 30, 60);
+                let pong_timeout = scaled(options.pong_timeout, 60, 120);
                 // Watchdog: a half-open tunnel that never answers pings must be replaced.
-                if last_pong.elapsed() > options.pong_timeout {
+                if last_pong.elapsed() > pong_timeout {
                     result = Err(anyhow::anyhow!(
                         "no pong for {:?} (watchdog)",
                         last_pong.elapsed()

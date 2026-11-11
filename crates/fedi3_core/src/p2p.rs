@@ -14,7 +14,7 @@ use libp2p::kad::{Quorum, Record};
 use libp2p::multiaddr::Protocol;
 use libp2p::Transport;
 use libp2p::{
-    autonat,
+    autonat, connection_limits,
     core::muxing::StreamMuxerBox,
     core::upgrade,
     dcutr, gossipsub, identify, identity, kad, mdns, noise, ping, quic, relay, request_response,
@@ -53,6 +53,30 @@ fn relay_peer_of(addr: &Multiaddr) -> Option<PeerId> {
 /// Exponential retry delay for a relay reservation that keeps closing.
 fn relay_retry_delay(attempts: u32) -> Duration {
     Duration::from_secs(5u64.saturating_mul(1u64 << attempts.min(5))).min(Duration::from_secs(120))
+}
+
+/// Cached IPv6 route probe. A phone with no global IPv6 route cannot reach
+/// `/ip6/...` peers: dialling them only burns radio and floods the log with
+/// `NetworkUnreachable` retries until the dial timeout expires.
+fn ipv6_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        std::net::UdpSocket::bind("[::]:0")
+            .and_then(|socket| socket.connect("[2001:4860:4860::8888]:53"))
+            .is_ok()
+    })
+}
+
+/// True when an address is worth dialling/listening on this device.
+fn dialable(addr: &Multiaddr) -> bool {
+    ipv6_available() || !addr.iter().any(|p| matches!(p, Protocol::Ip6(_)))
+}
+
+/// mDNS keeps a multicast socket open; on Android that holds a WiFi multicast
+/// wakelock for hours. Mobile clients discover peers through relays and the
+/// DHT, so local discovery is opt-in there and off by default.
+fn mdns_default_enabled() -> bool {
+    !cfg!(any(target_os = "android", target_os = "ios"))
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -507,10 +531,20 @@ impl From<gossipsub::Event> for BehaviourEvent {
         Self::Gossip(v)
     }
 }
+// Connection limits never emit events; the derive still requires the conversion.
+impl From<std::convert::Infallible> for BehaviourEvent {
+    fn from(v: std::convert::Infallible) -> Self {
+        match v {}
+    }
+}
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "BehaviourEvent")]
 struct Behaviour {
+    /// Hard cap on libp2p connections. Without it the public DHT keeps dialing
+    /// every peer it learns about and the swarm grows without bound (observed
+    /// >130 established connections on a phone), which burns CPU and battery.
+    connection_limits: connection_limits::Behaviour,
     mdns: libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour>,
     identify: identify::Behaviour,
     ping: ping::Behaviour,
@@ -644,7 +678,7 @@ where
             })
             .boxed();
 
-    let mdns = if cfg.mdns_enable.unwrap_or(true) {
+    let mdns = if cfg.mdns_enable.unwrap_or_else(mdns_default_enabled) {
         match mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id) {
             Ok(behaviour) => Some(behaviour),
             Err(e) => {
@@ -692,15 +726,31 @@ where
     let dcutr = dcutr::Behaviour::new(peer_id);
 
     let gossip = {
+        // The default 1 s heartbeat wakes the runtime every second forever.
+        // Global gossip is best-effort: a slower mesh maintenance cadence cuts
+        // idle wakeups fivefold without changing message propagation, which is
+        // push-based.
         let cfg = gossipsub::ConfigBuilder::default()
             .max_transmit_size(256 * 1024)
+            .heartbeat_interval(Duration::from_secs(5))
             .build()
             .expect("gossipsub config");
         let auth = gossipsub::MessageAuthenticity::Signed(keypair.clone());
         gossipsub::Behaviour::new(auth, cfg).expect("gossipsub")
     };
 
+    // Mobile devices must not behave like full DHT nodes: cap the swarm so a
+    // long-running client cannot accumulate hundreds of idle connections.
+    let connection_limits = connection_limits::Behaviour::new(
+        connection_limits::ConnectionLimits::default()
+            .with_max_established(Some(48))
+            .with_max_established_per_peer(Some(2))
+            .with_max_pending_outgoing(Some(16))
+            .with_max_pending_incoming(Some(8)),
+    );
+
     let behaviour = Behaviour {
+        connection_limits,
         mdns,
         identify,
         ping,
@@ -721,26 +771,35 @@ where
     if !force_relay_only {
         // Deserializing an omitted Option does not use P2pConfig::default().
         // The Flutter payload omits listen; still open direct TCP/QUIC ports.
-        if let Some(listen) = cfg
+        let mut listens: Vec<String> = cfg
             .listen
             .as_deref()
-            .or(Some("/ip4/0.0.0.0/tcp/0,/ip4/0.0.0.0/udp/0/quic-v1"))
-        {
-            for s in listen
-                .split(',')
-                .map(|v| v.trim())
-                .filter(|v| !v.is_empty())
-            {
-                // A single bad listen address (for example an IPv6 bind on a
-                // device without IPv6) must not abort the whole P2P stack.
-                match s.parse::<Multiaddr>() {
-                    Ok(addr) => {
-                        if let Err(e) = swarm.listen_on(addr.clone()) {
-                            tracing::warn!(%addr, error = %e, "p2p listen failed");
-                        }
-                    }
-                    Err(e) => tracing::warn!(listen = s, error = %e, "invalid p2p listen address"),
+            .unwrap_or("/ip4/0.0.0.0/tcp/0,/ip4/0.0.0.0/udp/0/quic-v1")
+            .split(',')
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        // A QUIC/TCP socket bound to IPv4 cannot send to `/ip6/` peers. When
+        // the device really has an IPv6 route, listen on both families so
+        // discovered IPv6 addresses are reachable instead of failing.
+        if ipv6_available() {
+            for addr in ["/ip6/::/tcp/0", "/ip6/::/udp/0/quic-v1"] {
+                if !listens.iter().any(|v| v == addr) {
+                    listens.push(addr.to_string());
                 }
+            }
+        }
+        for s in listens {
+            // A single bad listen address (for example an IPv6 bind on a
+            // device without IPv6) must not abort the whole P2P stack.
+            match s.parse::<Multiaddr>() {
+                Ok(addr) if dialable(&addr) => {
+                    if let Err(e) = swarm.listen_on(addr.clone()) {
+                        tracing::warn!(%addr, error = %e, "p2p listen failed");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(listen = s, error = %e, "invalid p2p listen address"),
             }
         }
     }
@@ -760,6 +819,9 @@ where
         let Ok(addr) = s.trim().parse::<Multiaddr>() else {
             continue;
         };
+        if !dialable(&addr) {
+            continue;
+        }
         let Some(relay_peer) = relay_peer_of(&addr) else {
             tracing::warn!(%addr, "relay reservation requires a terminal peer ID");
             continue;
@@ -797,7 +859,9 @@ where
     if let Some(items) = &cfg.bootstrap {
         for s in items {
             if let Ok(a) = s.parse::<Multiaddr>() {
-                boot.insert(a);
+                if dialable(&a) {
+                    boot.insert(a);
+                }
             }
         }
     }
@@ -839,6 +903,11 @@ where
             self_addrs.push(format!("{r}/p2p-circuit/p2p/{peer_id}"));
         }
     }
+    self_addrs.retain(|s| {
+        s.parse::<Multiaddr>()
+            .map(|addr| dialable(&addr))
+            .unwrap_or(false)
+    });
     self_addrs.sort();
     self_addrs.dedup();
     let mut self_record = PeerDiscoveryRecord {
@@ -858,11 +927,18 @@ where
 
     // Mailbox targets: infra peers that provide store-and-forward.
     let mailbox_poll_secs = cfg.mailbox_poll_secs.unwrap_or(15).max(5).min(300);
+    // Store-and-forward can wait while the client is backgrounded: the relay
+    // holds the mailbox, and each poll is a full request/response round-trip.
+    let mailbox_background_secs = mailbox_poll_secs.saturating_mul(8).min(1200);
+    let mailbox_doze_secs = mailbox_poll_secs.saturating_mul(16).min(3600);
     let mut mailbox_targets: Vec<PeerId> = Vec::new();
     if let Some(relays) = cfg.relay_reserve.as_ref() {
         let mut by_peer: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
         for s in relays {
             if let Ok(addr) = s.parse::<Multiaddr>() {
+                if !dialable(&addr) {
+                    continue;
+                }
                 let mut pid: Option<PeerId> = None;
                 for p in addr.iter() {
                     if let Protocol::P2p(h) = p {
@@ -882,8 +958,9 @@ where
             mailbox_targets.push(pid);
         }
     }
-    let mut mailbox_tick = tokio::time::interval(Duration::from_secs(mailbox_poll_secs));
-    mailbox_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // First mailbox poll runs immediately (previous interval behaviour); the
+    // cadence after that follows the power profile.
+    let mut mailbox_next = tokio::time::Instant::now();
     let mut mailbox_pending: HashMap<request_response::OutboundRequestId, PeerId> = HashMap::new();
     // Persist mailbox dedup using the main inbox_seen table via a reserved namespace.
 
@@ -930,6 +1007,7 @@ where
         .iter()
         .flatten()
         .filter_map(|s| s.parse::<Multiaddr>().ok())
+        .filter(dialable)
         .filter_map(|addr| {
             addr.iter()
                 .filter_map(|p| {
@@ -943,6 +1021,13 @@ where
         })
         .collect();
     let mut public_relay_cooldowns = HashMap::new();
+    // While the UI is away the swarm keeps only the relay connections that
+    // carry the mailbox and our relay reservations. The DHT/gossip mesh is
+    // dropped: dozens of idle libp2p connections were the largest background
+    // CPU cost on a phone, and the relay covers delivery meanwhile.
+    // A core started by the keep-alive isolate is already in the background:
+    // do not open the DHT/gossip mesh until the UI comes back.
+    let mut swarm_suspended = !crate::power::is_foreground() && crate::power::relay_available();
 
     if discovery_enabled {
         // Try to publish immediately (will replicate when peers are known).
@@ -976,9 +1061,13 @@ where
                 let now = now_ms();
                 exchange_last.retain(|id, _| connected_peers.contains(id));
                 exchange_requested.retain(|id, _| connected_peers.contains(id));
-                if connected_peers.len() < 32 {
+                if !swarm_suspended && connected_peers.len() < 32 {
                     for (peer, addrs) in peer_book.candidates(now, &connected_peers) {
-                        for addr in addrs.into_iter().filter_map(|s| s.parse::<Multiaddr>().ok()) {
+                        for addr in addrs
+                            .into_iter()
+                            .filter_map(|s| s.parse::<Multiaddr>().ok())
+                            .filter(dialable)
+                        {
                             swarm.add_peer_address(peer, addr);
                         }
                         let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
@@ -999,8 +1088,12 @@ where
             }
             _ = public_tick.tick(), if public_enabled => {
                 public_relay_cooldowns.retain(|_, until| *until > tokio::time::Instant::now());
-                for seed in public_seeds.iter().take(8) {
+                if !swarm_suspended {
+                    for seed in public_seeds.iter().take(8) {
                     if let Ok(addr) = seed.parse::<Multiaddr>() {
+                        if !dialable(&addr) {
+                            continue;
+                        }
                         if let Some(Protocol::P2p(peer)) = addr.iter().last() {
                             if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() {
                                 public.kad.add_address(&peer, addr.clone());
@@ -1013,11 +1106,12 @@ where
                         }
                     }
                 }
-                if public_ready {
-                    if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() {
-                        let _ = public.kad.bootstrap();
-                        let _ = public.kad.start_providing(discovery::public_provider_key());
-                        public.kad.get_providers(discovery::public_provider_key());
+                    if public_ready {
+                        if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() {
+                            let _ = public.kad.bootstrap();
+                            let _ = public.kad.start_providing(discovery::public_provider_key());
+                            public.kad.get_providers(discovery::public_provider_key());
+                        }
                     }
                 }
                 provider_candidates.clear();
@@ -1064,6 +1158,9 @@ where
                         let Ok(mut addr) = raw.trim().parse::<Multiaddr>() else {
                             continue;
                         };
+                        if !dialable(&addr) {
+                            continue;
+                        }
                         let Some(relay_peer) = relay_peer_of(&addr) else {
                             continue;
                         };
@@ -1133,7 +1230,7 @@ where
                 }
             }
             _ = discovery_tick.tick() => {
-                if discovery_enabled {
+                if discovery_enabled && !swarm_suspended {
                     self_record.addrs = base_self_addrs.clone();
                     if !prefer_relay_addrs && !observed_addrs.is_empty() {
                         // Publish a bounded set of observed external addrs (best-effort).
@@ -1167,7 +1264,13 @@ where
                     did_publish_pending.insert(q);
                 }
             }
-            _ = mailbox_tick.tick() => {
+            _ = tokio::time::sleep_until(mailbox_next) => {
+                mailbox_next = tokio::time::Instant::now()
+                    + Duration::from_secs(crate::power::interval_secs(
+                        mailbox_poll_secs,
+                        mailbox_background_secs,
+                        mailbox_doze_secs,
+                    ));
                 if mailbox_targets.is_empty() {
                     continue;
                 }
@@ -1191,6 +1294,48 @@ where
                     mailbox_pending.insert(req_id, pid.clone());
                     mailbox_sent_at.insert(req_id, now_ms());
                 }
+            }
+            _ = crate::power::changed() => {
+                let background = !crate::power::is_foreground();
+                if background && crate::power::relay_available() && !swarm_suspended {
+                    // Keep the relay peers that serve the mailbox and our
+                    // reservations; drop the rest of the mesh.
+                    let keep: HashSet<PeerId> = mailbox_targets
+                        .iter()
+                        .copied()
+                        .chain(configured_relays.iter().copied())
+                        .chain(public_relays.iter().copied())
+                        .collect();
+                    let drop: Vec<PeerId> = connected_peers
+                        .iter()
+                        .filter(|peer| !keep.contains(*peer))
+                        .copied()
+                        .collect();
+                    for peer in &drop {
+                        let _ = swarm.disconnect_peer_id(*peer);
+                    }
+                    swarm_suspended = true;
+                    info!(
+                        kept = keep.len(),
+                        closed = drop.len(),
+                        "p2p swarm suspended in background"
+                    );
+                } else if !background && swarm_suspended {
+                    // Rebuild the mesh: bootstrap the DHTs and let the peer
+                    // tick redial the known Fedi3 peers immediately.
+                    let _ = swarm.behaviour_mut().kad.bootstrap();
+                    if public_enabled {
+                        if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() {
+                            let _ = public.kad.bootstrap();
+                        }
+                    }
+                    peers_tick.reset_immediately();
+                    swarm_suspended = false;
+                    info!("p2p swarm resumed in foreground");
+                }
+                // Returning to the foreground must resume the mailbox cadence
+                // immediately instead of waiting out a background sleep.
+                mailbox_next = tokio::time::Instant::now();
             }
             msg = out_rx.recv() => {
                 let Some(msg) = msg else { break; };
@@ -1230,6 +1375,9 @@ where
                         let Ok(peer) = peer_id.parse::<PeerId>() else { continue; };
                         for a in addrs {
                             if let Ok(addr) = a.parse::<Multiaddr>() {
+                                if !dialable(&addr) {
+                                    continue;
+                                }
                                 if dynamic_relay_only {
                                     let ok = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
                                     if !ok {
@@ -1331,8 +1479,20 @@ where
                             observed_addrs.insert(address);
                         }
                     }
-                    SwarmEvent::ConnectionEstablished { peer_id: remote_peer, .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id: remote_peer, endpoint, .. } => {
                         connected_peers.insert(remote_peer);
+                        // While suspended, drop connections we opened for DHT
+                        // discovery, but keep inbound ones: they are peers
+                        // delivering traffic through the relay, and closing
+                        // them makes senders retry in a loop.
+                        if swarm_suspended
+                            && matches!(endpoint, libp2p::core::ConnectedPoint::Dialer { .. })
+                            && !mailbox_targets.contains(&remote_peer)
+                            && !configured_relays.contains(&remote_peer)
+                            && !public_relays.contains(&remote_peer)
+                        {
+                            let _ = swarm.disconnect_peer_id(remote_peer);
+                        }
                         for (req, tx) in connecting.remove(&remote_peer).unwrap_or_default() {
                             if !tx.is_closed() {
                                 let id = swarm.behaviour_mut().rr.send_request(&remote_peer, req);
@@ -1340,7 +1500,7 @@ where
                             }
                         }
                         metrics.p2p_connected_peers_set(connected_peers.len() as u64);
-                        if !kad_bootstrapped {
+                        if !kad_bootstrapped && !swarm_suspended {
                             kad_bootstrapped = swarm.behaviour_mut().kad.bootstrap().is_ok();
                         }
                     }
@@ -1373,7 +1533,7 @@ where
                             }
                         }
                         if info.protocols.iter().any(|p| p.as_ref() == discovery::PRIVATE_DHT) {
-                            for addr in &info.listen_addrs {
+                            for addr in info.listen_addrs.iter().filter(|a| dialable(a)) {
                                 swarm.behaviour_mut().kad.add_address(&remote_peer, addr.clone());
                             }
                             if !kad_bootstrapped { kad_bootstrapped = swarm.behaviour_mut().kad.bootstrap().is_ok(); }
@@ -1388,7 +1548,9 @@ where
                             if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() { public.kad.remove_peer(&remote_peer); }
                         } else if info.protocols.iter().any(|p| p.as_ref() == "/ipfs/kad/1.0.0") {
                             if let Some(public) = swarm.behaviour_mut().public_dht.as_mut() {
-                                for addr in &info.listen_addrs { public.kad.add_address(&remote_peer, addr.clone()); }
+                                for addr in info.listen_addrs.iter().filter(|a| dialable(a)) {
+                                    public.kad.add_address(&remote_peer, addr.clone());
+                                }
                                 if !public_ready {
                                     public_ready = public.kad.bootstrap().is_ok();
                                     if public_ready { info!(peer=%remote_peer, "public IPFS discovery bootstrap connected"); }
@@ -1415,13 +1577,16 @@ where
                                 }
                             }
                         }
-                        if !prefer_relay_addrs {
+                        if !prefer_relay_addrs && dialable(&info.observed_addr) {
                             swarm.add_external_address(info.observed_addr.clone());
                             observed_addrs.insert(info.observed_addr);
                         }
                     }
                     SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                         for (p, addr) in list {
+                            if !dialable(&addr) {
+                                continue;
+                            }
                             info!(peer=%p, %addr, "p2p discovered");
                             swarm.add_peer_address(p, addr);
                             if connected_peers.len() < 32 {
@@ -1770,6 +1935,7 @@ fn learn_contacts(
             for addr in addrs
                 .into_iter()
                 .filter_map(|a| a.parse::<Multiaddr>().ok())
+                .filter(dialable)
             {
                 swarm.add_peer_address(peer, addr);
             }

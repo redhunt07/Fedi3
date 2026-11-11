@@ -31,9 +31,10 @@ Both `FEDI3_RELAY_PUSH_GATEWAY_URL` (public HTTPS) and
 `FEDI3_RELAY_PUSH_GATEWAY_TOKEN` (at least 32 random characters) are required.
 Without them registration returns 503 and no pushes are attempted. The gateway
 receives authenticated JSON: `provider`, `token`, `event:"sync"`, `ttl_secs`
-and, for UnifiedPush, `webpush_keys`.
-It must validate device endpoints, coalesce notifications, discard expired jobs,
-and implement the provider protocol. No content, sender, account name, private
+and, for Web Push UnifiedPush distributors, `webpush_keys`. Topic-style
+distributors such as ntfy omit the keys and receive the plain `{"event":"sync"}`
+wakeup. It must validate device endpoints, coalesce notifications, discard
+expired jobs, and implement the provider protocol. No content, sender, account name, private
 key or account relay token enters that JSON. The gateway learns the destination.
 Relay attempts are limited to one/account/minute and bounded to four seconds;
 failures leave the spool intact. Gateway redirects are disabled.
@@ -41,7 +42,8 @@ failures leave the spool intact. Gateway redirects are disabled.
 Native Android UnifiedPush and iOS APNs connectors are implemented. See
 [push_forward_receipts.md](push_forward_receipts.md) for platform behavior,
 provider configuration, build/signing requirements and verification limits.
-No external push gateway is activated by default.
+No external push gateway is activated by default; the repository ships a
+self-hosted gateway (`crates/fedi3_push_gateway`) for relays that want one.
 
 References: [UnifiedPush Android protocol](https://unifiedpush.org/developers/spec/android/),
 [Apple background pushes](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app).

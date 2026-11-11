@@ -13,6 +13,7 @@ import '../core/core_http.dart';
 import '../core/fedi3_core.dart';
 import '../model/core_config.dart';
 import '../model/ui_prefs.dart';
+import '../services/app_activity.dart';
 import '../services/telemetry_service.dart';
 import 'config_store.dart';
 import 'peer_presence_store.dart';
@@ -93,6 +94,30 @@ class AppState extends ChangeNotifier {
   int get unreadChats => _unreadChats;
 
   CoreRuntime get _runtime => _core ?? Fedi3Core.instance;
+
+  /// Tells the native core whether the client is visible. Background workers
+  /// stretch their network cadence so a phone stops waking the radio for an
+  /// app nobody is looking at. No-op when no core is running or the injected
+  /// runtime does not support the profile switch.
+  void setPowerMode(int mode) {
+    final handle = _coreHandle;
+    if (handle == null) return;
+    final runtime = _runtime;
+    if (runtime is PowerAwareCore) {
+      try {
+        (runtime as PowerAwareCore).setPowerMode(handle, mode);
+      } catch (_) {
+        // A core built before the power API keeps its cadence.
+      }
+    }
+  }
+
+  /// Loopback health probe used by the background supervisor.
+  Future<bool> probeCoreHealth() async {
+    final cfg = _config;
+    if (cfg == null) return false;
+    return _probeHealth(cfg);
+  }
 
   @override
   void notifyListeners() {
@@ -258,6 +283,15 @@ class AppState extends ChangeNotifier {
   /// Points the core data directory at a writable app-private path.
   /// Only needed on platforms that expose no HOME (Android).
   void useCoreDataDirBase(String? path) => _coreDataDirBase = path;
+
+  /// Background suspension hold: an active call keeps the core alive even
+  /// when the UI leaves the foreground, because call signaling runs in it.
+  int _coreHold = 0;
+  bool get coreHeld => _coreHold > 0;
+  void holdCore() => _coreHold++;
+  void releaseCore() {
+    if (_coreHold > 0) _coreHold--;
+  }
 
   /// Starts the core. The FFI contract guarantees that a normal return means
   /// the server is listening, so the handle is stored only after that.
@@ -444,8 +478,21 @@ class AppState extends ChangeNotifier {
   void _startWatchdog() {
     _stopWatchdog();
     if (!_watchdogEnabled || _watchdogInterval == null) return;
-    _watchdog = Timer.periodic(_watchdogInterval, (_) {
+    _scheduleWatchdog();
+  }
+
+  /// Health probing is a loopback HTTP request. Keep the 5 s cadence while the
+  /// UI is visible; once it is gone, four times the interval is plenty to
+  /// notice a dead core without waking the CPU as often.
+  void _scheduleWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = null;
+    final base = _watchdogInterval;
+    if (!_watchdogEnabled || base == null || _disposed) return;
+    final interval = AppActivity.foreground ? base : base * 4;
+    _watchdog = Timer(interval, () {
       unawaited(runWatchdogOnce());
+      _scheduleWatchdog();
     });
   }
 

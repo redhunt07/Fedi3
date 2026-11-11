@@ -4,6 +4,36 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-11 — Integrated push-only service: notifications without an idle core
+
+The Android foreground service can now run in push-only mode, with no third-party distributor and no idle core. While the app is backgrounded, the service only polls the relay chat spool over authenticated HTTPS every 15 seconds and stores the last seen id; when something new arrives it starts the local core on demand, drains the spool, shows chat, call and timeline notifications, and stops the core again after a 30-second quiet period. There is no P2P swarm and no relay tunnel while idle.
+
+Measured on a Xiaomi 2201123G (Android 15): the poller returns `items=0` on a settled spool and the service's idle CPU is about 0.1 % of a core, with no core wakeups in the logs. A first poll on a large backlog drains at most 50 historical items once and then advances the cursor. Calls keep the core held for their whole duration; P2P-only accounts (no relay tunnel) keep the core running because there is no spool to poll. The mode is opt-in under **Settings → Security → Background notifications**, and the UnifiedPush/gateway path remains available for anyone who prefers a distributor.
+
+## 2026-11-11 — Self-hosted push gateway with ntfy, per relay
+
+Fedi3 can now wake a phone through a self-hosted push gateway instead of keeping a background service alive. The new `fedi3_push_gateway` (in `crates/fedi3_push_gateway`, shipped as the `push` Compose profile with an ntfy container) accepts the relay's authenticated wakeups and delivers them to UnifiedPush distributors. Two transports are supported: Web Push distributors (NextPush) with `webpush_keys` and VAPID encryption, and topic-style distributors such as ntfy, where the app registers a keyless topic URL and the gateway publishes the plain `{"event":"sync"}` wakeup. The relay accepts keyless registrations and the mobile client accepts clear wakeups.
+
+Each relay runs its own gateway and ntfy instance. Every URL is per relay, so one relay's settings never affect another. Relays with DNS subdomains use dedicated hosts; relays without them mount the gateway under a path of the relay domain (`/_fedi3/push`) and ntfy under `/ntfy`, configured in that relay's `.env`. `deploy/push_gateway/Caddyfile.example` shows both layouts.
+
+With a distributor installed and push enabled, the client can stop its own foreground service and let the distributor hold the wakeup connection; notifications arrive without the core running. Existing FGS mode remains available.
+
+## 2026-11-11 — Background P2P suspension: idle drain close to mainstream apps
+
+A backgrounded client no longer keeps the whole P2P mesh alive. When the UI goes away and a relay tunnel is configured, the core closes the DHT and gossip connections and keeps only the relay peers that serve the store-and-forward mailbox and our relay reservations; inbound relay circuits stay open so peers delivering messages are not disconnected mid-request and forced to retry. Returning to the foreground bootstraps both DHTs and redials the known Fedi3 peers immediately, so P2P resumes with the same reachability as before. P2P-only accounts (no relay tunnel) keep their swarm running, because the relay is not there to cover delivery.
+
+The remaining background cadences were stretched as well: device sync to 60 s, mailbox to 120 s, the SSE keep-alive to 30 s and the tunnel ping to 30 s (60 s in doze), with the pong watchdog scaled to match.
+
+On a Xiaomi 2201123G (Android 15) the core's background CPU is now 1.2-1.4 % of a core, down from 5.6 % after the previous round and roughly 24 % before the work started; the app holds 11 TCP sockets (relay tunnel, pooled HTTPS and the loopback UI) instead of 138, the relay circuit churn that kept waking the runtime is gone, and no background radio traffic is measured once the sync settles. Timeline, chat, notifications and the foreground P2P resume were exercised on the device.
+
+## 2026-11-10 — Lower battery drain and heat on Android
+
+The client no longer keeps a phone's CPU busy while it sits in the background. The core now exposes a process-wide power profile: the app switches it to foreground, background or doze with the activity lifecycle, and every network poller stretches its cadence instead of running at the foreground rate. Chat spool checks go from 3 s to 10 s (30 s in doze), device sync from 5 s to 30 s, WebRTC signalling from the configured interval to 10 s, the P2P mailbox from 15 s to 60 s, relay and legacy sync to 15/30 minutes, and the delivery queue, object fetch and storage GC back off the same way. Foreground latency is unchanged.
+
+Two background drains were removed outright: mDNS is now off by default on Android and iOS (the open multicast socket held a WiFi multicast wakelock for hours; relays and the DHT already provide discovery), and the libp2p swarm is capped at 48 established connections, at most 2 per peer, with bounded pending dials. Before the cap the public DHT kept dialing every peer it learned about and the swarm grew past 130 idle connections on a phone, which is what kept the CPU warm. IPv6 addresses are filtered out when the device has no IPv6 route, the gossipsub heartbeat is 5 s instead of 1 s, and inactive tabs no longer tick animations.
+
+On a Xiaomi 2201123G (Android 15) the core's background CPU dropped from roughly 24 % of a core (bursts above 60 %) to 5-10 %, the connection count stays at 24-44 instead of climbing past 130, and no multicast wakelock is held. Timeline, chat, notifications and WebRTC signalling were exercised on the device after the change.
+
 ## 2026-11-09 — Multi-device sync, QR login and playable media notes
 
 Voice notes and video notes now load and play on both sides: the client reads the camelCase `mediaType` field written by newer cores, falls back to the file name or URL extension when the type is empty or generic, and shows a play control on the recipient's bubble instead of a bare attachment. Video notes keep the inline player with the play overlay; audio notes keep the dedicated voice bubble. The recorder now enables the audio track for video notes too, so the recorded clip carries sound.

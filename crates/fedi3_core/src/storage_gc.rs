@@ -6,7 +6,6 @@
 use crate::social_db::SocialDb;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -100,15 +99,15 @@ pub fn start_storage_gc_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let interval = cfg.gc_interval_secs.unwrap_or(300).max(30);
-        let mut tick = tokio::time::interval(Duration::from_secs(interval));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
+        let background = interval.saturating_mul(3);
+        let doze = interval.saturating_mul(6);
         loop {
             tokio::select! {
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() { break; }
+                _ = crate::power::sleep(interval, background, doze) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break; }
+                    continue;
                 }
-                _ = tick.tick() => {}
             }
 
             if *shutdown.borrow() {

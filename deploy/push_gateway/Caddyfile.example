@@ -1,0 +1,49 @@
+# Push gateway + ntfy reverse proxy examples.
+#
+# The relay stack mounts deploy/relay/Caddyfile, which stays relay-only so a
+# default installation does not require new DNS records. Merge one of the
+# layouts below into that Caddyfile, or mount this file next to it and import
+# it. Every relay runs its own gateway and ntfy instance; keep the relay's
+# FEDI3_RELAY_PUSH_GATEWAY_URL pointing at the matching public URL.
+
+# Layout A: dedicated subdomains (DNS A/AAAA records required, DNS-only so
+# Caddy can obtain certificates directly).
+ntfy.example.org {
+  encode zstd gzip
+  reverse_proxy ntfy:80 {
+    trusted_proxies private_ranges
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+
+push.example.org {
+  encode zstd gzip
+  reverse_proxy push_gateway:8090 {
+    trusted_proxies private_ranges
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+
+# Layout B: same domain as the relay (for relays without DNS subdomains).
+# Replace the two site blocks above with these handlers inside the existing
+# {$FEDI3_DOMAIN} site block, before its relay reverse_proxy:
+#
+#   handle_path /ntfy/* {
+#     reverse_proxy ntfy:80 {
+#       trusted_proxies private_ranges
+#       header_up X-Real-IP {remote_host}
+#     }
+#   }
+#   handle /_fedi3/push {
+#     reverse_proxy push_gateway:8090 {
+#       trusted_proxies private_ranges
+#       header_up X-Real-IP {remote_host}
+#     }
+#   }
+#
+# Then set in .env:
+#   FEDI3_PUSH_GATEWAY_PATH=/_fedi3/push
+#   FEDI3_NTFY_BASE_URL=https://relay.example.org/ntfy
+#   FEDI3_RELAY_PUSH_GATEWAY_URL=https://relay.example.org/_fedi3/push

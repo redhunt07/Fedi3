@@ -992,7 +992,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get backgroundServiceHint =>
-      'Keep Fedi3 running while the app is in the background so new activity still reaches you. A small persistent notification is shown.';
+      'Keep notifications arriving while the app is in the background. Fedi3 wakes only when something new arrives, so no core or P2P swarm stays running while idle. A small persistent notification is shown.';
 
   @override
   String get backgroundServiceRunning => 'Service active';
@@ -1001,7 +1001,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get backgroundServiceIdle => 'Service paused (app in foreground)';
 
   @override
-  String get backgroundServiceNotificationBody => 'Connected for notifications';
+  String get backgroundServiceNotificationBody => 'Checking for new activity';
 
   @override
   String get composeAddMediaTitle => 'Add media';

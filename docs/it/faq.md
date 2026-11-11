@@ -82,9 +82,10 @@ sul relay.
 
 ## Android mantiene le notifiche quando l'app è chiusa?
 
-Sì. Un servizio foreground keep-alive mantiene vivo un engine Flutter headless per
-le notifiche di timeline, chat e chiamate in arrivo, con suoni distinti per
-attività, chat e chiamate. Da Android 14 dichiara `remoteMessaging` e sotto usa
+Sì. Un servizio foreground keep-alive mantiene vivo un engine Flutter headless che
+interroga lo spool del relay per attività di timeline, chat e chiamate in arrivo e
+risveglia il core locale solo quando c'è qualcosa da consegnare, con suoni distinti
+per attività, chat e chiamate. Da Android 14 dichiara `remoteMessaging` e sotto usa
 `dataSync`; Android 15 limita i servizi `dataSync` a sei ore al giorno. Un'ottimizzazione
 batteria aggressiva può ritardare la consegna: consenti a Fedi3 di restare attiva
 in background. Vedi la [guida dell'app](app_guide.md).

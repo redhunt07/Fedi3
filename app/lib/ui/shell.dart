@@ -92,6 +92,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     super.initState();
     _notificationTaps = NotificationService.taps.listen(_openNotifiedThread);
     _activitySub = AppActivity.changes.listen((foreground) {
+      // Re-evaluate the poller cadence as soon as the lifecycle changes, so a
+      // returning client rings without waiting out a background interval.
+      if (_callPollTimer != null) {
+        _scheduleCallPoll(immediate: foreground);
+      }
       if (!foreground || !mounted) return;
       final pending = _pendingCallSignal;
       if (pending == null) return;
@@ -379,21 +384,28 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   }
 
   void _startCallPolling() {
-    if (!widget.appState.isRunning || _callPollTimer != null) return;
+    if (!widget.appState.isRunning) return;
     if (_lastCallSignalMs == 0) {
       _lastCallSignalMs = DateTime.now().millisecondsSinceEpoch -
           const Duration(seconds: 60).inMilliseconds;
     }
-    // Plain periodic timer: calls must ring while the app is backgrounded too,
-    // where AppActivity.periodic deliberately stays silent. The local core
-    // answers on loopback, so a constant 3 s cadence costs almost nothing and
-    // keeps an invite from sitting unnoticed behind an idle backoff.
-    _callPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      _pollIncomingCall();
-    });
-    // ModalRoute is an inherited dependency and cannot be read in initState.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _callPollTimer != null) _pollIncomingCall();
+    _scheduleCallPoll(immediate: true);
+  }
+
+  /// Self-rescheduling poller. A visible client keeps the 3 s cadence; while
+  /// the UI is backgrounded the Android keep-alive isolate owns call polling
+  /// anyway, so the activity engine only needs a cheap safety net.
+  void _scheduleCallPoll({bool immediate = false}) {
+    _callPollTimer?.cancel();
+    _callPollTimer = null;
+    if (!widget.appState.isRunning) return;
+    final interval = AppActivity.foreground
+        ? const Duration(seconds: 3)
+        : const Duration(seconds: 10);
+    _callPollTimer = Timer(immediate ? Duration.zero : interval, () {
+      if (!mounted) return;
+      unawaited(_pollIncomingCall());
+      _scheduleCallPoll();
     });
   }
 
@@ -755,11 +767,17 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   /// action buttons would otherwise expose duplicate default Hero tags to the
   /// navigator whenever a route is pushed (a debug assertion and a wrong hero
   /// source in release). HeroMode limits hero collection to the visible page.
+  /// TickerMode stops animations (shimmer, particles, spinners) on hidden
+  /// pages: IndexedStack only paints the selected child, but hidden tickers
+  /// keep requesting frames and burning CPU/GPU.
   List<Widget> _shellPages() => [
         for (var i = 0; i < _pages.length; i++)
-          HeroMode(
+          TickerMode(
             enabled: i == _index,
-            child: PrimaryScrollController.none(child: _pages[i]),
+            child: HeroMode(
+              enabled: i == _index,
+              child: PrimaryScrollController.none(child: _pages[i]),
+            ),
           ),
       ];
 
