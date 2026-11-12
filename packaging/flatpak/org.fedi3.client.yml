@@ -46,7 +46,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/redhunt07/Fedi3.git
-        commit: dbc76d6b1876f802510e7bab4ce229904c0f8973
+        commit: b476e3bdc8818672b73fb85c1c51e8ac8576f33d
       - type: archive
         url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.50.0-stable.tar.xz
         sha256: 6ea2d806fd57269ae783e6788e2a81fc26eaad782f1e0d0ff38623bb765ff9f5
