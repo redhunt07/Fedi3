@@ -12,6 +12,22 @@ I file di packaging sono nel repository:
   AppStream.
 - `packaging/aur/`: PKGBUILD `fedi3-bin` e `.SRCINFO`.
 
+## Verifica locale
+
+Verificato il 2026-11-12:
+
+| Canale | Verifica | Esito |
+| --- | --- | --- |
+| F-Droid | `fdroid lint` con i metadati di fdroiddata | pulito |
+| F-Droid | `scripts/build_android_fdroid.sh arm64-v8a` | APK creato, versionCode 6015 |
+| F-Droid | version code APK x86_64 | 8015 (dalla build di release) |
+| Flatpak | `flatpak-builder`, `flatpak install`, avvio di 20 s | l'app parte, core e libmpv si caricano |
+| AUR | `makepkg -f` per `fedi3-bin` | pacchetto creato, wrapper/desktop/icona presenti |
+
+F-Droid e AUR sono preparati ma non ancora inviati: F-Droid richiede un account
+GitLab e una merge request; l'AUR richiede una chiave SSH registrata su
+aur.archlinux.org.
+
 ## Versioni e version code
 
 `app/pubspec.yaml` contiene il build number Flutter `4015`. Con
@@ -83,15 +99,22 @@ il core Rust è compilato con l'estensione SDK `rust-stable`.
 ### Build e test locale
 
 ```bash
-flatpak-builder --user --force-clean --repo=/tmp/fedi3-flatpak-repo \
-  /tmp/fedi3-flatpak-build packaging/flatpak/org.fedi3.client.yml
+flatpak-builder --user --force-clean --compose-image-format=png \
+  --repo=/tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build \
+  packaging/flatpak/org.fedi3.client.yml
 flatpak build-export /tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build
 flatpak install --user /tmp/fedi3-flatpak-repo org.fedi3.client
 flatpak run org.fedi3.client
 ```
 
 Servono `org.gnome.Platform//50`, `org.gnome.Sdk//50` e
-`org.freedesktop.Sdk.Extension.rust-stable//25.08` installati da Flathub.
+`org.freedesktop.Sdk.Extension.rust-stable//25.08` e
+`org.freedesktop.Sdk.Extension.llvm21//25.08` installati da Flathub.
+
+Su host Arch, se `appstreamcli compose` fallisce con `media-worker-error`,
+esporta `VIPSHOME=/usr VIPS_PREFIX=/usr` prima di `flatpak-builder`: così il
+media worker carica i moduli libvips di sistema. I builder Flathub non hanno
+bisogno di questo workaround.
 
 ### Flathub
 

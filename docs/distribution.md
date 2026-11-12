@@ -12,6 +12,22 @@ The packaging files live in this repository:
   metadata.
 - `packaging/aur/`: `fedi3-bin` PKGBUILD and `.SRCINFO`.
 
+## Local verification
+
+Checked on 2026-11-12:
+
+| Channel | Check | Result |
+| --- | --- | --- |
+| F-Droid | `fdroid lint` with fdroiddata metadata config | clean |
+| F-Droid | `scripts/build_android_fdroid.sh arm64-v8a` | APK built, versionCode 6015 |
+| F-Droid | x86_64 APK version code | 8015 (from the release build) |
+| Flatpak | `flatpak-builder`, `flatpak install`, 20 s smoke run | app starts, core and libmpv load |
+| AUR | `makepkg -f` for `fedi3-bin` | package built, wrapper/desktop/icon present |
+
+F-Droid and AUR are prepared but not yet submitted: F-Droid needs a GitLab
+account and merge request; the AUR needs an SSH key registered on
+aur.archlinux.org.
+
 ## Version and version-code mapping
 
 `app/pubspec.yaml` carries the Flutter build number `4015`. Flutter's
@@ -81,15 +97,22 @@ pinned SHA256; the Rust core is compiled with the `rust-stable` SDK extension.
 ### Build and test locally
 
 ```bash
-flatpak-builder --user --force-clean --repo=/tmp/fedi3-flatpak-repo \
-  /tmp/fedi3-flatpak-build packaging/flatpak/org.fedi3.client.yml
+flatpak-builder --user --force-clean --compose-image-format=png \
+  --repo=/tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build \
+  packaging/flatpak/org.fedi3.client.yml
 flatpak build-export /tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build
 flatpak install --user /tmp/fedi3-flatpak-repo org.fedi3.client
 flatpak run org.fedi3.client
 ```
 
 Requirements: `org.gnome.Platform//50`, `org.gnome.Sdk//50` and
-`org.freedesktop.Sdk.Extension.rust-stable//25.08` installed from Flathub.
+`org.freedesktop.Sdk.Extension.rust-stable//25.08` and
+`org.freedesktop.Sdk.Extension.llvm21//25.08` installed from Flathub.
+
+On Arch hosts, if `appstreamcli compose` fails with `media-worker-error`,
+export `VIPSHOME=/usr VIPS_PREFIX=/usr` before running `flatpak-builder`; this
+lets the media worker load the host libvips modules. Flathub builders do not
+need this workaround.
 
 ### Flathub
 
