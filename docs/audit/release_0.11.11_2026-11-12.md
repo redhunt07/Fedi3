@@ -29,7 +29,7 @@ suspension, and the optional self-hosted push gateway.
 
 | Package | Platform | Size (bytes) | SHA256 |
 | :--- | :--- | ---: | :--- |
-| `Fedi3-linux-x86_64.AppImage` | Linux x86_64 | 177587392 | `676087808e7779724af9fe6b0d3ca1cb9b0a72ed8be4477c913ef24d0af56b49` |
+| `Fedi3-linux-x86_64.AppImage` | Linux x86_64 | 185595072 | `fc0b48e2d4704d9d244993f5c2777ff968540d8080472b30282649c8733a00ba` |
 | `Fedi3-windows-x64.zip` | Windows x64 | 57521500 | `c4ecbc5b88fc8ebc07dd011aa1a4da1065936d2905a32aae42305e55fdc5f4fd` |
 | `app-arm64-v8a-release.apk` | Android arm64-v8a | 80936286 | `2e7624120cf44fdccb28f7ec0898b7197a446fb780a183fbfc64b13595a7d2a0` |
 | `app-x86_64-release.apk` | Android x86_64 | 94305619 | `bb32d3949ca7ff397e5b9a54fa875ed6a25f6683e35459aba3b21bce6c3ad705` |
@@ -41,6 +41,13 @@ and 24.04). The Android APKs are built locally with
 version codes `6015` (arm64-v8a) and `8015` (x86_64). The release build needs
 JDK 21 for the AGP 9 lint tasks; the local build used
 `/usr/lib/jvm/java-21-openjdk`.
+
+The Linux AppImage was rebuilt on 2026-11-12 with a Mesa EGL fallback in
+`AppRun`. Flutter 3.50.0 has a Linux compositor regression
+([flutter#195885](https://github.com/flutter/flutter/issues/195885)): on NVIDIA
+proprietary drivers `glBlitFramebuffer` is blocklisted and the client content is
+shifted by half a window. The fallback forces the Mesa EGL vendor (llvmpipe)
+when available; it can be removed once Flutter 3.50.1 ships the upstream fix.
 
 ## Verification performed
 

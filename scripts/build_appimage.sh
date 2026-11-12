@@ -93,6 +93,12 @@ export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
 export LIBGL_DRI3_DISABLE="${LIBGL_DRI3_DISABLE:-1}"
 export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-llvmpipe}"
+# Flutter 3.50.0 renders Linux content shifted by half a window on NVIDIA
+# proprietary EGL because glBlitFramebuffer is blocklisted there. Prefer the
+# Mesa EGL vendor (llvmpipe) until the upstream fix in Flutter 3.50.1 ships.
+if [[ -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]]; then
+  export __EGL_VENDOR_LIBRARY_FILENAMES="${__EGL_VENDOR_LIBRARY_FILENAMES:-/usr/share/glvnd/egl_vendor.d/50_mesa.json}"
+fi
 export GTK_MODULES="${GTK_MODULES:-}"
 export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
 export GTK_IM_MODULE="${GTK_IM_MODULE:-gtk-im-context-simple}"

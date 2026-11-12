@@ -24,6 +24,6 @@ pkgbase = fedi3-bin
 	conflicts = fedi3-git
 	options = !strip
 	source = fedi3-0.11.11.AppImage::https://github.com/redhunt07/Fedi3/releases/download/v0.11.11/Fedi3-linux-x86_64.AppImage
-	sha256sums = 676087808e7779724af9fe6b0d3ca1cb9b0a72ed8be4477c913ef24d0af56b49
+	sha256sums = fc0b48e2d4704d9d244993f5c2777ff968540d8080472b30282649c8733a00ba
 
 pkgname = fedi3-bin
