@@ -207,6 +207,11 @@ Android: download `app-arm64-v8a-release.apk` for a 64-bit ARM phone or
 updates only when signing certificates match; keep the existing local signing
 key for future builds. iOS/macOS packages are not included in this release.
 
+Store-style channels are prepared in this repository: F-Droid metadata and build
+recipe for Android, a Flatpak manifest for Linux desktops, and the AUR package
+`fedi3-bin`. See [distribution packages](docs/distribution.md) for build,
+submission and release-check instructions.
+
 Available since 0.10.0: Settings → Client updates checks stable releases and
 verifies SHA256 downloads. Linux x86_64 AppImages can replace themselves with a
 backup; Windows x64 uses a verified ZIP and guided installation. Earlier clients
@@ -253,6 +258,7 @@ English (default):
 - [Push-forward receipts](docs/push_forward_receipts.md)
 - [Interoperability](docs/interop.md)
 - [Linux build](docs/build_linux.md)
+- [Distribution packages](docs/distribution.md)
 - [App guide](docs/app_guide.md)
 - [Client updates](docs/updates.md)
 - [Client UX plan](docs/client_ux_plan.md)

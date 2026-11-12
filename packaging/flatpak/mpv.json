@@ -1,0 +1,119 @@
+{
+    "name": "libmpv",
+    "cleanup": [
+        "/include",
+        "/lib/pkgconfig",
+        "/share/man"
+    ],
+    "buildsystem": "meson",
+    "config-opts": [
+        "-Dbuild-date=false",
+        "-Dlibmpv=true"
+    ],
+    "sources": [
+        {
+            "type": "archive",
+            "url": "https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz",
+            "sha256": "ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209"
+        }
+    ],
+    "modules": [
+        {
+            "name": "luajit",
+            "no-autogen": true,
+            "cleanup": [
+                "/bin",
+                "/lib/*.a",
+                "/include",
+                "/lib/pkgconfig",
+                "/share/man"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/LuaJIT/LuaJIT.git",
+                    "commit": "f73e649a954b599fc184726c376476e7a5c439ca"
+                },
+                {
+                    "type": "shell",
+                    "commands": [
+                        "sed -i 's|/usr/local|/app|' ./Makefile"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "nv-codec-headers",
+            "cleanup": [
+                "*"
+            ],
+            "no-autogen": true,
+            "make-install-args": [
+                "PREFIX=/app"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/FFmpeg/nv-codec-headers/releases/download/n11.1.5.1/nv-codec-headers-11.1.5.1.tar.gz",
+                    "sha256": "a28cdde3ac0e9e02c2dde7a1b4de5333b4ac6148a8332ca712da243a3361a0d9"
+                }
+            ]
+        },
+        {
+            "name": "libass",
+            "cleanup": [
+                "/include",
+                "/lib/*.la",
+                "/lib/pkgconfig"
+            ],
+            "config-opts": [
+                "--disable-static"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/libass/libass/releases/download/0.16.0/libass-0.16.0.tar.gz",
+                    "sha256": "fea8019b1887cab9ab00c1e58614b4ec2b1cee339b3f7e446f5fab01b032d430"
+                }
+            ]
+        },
+        {
+            "name": "uchardet",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_STATIC=0",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+            ],
+            "cleanup": [
+                "/bin",
+                "/include",
+                "/lib/pkgconfig",
+                "/share/man"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://gitlab.freedesktop.org/uchardet/uchardet/-/archive/v0.0.7/uchardet-v0.0.7.tar.gz",
+                    "sha256": "f3635d1d10e1470452bc42c1bf509451a9926b399a11740a9949e86069d69f58"
+                }
+            ]
+        },
+        {
+            "name": "libplacebo",
+            "buildsystem": "meson",
+            "cleanup": [
+                "/include",
+                "/lib/pkgconfig"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/haasn/libplacebo.git",
+                    "commit": "451d8ea5661c868562725e6500deda7fdd4e9a1e",
+                    "tag": "v7.387.0"
+                }
+            ]
+        }
+    ]
+}

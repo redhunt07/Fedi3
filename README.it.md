@@ -209,6 +209,11 @@ installa gli aggiornamenti solo quando i certificati di firma coincidono: conser
 la chiave di firma locale per le build future. I pacchetti iOS/macOS non sono
 inclusi in questa release.
 
+I canali di distribuzione sono preparati nel repository: metadati e ricetta
+F-Droid per Android, manifest Flatpak per i desktop Linux e pacchetto AUR
+`fedi3-bin`. Vedi [pacchetti di distribuzione](docs/it/distribution.md) per
+build, invio e checklist di release.
+
 Disponibile dalla 0.10.0: Impostazioni → Aggiornamenti del client controlla le
 release stabili e verifica i download SHA256. Gli AppImage Linux x86_64 possono
 sostituirsi con un backup; Windows x64 usa uno ZIP verificato e un'installazione
@@ -256,6 +261,7 @@ Italiano:
 - [Push-forward receipts](docs/it/push_forward_receipts.md)
 - [Interoperabilità](docs/it/interop.md)
 - [Build Linux](docs/it/build_linux.md)
+- [Pacchetti di distribuzione](docs/it/distribution.md)
 - [Guida dell'app](docs/it/app_guide.md)
 - [Aggiornamenti del client](docs/it/updates.md)
 - [Piano UX del client](docs/it/client_ux_plan.md)

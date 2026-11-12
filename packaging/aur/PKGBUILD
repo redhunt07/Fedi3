@@ -1,0 +1,35 @@
+# Maintainer: RedHunt07 <redhunt07@tutanota.com>
+pkgname=fedi3-bin
+pkgver=0.11.11
+pkgrel=1
+pkgdesc='Self-hosted ActivityPub client with P2P sync, chat and calls'
+arch=('x86_64')
+url='https://github.com/redhunt07/Fedi3'
+license=('AGPL-3.0-only')
+depends=('glib2' 'gtk3' 'libsecret' 'webkit2gtk-4.1' 'gstreamer' 'gst-plugins-base-libs' 'libpulse' 'jsoncpp' 'libx11' 'libxcb' 'libxshmfence' 'libdrm' 'mesa' 'wayland')
+provides=('fedi3')
+conflicts=('fedi3' 'fedi3-git')
+options=('!strip')
+source=("fedi3-${pkgver}.AppImage::https://github.com/redhunt07/Fedi3/releases/download/v${pkgver}/Fedi3-linux-x86_64.AppImage")
+sha256sums=('676087808e7779724af9fe6b0d3ca1cb9b0a72ed8be4477c913ef24d0af56b49')
+
+package() {
+  cd "$srcdir"
+  chmod +x "fedi3-${pkgver}.AppImage"
+  "./fedi3-${pkgver}.AppImage" --appimage-extract >/dev/null
+
+  install -d "$pkgdir/opt/fedi3"
+  cp -a squashfs-root/. "$pkgdir/opt/fedi3/"
+
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/fedi3" <<'WRAPPER'
+#!/bin/sh
+export LD_LIBRARY_PATH="/opt/fedi3/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
+exec /opt/fedi3/usr/fedi3 "$@"
+WRAPPER
+  chmod 755 "$pkgdir/usr/bin/fedi3"
+
+  install -Dm644 squashfs-root/fedi3.desktop "$pkgdir/usr/share/applications/fedi3.desktop"
+  install -Dm644 squashfs-root/fedi3.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/fedi3.png"
+}

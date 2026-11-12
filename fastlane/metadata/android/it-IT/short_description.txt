@@ -1,0 +1,1 @@
+Client ActivityPub self-hosted con sync P2P, chat e chiamate

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.fedi3.client</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <name>Fedi3</name>
+  <summary>Self-hosted ActivityPub client with P2P sync, chat and calls</summary>
+  <description>
+    <p>Fedi3 is a self-hosted ActivityPub client. Your account, profile and posts live in a local Rust core on the device, while a relay you control carries federation traffic when the app is offline.</p>
+    <p>Features:</p>
+    <ul>
+      <li>Your identity and data stay on your device; the relay stores only sealed chat envelopes and forwards ActivityPub traffic.</li>
+      <li>Multi-device sync over P2P, with QR pairing to link a new phone or PC and transfer the account, profile and chat history.</li>
+      <li>Chat with direct and group threads, voice and video notes, and calls with screen sharing.</li>
+      <li>Push-only background notifications and optional self-hosted push gateway (Web Push or ntfy) per relay.</li>
+      <li>Full ActivityPub timelines, profiles, follow requests and moderation tools.</li>
+      <li>No proprietary tracking, no Google Play Services required.</li>
+    </ul>
+  </description>
+  <developer id="org.fedi3">
+    <name>RedHunt07</name>
+  </developer>
+  <launchable type="desktop-id">org.fedi3.client.desktop</launchable>
+  <url type="homepage">https://github.com/redhunt07/Fedi3</url>
+  <url type="bugtracker">https://github.com/redhunt07/Fedi3/issues</url>
+  <url type="vcs-browser">https://github.com/redhunt07/Fedi3</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/redhunt07/Fedi3/main/docs/assets/screenshots/desktop-timeline.png</image>
+      <caption>Timeline</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/redhunt07/Fedi3/main/docs/assets/screenshots/desktop-chat.png</image>
+      <caption>Chat</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.11.11" date="2026-11-12"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

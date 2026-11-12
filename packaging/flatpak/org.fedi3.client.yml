@@ -1,0 +1,66 @@
+app-id: org.fedi3.client
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm21
+command: fedi3
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+  - --env=LD_LIBRARY_PATH=/app/lib
+  - --env=LIBMPV_LIBRARY_PATH=/app/lib/libmpv.so
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+
+modules:
+  - mpv.json
+
+  - name: fedi3
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+      append-path: /run/build/fedi3/flutter/bin:/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+      prepend-ld-library-path: /usr/lib/sdk/llvm21/lib
+      env:
+        PUB_CACHE: /run/build/fedi3/.pub-cache
+        HOME: /run/build/fedi3
+      arch:
+        x86_64:
+          env:
+            BUNDLE_PATH: app/build/linux/x64/release/bundle
+        aarch64:
+          env:
+            BUNDLE_PATH: app/build/linux/arm64/release/bundle
+    sources:
+      - type: git
+        url: https://github.com/redhunt07/Fedi3.git
+        commit: dbc76d6b1876f802510e7bab4ce229904c0f8973
+      - type: archive
+        url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.50.0-stable.tar.xz
+        sha256: 6ea2d806fd57269ae783e6788e2a81fc26eaad782f1e0d0ff38623bb765ff9f5
+        strip-components: 0
+    build-commands:
+      - cargo build --release -p fedi3_core --locked
+      - flutter --disable-analytics
+      - cd app && flutter pub get --enforce-lockfile
+      - cd app && flutter build linux --release --no-pub --suppress-analytics
+      - install -d /app/fedi3
+      - cp -a "$BUNDLE_PATH"/. /app/fedi3/
+      - cp target/release/libfedi3_core.so /app/fedi3/lib/libfedi3_core.so
+      - install -d /app/bin
+      - ln -sf /app/fedi3/fedi3 /app/bin/fedi3
+      - install -Dm644 app/web/icons/Icon-512.png /app/share/icons/hicolor/512x512/apps/org.fedi3.client.png
+      - install -Dm644 packaging/flatpak/org.fedi3.client.desktop /app/share/applications/org.fedi3.client.desktop
+      - install -Dm644 packaging/flatpak/org.fedi3.client.metainfo.xml /app/share/metainfo/org.fedi3.client.metainfo.xml

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fedi3
+Comment=Self-hosted ActivityPub client with P2P sync, chat and calls
+Exec=fedi3
+Icon=org.fedi3.client
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+StartupWMClass=org.fedi3.client

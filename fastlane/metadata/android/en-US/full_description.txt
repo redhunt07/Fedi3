@@ -1,0 +1,10 @@
+Fedi3 is a self-hosted ActivityPub client. Your account, profile and posts live in a local Rust core on the device, while a relay you control carries federation traffic when the phone is offline.
+
+Features:
+- Your identity and data stay on your device; the relay stores only sealed chat envelopes and forwards ActivityPub traffic.
+- Multi-device sync over P2P, with QR pairing to link a new phone or PC and transfer the account, profile and chat history.
+- Chat with direct and group threads, voice and video notes, and calls with screen sharing.
+- Push-only background notifications: a foreground service polls the relay spool and starts the core only when something arrives, then stops it.
+- Full ActivityPub timelines, profiles, follow requests and moderation tools.
+- Optional self-hosted push gateway (Web Push or ntfy) configured per relay.
+- No proprietary tracking, no Google Play Services required.

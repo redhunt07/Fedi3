@@ -1,0 +1,6 @@
+0.11.11:
+- Sync chat multi-dispositivo con login QR: il PC già loggato mostra il QR, il telefono lo inquadra per accedere e sincronizzare.
+- Note vocali e video riproducibili, anche dal lato destinatario.
+- Notifiche in background solo-push e minor consumo in idle; il P2P viene sospeso mentre l'app è in background.
+- Push gateway self-hosted opzionale (Web Push/ntfy) per relay.
+- Miglioramenti a chat/chiamate, suoni di notifica e stabilità.
