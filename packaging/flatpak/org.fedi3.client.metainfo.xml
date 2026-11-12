@@ -24,16 +24,6 @@
   <url type="homepage">https://github.com/redhunt07/Fedi3</url>
   <url type="bugtracker">https://github.com/redhunt07/Fedi3/issues</url>
   <url type="vcs-browser">https://github.com/redhunt07/Fedi3</url>
-  <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/redhunt07/Fedi3/main/docs/assets/screenshots/desktop-timeline.png</image>
-      <caption>Timeline</caption>
-    </screenshot>
-    <screenshot>
-      <image>https://raw.githubusercontent.com/redhunt07/Fedi3/main/docs/assets/screenshots/desktop-chat.png</image>
-      <caption>Chat</caption>
-    </screenshot>
-  </screenshots>
   <releases>
     <release version="0.11.11" date="2026-11-12"/>
   </releases>
