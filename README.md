@@ -15,7 +15,7 @@ Rust core, plus an optional public relay for federation and offline delivery.
 > Linux x86_64, Android arm64-v8a/x86_64 and Windows x64 builds are published on
 > the release page with SHA256 checksums. Android APKs are sideload builds signed
 > with the local debug key; iOS and macOS are buildable from source but are not
-> part of the published packages. See [release verification](docs/audit/release_0.11.10_2026-11-09.md).
+> part of the published packages. See [release verification](docs/audit/release_0.11.11_2026-11-12.md).
 
 ## Screenshots
 
@@ -263,7 +263,7 @@ English (default):
 - [Relay sync API](docs/relay_sync_api.md)
 - [OpenAPI specification](docs/openapi.yaml)
 - [Announcements](ANNOUNCEMENTS.md) and [changelog](CHANGELOG.md)
-- [Release verification 0.11.10](docs/audit/release_0.11.10_2026-11-09.md)
+- [Release verification 0.11.11](docs/audit/release_0.11.11_2026-11-12.md)
 
 Italian counterparts: [`docs/it/`](docs/it/README.md).
 
