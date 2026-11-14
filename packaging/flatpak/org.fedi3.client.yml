@@ -11,7 +11,7 @@ finish-args:
   - --share=network
   - --share=ipc
   - --socket=wayland
-  - --socket=fallback-x11
+  - --socket=x11
   - --socket=pulseaudio
   - --device=dri
   - --talk-name=org.freedesktop.secrets
@@ -60,7 +60,7 @@ modules:
       - cp -a "$BUNDLE_PATH"/. /app/fedi3/
       - cp target/release/libfedi3_core.so /app/fedi3/lib/libfedi3_core.so
       - install -d /app/bin
-      - ln -sf /app/fedi3/fedi3 /app/bin/fedi3
+      - install -m755 packaging/flatpak/fedi3 /app/bin/fedi3
       - install -Dm644 app/web/icons/Icon-512.png /app/share/icons/hicolor/512x512/apps/org.fedi3.client.png
       - install -Dm644 packaging/flatpak/org.fedi3.client.desktop /app/share/applications/org.fedi3.client.desktop
       - install -Dm644 packaging/flatpak/org.fedi3.client.metainfo.xml /app/share/metainfo/org.fedi3.client.metainfo.xml

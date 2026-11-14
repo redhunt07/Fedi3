@@ -331,6 +331,10 @@ class ConfigStore {
       final home = Platform.environment['HOME'] ?? '.';
       return Directory(_join(home, 'Library', 'Application Support', 'Fedi3'));
     }
+    final xdg = Platform.environment['XDG_CONFIG_HOME'];
+    if (xdg != null && xdg.trim().isNotEmpty) {
+      return Directory(_join(xdg, 'fedi3'));
+    }
     final home = Platform.environment['HOME'] ?? '.';
     return Directory(_join(home, '.config', 'fedi3'));
   }

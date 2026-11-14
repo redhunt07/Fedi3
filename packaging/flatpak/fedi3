@@ -1,0 +1,16 @@
+#!/bin/sh
+# Match the verified AppImage workaround for Flutter 3.50 on NVIDIA EGL.
+export LD_LIBRARY_PATH="/app/lib:/app/fedi3/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GDK_BACKEND="${GDK_BACKEND:-x11}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-llvmpipe}"
+export LP_NUM_THREADS="${LP_NUM_THREADS:-4}"
+if [ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" ]; then
+  for vendor in /usr/lib/x86_64-linux-gnu/GL/default/share/glvnd/egl_vendor.d/50_mesa.json /usr/lib/aarch64-linux-gnu/GL/default/share/glvnd/egl_vendor.d/50_mesa.json /usr/share/glvnd/egl_vendor.d/50_mesa.json; do
+    if [ -f "$vendor" ]; then
+      export __EGL_VENDOR_LIBRARY_FILENAMES="$vendor"
+      break
+    fi
+  done
+fi
+exec /app/fedi3/fedi3 --enable-software-rendering "$@"
