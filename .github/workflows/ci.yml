@@ -34,6 +34,8 @@ jobs:
         run: python3 scripts/tests/test_release_contract.py
       - name: Verify AppImage host ABI regression
         run: python3 scripts/tests/test_appimage_host_libs.py
+      - name: Verify signed APT repository preparation
+        run: python3 scripts/tests/test_apt_repo.py
       - name: Validate shared relay directory
         run: python3 scripts/tests/test_relay_directory.py
       - name: Exercise backup and restore with the default dotenv template

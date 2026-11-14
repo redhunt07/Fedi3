@@ -25,8 +25,10 @@ Do not run variant preparation in a checkout used to build the regular APK.
 
 The metadata in `packaging/fdroiddata/org.fedi3.client.yml` is intentionally
 **disabled pending review**. Removing ML Kit does not make the whole native
-supply chain source-built: WebRTC and media_kit Android artifacts still require
-reviewed source-build recipes and licence checks. Run the F-Droid scanner and
+supply chain source-built: media_kit downloads native JARs directly from GitHub releases and needs an
+approved provenance/source-build strategy. WebRTC uses Maven artifacts; those
+may qualify under the trusted-Maven exception but still need licence and
+provenance validation. Prebuilt FLOSS dependencies are not categorically banned. Run the F-Droid scanner and
 an isolated offline build before removing `Disabled` or proposing inclusion.
 No acceptance by F-Droid is implied by a successful local APK build or lint.
 
@@ -100,3 +102,19 @@ the same already-built Rust core and installed mpv dependency layer may be reuse
 the Flutter binary must be built inside the SDK to match its ABI. A GitHub .flatpak
 bundle is not publication on Flathub. Flathub submission still requires its own
 manifest review and offline dependency preparation.
+
+### Independent APT repository staging
+
+Use `scripts/build_apt_repo.py --output /path/to/repo --unsigned-preview dist/fedi3_0.12.0-1_amd64.deb`
+to prepare pool/, Packages, Packages.gz and Release for inspection. For hosting,
+replace `--unsigned-preview` with `--signing-key YOUR_EXISTING_OPENPGP_KEY`;
+the script creates InRelease, Release.gpg and the public archive key. Configure
+clients with `signed-by=` pointing at that key. Do not disable APT signature
+checks. The preparation archive is not a live repository URL.
+
+A pacman repository preview can be generated with
+`repo-add fedi3.db.tar.gz fedi3-bin-0.12.0-1-x86_64.pkg.tar.zst`.
+The release preparation archive contains that index; place the separately
+published package beside it. Sign the package and regenerate/sign the database
+with the maintainer's OpenPGP key before enabling a public repository.
+The preview does not replace an AUR submission or an official Arch repository.

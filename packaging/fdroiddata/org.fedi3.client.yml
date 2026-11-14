@@ -87,5 +87,5 @@ VercodeOperation:
 UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
 CurrentVersion: 0.12.0
 CurrentVersionCode: 8016
-Disabled: Native dependency source-build review pending for flutter_webrtc and media_kit
-  Android artifacts. Not ready for F-Droid inclusion.
+Disabled: Native artifact provenance review pending, especially media_kit native JAR
+  downloads from GitHub. WebRTC Maven artifacts also need licence/provenance validation.

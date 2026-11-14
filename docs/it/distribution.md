@@ -13,8 +13,10 @@ ML Kit con l’inserimento del collegamento di abbinamento e rimuove
 `mobile_scanner`. Usare un checkout separato: lo script modifica i sorgenti.
 
 La ricetta `packaging/fdroiddata/org.fedi3.client.yml` resta intenzionalmente
-**disabilitata**: occorre ancora verificare e predisporre la compilazione dai
-sorgenti degli artefatti Android WebRTC e media_kit. Un APK compilato o un lint
+**disabilitata**: occorre ancora verificare la provenienza delle dipendenze native. media_kit
+scarica JAR nativi da GitHub e richiede una strategia approvata o una build dai
+sorgenti. WebRTC usa artefatti Maven, potenzialmente ammessi dall’eccezione
+per repository fidati, da verificare per provenienza e licenze. Un APK compilato o un lint
 pulito non dimostrano l’idoneità a F-Droid. Prima della proposta a fdroiddata
 servono scanner, verifica licenze e build isolata offline. Metadati, screenshot
 e changelog sono in `fastlane/metadata/android`.
@@ -66,3 +68,17 @@ su GitHub non significa che il programma sia stato pubblicato su Flathub.
 
 I dettagli completi, le procedure e i limiti della preparazione si trovano in
 [Distribution packages](../distribution.md).
+
+### Preparazione di un repository APT indipendente
+
+`scripts/build_apt_repo.py --output /percorso/repo --unsigned-preview dist/fedi3_0.12.0-1_amd64.deb`
+prepara pool, Packages, Packages.gz e Release. Per pubblicare sostituire
+`--unsigned-preview` con `--signing-key CHIAVE_OPENPGP_ESISTENTE`: vengono generati
+InRelease, Release.gpg e chiave pubblica. I client devono usare `signed-by=`;
+non disattivare le verifiche di firma. L’archivio preparatorio non è un URL APT
+attivo e richiede ancora hosting e identità di firma del manutentore.
+
+L’archivio preparatorio contiene anche l’indice pacman generato con `repo-add`.
+Affiancare il pacchetto `.pkg.tar.zst` pubblicato separatamente, firmare pacchetto
+e database con la chiave del manutentore e scegliere l’hosting prima di attivare
+un repository pubblico. Non equivale a un invio su AUR o nei repository ufficiali.

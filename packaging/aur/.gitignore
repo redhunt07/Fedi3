@@ -2,3 +2,6 @@ src/
 pkg/
 *.pkg.tar.*
 fedi3-*.AppImage
+
+# Downloaded and checksum-verified upstream licence
+/LICENSE

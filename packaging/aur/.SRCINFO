@@ -1,6 +1,6 @@
 pkgbase = fedi3-bin
 	pkgdesc = Self-hosted ActivityPub client with P2P sync, chat and calls
-	pkgver = 0.11.11
+	pkgver = 0.12.0
 	pkgrel = 1
 	url = https://github.com/redhunt07/Fedi3
 	arch = x86_64
@@ -23,7 +23,9 @@ pkgbase = fedi3-bin
 	conflicts = fedi3
 	conflicts = fedi3-git
 	options = !strip
-	source = fedi3-0.11.11.AppImage::https://github.com/redhunt07/Fedi3/releases/download/v0.11.11/Fedi3-linux-x86_64.AppImage
-	sha256sums = fc0b48e2d4704d9d244993f5c2777ff968540d8080472b30282649c8733a00ba
+	source = fedi3-0.12.0.AppImage::https://github.com/redhunt07/Fedi3/releases/download/v0.12.0/Fedi3-linux-x86_64.AppImage
+	source = LICENSE::https://raw.githubusercontent.com/redhunt07/Fedi3/v0.12.0/LICENSE
+	sha256sums = 95d91567cf0725dea37a1dedc100100a2924e7fa1b91aadb1c29884485451611
+	sha256sums = d8a6cc31abc16b6748c7a21f21611f5a1ec33f67d22ca23d7da1c19b95496bee
 
 pkgname = fedi3-bin
