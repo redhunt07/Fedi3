@@ -1,3 +1,4 @@
+import '../../model/profile_content.dart';
 import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
@@ -802,7 +803,8 @@ class _ProfileHeader extends StatelessWidget {
             ),
             if (profile.summary.isNotEmpty) ...[
               const SizedBox(height: 10),
-              HtmlWidget(profile.summary, onTapUrl: UrlPolicy.handleTap),
+              HtmlWidget(ProfileContent.toHtml(profile.summary),
+                  onTapUrl: UrlPolicy.handleTap),
             ],
             if (fields.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -820,7 +822,7 @@ class _ProfileHeader extends StatelessWidget {
                         ),
                       ),
                       Expanded(
-                          child: HtmlWidget(f.value,
+                          child: HtmlWidget(ProfileContent.toHtml(f.value),
                               onTapUrl: UrlPolicy.handleTap)),
                     ],
                   ),

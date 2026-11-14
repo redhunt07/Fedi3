@@ -1,3 +1,4 @@
+import '../../model/profile_content.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -45,7 +46,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     super.initState();
     _cfg = widget.appState.config!;
     _displayName = TextEditingController(text: _cfg.displayName);
-    _summary = TextEditingController(text: _cfg.summary);
+    _summary =
+        TextEditingController(text: ProfileContent.toPlainText(_cfg.summary));
     _locked = _cfg.manuallyApprovesFollowers;
   }
 
@@ -708,7 +710,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
   Future<void> _editField(ProfileFieldKV entry) async {
     final name = TextEditingController(text: entry.name);
-    final value = TextEditingController(text: entry.value);
+    final value =
+        TextEditingController(text: ProfileContent.toPlainText(entry.value));
     final ok = await _showFieldDialog(
         nameCtrl: name, valueCtrl: value, title: context.l10n.profileFieldEdit);
     if (!mounted) return;
@@ -773,24 +776,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     List<ProfileFieldKV>? profileFields,
   }) {
     final c = _cfg;
-    return CoreConfig(
-      username: c.username,
-      domain: c.domain,
-      publicBaseUrl: c.publicBaseUrl,
-      relayWs: c.relayWs,
-      relayToken: c.relayToken,
-      bind: c.bind,
-      internalToken: c.internalToken,
-      p2pEnable: c.p2pEnable,
-      p2pRelayReserve: c.p2pRelayReserve,
-      p2pBootstrap: c.p2pBootstrap,
-      p2pPublicDiscovery: c.p2pPublicDiscovery,
-      p2pPeerExchange: c.p2pPeerExchange,
-      webrtcEnable: c.webrtcEnable,
-      webrtcIceUrls: c.webrtcIceUrls,
-      webrtcIceUsername: c.webrtcIceUsername,
-      webrtcIceCredential: c.webrtcIceCredential,
-      apRelays: c.apRelays,
+    return c.copyWith(
       displayName: _displayName.text.trim(),
       summary: _summary.text,
       iconUrl: iconUrl ?? c.iconUrl,
@@ -799,13 +785,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       imageMediaType: imageMediaType ?? c.imageMediaType,
       profileFields: profileFields ?? c.profileFields,
       manuallyApprovesFollowers: _locked,
-      blockedDomains: c.blockedDomains,
-      blockedActors: c.blockedActors,
-      postDeliveryMode: c.postDeliveryMode,
-      p2pCacheTtlSecs: c.p2pCacheTtlSecs,
-      previousPublicBaseUrl: c.previousPublicBaseUrl,
-      previousRelayToken: c.previousRelayToken,
-      anchorActorUrl: c.anchorActorUrl,
     );
   }
 

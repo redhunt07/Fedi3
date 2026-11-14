@@ -4,6 +4,7 @@
  */
 
 import 'dart:math';
+import 'profile_content.dart';
 
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
@@ -356,22 +357,6 @@ class CoreConfig {
       };
 
   Map<String, dynamic> toCoreStartJson() {
-    String textToHtml(String input) {
-      var s = input.trim();
-      if (s.isEmpty) return '';
-      s = s
-          .replaceAll('&', '&amp;')
-          .replaceAll('<', '&lt;')
-          .replaceAll('>', '&gt;')
-          .replaceAll('"', '&quot;')
-          .replaceAll("'", '&#39;');
-      s = s
-          .replaceAll('\r\n', '\n')
-          .replaceAll('\r', '\n')
-          .replaceAll('\n', '<br>');
-      return '<p>$s</p>';
-    }
-
     final cfg = <String, dynamic>{
       'username': username,
       'domain': domain,
@@ -425,7 +410,9 @@ class CoreConfig {
       cfg['chat_identity_secret_b64'] = chatIdentitySecretB64!.trim();
     }
     if (displayName.trim().isNotEmpty) cfg['display_name'] = displayName.trim();
-    if (summary.trim().isNotEmpty) cfg['summary'] = textToHtml(summary);
+    if (summary.trim().isNotEmpty) {
+      cfg['summary'] = ProfileContent.toHtml(summary);
+    }
     if (iconUrl.trim().isNotEmpty) cfg['icon_url'] = iconUrl.trim();
     if (iconMediaType.trim().isNotEmpty) {
       cfg['icon_media_type'] = iconMediaType.trim();
@@ -439,7 +426,7 @@ class CoreConfig {
           .map(
             (f) => {
               'name': f.name.trim(),
-              'value': textToHtml(f.value),
+              'value': ProfileContent.toHtml(f.value),
             },
           )
           .where((m) =>

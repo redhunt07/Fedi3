@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct SocialDb {
     path: PathBuf,
+    pub(crate) chat_notify: std::sync::Arc<tokio::sync::Notify>,
 }
 
 #[cfg(test)]
@@ -522,7 +523,10 @@ impl SocialDb {
         ensure_columns(&conn, "outbox_items", &[("visibility", "TEXT NULL")])?;
         migrate(&mut conn)?;
         secure_db_permissions(&path);
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            chat_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        })
     }
 
     pub(crate) fn connect(&self) -> Result<Connection> {
@@ -4083,6 +4087,41 @@ impl SocialDb {
             items,
             next: last_updated.map(|v| v.to_string()),
         })
+    }
+
+    /// Commit a locally accepted message and all delivery intents together.
+    /// Retrying the same request never changes its content or creates another message.
+    pub fn accept_outgoing_chat(&self, msg: &ChatMessage, recipients: &[String]) -> Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let old: Option<(String, String, String)> = tx
+            .query_row(
+                "SELECT thread_id,sender_actor,body_json FROM chat_messages WHERE message_id=?1",
+                [&msg.message_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if let Some((thread, sender, body)) = old {
+            anyhow::ensure!(
+                thread == msg.thread_id && sender == msg.sender_actor && body == msg.body_json,
+                "chat request id already used for different content"
+            );
+            return Ok(false);
+        }
+        tx.execute("INSERT INTO chat_messages(message_id,thread_id,sender_actor,sender_device,created_at_ms,edited_at_ms,deleted,body_json) VALUES(?1,?2,?3,?4,?5,NULL,0,?6)",params![msg.message_id,msg.thread_id,msg.sender_actor,msg.sender_device,msg.created_at_ms,msg.body_json])?;
+        tx.execute(
+            "UPDATE chat_threads SET updated_at_ms=?2 WHERE thread_id=?1",
+            params![msg.thread_id, msg.created_at_ms],
+        )?;
+        for actor in recipients {
+            tx.execute("INSERT INTO chat_pending_deliveries(thread_id,actor_id,message_id,payload_json,attempts,next_at_ms,created_at_ms) VALUES(?1,?2,?3,?4,0,?5,?5)",params![msg.thread_id,actor,msg.message_id,msg.body_json.as_bytes(),msg.created_at_ms])?;
+            if actor != &msg.sender_actor {
+                tx.execute("INSERT INTO chat_message_status(message_id,actor_id,status,updated_at_ms) VALUES(?1,?2,'queued',?3) ON CONFLICT(message_id,actor_id) DO NOTHING",params![msg.message_id,actor,msg.created_at_ms])?;
+            }
+        }
+        tx.commit()?;
+        self.chat_notify.notify_one();
+        Ok(true)
     }
 
     pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<()> {

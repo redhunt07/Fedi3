@@ -25,12 +25,13 @@ class StatusAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatar = _buildAvatar(context);
-    final key = statusKey?.trim() ?? '';
+    final key = presenceActorKey(statusKey);
     if (!showStatus || key.isEmpty) return avatar;
     return ValueListenableBuilder<Map<String, PresenceStatus>>(
-      valueListenable: PeerPresenceStore.instance.statusByUsername,
+      valueListenable: PeerPresenceStore.instance.statusByActor,
       builder: (context, map, _) {
-        final status = map[key] ?? PresenceStatus.offline;
+        if (!map.containsKey(key)) return avatar;
+        final status = map[key]!;
         return Stack(
           clipBehavior: Clip.none,
           children: [

@@ -251,3 +251,17 @@ replica and pinned key. Chat spool retention is a separate policy.
 Old clients with signed forward receipts can prove the existing pinned identity
 through a fresh tunnel challenge. `FEDI3_RELAY_ALLOW_LEGACY_TUNNELS=true` disables
 this protection for legacy compatibility; leave it unset in normal deployments.
+
+
+Relay device liveness is per authenticated connection and peer ID, never inherited
+from another device with the same username. Heartbeats expire after 150 seconds;
+disconnects remove the active session immediately. Historical directory contacts
+remain discoverable as offline entries. Multiple paired sockets remain open while
+the relay chooses a current public forwarding target.
+
+Chat send responses acknowledge an atomic local message/delivery-queue commit.
+Fast delivery counts can be returned within a two-second budget; slow/offline peers
+remain queued. The optional `client_message_id` must be reused for an ambiguous
+retry; reuse with different content is rejected. Retry workers and self-sync use
+the durable queue. UI presence keys use complete actor URLs, and missing presence
+is not treated as evidence that a classic ActivityPub account is online.

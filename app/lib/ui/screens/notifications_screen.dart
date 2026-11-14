@@ -330,10 +330,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     void flush() {
       if (cluster.isEmpty) return;
       if (cluster.length == 1) {
-        out.add(
-            _NotificationItem(appState: widget.appState, item: cluster.first));
+        out.add(_NotificationItem(
+          key: ValueKey('notification:${_notificationKey(cluster.first)}'),
+          appState: widget.appState,
+          item: cluster.first,
+        ));
       } else {
         out.add(_NotificationCluster(
+          key: ValueKey(
+              'notification-cluster:$clusterActor:$clusterType:${_notificationKey(cluster.first)}'),
           appState: widget.appState,
           items: List<Map<String, dynamic>>.of(cluster),
         ));
@@ -601,7 +606,8 @@ String _notificationExcerpt(Map<String, dynamic> activity) {
 }
 
 class _NotificationItem extends StatefulWidget {
-  const _NotificationItem({required this.appState, required this.item});
+  const _NotificationItem(
+      {super.key, required this.appState, required this.item});
 
   final AppState appState;
   final Map<String, dynamic> item;
@@ -612,6 +618,8 @@ class _NotificationItem extends StatefulWidget {
 
 class _NotificationItemState extends State<_NotificationItem> {
   ActorProfile? _actorProfile;
+  String? _requestedActor;
+  int _actorLoadId = 0;
 
   @override
   void initState() {
@@ -619,12 +627,22 @@ class _NotificationItemState extends State<_NotificationItem> {
     _loadActor();
   }
 
+  @override
+  void didUpdateWidget(covariant _NotificationItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_actorUrl != _requestedActor) {
+      _actorProfile = null;
+      _loadActor();
+    }
+  }
+
   Future<void> _loadActor() async {
-    final activity = _activity;
-    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    final actor = _actorUrl;
+    _requestedActor = actor;
+    final loadId = ++_actorLoadId;
     if (actor.isEmpty) return;
     final profile = await ActorRepository.instance.getActor(actor);
-    if (!mounted) return;
+    if (!mounted || loadId != _actorLoadId || actor != _actorUrl) return;
     setState(() => _actorProfile = profile);
   }
 
@@ -713,7 +731,7 @@ class _NotificationItemState extends State<_NotificationItem> {
                 imageUrl: profile?.iconUrl ?? '',
                 size: 40,
                 showStatus: true,
-                statusKey: username,
+                statusKey: _actorUrl,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -859,7 +877,8 @@ class _NotificationItemState extends State<_NotificationItem> {
 }
 
 class _NotificationCluster extends StatefulWidget {
-  const _NotificationCluster({required this.appState, required this.items});
+  const _NotificationCluster(
+      {super.key, required this.appState, required this.items});
 
   final AppState appState;
   final List<Map<String, dynamic>> items;
@@ -871,6 +890,8 @@ class _NotificationCluster extends StatefulWidget {
 class _NotificationClusterState extends State<_NotificationCluster> {
   ActorProfile? _profile;
   bool _expanded = false;
+  String? _requestedActor;
+  int _actorLoadId = 0;
 
   @override
   void initState() {
@@ -878,15 +899,23 @@ class _NotificationClusterState extends State<_NotificationCluster> {
     _loadActor();
   }
 
+  @override
+  void didUpdateWidget(covariant _NotificationCluster oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_actorUrl != _requestedActor) {
+      _profile = null;
+      _expanded = false;
+      _loadActor();
+    }
+  }
+
   Future<void> _loadActor() async {
-    final first = widget.items.first;
-    final activity = (first['activity'] is Map)
-        ? (first['activity'] as Map).cast<String, dynamic>()
-        : const <String, dynamic>{};
-    final actor = (activity['actor'] as String?)?.trim() ?? '';
+    final actor = _actorUrl;
+    _requestedActor = actor;
+    final loadId = ++_actorLoadId;
     if (actor.isEmpty) return;
     final profile = await ActorRepository.instance.getActor(actor);
-    if (!mounted) return;
+    if (!mounted || loadId != _actorLoadId || actor != _actorUrl) return;
     setState(() => _profile = profile);
   }
 
@@ -927,9 +956,6 @@ class _NotificationClusterState extends State<_NotificationCluster> {
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
-    final username = profile?.preferredUsername.isNotEmpty == true
-        ? profile!.preferredUsername
-        : _name;
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(UiTokens.radiusCard),
@@ -945,7 +971,7 @@ class _NotificationClusterState extends State<_NotificationCluster> {
                     imageUrl: profile?.iconUrl ?? '',
                     size: 40,
                     showStatus: true,
-                    statusKey: username,
+                    statusKey: _actorUrl,
                   ),
                   const SizedBox(width: 10),
                   Expanded(

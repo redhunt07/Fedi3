@@ -182,3 +182,73 @@ async fn complete_account_converges_across_two_cores_and_offline_restart() {
     );
     drop(a_core);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reset_device_keeps_old_contact_offline_without_disconnects_between_paired_devices() {
+    let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_DIRECTORY_URLS", "")]).await;
+    let a = fedi3_core::test_support::TempDir::new("session-desktop");
+    let b = fedi3_core::test_support::TempDir::new("session-old-phone");
+    let c = fedi3_core::test_support::TempDir::new("session-reset-phone");
+    let pem = fedi3_protocol::crypto::rsa_generate_private_pem().unwrap();
+    let start = |path: &std::path::Path| {
+        let mut config = cfg(&relay, path, &pem, port());
+        config.p2p = Some(fedi3_core::p2p::P2pConfig {
+            enable: true,
+            mdns_enable: Some(false),
+            public_discovery_enable: Some(false),
+            discovery_enable: Some(false),
+            gossip_enable: Some(false),
+            sync_enable: Some(false),
+            listen: Some("/ip4/127.0.0.1/tcp/0".into()),
+            ..Default::default()
+        });
+        Core(runtime::start(config).unwrap())
+    };
+    let desktop = start(a.path());
+    let phone = start(b.path());
+    let snapshot = || async {
+        let data: serde_json::Value = relay
+            .client
+            .get(format!("{}/_fedi3/relay/peers", relay.base_url()))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let items = data["items"].as_array().unwrap();
+        (
+            items.len(),
+            items.iter().filter(|p| p["online"] == true).count(),
+        )
+    };
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while snapshot().await != (2, 2) {
+        assert!(
+            Instant::now() < deadline,
+            "paired devices did not both stay online"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for _ in 0..4 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(snapshot().await, (2, 2));
+    }
+    drop(phone);
+    let reset_phone = start(c.path());
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while snapshot().await != (3, 2) {
+        assert!(
+            Instant::now() < deadline,
+            "reset phone did not replace its old online state"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(reset_phone);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while snapshot().await != (3, 1) {
+        assert!(Instant::now() < deadline, "disconnected phone still online");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(desktop);
+}

@@ -1,3 +1,4 @@
+import '../model/profile_content.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -426,20 +427,22 @@ class AppState extends ChangeNotifier {
           (p[key] as List? ?? []).map((v) => v.toString()).toList();
       final updated = cfg.copyWith(
           displayName: p['display_name'] as String? ?? '',
-          summary: p['summary'] as String? ?? '',
+          summary: ProfileContent.toPlainText(p['summary'] as String? ?? ''),
           iconUrl: p['icon_url'] as String? ?? '',
           iconMediaType: p['icon_media_type'] as String? ?? '',
           imageUrl: p['image_url'] as String? ?? '',
           imageMediaType: p['image_media_type'] as String? ?? '',
           profileFields: (p['profile_fields'] as List? ?? [])
               .whereType<Map>()
-              .map((v) => ProfileFieldKV.fromJson(Map<String, dynamic>.from(v)))
+              .map((v) => ProfileFieldKV(
+                  name: v['name']?.toString() ?? '',
+                  value:
+                      ProfileContent.toPlainText(v['value']?.toString() ?? '')))
               .toList(),
           manuallyApprovesFollowers: p['manually_approves_followers'] == true,
           blockedDomains: strings('blocked_domains'),
           blockedActors: strings('blocked_actors'));
-      if (jsonEncode(cfg.toCoreStartJson()) !=
-          jsonEncode(updated.toCoreStartJson())) {
+      if (jsonEncode(cfg.toJson()) != jsonEncode(updated.toJson())) {
         await saveConfig(updated);
         if (identical(_config, updated)) _activeConfig = updated;
       }

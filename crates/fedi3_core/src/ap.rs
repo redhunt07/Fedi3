@@ -3293,6 +3293,7 @@ async fn search_hashtags(state: &ApState, req: Request<Body>) -> Response<Body> 
 
 #[derive(Debug, serde::Deserialize)]
 struct ChatSendReq {
+    client_message_id: Option<String>,
     thread_id: Option<String>,
     recipients: Vec<String>,
     text: String,
@@ -3693,6 +3694,15 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         Ok(v) => v,
         Err(_) => return simple(StatusCode::BAD_REQUEST, "invalid json"),
     };
+    if input.client_message_id.as_ref().is_some_and(|id| {
+        id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    }) {
+        return simple(StatusCode::BAD_REQUEST, "invalid client message id");
+    }
     let has_attachments = input
         .attachments
         .as_ref()
@@ -3726,13 +3736,20 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
     members.sort();
     members.dedup();
 
+    let request_id = input
+        .client_message_id
+        .as_ref()
+        .map(|id| fedi3_protocol::receipts::sha256(format!("{self_actor}:{id}").as_bytes()));
     let (thread_id, kind) = if let Some(id) = input.thread_id.as_deref() {
         (id.to_string(), "group".to_string())
     } else if members.len() == 2 {
         (chat_dm_thread_id(&members), "dm".to_string())
     } else {
         (
-            format!("urn:fedi3:chat:{}", chat::random_id()),
+            format!(
+                "urn:fedi3:chat:{}",
+                request_id.clone().unwrap_or_else(chat::random_id)
+            ),
             "group".to_string(),
         )
     };
@@ -3751,7 +3768,10 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
-    let message_id = format!("urn:fedi3:chat:msg:{}", chat::random_id());
+    let message_id = format!(
+        "urn:fedi3:chat:msg:{}",
+        request_id.unwrap_or_else(chat::random_id)
+    );
     let payload = chat::ChatPayload {
         op: "message".to_string(),
         text: Some(input.text.clone()),
@@ -3793,97 +3813,37 @@ async fn chat_send_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         deleted: false,
         body_json: serde_json::to_string(&payload).unwrap_or_default(),
     };
-    let _ = state.social.insert_chat_message(&msg);
-    let _ = state.social.touch_chat_thread(&thread_id);
-
-    let mut sent = 0u32;
-    let mut queued = 0u32;
-    for actor in members {
-        if actor == self_actor {
-            continue;
-        }
-        let peers = match resolve_actor_peers(state, &actor).await {
-            Ok(peers) => peers,
-            Err(e) => {
-                warn!(actor=%actor, msg_id=%message_id, "chat peer resolution failed: {e}");
-                queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
-                continue;
-            }
-        };
-        // A recipient core can run without P2P and still accept chat over the relay
-        // HTTP proxy. Use an empty peer id so the bundle fetch and envelope send take
-        // their HTTP fallback paths instead of skipping delivery entirely.
-        let peers = if peers.is_empty() {
-            vec![String::new()]
-        } else {
-            peers
-        };
-        for peer_id in peers {
-            let bundle = match fetch_chat_bundle(state, &peer_id, &actor).await {
-                Ok(Some(bundle)) => bundle,
-                Ok(None) => {
-                    warn!(actor=%actor, peer=%peer_id, "chat bundle not found");
-                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
-                    continue;
-                }
-                Err(e) => {
-                    warn!(actor=%actor, peer=%peer_id, "chat bundle fetch failed: {e}");
-                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
-                    continue;
-                }
-            };
-            if let Err(e) = chat::verify_bundle(state, &bundle).await {
-                warn!(actor=%actor, peer=%peer_id, "chat bundle verification failed: {e}");
-                continue;
-            }
-            let env = match chat::encrypt_payload_for_bundle(
-                state,
-                &bundle,
-                &thread_id,
-                &message_id,
-                &payload,
-            ) {
-                Ok(env) => env,
-                Err(e) => {
-                    warn!(actor=%actor, peer=%peer_id, "chat encryption failed: {e}");
-                    continue;
-                }
-            };
-            match chat::send_envelope_to_peer(state, &peer_id, &actor, &env).await {
-                Ok(chat::ChatSendOutcome::Sent) => {
-                    let _ = state
-                        .social
-                        .upsert_chat_message_status(&message_id, &actor, "sent");
-                    sent = sent.saturating_add(1);
-                }
-                Ok(chat::ChatSendOutcome::Queued) => {
-                    let _ = state
-                        .social
-                        .upsert_chat_message_status(&message_id, &actor, "queued");
-                    queued = queued.saturating_add(1);
-                }
-                Ok(chat::ChatSendOutcome::RelayAccepted) => {
-                    // The relay answers 503 when the recipient tunnel is down and
-                    // 2xx only when it proxied to the core, so this is a delivery.
-                    let _ = state
-                        .social
-                        .upsert_chat_message_status(&message_id, &actor, "sent");
-                    sent = sent.saturating_add(1);
-                }
-                Err(e) => {
-                    warn!(actor=%actor, peer=%peer_id, msg_id=%message_id, "chat delivery failed: {e}");
-                    queue_chat_retry(state, &thread_id, &actor, &message_id, &payload);
-                }
-            }
-        }
+    if let Err(error) = state.social.accept_outgoing_chat(&msg, &members) {
+        warn!(%error, "chat acceptance failed");
+        return simple(
+            StatusCode::CONFLICT,
+            "message could not be accepted; retry with the same request id",
+        );
     }
-
-    // The message is already stored locally: publish exactly one self-sync copy for the
-    // account's other clients, independently of the per-recipient delivery loop above.
-    chat::self_sync_chat_payload(state, &thread_id, &payload, &message_id).await;
+    let recipients = members.iter().filter(|actor| **actor != self_actor).count();
+    // Preserve immediate delivery counts for fast peers, but never wait for a
+    // slow remote server beyond this local acknowledgement budget.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let sent = loop {
+        let sent = state
+            .social
+            .list_chat_message_statuses(std::slice::from_ref(&message_id))
+            .unwrap_or_default()
+            .iter()
+            .filter(|(_, actor, status, _)| {
+                actor != &self_actor && matches!(status.as_str(), "sent" | "delivered" | "read")
+            })
+            .count();
+        if sent >= recipients || tokio::time::Instant::now() >= deadline {
+            break sent;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let queued = recipients.saturating_sub(sent);
 
     axum::Json(serde_json::json!({
         "ok": true,
+        "accepted": true,
         "thread_id": thread_id,
         "message_id": message_id,
         "sent": sent,
@@ -3929,10 +3889,12 @@ pub fn start_chat_retry_worker(
                     }
                     retry_pending_chat(&state).await;
                 }
+                _ = state.social.chat_notify.notified() => {
+                    if *shutdown.borrow() { break; }
+                    retry_pending_chat(&state).await;
+                }
                 changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
-                    }
+                    if changed.is_err() || *shutdown.borrow() { break; }
                 }
             }
         }
@@ -3956,8 +3918,28 @@ async fn retry_pending_chat(state: &ApState) {
             let _ = state.social.finish_chat_delivery(row.id);
             continue;
         }
+        let self_actor = canonical_actor_url(&state.cfg);
+        if row.actor_id == self_actor {
+            if chat::self_sync_chat_payload(state, &row.thread_id, &payload, &row.message_id).await
+            {
+                let _ = state.social.finish_chat_delivery(row.id);
+            } else {
+                let attempts = row.attempts.saturating_add(1);
+                let _ = state.social.reschedule_chat_delivery(
+                    row.id,
+                    attempts,
+                    now_ms() + retry_backoff_ms(attempts),
+                );
+            }
+            continue;
+        }
         let mut delivered = false;
         if let Ok(peers) = resolve_actor_peers(state, &row.actor_id).await {
+            let peers = if peers.is_empty() {
+                vec![String::new()]
+            } else {
+                peers
+            };
             for peer_id in peers {
                 let Ok(Some(bundle)) = fetch_chat_bundle(state, &peer_id, &row.actor_id).await
                 else {
@@ -8696,9 +8678,15 @@ pub(crate) async fn process_inbox_activity(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
+            let handle = format!("@{}@{}", state.cfg.username, state.cfg.domain);
+            let event_kind = if is_notification(state, activity, &me, &handle) {
+                "notification"
+            } else {
+                "inbox"
+            };
             let _ = state
                 .ui_events
-                .send(UiEvent::new("inbox", Some(ty.to_string()), act_id));
+                .send(UiEvent::new(event_kind, Some(ty.to_string()), act_id));
             Ok(())
         }
         "Follow" => {
@@ -9202,7 +9190,7 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
                     }
                 }
             }
-            if is_notification(&v, &me_actor, &my_handle) {
+            if is_notification(state, &v, &me_actor, &my_handle) {
                 items.push(serde_json::json!({ "ts": ts, "activity": v }));
             }
         }
@@ -9215,52 +9203,123 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
     .into_response()
 }
 
-fn is_notification(activity: &serde_json::Value, me_actor: &str, my_handle: &str) -> bool {
-    let ty = activity.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    match ty {
-        "Follow" | "Accept" | "Reject" | "Announce" | "Like" | "EmojiReact" => true,
-        "Create" => {
-            let Some(obj) = activity.get("object").and_then(|v| v.as_object()) else {
-                return false;
-            };
-            if obj.get("type").and_then(|v| v.as_str()) != Some("Note") {
-                return false;
+fn is_notification(state: &ApState, activity: &Value, me_actor: &str, my_handle: &str) -> bool {
+    notification_for_account(activity, me_actor, my_handle, |object| {
+        let id = object
+            .as_str()
+            .or_else(|| object.get("id").and_then(Value::as_str))
+            .unwrap_or("");
+        if id.is_empty() {
+            return false;
+        }
+        let record = state.social.connect().ok().and_then(|c| {
+            c.query_row(
+                "SELECT actor_id,object_json FROM objects WHERE object_id=?1",
+                [id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .ok()
+        });
+        record.is_some_and(|(actor, raw)| {
+            actor.as_deref() == Some(me_actor)
+                || serde_json::from_slice::<Value>(&raw)
+                    .ok()
+                    .is_some_and(|v| value_has_actor(v.get("attributedTo"), me_actor))
+        })
+    })
+}
+
+fn value_has_actor(value: Option<&Value>, actor: &str) -> bool {
+    match value {
+        Some(Value::String(s)) => s == actor,
+        Some(Value::Array(list)) => list.iter().any(|v| value_has_actor(Some(v), actor)),
+        Some(Value::Object(map)) => map.get("id").and_then(Value::as_str) == Some(actor),
+        _ => false,
+    }
+}
+
+fn notification_for_account(
+    activity: &Value,
+    me_actor: &str,
+    my_handle: &str,
+    owns: impl Fn(&Value) -> bool,
+) -> bool {
+    if value_has_actor(activity.get("actor"), me_actor) {
+        return false;
+    }
+    let object = activity.get("object").unwrap_or(&Value::Null);
+    match activity.get("type").and_then(Value::as_str).unwrap_or("") {
+        "Follow" => value_has_actor(Some(object), me_actor),
+        "Accept" | "Reject" => {
+            value_has_actor(object.get("actor"), me_actor)
+                || value_has_actor(activity.get("to"), me_actor)
+        }
+        "Like" | "EmojiReact" | "Announce" => owns(object),
+        "Create" if object.get("type").and_then(Value::as_str) == Some("Note") => {
+            if object.get("inReplyTo").is_some_and(&owns) {
+                return true;
             }
-            if let Some(serde_json::Value::String(in_reply_to)) = obj.get("inReplyTo") {
-                if in_reply_to.contains("/users/") {
-                    // Best-effort: treat replies to our local objects as notifications.
-                    if in_reply_to.contains("/objects/") {
-                        return true;
-                    }
-                }
-            }
-            // Mention tags or content contains our handle.
-            if let Some(tags) = obj.get("tag").and_then(|v| v.as_array()) {
-                for t in tags {
-                    if t.get("type").and_then(|v| v.as_str()) == Some("Mention") {
-                        if let Some(href) = t.get("href").and_then(|v| v.as_str()) {
-                            if href == me_actor {
-                                return true;
-                            }
-                        }
-                        if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
-                            if name == my_handle
-                                || name.trim_start_matches('@') == my_handle.trim_start_matches('@')
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(content) = obj.get("content").and_then(|v| v.as_str()) {
-                if content.contains(my_handle) {
-                    return true;
-                }
-            }
-            false
+            object
+                .get("tag")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| {
+                    tags.iter().any(|tag| {
+                        tag.get("type").and_then(Value::as_str) == Some("Mention")
+                            && (value_has_actor(tag.get("href"), me_actor)
+                                || tag.get("name").and_then(Value::as_str) == Some(my_handle))
+                    })
+                })
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod notification_policy_tests {
+    use super::*;
+    #[test]
+    fn personal_notifications_exclude_other_peoples_reactions_and_replies() {
+        let me = "https://me.example/users/alice";
+        let other = "https://other.example/users/alice";
+        let owns = |v: &Value| v.as_str() == Some("https://me.example/objects/owned");
+        for kind in ["Like", "Announce", "EmojiReact"] {
+            assert!(!notification_for_account(
+                &serde_json::json!({"type":kind,"actor":other,"object":"https://else.example/users/bob/objects/post","to":[me]}),
+                me,
+                "@alice@me.example",
+                owns
+            ));
+            assert!(notification_for_account(
+                &serde_json::json!({"type":kind,"actor":other,"object":"https://me.example/objects/owned"}),
+                me,
+                "@alice@me.example",
+                owns
+            ));
+        }
+        assert!(!notification_for_account(
+            &serde_json::json!({"type":"Follow","actor":other,"object":"https://else.example/users/bob"}),
+            me,
+            "@alice@me.example",
+            owns
+        ));
+        assert!(notification_for_account(
+            &serde_json::json!({"type":"Follow","actor":other,"object":me}),
+            me,
+            "@alice@me.example",
+            owns
+        ));
+        assert!(!notification_for_account(
+            &serde_json::json!({"type":"Create","actor":other,"object":{"type":"Note","inReplyTo":"https://else.example/users/bob/objects/post"}}),
+            me,
+            "@alice@me.example",
+            owns
+        ));
+        assert!(notification_for_account(
+            &serde_json::json!({"type":"Create","actor":other,"object":{"type":"Note","tag":[{"type":"Mention","href":me}]}}),
+            me,
+            "@alice@me.example",
+            owns
+        ));
     }
 }
 

@@ -390,7 +390,7 @@ class _NewChatScreenState extends State<NewChatScreen>
                     imageUrl: profile.iconUrl,
                     size: 42,
                     showStatus: true,
-                    statusKey: profile.preferredUsername,
+                    statusKey: profile.statusKey,
                   ),
                   title: Text(
                     profile.displayName.trim().isEmpty
@@ -461,7 +461,7 @@ class _NewChatScreenState extends State<NewChatScreen>
                   imageUrl: profile.iconUrl,
                   size: 38,
                   showStatus: true,
-                  statusKey: profile.preferredUsername,
+                  statusKey: profile.statusKey,
                 ),
                 title: Text(
                   profile.displayName.trim().isEmpty

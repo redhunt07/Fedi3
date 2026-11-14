@@ -9,6 +9,7 @@ import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/ui/screens/notifications_screen.dart';
+import 'package:fedi3/ui/screens/profile_screen.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -40,6 +41,108 @@ Map<String, dynamic> _like(String actor, String noteId) => {
     };
 
 void main() {
+  testWidgets(
+      'prepending a follow keeps displayed identity and profile target together',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    const peppe = 'https://notification-identity.test/users/peppenamir';
+    const panormus = 'https://notification-identity.test/users/panormus';
+    var items = [_follow(peppe)];
+    final client = FakeHttpClient();
+    client.handler = (request) {
+      if (request.url.path == '/_fedi3/notifications') {
+        return FakeHttpResponse(body: jsonEncode({'items': items}));
+      }
+      if (request.url.host == 'notification-identity.test') {
+        final name = request.url.pathSegments.last;
+        return FakeHttpResponse(
+            body: jsonEncode({
+          'type': 'Person',
+          'id': request.url.toString(),
+          'preferredUsername': name,
+          'name': name,
+        }));
+      }
+      return FakeHttpResponse(
+          body: request.url.path == '/_fedi3/stream' ? '' : '{}');
+    };
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, NotificationsScreen(appState: app, active: false));
+    await tester.pumpAndSettle();
+    expect(find.text('@peppenamir@notification-identity.test'), findsOneWidget);
+    items = [_follow(panormus), ...items];
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pumpAndSettle();
+    final firstCard = find.byType(Card).first;
+    expect(find.descendant(of: firstCard, matching: find.text('panormus')),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: firstCard,
+            matching: find.text('@panormus@notification-identity.test')),
+        findsOneWidget);
+    final peppeCard = find.ancestor(
+        of: find.text('@peppenamir@notification-identity.test'),
+        matching: find.byType(Card));
+    await tester.tap(peppeCard);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ProfileScreen>(find.byType(ProfileScreen)).actorUrl,
+        peppe);
+    expect(find.text('@peppenamir@notification-identity.test'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+      'reaction clusters retain their actor after another cluster is prepended',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    const peppe = 'https://notification-cluster.test/users/peppenamir';
+    const panormus = 'https://notification-cluster.test/users/panormus';
+    var items = [_like(peppe, 'peppe-1'), _like(peppe, 'peppe-2')];
+    final client = FakeHttpClient();
+    client.handler = (request) {
+      if (request.url.path == '/_fedi3/notifications') {
+        return FakeHttpResponse(body: jsonEncode({'items': items}));
+      }
+      if (request.url.host == 'notification-cluster.test') {
+        final name = request.url.pathSegments.last;
+        return FakeHttpResponse(
+            body: jsonEncode({
+          'type': 'Person',
+          'id': request.url.toString(),
+          'preferredUsername': name,
+          'name': name
+        }));
+      }
+      return FakeHttpResponse(
+          body: request.url.path == '/_fedi3/stream' ? '' : '{}');
+    };
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, NotificationsScreen(appState: app, active: false));
+    await tester.pumpAndSettle();
+    items = [
+      _like(panormus, 'panormus-1'),
+      _like(panormus, 'panormus-2'),
+      ...items
+    ];
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pumpAndSettle();
+    expect(
+        find.descendant(
+            of: find.byType(Card).first, matching: find.text('panormus')),
+        findsOneWidget);
+    expect(find.text('peppenamir'), findsOneWidget);
+    await tester.tap(find.byType(Card).first);
+    await tester.pumpAndSettle();
+    expect(find.text('post panormus-1'), findsOneWidget);
+    expect(find.text('post panormus-2'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
       'hidden notifications recover missed events without marking them read',
       (tester) async {

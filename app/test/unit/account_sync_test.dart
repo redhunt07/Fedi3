@@ -56,7 +56,7 @@ void main() {
     client.json('GET', '/_fedi3/account/profile', {
       'profile': {
         'display_name': 'New',
-        'summary': '',
+        'summary': '<p>Biography &amp; links<br>https://example.test</p>',
         'icon_url': 'https://media.example/avatar.png',
         'profile_fields': [],
         'blocked_actors': [],
@@ -67,6 +67,10 @@ void main() {
     CoreHttp.useTestClient(client);
     await app.refreshAccountProfile();
     expect(app.config!.displayName, 'New');
+    expect(app.config!.summary, 'Biography & links\nhttps://example.test');
+    final profileHtml = app.config!.toCoreStartJson()['summary'];
+    await app.refreshAccountProfile();
+    expect(app.config!.toCoreStartJson()['summary'], profileHtml);
     expect(app.config!.blockedActors, isEmpty);
     expect(app.config!.identityPrivateKeyPem, 'unchanged-private-key');
     expect(app.config!.relayToken, cfg.relayToken);

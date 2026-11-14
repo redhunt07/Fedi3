@@ -908,6 +908,7 @@ class CoreApi {
 
   Future<Map<String, dynamic>> sendChatMessage({
     String? threadId,
+    String? clientMessageId,
     required List<String> recipients,
     required String text,
     String? replyTo,
@@ -918,6 +919,7 @@ class CoreApi {
     final body = jsonEncode({
       if (threadId != null && threadId.trim().isNotEmpty)
         'thread_id': threadId.trim(),
+      if (clientMessageId != null) 'client_message_id': clientMessageId,
       'recipients': recipients,
       'text': text,
       if (replyTo != null && replyTo.trim().isNotEmpty)

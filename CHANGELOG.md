@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-14
+
+- Keep notification row identities stable when new events arrive; ignore stale profile lookups.
+- Show only reactions/boosts to owned posts, addressed follows and explicit mentions/replies as personal notifications. Background activity notifications use the same classification.
+- Repair recursively escaped profile markup, preserve line breaks and make profile URLs clickable. Profile synchronization no longer adds escaping on restart.
+- Scope presence by full actor URL and hide unknown presence, so equal usernames across instances cannot share an online badge.
+- Track relay liveness per authenticated device connection with heartbeat expiry, including multiple paired devices and reset phones.
+- Commit outgoing chat and delivery intents atomically, acknowledge within a bounded local deadline, and retain request IDs on retries to prevent duplicate messages.
+
 ## [0.12.0] - 2026-11-14
 
 - Bind accounts to the complete actor URL and existing RSA identity. Separate

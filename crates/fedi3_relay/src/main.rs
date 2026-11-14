@@ -260,6 +260,7 @@ struct AppState {
     tunnels: Arc<RwLock<HashMap<String, TunnelHandle>>>,
     inflight_per_user: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
+    peer_sessions: Arc<RwLock<HashMap<u64, PeerSession>>>,
     cfg: RelayConfig,
     db: Arc<DbDispatch>,
     limiter: Arc<RateLimiter>,
@@ -270,6 +271,67 @@ struct AppState {
     search_cache: Option<Arc<SearchCache>>,
     media_cfg: media_store::MediaConfig,
     media_backend: Arc<dyn media_store::MediaBackend>,
+}
+
+#[derive(Clone)]
+struct PeerSession {
+    actor_url: String,
+    peer_id: String,
+    last_seen_ms: i64,
+}
+
+const PEER_ONLINE_TTL_MS: i64 = 150_000;
+
+fn online_peer_sessions(
+    sessions: &HashMap<u64, PeerSession>,
+    now: i64,
+) -> std::collections::HashSet<(String, String)> {
+    sessions
+        .values()
+        .filter(|s| now.saturating_sub(s.last_seen_ms) <= PEER_ONLINE_TTL_MS)
+        .map(|s| (s.actor_url.clone(), s.peer_id.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod peer_session_tests {
+    use super::*;
+    #[test]
+    fn online_state_is_per_device_and_expires_without_heartbeats() {
+        let actor = "https://relay.example/users/alice".to_string();
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            1,
+            PeerSession {
+                actor_url: actor.clone(),
+                peer_id: "old-phone".into(),
+                last_seen_ms: 1,
+            },
+        );
+        sessions.insert(
+            2,
+            PeerSession {
+                actor_url: actor.clone(),
+                peer_id: "new-phone".into(),
+                last_seen_ms: 200_000,
+            },
+        );
+        sessions.insert(
+            3,
+            PeerSession {
+                actor_url: actor.clone(),
+                peer_id: "desktop".into(),
+                last_seen_ms: 200_000,
+            },
+        );
+        let online = online_peer_sessions(&sessions, 200_001);
+        assert!(!online.contains(&(actor.clone(), "old-phone".into())));
+        assert!(online.contains(&(actor.clone(), "new-phone".into())));
+        assert!(online.contains(&(actor.clone(), "desktop".into())));
+        assert!(!online.contains(&("https://else.example/users/alice".into(), "desktop".into())));
+        sessions.remove(&2);
+        assert!(!online_peer_sessions(&sessions, 200_002).contains(&(actor, "new-phone".into())));
+    }
 }
 
 #[derive(Clone)]
@@ -1212,6 +1274,7 @@ async fn main() {
         tunnels: Arc::new(RwLock::new(HashMap::new())),
         inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
+        peer_sessions: Arc::new(RwLock::new(HashMap::new())),
         cfg,
         db: Arc::new(DbDispatch::new(db)),
         limiter,
@@ -2529,6 +2592,9 @@ async fn handle_tunnel(
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::channel::<TunnelRequest>(64);
     let tx_for_hello = tx.clone();
+    // The routing map selects a public forward target, while each paired
+    // device retains its authenticated socket and independent liveness.
+    let connection_lifetime = tx.clone();
 
     // A connection id makes the disconnect cleanup safe under reconnects: the
     // old socket must not remove the new tunnel entry (H-30 / RT-04).
@@ -2548,6 +2614,8 @@ async fn handle_tunnel(
         return; // A newer authenticated connection already owns this account.
     }
 
+    let session_closed = tokio_util::sync::CancellationToken::new();
+    let hello_closed = session_closed.clone();
     // Fetch peer hello (best-effort) and store it for telemetry/online peer id.
     let hello_state = state.clone();
     let hello_user = user.clone();
@@ -2557,7 +2625,19 @@ async fn handle_tunnel(
                 let db = hello_state.db.clone();
                 let _ = db.upsert_peer_seen(&p).await;
                 let actor_url = hello.actor.trim().to_string();
-                if !actor_url.is_empty() {
+                if !actor_url.is_empty() && hello.username == hello_user {
+                    let mut sessions = hello_state.peer_sessions.write().await;
+                    if !hello_closed.is_cancelled() {
+                        sessions.insert(
+                            conn_id,
+                            PeerSession {
+                                actor_url: actor_url.clone(),
+                                peer_id: p.clone(),
+                                last_seen_ms: now_ms(),
+                            },
+                        );
+                    }
+                    drop(sessions);
                     let _ = db
                         .upsert_peer_directory(&p, &hello.username, &actor_url)
                         .await;
@@ -2615,6 +2695,7 @@ async fn handle_tunnel(
         }
     });
 
+    let reader_sessions = state.peer_sessions.clone();
     let inflight_reader = inflight.clone();
     let user_reader = user.clone();
     let service_shutdown = state.shutdown.clone();
@@ -2636,6 +2717,9 @@ async fn handle_tunnel(
             let Some(Ok(msg)) = next else {
                 break;
             };
+            if let Some(session) = reader_sessions.write().await.get_mut(&conn_id) {
+                session.last_seen_ms = now_ms();
+            }
             let Message::Text(text) = msg else { continue };
             let resp: RelayHttpResponse = match serde_json::from_str(&text) {
                 Ok(v) => v,
@@ -2655,6 +2739,9 @@ async fn handle_tunnel(
         _ = &mut writer => { reader.abort(); let _ = reader.await; },
         _ = &mut reader => { writer.abort(); let _ = writer.await; },
     }
+    drop(connection_lifetime);
+    session_closed.cancel();
+    state.peer_sessions.write().await.remove(&conn_id);
     // Dropping senders wakes requests whose core did not answer by the deadline.
     inflight.write().await.clear();
 
@@ -7198,13 +7285,7 @@ async fn relay_peers(
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(200).min(500);
     let query = q.q.unwrap_or_default();
-    let online_users = {
-        let tunnels = state.tunnels.read().await;
-        tunnels
-            .keys()
-            .cloned()
-            .collect::<std::collections::HashSet<String>>()
-    };
+    let online_peers = online_peer_sessions(&*state.peer_sessions.read().await, now_ms());
     let db = state.db.clone();
     let rows = match db.list_peer_directory(&query, limit).await {
         Ok(v) => v,
@@ -7217,7 +7298,7 @@ async fn relay_peers(
               "peer_id": peer_id,
               "username": username,
               "actor_url": actor_url,
-              "online": online_users.contains(&username),
+              "online": online_peers.contains(&(actor_url.clone(), peer_id.clone())),
             })
         })
         .collect();
@@ -8083,16 +8164,8 @@ async fn fetch_peer_hello(
 
 async fn build_self_telemetry(state: &AppState) -> Result<RelayTelemetry> {
     let online_users = state.tunnels.read().await.len() as u64;
-    let online_peers = {
-        let map = state.peer_hello.read().await;
-        let mut s = std::collections::HashSet::new();
-        for h in map.values() {
-            if let Some(pid) = h.p2p.as_ref().and_then(|p| p.peer_id.as_ref()) {
-                s.insert(pid.clone());
-            }
-        }
-        s.len() as u64
-    };
+    let online_peers =
+        online_peer_sessions(&*state.peer_sessions.read().await, now_ms()).len() as u64;
 
     let peers_seen_window_ms: i64 = 30 * 24 * 3600 * 1000;
     let cutoff_ms = now_ms().saturating_sub(peers_seen_window_ms);
@@ -10470,6 +10543,7 @@ mod tests {
             tunnels: Arc::new(RwLock::new(HashMap::new())),
             inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
             peer_hello: Arc::new(RwLock::new(HashMap::new())),
+            peer_sessions: Arc::new(RwLock::new(HashMap::new())),
             cfg,
             db: Arc::new(DbDispatch::new(db)),
             limiter,

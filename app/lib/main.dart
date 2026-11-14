@@ -222,7 +222,7 @@ Future<void> backgroundMain() async {
           .stream(background: true, reconnect: true)
           .listen((ev) async {
         if (pushOnly) armQuiet();
-        if (ev.kind == 'notification' || ev.kind == 'inbox') {
+        if (ev.kind == 'notification') {
           await NotificationService.showActivityNotification(
             title: l10n.activityNotificationTitle,
             body: l10n.activityNotificationBody,

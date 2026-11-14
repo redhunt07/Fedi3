@@ -45,16 +45,7 @@ class ActorProfile {
   String get displayName => name.isNotEmpty ? name : preferredUsername;
   bool get isFedi3 => fedi3PeerId.isNotEmpty;
 
-  String get statusKey {
-    if (preferredUsername.isNotEmpty) return preferredUsername;
-    final uri = Uri.tryParse(id);
-    if (uri == null) return '';
-    final segs = uri.pathSegments;
-    if (segs.length >= 2 && segs.first == 'users') {
-      return segs[1];
-    }
-    return '';
-  }
+  String get statusKey => id;
 
   static ActorProfile? tryParse(Map<String, dynamic> json) {
     if ((json['type'] as String?) == null) return null;

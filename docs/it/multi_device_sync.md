@@ -256,3 +256,17 @@ anche replica e chiave vincolata. La retention dello spool chat resta separata.
 I vecchi client che firmano le ricevute dei forward possono provare la chiave
 tramite una sfida fresca sul tunnel. Lasciare disattivata l’opzione di compatibilità
 `FEDI3_RELAY_ALLOW_LEGACY_TUNNELS=true`, che aggira questa protezione.
+
+
+La presenza del dispositivo sul relay è legata alla connessione autenticata e
+al peer ID, non al solo nome dell’account. Gli heartbeat scadono dopo 150 secondi;
+la disconnessione elimina subito la sessione attiva. I contatti storici restano
+nella directory come offline. Le connessioni dei dispositivi abbinati restano
+aperte contemporaneamente, con un target corrente per i forward pubblici.
+
+L’invio chat conferma una scrittura atomica di messaggio e coda locale. Le
+consegne rapide possono essere confermate entro due secondi; gli altri destinatari
+restano in coda. `client_message_id` si riutilizza in caso di risposta ambigua:
+lo stesso identificativo con testo diverso viene rifiutato. La presenza usa URL
+completi degli attori e non attribuisce lo stato online ai classici utenti AP
+omonimi privi di una presenza propria.

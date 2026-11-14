@@ -523,7 +523,8 @@ paths:
   /_fedi3/chat/send:
     post:
       tags: [core]
-      summary: Invia un messaggio cifrato E2E
+      summary: Accetta e accoda un messaggio cifrato senza attendere destinatari lenti
+      security: [{internalToken: []}]
       requestBody:
         required: true
         content:
@@ -531,12 +532,22 @@ paths:
             schema:
               $ref: '#/components/schemas/ChatSendRequest'
       responses:
-        '201':
-          description: Messaggio inviato
+        '200':
+          description: Messaggio e consegne salvati atomicamente; conteggi aggiornati entro due secondi
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatMessage'
+                type: object
+                required: [ok, accepted, thread_id, message_id, sent, queued]
+                properties:
+                  ok: {type: boolean}
+                  accepted: {type: boolean}
+                  thread_id: {type: string}
+                  message_id: {type: string}
+                  sent: {type: integer}
+                  queued: {type: integer}
+        '400': {description: Richiesta non valida}
+        '409': {description: Identificativo riutilizzato con contenuto diverso o salvataggio fallito; mantenere la bozza}
   /_fedi3/chat/react:
     post:
       tags: [core]
@@ -2131,17 +2142,21 @@ components:
               type: string
     ChatSendRequest:
       type: object
-      required: [threadId, content]
+      required: [recipients, text]
       properties:
-        threadId:
+        thread_id: {type: string}
+        client_message_id:
           type: string
-        content:
-          type: string
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Identificativo stabile da riutilizzare nel retry della stessa bozza
+        recipients: {type: array, items: {type: string}}
+        text: {type: string}
+        reply_to: {type: string}
+        title: {type: string}
         attachments:
           type: array
-          items:
-            type: object
-            additionalProperties: true
+          items: {type: object, additionalProperties: true}
     RelayUser:
       type: object
       required: [username]

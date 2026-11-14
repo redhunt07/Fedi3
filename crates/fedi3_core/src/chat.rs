@@ -673,7 +673,7 @@ pub async fn self_sync_chat_payload(
     thread_id: &str,
     payload: &ChatPayload,
     envelope_message_id: &str,
-) {
+) -> bool {
     let Some(relay_base) = state
         .cfg
         .relay_base_url
@@ -681,13 +681,13 @@ pub async fn self_sync_chat_payload(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     else {
-        return;
+        return true;
     };
     let bundle = match build_chat_bundle(state) {
         Ok(bundle) => bundle,
         Err(e) => {
             debug!(error=%e, "self-sync bundle unavailable");
-            return;
+            return false;
         }
     };
     let env =
@@ -695,14 +695,14 @@ pub async fn self_sync_chat_payload(
             Ok(env) => env,
             Err(e) => {
                 debug!(error=%e, "self-sync encryption failed");
-                return;
+                return false;
             }
         };
     let bytes = match serde_json::to_vec(&env) {
         Ok(bytes) => bytes,
         Err(e) => {
             debug!(error=%e, "self-sync serialization failed");
-            return;
+            return false;
         }
     };
     let url = format!(
@@ -721,9 +721,16 @@ pub async fn self_sync_chat_payload(
     {
         Ok(resp) if resp.status().is_success() => {
             debug!(thread=%thread_id, "chat payload self-synced to the account spool");
+            true
         }
-        Ok(resp) => debug!(thread=%thread_id, status=%resp.status(), "self-sync rejected"),
-        Err(e) => debug!(thread=%thread_id, error=%e, "self-sync failed"),
+        Ok(resp) => {
+            debug!(thread=%thread_id, status=%resp.status(), "self-sync rejected");
+            false
+        }
+        Err(e) => {
+            debug!(thread=%thread_id, error=%e, "self-sync failed");
+            false
+        }
     }
 }
 

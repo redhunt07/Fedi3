@@ -41,8 +41,8 @@ class PeerPresenceStore {
 
   static final PeerPresenceStore instance = PeerPresenceStore._();
 
-  /// Presence keyed by Fedi3 username. Values expire after [ttl].
-  final ValueNotifier<Map<String, PresenceStatus>> statusByUsername =
+  /// Presence keyed by the complete ActivityPub actor URL. Values expire after [ttl].
+  final ValueNotifier<Map<String, PresenceStatus>> statusByActor =
       ValueNotifier(const {});
 
   /// Status the local user selected. Kept in sync with [start]/[setSelfStatus].
@@ -83,7 +83,7 @@ class PeerPresenceStore {
     _heartbeat?.cancel();
     _heartbeat = null;
     _config = null;
-    statusByUsername.value = const {};
+    statusByActor.value = const {};
   }
 
   Future<void> setSelfStatus(PresenceStatus status) async {
@@ -150,12 +150,14 @@ class PeerPresenceStore {
       if (relayItems is List) {
         for (final it in relayItems) {
           if (it is! Map) continue;
-          final username =
-              (it['username'] as String?)?.trim().toLowerCase() ?? '';
-          if (username.isEmpty) continue;
-          next[username] = it['online'] == true
-              ? PresenceStatus.online
-              : PresenceStatus.offline;
+          final actor = presenceActorKey(it['actor_url'] as String?);
+          if (actor.isEmpty) continue;
+          // Several devices can advertise the same account.
+          if (it['online'] == true || !next.containsKey(actor)) {
+            next[actor] = it['online'] == true
+                ? PresenceStatus.online
+                : PresenceStatus.offline;
+          }
         }
       }
 
@@ -165,30 +167,28 @@ class PeerPresenceStore {
       if (presenceItems is List) {
         for (final it in presenceItems) {
           if (it is! Map) continue;
-          final actor = (it['actor_id'] as String?)?.trim() ?? '';
-          final username = _usernameFromActor(actor);
-          if (username.isEmpty) continue;
+          final actor = presenceActorKey(it['actor_id'] as String?);
+          if (actor.isEmpty) continue;
           final status = presenceFromString(it['status'] as String?);
           final updated = (it['updated_at_ms'] as num?)?.toInt() ?? 0;
           final fresh = now - updated <= ttl.inMilliseconds;
           if (!fresh) {
-            if (!next.containsKey(username)) {
-              next[username] = PresenceStatus.offline;
+            if (!next.containsKey(actor)) {
+              next[actor] = PresenceStatus.offline;
             }
             continue;
           }
-          next[username] = status;
+          next[actor] = status;
         }
       }
 
-      final selfActor = (presence['self_actor'] as String?)?.trim() ?? '';
-      final selfName = _usernameFromActor(selfActor);
-      if (selfName.isNotEmpty) {
-        next[selfName] = selfStatus.value;
+      final selfActor = presenceActorKey(presence['self_actor'] as String?);
+      if (selfActor.isNotEmpty) {
+        next[selfActor] = selfStatus.value;
       }
 
-      if (!mapEquals(next, statusByUsername.value)) {
-        statusByUsername.value = next;
+      if (!mapEquals(next, statusByActor.value)) {
+        statusByActor.value = next;
       }
     } catch (_) {
       // Best-effort: keep existing state if refresh fails.
@@ -197,20 +197,19 @@ class PeerPresenceStore {
     }
   }
 
-  PresenceStatus statusFor(String? username) {
-    final key = username?.trim().toLowerCase() ?? '';
-    if (key.isEmpty) return PresenceStatus.offline;
-    return statusByUsername.value[key] ?? PresenceStatus.offline;
+  PresenceStatus statusFor(String? actorUrl) {
+    final key = presenceActorKey(actorUrl);
+    return statusByActor.value[key] ?? PresenceStatus.offline;
   }
+}
 
-  static String _usernameFromActor(String actorUrl) {
-    final uri = Uri.tryParse(actorUrl.trim());
-    if (uri == null) return '';
-    for (final seg in uri.pathSegments.reversed) {
-      final value = seg.trim();
-      if (value.isEmpty) continue;
-      return (value.startsWith('@') ? value.substring(1) : value).toLowerCase();
-    }
+/// Usernames alone cannot establish a federated identity. Preserve path casing.
+String presenceActorKey(String? input) {
+  final uri = Uri.tryParse(input?.trim() ?? '');
+  if (uri == null ||
+      !{'http', 'https'}.contains(uri.scheme) ||
+      uri.host.isEmpty) {
     return '';
   }
+  return uri.replace(path: uri.path.replaceAll(RegExp(r'/+$'), '')).toString();
 }

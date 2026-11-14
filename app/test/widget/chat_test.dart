@@ -167,6 +167,15 @@ void main() {
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    final indices = [
+      for (var i = 0; i < client.requests.length; i++)
+        if (client.requests[i].url.path == '/_fedi3/chat/send') i
+    ];
+    expect(indices, hasLength(2));
+    final first = jsonDecode(client.requestBodies[indices[0]]) as Map;
+    final second = jsonDecode(client.requestBodies[indices[1]]) as Map;
+    expect(first['client_message_id'], isNotEmpty);
+    expect(second['client_message_id'], first['client_message_id']);
   });
   testWidgets('AW-09 chat sends the typed message with the correct payload',
       (tester) async {

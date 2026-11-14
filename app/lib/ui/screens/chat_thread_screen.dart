@@ -5,6 +5,8 @@ import '../../services/app_activity.dart';
  */
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
@@ -94,6 +96,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Timer? _loadRetry;
   Timer? _typingDebounce;
   final List<_PickedMedia> _media = [];
+  String? _sendClientId;
+  String? _sendFingerprint;
   bool _sending = false;
   Map<String, _StatusSummary> _statusMap = const {};
   final Set<String> _seenMessageIds = <String>{};
@@ -966,14 +970,27 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           });
         }
       }
+      final fingerprint =
+          jsonEncode([widget.threadId, text, attachments, reply?.messageId]);
+      if (_sendFingerprint != fingerprint || _sendClientId == null) {
+        _sendFingerprint = fingerprint;
+        _sendClientId = base64UrlEncode(
+                List<int>.generate(18, (_) => Random.secure().nextInt(256)))
+            .replaceAll('=', '');
+      }
       await api.sendChatMessage(
         threadId: widget.threadId,
+        clientMessageId: _sendClientId,
         recipients: const [],
         text: text,
         attachments: attachments,
         replyTo: reply?.messageId,
       );
       if (!mounted) return;
+      _sendClientId = null;
+      _sendFingerprint = null;
+      _error = null;
+      ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
       if (_composerCtrl.text == draft) _composerCtrl.clear();
       if (identical(_replyTo, reply)) _replyTo = null;
       _media.removeWhere(media.contains);
@@ -1339,7 +1356,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                               imageUrl: profile?.iconUrl ?? '',
                               size: 34,
                               showStatus: true,
-                              statusKey: profile?.preferredUsername ?? '',
+                              statusKey: profile?.statusKey ?? actor,
                             ),
                             title: Text(
                               profile == null
@@ -1733,8 +1750,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   imageUrl: _profiles[_recipients.first]?.iconUrl ?? '',
                   size: 34,
                   showStatus: true,
-                  statusKey: _profiles[_recipients.first]?.preferredUsername ??
-                      _usernameFromActor(_recipients.first),
+                  statusKey: _profiles[_recipients.first]?.statusKey ??
+                      _recipients.first,
                 ),
                 const SizedBox(width: 10),
               ],
@@ -1750,13 +1767,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                         if (!widget.isGroup && _recipients.length == 1)
                           ValueListenableBuilder<Map<String, PresenceStatus>>(
                             valueListenable:
-                                PeerPresenceStore.instance.statusByUsername,
+                                PeerPresenceStore.instance.statusByActor,
                             builder: (context, map, _) {
-                              final username = _profiles[_recipients.first]
-                                      ?.preferredUsername ??
-                                  _usernameFromActor(_recipients.first);
+                              final actor = presenceActorKey(
+                                  _profiles[_recipients.first]?.statusKey ??
+                                      _recipients.first);
                               final status =
-                                  map[username] ?? PresenceStatus.offline;
+                                  map[actor] ?? PresenceStatus.offline;
                               return Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -2071,7 +2088,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     imageUrl: senderProfile?.iconUrl ?? '',
                     size: 30,
                     showStatus: true,
-                    statusKey: senderUsername,
+                    statusKey: senderProfile?.statusKey ?? message.senderActor,
                   ),
                 ),
                 const SizedBox(width: 6),

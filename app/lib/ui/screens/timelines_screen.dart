@@ -587,7 +587,7 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
                                   imageUrl: profile.iconUrl,
                                   size: 38,
                                   showStatus: true,
-                                  statusKey: profile.preferredUsername,
+                                  statusKey: profile.statusKey,
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
