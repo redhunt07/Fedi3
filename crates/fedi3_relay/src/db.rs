@@ -27,6 +27,10 @@ impl Db {
     }
 
     pub(super) fn init(&self) -> Result<()> {
+        self.init_base()?;
+        self.init_account_state()
+    }
+    fn init_base(&self) -> Result<()> {
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
@@ -626,6 +630,110 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         }
     }
 
+    /// Atomic per-installation map; legacy clients own only the legacy slot.
+    pub(super) fn update_push_registration(
+        &self,
+        user: &str,
+        installation: &str,
+        registration: Option<&str>,
+    ) -> Result<()> {
+        let key = format!("pushv2:{user}");
+        fn updated(
+            raw: Option<String>,
+            installation: &str,
+            registration: Option<&str>,
+        ) -> Result<String> {
+            let mut map: std::collections::BTreeMap<String, String> = raw
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or_default();
+            map.retain(|_, raw| {
+                serde_json::from_str::<serde_json::Value>(raw)
+                    .ok()
+                    .and_then(|v| v["expires_at_ms"].as_i64())
+                    .is_some_and(|expiry| expiry > now_ms())
+            });
+            if let Some(raw) = registration {
+                anyhow::ensure!(
+                    map.contains_key(installation) || map.len() < 32,
+                    "push installation limit"
+                );
+                map.insert(installation.into(), raw.into());
+            } else {
+                map.remove(installation);
+            }
+            Ok(serde_json::to_string(&map)?)
+        }
+        match self.driver {
+            DbDriver::Sqlite => {
+                let mut conn = self.open_sqlite_conn()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let enabled: Option<i64> = tx
+                    .query_row(
+                        "SELECT disabled FROM users WHERE username=?1",
+                        [user],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                anyhow::ensure!(enabled == Some(0), "account unavailable");
+                let raw = tx
+                    .query_row("SELECT value FROM relay_meta WHERE key=?1", [&key], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
+                let value = updated(raw, installation, registration)?;
+                tx.execute("INSERT INTO relay_meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
+                if installation == "legacy" {
+                    tx.execute(
+                        "DELETE FROM relay_meta WHERE key=?1",
+                        [format!("push:{user}")],
+                    )?;
+                }
+                tx.commit()?;
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let mut tx = conn.transaction()?;
+                let row = tx.query_opt(
+                    "SELECT disabled FROM users WHERE username=$1 FOR UPDATE",
+                    &[&user],
+                )?;
+                anyhow::ensure!(
+                    row.is_some_and(|r| !r.get::<_, bool>(0)),
+                    "account unavailable"
+                );
+                let raw = tx
+                    .query_opt("SELECT value FROM relay_meta WHERE key=$1", &[&key])?
+                    .map(|r| r.get(0));
+                let value = updated(raw, installation, registration)?;
+                tx.execute("INSERT INTO relay_meta(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", &[&key,&value])?;
+                if installation == "legacy" {
+                    tx.execute(
+                        "DELETE FROM relay_meta WHERE key=$1",
+                        &[&format!("push:{user}")],
+                    )?;
+                }
+                tx.commit()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn push_registrations(&self, user: &str) -> Result<Vec<String>> {
+        let mut map: std::collections::BTreeMap<String, String> = self
+            .relay_meta_get(&format!("pushv2:{user}"))?
+            .map(|s| serde_json::from_str(&s))
+            .transpose()?
+            .unwrap_or_default();
+        if let Some(raw) = self.relay_meta_get(&format!("push:{user}"))? {
+            if !raw.is_empty() {
+                map.entry("legacy".into()).or_insert(raw);
+            }
+        }
+        Ok(map.into_values().collect())
+    }
+
     pub(super) fn relay_meta_get(&self, key: &str) -> Result<Option<String>> {
         match self.driver {
             DbDriver::Sqlite => {
@@ -1147,20 +1255,41 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         let now = now_ms();
         match self.driver {
             DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
+                let mut conn = self.open_sqlite_conn()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let enabled: Option<i64> = tx
+                    .query_row(
+                        "SELECT disabled FROM users WHERE username=?1",
+                        [username],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                anyhow::ensure!(enabled == Some(0), "account unavailable");
+                tx.execute(
                     "INSERT INTO user_identity(username, envelope, updated_at_ms) VALUES (?1, ?2, ?3)
                      ON CONFLICT(username) DO UPDATE SET envelope=excluded.envelope, updated_at_ms=excluded.updated_at_ms",
                     params![username, envelope, now],
                 )?;
+                tx.commit()?;
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                conn.execute(
+                let mut tx = conn.transaction()?;
+                let row = tx.query_opt(
+                    "SELECT disabled FROM users WHERE username=$1 FOR KEY SHARE",
+                    &[&username],
+                )?;
+                anyhow::ensure!(
+                    row.is_some_and(|r| !r.get::<_, bool>(0)),
+                    "account unavailable"
+                );
+                tx.execute(
                     "INSERT INTO user_identity(username, envelope, updated_at_ms) VALUES ($1, $2, $3)
                      ON CONFLICT (username) DO UPDATE SET envelope=EXCLUDED.envelope, updated_at_ms=EXCLUDED.updated_at_ms",
                     &[&username, &envelope, &now],
                 )?;
+                tx.commit()?;
             }
         }
         Ok(())
@@ -1200,8 +1329,18 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         let now = now_ms();
         match self.driver {
             DbDriver::Sqlite => {
-                let conn = self.open_sqlite_conn()?;
-                conn.execute(
+                let mut conn = self.open_sqlite_conn()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let enabled: Option<i64> = tx
+                    .query_row(
+                        "SELECT disabled FROM users WHERE username=?1",
+                        [username],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                anyhow::ensure!(enabled == Some(0), "account unavailable");
+                tx.execute(
                     "INSERT INTO pair_sessions(code, username, envelope, created_at_ms, expires_at_ms)
                      VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(code) DO UPDATE SET
@@ -1211,10 +1350,20 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                        expires_at_ms=excluded.expires_at_ms",
                     params![code, username, envelope, now, expires_at_ms],
                 )?;
+                tx.commit()?;
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
-                conn.execute(
+                let mut tx = conn.transaction()?;
+                let row = tx.query_opt(
+                    "SELECT disabled FROM users WHERE username=$1 FOR KEY SHARE",
+                    &[&username],
+                )?;
+                anyhow::ensure!(
+                    row.is_some_and(|r| !r.get::<_, bool>(0)),
+                    "account unavailable"
+                );
+                tx.execute(
                     "INSERT INTO pair_sessions(code, username, envelope, created_at_ms, expires_at_ms)
                      VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT (code) DO UPDATE SET
@@ -1224,6 +1373,7 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
                        expires_at_ms=EXCLUDED.expires_at_ms",
                     &[&code, &username, &envelope, &now, &expires_at_ms],
                 )?;
+                tx.commit()?;
             }
         }
         Ok(())
@@ -1273,7 +1423,76 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         Ok(())
     }
 
+    pub(super) fn insert_chat_spool_bounded(
+        &self,
+        user: &str,
+        envelope: &str,
+        max_rows: i64,
+        max_bytes: i64,
+    ) -> Result<i64> {
+        let now = now_ms();
+        let cutoff = now.saturating_sub(CHAT_SPOOL_RETENTION_MS);
+        match self.driver {
+            DbDriver::Sqlite => {
+                let mut conn = self.open_sqlite_conn()?;
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let enabled: Option<i64> = tx
+                    .query_row(
+                        "SELECT disabled FROM users WHERE username=?1",
+                        [user],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                anyhow::ensure!(enabled == Some(0), "account unavailable");
+                tx.execute(
+                    "DELETE FROM chat_spool WHERE username=?1 AND created_at_ms<?2",
+                    params![user, cutoff],
+                )?;
+                let (count,bytes):(i64,i64)=tx.query_row("SELECT COUNT(*),COALESCE(SUM(LENGTH(CAST(envelope AS BLOB))),0) FROM chat_spool WHERE username=?1",[user],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                anyhow::ensure!(
+                    count < max_rows && bytes.saturating_add(envelope.len() as i64) <= max_bytes,
+                    "chat spool full"
+                );
+                tx.execute(
+                    "INSERT INTO chat_spool(username,envelope,created_at_ms) VALUES(?1,?2,?3)",
+                    params![user, envelope, now],
+                )?;
+                let id = tx.last_insert_rowid();
+                tx.commit()?;
+                Ok(id)
+            }
+            DbDriver::Postgres => {
+                let mut conn = self.open_pg_conn()?;
+                let mut tx = conn.transaction()?;
+                let row = tx.query_opt(
+                    "SELECT disabled FROM users WHERE username=$1 FOR UPDATE",
+                    &[&user],
+                )?;
+                anyhow::ensure!(
+                    row.is_some_and(|r| !r.get::<_, bool>(0)),
+                    "account unavailable"
+                );
+                tx.execute(
+                    "DELETE FROM chat_spool WHERE username=$1 AND created_at_ms<$2",
+                    &[&user, &cutoff],
+                )?;
+                let r=tx.query_one("SELECT COUNT(*),COALESCE(SUM(OCTET_LENGTH(envelope)),0)::BIGINT FROM chat_spool WHERE username=$1",&[&user])?;
+                let count: i64 = r.get(0);
+                let bytes: i64 = r.get(1);
+                anyhow::ensure!(
+                    count < max_rows && bytes.saturating_add(envelope.len() as i64) <= max_bytes,
+                    "chat spool full"
+                );
+                let id=tx.query_one("INSERT INTO chat_spool(username,envelope,created_at_ms) VALUES($1,$2,$3) RETURNING id",&[&user,&envelope,&now])?.get(0);
+                tx.commit()?;
+                Ok(id)
+            }
+        }
+    }
+
     /// Append one chat envelope to the recipient's spool and return its id.
+    #[cfg(test)]
     pub(super) fn insert_chat_spool(&self, username: &str, envelope: &str) -> Result<i64> {
         let now = now_ms();
         match self.driver {
@@ -1349,20 +1568,21 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
     }
 
     /// Keep only the newest `keep` spool rows of one account.
+    #[cfg(test)]
     pub(super) fn trim_chat_spool(&self, username: &str, keep: i64) -> Result<()> {
         let keep = keep.max(1);
         match self.driver {
             DbDriver::Sqlite => {
                 let conn = self.open_sqlite_conn()?;
                 conn.execute(
-                    "DELETE FROM chat_spool WHERE username = ?1 AND id < (SELECT COALESCE(MAX(id), 0) - ?2 FROM chat_spool WHERE username = ?1)",
+                    "DELETE FROM chat_spool WHERE username = ?1 AND id IN (SELECT id FROM chat_spool WHERE username = ?1 ORDER BY id DESC LIMIT -1 OFFSET ?2)",
                     params![username, keep],
                 )?;
             }
             DbDriver::Postgres => {
                 let mut conn = self.open_pg_conn()?;
                 conn.execute(
-                    "DELETE FROM chat_spool WHERE username = $1 AND id < (SELECT COALESCE(MAX(id), 0) - $2 FROM chat_spool WHERE username = $1)",
+                    "DELETE FROM chat_spool WHERE username = $1 AND id IN (SELECT id FROM chat_spool WHERE username = $1 ORDER BY id DESC OFFSET $2)",
                     &[&username, &keep],
                 )?;
             }
@@ -1692,13 +1912,19 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
         let actors = "SELECT actor_id FROM user_cache WHERE username=?1 UNION SELECT actor_url FROM user_cache WHERE username=?1 UNION SELECT actor_url FROM peer_directory WHERE username=?1";
         let mut statements = vec![
             "UPDATE forward_receipts SET username='',envelope_json='' WHERE username=?1".to_string(),
-            "DELETE FROM relay_meta WHERE key='push:' || ?1".to_string(),
+            "DELETE FROM relay_meta WHERE key='push:' || ?1 OR key='pushv2:' || ?1".to_string(),
             format!("DELETE FROM webrtc_signals WHERE from_actor IN ({actors}) OR to_peer_id IN (SELECT peer_id FROM peer_directory WHERE username=?1)"),
             format!("DELETE FROM relay_note_tags WHERE note_id IN (SELECT note_id FROM relay_notes WHERE actor_id IN ({actors}))"),
             format!("DELETE FROM relay_notes WHERE actor_id IN ({actors})"),
             format!("DELETE FROM relay_user_directory WHERE actor_url IN ({actors})"),
         ];
         for table in [
+            "account_tunnel_nonces",
+            "account_state",
+            "account_keys",
+            "user_identity",
+            "pair_sessions",
+            "chat_spool",
             "inbox_spool",
             "user_collection_cache",
             "user_blocks",
@@ -2617,6 +2843,28 @@ CREATE INDEX IF NOT EXISTS forward_receipts_created ON forward_receipts(created_
     }
 
     pub(super) fn upsert_actor_cache(&self, username: &str, actor_json: &str) -> Result<()> {
+        if let Some((actor, pem)) = self.account_key(username)? {
+            let value: serde_json::Value = serde_json::from_str(actor_json)?;
+            anyhow::ensure!(
+                value["id"] == actor
+                    && value["publicKey"]["publicKeyPem"]
+                        .as_str()
+                        .is_some_and(|p| p.split_whitespace().collect::<String>()
+                            == pem.split_whitespace().collect::<String>()),
+                "account key substitution rejected"
+            );
+        }
+        if self.account_key(username)?.is_none() && self.is_user_enabled(username).unwrap_or(false)
+        {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(actor_json) {
+                if let (Some(actor), Some(pem)) = (
+                    value["id"].as_str(),
+                    value["publicKey"]["publicKeyPem"].as_str(),
+                ) {
+                    self.bind_account_key(username, actor, pem)?;
+                }
+            }
+        }
         let now = now_ms();
         let (actor_id, actor_url) = extract_actor_ids_from_json(actor_json);
         match self.driver {

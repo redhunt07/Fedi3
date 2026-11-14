@@ -159,7 +159,7 @@ class _PairingScreenState extends State<PairingScreen> {
         );
       }
       if (!mounted || generation != _generation) return;
-      debugPrint('[pair] QR ready code=$code relay=$relayBase');
+
       setState(() {
         _ready = true;
         _busy = false;

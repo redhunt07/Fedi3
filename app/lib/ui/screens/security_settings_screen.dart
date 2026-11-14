@@ -10,6 +10,7 @@ import '../../l10n/l10n_ext.dart';
 import '../../model/core_config.dart';
 import '../../state/app_state.dart';
 import '../../services/background_service.dart';
+import '../../services/identity_sync.dart';
 import '../../services/mobile_push_service.dart';
 import '../widgets/background_service_settings.dart';
 import '../widgets/mobile_push_settings.dart';
@@ -71,6 +72,37 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                         : Theme.of(context).colorScheme.error),
               ),
             ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.key),
+            label: Text(Localizations.localeOf(context).languageCode == 'it'
+                ? 'Mostra chiave di recupero identità'
+                : 'Show identity recovery key'),
+            onPressed: () async {
+              final cfg = widget.appState.config;
+              if (cfg == null) return;
+              try {
+                final key = await IdentitySync.localRecoverySecret(cfg);
+                if (!context.mounted) return;
+                await showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                          title: const Text('Identity recovery key'),
+                          content: SelectableText(key),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(ctx),
+                                child: const Text('OK'))
+                          ],
+                        ));
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content:
+                          Text('Avvia il core per accedere alla chiave.')));
+                }
+              }
+            },
+          ),
           _section(context, context.l10n.securityInternalToken),
           GlassPanel(
             child: Column(

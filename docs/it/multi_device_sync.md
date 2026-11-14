@@ -56,7 +56,7 @@ dispositivo. L'envelope è JSON:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "alg": "aes-256-gcm",
   "kdf": "hkdf-sha256",
   "salt_b64": "...",
@@ -66,10 +66,19 @@ dispositivo. L'envelope è JSON:
 }
 ```
 
-La chiave AES-256 è derivata con HKDF-SHA256 dal segreto condiviso (il token del
-relay per il blob dell'account, il codice di abbinamento per una sessione QR),
-dal salt casuale e dalla stringa info `fedi3-identity-v1`. Il relay memorizza
-solo l'envelope e non può decifrarlo.
+La chiave AES-256 deriva con HKDF-SHA256 da una chiave di recupero indipendente
+per il blob account oppure dal segreto casuale del QR. Il token relay serve
+soltanto per autenticarsi e non cifra più le identità. La chiave di recupero è
+visibile nelle impostazioni Sicurezza e deve essere conservata separatamente.
+Per un nuovo client servono token e chiave di recupero, oppure QR o backup.
+Un recupero fallito non genera nuove identità sostitutive.
+
+Il relay riceve soltanto l'identificatore SHA-256 del segreto QR, con dominio
+`fedi3-pair-id/v2:`, codificato base64url senza padding. Il segreto originale
+rimane nel QR. Le specifiche esatte della derivazione sono nel documento inglese.
+Gli upload v1 sono rifiutati; i vecchi blob sono conservati per la migrazione ma
+non vengono serviti. Il client esistente aggiornato riscrive il proprio blob v1
+con le stesse chiavi locali. Ciò non annulla eventuali esposizioni storiche.
 
 ## Endpoint del relay
 
@@ -185,3 +194,65 @@ la possibilità di rispondere.
   avviato pubblica la propria identità. Se un client nuovo si avvia prima che il
   client originale abbia pubblicato, usare l'abbinamento QR: trasferisce
   l'identità originale ed evita una chiave dell'account non corrispondente.
+
+### Isolamento delle code e dei dispositivi (14 novembre 2026)
+
+Il relay verifica schema e firma RSA del mittente prima di accettare un envelope
+chat. I limiti di righe e byte sono atomici: una coda piena rifiuta nuovi elementi
+senza eliminare quelli accettati. La cancellazione account comprende identità,
+sessioni QR, coda chat e tutte le registrazioni push; i lock impediscono scritture
+tardive dopo la cancellazione.
+
+Ogni installazione push ha il proprio `installation_id`; la revoca usa
+`X-Fedi3-Push-Installation` e riguarda solo quel dispositivo. Le vecchie richieste
+senza ID modificano soltanto lo slot legacy. Il limite è 32 installazioni attive.
+I client desktop mantengono il core quando nascosti; Android lo delega al servizio
+background, preservando le chiamate. Un avvio fallito non avanza il cursore della
+coda, che è separato per account e relay.
+
+I post propri sono dati permanenti: il core conserva gli alias autore attuali e
+precedenti in `local_meta` e li esclude dalla pulizia della cache per TTL, numero
+e byte, anche nei vecchi record privi di `actor_id`. Questo non modifica lo stato
+di pin mostrato nell’interfaccia.
+
+
+## Identità e sincronizzazione dello stato sociale
+
+Un account è identificato dall’URL completo dell’attore e dalla chiave RSA. Lo
+stesso nome su relay diversi identifica account distinti. I peer ID identificano
+i dispositivi: la directory li raggruppa sotto l’attore. Per aggiungere un secondo
+dispositivo bisogna abbinarlo o importare l’identità esistente. Una nuova chiave
+con lo stesso nome e token non può sostituire l’account già registrato.
+
+La directory locale è vincolata ad attore e chiave pubblica. Le directory storiche
+compatibili restano al loro posto; i nuovi account usano percorsi distinti per
+attore. Una chiave importata diversa, una directory appartenente a un altro
+attore o una chiave mancante su un account esistente interrompono l’avvio senza
+sovrascrivere l’identità.
+
+I dispositivi abbinati replicano campi del profilo, follower, seguiti, richieste,
+post propri, outbox, reazioni e metadati degli allegati. I record AES-256-GCM sono
+cifrati con materiale derivato dalla chiave privata condivisa e firmati RSA. Il
+relay conserva record opachi tramite GET/PUT autenticati
+`/_fedi3/account/{user}/state`; i peer dello stesso account li scambiano anche via
+`/.fedi3/device/account` con richieste firmate. I file multimediali restano nel
+backend configurato: questa sincronizzazione non copia file locali arbitrari e
+non sostituisce il backup completo.
+
+Le modifiche si uniscono per record e per singolo campo del profilo. Rimozioni
+offline persistono come tombstone; un vecchio post modificato non annulla una
+cancellazione. Le scritture locali concorrenti al download vengono conservate.
+Le conferme riguardano soltanto la revisione caricata. I cursori sono distinti
+per relay; un cambio di relay ripubblica tutto lo stato conservato. Gli errori
+lasciano intatti i dati locali e sono visibili nelle impostazioni di rete.
+
+Record e tombstone dell’account non scadono. Il relay rifiuta atomicamente nuovi
+caricamenti oltre quota senza espellere dati sociali: 1.000.000 record e 1 GiB
+per account per impostazione predefinita. Opzioni:
+`FEDI3_RELAY_ACCOUNT_MAX_ROWS` (1.000–2.000.000),
+`FEDI3_RELAY_ACCOUNT_MAX_BYTES` (1 MiB–16 GiB). L’eliminazione dell’account elimina
+anche replica e chiave vincolata. La retention dello spool chat resta separata.
+
+I vecchi client che firmano le ricevute dei forward possono provare la chiave
+tramite una sfida fresca sul tunnel. Lasciare disattivata l’opzione di compatibilità
+`FEDI3_RELAY_ALLOW_LEGACY_TUNNELS=true`, che aggira questa protezione.

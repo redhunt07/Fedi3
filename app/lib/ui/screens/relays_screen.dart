@@ -14,6 +14,8 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../state/app_state.dart';
 import '../theme/ui_tokens.dart';
+import '../../model/peer_account.dart';
+import 'profile_screen.dart';
 import '../utils/time_ago.dart';
 import '../widgets/network_error_card.dart';
 
@@ -193,19 +195,37 @@ class _RelaysScreenState extends State<RelaysScreen> {
                         Theme.of(context).colorScheme.onSurface.withAlpha(160)),
               ),
             ),
-          for (final p in (_peers ?? const []))
+          for (final p in groupPeersByAccount(_peers ?? const []))
             Card(
-              child: ListTile(
+                child: Column(children: [
+              ListTile(
                 leading: _peerAvatar(
-                  context,
-                  (p as Map)['username']?.toString() ?? '',
-                  (p)['online'] == true,
-                ),
-                title: Text(p['username']?.toString() ?? ''),
-                subtitle: Text((p)['actor_url']?.toString() ?? ''),
-                trailing: Text((p)['peer_id']?.toString() ?? ''),
+                    context, p['username'] as String, p['online'] == true),
+                title: Text(p['username'] as String),
+                subtitle: Text(p['actor_url'] as String),
+                trailing: const Icon(Icons.person_outline),
+                onTap: (p['actor_url'] as String).isEmpty
+                    ? null
+                    : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ProfileScreen(
+                            appState: widget.appState,
+                            actorUrl: p['actor_url'] as String))),
               ),
-            ),
+              ExpansionTile(
+                title: Text(Localizations.localeOf(context).languageCode == 'it'
+                    ? '${(p['devices'] as List).length} dispositivi'
+                    : '${(p['devices'] as List).length} devices'),
+                children: [
+                  for (final device
+                      in p['devices'] as List<Map<String, dynamic>>)
+                    ListTile(
+                        dense: true,
+                        title: Text(device['peer_id']?.toString() ?? ''),
+                        subtitle: Text(
+                            device['online'] == true ? 'Online' : 'Offline'))
+                ],
+              ),
+            ])),
         ],
       ),
     );

@@ -192,13 +192,16 @@ Future<void> backgroundMain() async {
   };
 
   Future<void> startBackgroundCore({bool pushOnly = true}) async {
-    if (starting) return;
+    if (starting) throw StateError("Core startup pending");
     starting = true;
     try {
       final healthy = appState.isRunning && await appState.probeCoreHealth();
       if (!healthy) {
         debugPrint('[bg] starting core for wake');
         await appState.startCore();
+      }
+      if (!await appState.probeCoreHealth()) {
+        throw StateError("Background core did not start");
       }
       appState.setPowerMode(CorePowerMode.background);
       coreUp = true;
@@ -267,6 +270,7 @@ Future<void> backgroundMain() async {
     } catch (e) {
       debugPrint('[bg] core start failed: $e');
       coreUp = false;
+      rethrow;
     } finally {
       starting = false;
     }

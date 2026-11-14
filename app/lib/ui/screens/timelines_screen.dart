@@ -159,23 +159,6 @@ class _TimelinesScreenState extends State<TimelinesScreen>
                 ),
                 icon: const Icon(Icons.search_rounded),
               ),
-              IconButton(
-                tooltip: widget.appState.isRunning
-                    ? context.l10n.coreStop
-                    : context.l10n.coreStart,
-                onPressed: () async {
-                  if (widget.appState.isRunning) {
-                    await widget.appState.stopCore();
-                  } else {
-                    await widget.appState.startCore();
-                  }
-                },
-                icon: Icon(
-                  widget.appState.isRunning
-                      ? Icons.stop_circle_outlined
-                      : Icons.play_circle_outline,
-                ),
-              ),
               if (isWide)
                 IconButton(
                   tooltip: useColumns

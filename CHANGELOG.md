@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-14
+
+- Bind accounts to the complete actor URL and existing RSA identity. Separate
+  same-name accounts on different relays without replacing legacy data.
+- Replicate encrypted profile fields, followers, following, owned posts and
+  durable offline deletions between paired devices, through relay or peers.
+- Require proof of the pinned account key before replacing a relay tunnel.
+- Group peer devices by account and refresh replicated profiles in the UI.
+- Preserve own posts during cache cleanup, isolate mobile push installations,
+  and harden encrypted identity recovery and chat delivery handling.
+- Prepare distribution recipes and packages for Arch/AUR, Debian/Ubuntu,
+  Flatpak and F-Droid. F-Droid inclusion remains subject to native dependency
+  source-build review; the F-Droid variant uses manual pairing without ML Kit.
+
 ## [0.11.11] - 2026-11-12
 
 ### Android client

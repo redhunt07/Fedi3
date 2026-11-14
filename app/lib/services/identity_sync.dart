@@ -16,13 +16,13 @@ import '../model/core_config.dart';
 /// Sealed account identity transfer for multi-device login and QR pairing.
 ///
 /// The relay only stores the sealed envelope: the AES-256-GCM key is derived
-/// with HKDF-SHA256 from the shared secret (the account relay token for the
-/// account blob, the pairing code for a QR session), a random salt and the
+/// with HKDF-SHA256 from the shared secret (the independent recovery key for the
+/// account blob, the QR-only secret for a pairing session), a random salt and the
 /// `fedi3-identity-v1` info string.
 class IdentitySync {
   IdentitySync._();
 
-  static const String envelopeVersion = '1';
+  static const String envelopeVersion = '2';
   static const String algorithm = 'aes-256-gcm';
   static const String kdf = 'hkdf-sha256';
   static const String kdfInfo = 'fedi3-identity-v1';
@@ -57,6 +57,27 @@ class IdentitySync {
     return '$scheme://$host$port';
   }
 
+  /// Only its hash is sent to the relay. The QR retains the random secret.
+  static Future<String> pairingId(String secret) async => base64UrlEncode(
+          (await Sha256().hash(utf8.encode('fedi3-pair-id/v2:$secret'))).bytes)
+      .replaceAll('=', '');
+
+  /// Stable recovery key available only to clients holding the private identity.
+  /// It must never be used as an HTTP credential or sent in a URL.
+  static Future<String> recoverySecret(String privatePem) async {
+    if (privatePem.trim().isEmpty) throw StateError('Identity required');
+    final normalized = privatePem.replaceAll(RegExp(r'\s+'), '');
+    return base64UrlEncode((await Sha256()
+                .hash(utf8.encode('fedi3-identity-recovery/v2:$normalized')))
+            .bytes)
+        .replaceAll('=', '');
+  }
+
+  static Future<String> localRecoverySecret(CoreConfig config) async {
+    final identity = await CoreApi(config: config).exportIdentity();
+    return recoverySecret(identity['private_key_pem'] as String);
+  }
+
   static String _normalizeBase(String base) =>
       base.trim().replaceAll(RegExp(r'/+$'), '');
 
@@ -74,7 +95,7 @@ class IdentitySync {
   }
 
   static bool looksSealed(Map<String, dynamic> envelope) =>
-      envelope['v']?.toString() == envelopeVersion &&
+      (envelope['v']?.toString() == envelopeVersion || envelope['v'] == 1) &&
       envelope['alg']?.toString() == algorithm &&
       envelope['kdf']?.toString() == kdf &&
       envelope['ciphertext_b64'] is String &&
@@ -100,7 +121,7 @@ class IdentitySync {
       nonce: nonce,
     );
     return {
-      'v': 1,
+      'v': 2,
       'alg': algorithm,
       'kdf': kdf,
       'salt_b64': _b64(salt),
@@ -404,7 +425,7 @@ class IdentitySync {
     required String code,
     http.Client? client,
   }) async {
-    final uri = _pairUri(relayBase, code);
+    final uri = _pairUri(relayBase, await pairingId(code));
     final resp = await (client ?? CoreHttp.client)
         .get(uri)
         .timeout(CoreHttp.totalTimeout);
@@ -425,7 +446,7 @@ class IdentitySync {
     required Map<String, dynamic> envelope,
     http.Client? client,
   }) async {
-    final uri = _pairUri(relayBase, code, user: user);
+    final uri = _pairUri(relayBase, await pairingId(code), user: user);
     final resp = await (client ?? CoreHttp.client)
         .put(
           uri,
@@ -454,12 +475,12 @@ class IdentitySync {
         user: config.username,
         token: config.relayToken,
       );
-      if (existing != null) return;
+      if (existing?['v'] == 2) return;
       final exported = await CoreApi(config: config).exportIdentity();
       final privateKey = exported['private_key_pem']?.toString().trim() ?? '';
       if (privateKey.isEmpty) return;
       final package = buildPackage(config, exported);
-      final envelope = await seal(package, config.relayToken);
+      final envelope = await seal(package, await recoverySecret(privateKey));
       await uploadRelayIdentity(
         relayBase: relayBase,
         user: config.username,

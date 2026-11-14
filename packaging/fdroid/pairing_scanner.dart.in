@@ -1,0 +1,47 @@
+import 'package:material_ui/material_ui.dart';
+
+/// F-Droid variant: paste the pairing link, without proprietary camera libraries.
+class PairingScanner extends StatefulWidget {
+  const PairingScanner({
+    super.key,
+    required this.enabled,
+    required this.onCode,
+  });
+  final bool enabled;
+  final ValueChanged<String> onCode;
+  @override
+  State<PairingScanner> createState() => _PairingScannerState();
+}
+
+class _PairingScannerState extends State<PairingScanner> {
+  final _text = TextEditingController();
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(20),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        TextField(
+          controller: _text,
+          enabled: widget.enabled,
+          decoration: const InputDecoration(
+            labelText: 'fedi3://pair',
+            hintText: 'fedi3://pair?relay=…&code=…',
+          ),
+          onSubmitted: widget.enabled ? widget.onCode : null,
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: widget.enabled ? () => widget.onCode(_text.text) : null,
+          child: const Icon(Icons.link),
+        ),
+      ],
+    ),
+  );
+}

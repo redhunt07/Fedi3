@@ -226,6 +226,9 @@ struct ActorImage {
 }
 
 pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let mut effective = state.clone();
+    effective.cfg = crate::account_sync::effective_config(state);
+    let state = &effective;
     let path = req.uri().path().to_string();
     let accept = accept_activity(req.headers());
     let resp = match (req.method().as_str(), path.as_str()) {
@@ -305,6 +308,47 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
         // Identity package export (internal): used by QR pairing and manual login.
+        ("POST", "/_fedi3/account/proof") => {
+            if req
+                .extensions()
+                .get::<AuthenticatedRelayForward>()
+                .is_none()
+            {
+                return simple(StatusCode::FORBIDDEN, "tunnel only");
+            }
+            let bytes = match axum::body::to_bytes(req.into_body(), 4096).await {
+                Ok(b) => b,
+                Err(_) => return simple(StatusCode::BAD_REQUEST, "challenge"),
+            };
+            let challenge: Value = match serde_json::from_slice(&bytes) {
+                Ok(v) => v,
+                Err(_) => return simple(StatusCode::BAD_REQUEST, "challenge"),
+            };
+            let mut proof = fedi3_protocol::account_sync::TunnelProof {
+                actor: canonical_actor_url(&state.cfg),
+                user: state.cfg.username.clone(),
+                nonce: challenge["nonce"].as_str().unwrap_or("").to_string(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64,
+                public_key_pem: state.cfg.public_key_pem.clone(),
+                signature_b64: None,
+            };
+            proof.signature_b64 = crate::http_sig::sign_bytes_rsa_sha256(
+                &state.private_key_pem,
+                &proof.signing_bytes().unwrap_or_default(),
+            )
+            .ok()
+            .map(|s| B64.encode(s));
+            axum::Json(proof).into_response()
+        }
+        ("GET", "/_fedi3/account/profile") => {
+            if let Err(resp) = require_internal(state, req.headers()) {
+                return resp;
+            }
+            axum::Json(serde_json::json!({"profile":crate::account_sync::current_profile(&state.social).ok().flatten(),"last_ok":state.social.get_local_meta("account_sync_last_ok").ok().flatten(),"error":state.social.get_local_meta("account_sync_error").ok().flatten()})).into_response()
+        }
         ("GET", "/_fedi3/identity/export") => identity_export_get(state, req).await,
         // Chat snapshot (internal): recent history carried by the pairing package.
         ("GET", "/_fedi3/chat/snapshot") => chat_snapshot_get(state, req).await,
@@ -369,6 +413,28 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         // Delivery receipts (peer-to-peer, requires HTTP Signature).
         ("POST", "/.fedi3/receipt") => receipt_post(state, req).await,
         // Device sync endpoints (peer-to-peer, requires shared identity key).
+        ("GET", "/.fedi3/device/account") => {
+            let (parts, body) = req.into_parts();
+            let bytes = match axum::body::to_bytes(body, 1024).await {
+                Ok(b) => b,
+                Err(_) => return simple(StatusCode::BAD_REQUEST, "body"),
+            };
+            if let Err(resp) = verify_device_signature(state, &parts, &bytes) {
+                return resp;
+            }
+            let offset = parts
+                .uri
+                .query()
+                .unwrap_or("")
+                .split('&')
+                .find_map(|s| s.strip_prefix("offset="))
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            match crate::account_sync::peer_page(state, offset) {
+                Ok(page) => axum::Json(page).into_response(),
+                Err(_) => simple(StatusCode::SERVICE_UNAVAILABLE, "account state unavailable"),
+            }
+        }
         ("GET", "/.fedi3/device/outbox") => device_outbox(state, req).await,
         ("GET", "/.fedi3/device/inbox") => device_inbox(state, req).await,
         ("GET", "/inbox") => simple(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
@@ -3555,9 +3621,16 @@ async fn chat_threads_get(state: &ApState, req: Request<Body>) -> Response<Body>
                     })
                     .filter(|v| !v.is_empty())
                     .collect();
+                let peer_actors: Vec<String> = members
+                    .iter()
+                    .filter(|(actor, _)| actor != &self_actor)
+                    .map(|(actor, _)| actor.trim_end_matches('/').to_string())
+                    .filter(|v| !v.is_empty())
+                    .collect();
                 let mut value = serde_json::to_value(&thread).unwrap_or_default();
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert("peer_usernames".to_string(), serde_json::json!(peers));
+                    obj.insert("peer_actors".to_string(), serde_json::json!(peer_actors));
                 }
                 items.push(value);
             }

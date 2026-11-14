@@ -1,94 +1,91 @@
 Categories:
-  - Internet
+- Internet
 License: AGPL-3.0-only
-AntiFeatures:
-  NonFreeDep:
-    en-US: Uses the prebuilt Google MLKit barcode scanning library.
-    it-IT: Usa la libreria precompilata Google MLKit per la scansione dei codici.
 AuthorName: RedHunt07
 AuthorEmail: redhunt07@tutanota.com
 WebSite: https://fedi3.redhunt07.ovh
 SourceCode: https://github.com/redhunt07/Fedi3
 IssueTracker: https://github.com/redhunt07/Fedi3/issues
 Changelog: https://github.com/redhunt07/Fedi3/blob/HEAD/CHANGELOG.md
-
 AutoName: Fedi3
-
 RepoType: git
 Repo: https://github.com/redhunt07/Fedi3.git
-
 Builds:
-  - versionName: 0.11.11
-    versionCode: 6015
-    commit: dbc76d6b1876f802510e7bab4ce229904c0f8973
-    sudo:
-      - apt-get update
-      - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless rustup
-    srclibs:
-      - flutter@stable
-    rm:
-      - app/ios
-      - app/linux
-      - app/macos
-      - app/web
-      - app/windows
-    prebuild:
-      - sed -i '/android.builder.sdkDownload=false/d' app/android/gradle.properties
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - git -C $$flutter$$ checkout -f 3.50.0
-      - rustup default 1.99.1
-      - rustup target add aarch64-linux-android
-      - pushd app
-      - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get --enforce-lockfile
-      - popd
-    build:
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - export PATH="$$flutter$$/bin:$HOME/.cargo/bin:$PATH"
-      - export FEDI3_ANDROID_NDK=$$NDK$$
-      - export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-      - bash scripts/build_android_fdroid.sh arm64-v8a
-    output: app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-    ndk: r28c
-
-  - versionName: 0.11.11
-    versionCode: 8015
-    commit: dbc76d6b1876f802510e7bab4ce229904c0f8973
-    sudo:
-      - apt-get update
-      - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless rustup
-    srclibs:
-      - flutter@stable
-    rm:
-      - app/ios
-      - app/linux
-      - app/macos
-      - app/web
-      - app/windows
-    prebuild:
-      - sed -i '/android.builder.sdkDownload=false/d' app/android/gradle.properties
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - git -C $$flutter$$ checkout -f 3.50.0
-      - rustup default 1.99.1
-      - rustup target add x86_64-linux-android
-      - pushd app
-      - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get --enforce-lockfile
-      - popd
-    build:
-      - export PUB_CACHE=$(pwd)/.pub-cache
-      - export PATH="$$flutter$$/bin:$HOME/.cargo/bin:$PATH"
-      - export FEDI3_ANDROID_NDK=$$NDK$$
-      - export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-      - bash scripts/build_android_fdroid.sh x86_64
-    output: app/build/app/outputs/flutter-apk/app-x86_64-release.apk
-    ndk: r28c
-
+- versionName: 0.12.0
+  versionCode: 6016
+  commit: v0.12.0
+  sudo:
+  - apt-get update
+  - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless
+    rustup
+  srclibs:
+  - flutter@stable
+  rm:
+  - app/ios
+  - app/linux
+  - app/macos
+  - app/web
+  - app/windows
+  prebuild:
+  - python3 scripts/prepare_fdroid.py
+  - sed -i '/android.builder.sdkDownload=false/d' app/android/gradle.properties
+  - export PUB_CACHE=$(pwd)/.pub-cache
+  - git -C $$flutter$$ checkout -f 3.50.0
+  - rustup default 1.99.1
+  - rustup target add aarch64-linux-android
+  - pushd app
+  - $$flutter$$/bin/flutter config --no-analytics
+  - $$flutter$$/bin/flutter pub get
+  - popd
+  build:
+  - export PUB_CACHE=$(pwd)/.pub-cache
+  - export PATH="$$flutter$$/bin:$HOME/.cargo/bin:$PATH"
+  - export FEDI3_ANDROID_NDK=$$NDK$$
+  - export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+  - bash scripts/build_android_fdroid.sh arm64-v8a
+  output: app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+  ndk: r28c
+- versionName: 0.12.0
+  versionCode: 8016
+  commit: v0.12.0
+  sudo:
+  - apt-get update
+  - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless
+    rustup
+  srclibs:
+  - flutter@stable
+  rm:
+  - app/ios
+  - app/linux
+  - app/macos
+  - app/web
+  - app/windows
+  prebuild:
+  - python3 scripts/prepare_fdroid.py
+  - sed -i '/android.builder.sdkDownload=false/d' app/android/gradle.properties
+  - export PUB_CACHE=$(pwd)/.pub-cache
+  - git -C $$flutter$$ checkout -f 3.50.0
+  - rustup default 1.99.1
+  - rustup target add x86_64-linux-android
+  - pushd app
+  - $$flutter$$/bin/flutter config --no-analytics
+  - $$flutter$$/bin/flutter pub get
+  - popd
+  build:
+  - export PUB_CACHE=$(pwd)/.pub-cache
+  - export PATH="$$flutter$$/bin:$HOME/.cargo/bin:$PATH"
+  - export FEDI3_ANDROID_NDK=$$NDK$$
+  - export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+  - bash scripts/build_android_fdroid.sh x86_64
+  output: app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+  ndk: r28c
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[\d.]+$
 VercodeOperation:
-  - '%c + 2000'
-  - '%c + 4000'
+- '%c + 2000'
+- '%c + 4000'
 UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: 0.11.11
-CurrentVersionCode: 8015
+CurrentVersion: 0.12.0
+CurrentVersionCode: 8016
+Disabled: Native dependency source-build review pending for flutter_webrtc and media_kit
+  Android artifacts. Not ready for F-Droid inclusion.

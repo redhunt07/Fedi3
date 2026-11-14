@@ -47,6 +47,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   late final TextEditingController _publicBaseUrl;
   late final TextEditingController _relayWs;
   late final TextEditingController _relayToken;
+  final _identityRecovery = TextEditingController();
   late final TextEditingController _bind;
   late final TextEditingController _internalToken;
   late final TextEditingController _p2pRelayReserve;
@@ -98,6 +99,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _publicBaseUrl.dispose();
     _relayWs.dispose();
     _relayToken.dispose();
+    _identityRecovery.dispose();
     _bind.dispose();
     _internalToken.dispose();
     _p2pRelayReserve.dispose();
@@ -155,6 +157,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _field(context.l10n.onboardingUsername, _username),
+                if (widget.mode == OnboardingMode.loginExisting)
+                  _field(
+                      Localizations.localeOf(context).languageCode == 'it'
+                          ? 'Chiave di recupero identità (oppure usa QR/backup)'
+                          : 'Identity recovery key (or use QR/backup)',
+                      _identityRecovery),
                 if (widget.mode == OnboardingMode.loginExisting &&
                     !_manualLogin) ...[
                   _field(context.l10n.onboardingInstanceUrl, _quickUrl),
@@ -575,29 +583,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       anchorActorUrl: widget.appState.config?.anchorActorUrl,
     );
 
-    // Multi-device login: reuse the identity already stored by the relay.
-    // A missing or unreadable blob must never block the login; only a core
-    // that fails to start is a real error.
     var relayHasIdentity = false;
     if (widget.mode == OnboardingMode.loginExisting) {
       final relayBase = IdentitySync.relayHttpBaseFromWs(cfg.relayWs);
-      if (relayBase.isNotEmpty) {
-        try {
-          final sealed = await IdentitySync.fetchRelayIdentity(
-            relayBase: relayBase,
-            user: cfg.username,
-            token: relayToken,
-          );
-          if (sealed != null) {
-            relayHasIdentity = true;
-            if (IdentitySync.looksSealed(sealed)) {
-              final package = await IdentitySync.open(sealed, relayToken);
-              cfg = IdentitySync.mergeIdentity(cfg, package);
-            }
+      try {
+        final sealed = await IdentitySync.fetchRelayIdentity(
+            relayBase: relayBase, user: cfg.username, token: relayToken);
+        if (sealed != null) {
+          relayHasIdentity = true;
+          final recovery = _identityRecovery.text.trim();
+          if (sealed['v'] != 2 || recovery.isEmpty) {
+            throw StateError(
+                'Usa il QR/backup del client esistente oppure la chiave di recupero identità.');
           }
-        } catch (_) {
-          // Identity transfer is best-effort on login.
+          final package = await IdentitySync.open(sealed, recovery);
+          cfg = IdentitySync.mergeIdentity(cfg, package);
+        } else {
+          // An existing account without a transferable identity must not silently
+          // generate new keys and replace its federation/chat identity.
+          throw StateError(
+              'Identità non disponibile: usa QR o backup del client esistente.');
         }
+      } catch (e) {
+        if (mounted) setState(() => _formError = e.toString());
+        return;
       }
     }
 
@@ -667,6 +676,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _showRecoveryCode(CoreConfig cfg) async {
+    final identityRecovery = await IdentitySync.localRecoverySecret(cfg);
+    if (!mounted) return;
     Widget codeRow(String label, String value) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 10),
@@ -716,6 +727,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             children: [
               Text(context.l10n.onboardingRecoveryHint),
               const SizedBox(height: 14),
+              codeRow('Identity recovery key', identityRecovery),
               codeRow(context.l10n.onboardingRelayToken, cfg.relayToken),
               codeRow(context.l10n.onboardingInternalToken, cfg.internalToken),
             ],

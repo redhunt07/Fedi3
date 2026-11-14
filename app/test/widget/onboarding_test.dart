@@ -4,6 +4,7 @@
  */
 
 import 'package:fedi3/core/core_http.dart';
+import 'package:fedi3/services/identity_sync.dart';
 import 'package:fedi3/ui/screens/onboarding_screen.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,8 +77,11 @@ void main() {
       (tester) async {
     await setUpPumpEnv(tester);
     final core = FakeCoreRuntime();
-    CoreHttp.useTestClient(
-        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}')));
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json(
+        'GET', '/_fedi3/identity/export', {'private_key_pem': 'fixture-key'});
+    CoreHttp.useTestClient(client);
     addTearDown(CoreHttp.reset);
     final app = buildTestAppState(config: null, core: core);
     await pumpScreen(tester,
@@ -100,14 +104,22 @@ void main() {
       (tester) async {
     await setUpPumpEnv(tester);
     final core = FakeCoreRuntime();
-    CoreHttp.useTestClient(
-        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}')));
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    final sealed = await IdentitySync.seal(
+        {'identity_private_key_pem': 'fixture-key'}, 'fixture-recovery-key');
+    client.json('GET', '/_fedi3/users/bob/identity', sealed);
+    CoreHttp.useTestClient(client);
     addTearDown(CoreHttp.reset);
     final app = buildTestAppState(config: null, core: core);
     await pumpScreen(tester,
         OnboardingScreen(appState: app, mode: OnboardingMode.loginExisting));
     await tester.pumpAndSettle();
 
+    await tester.enterText(
+        find.widgetWithText(
+            TextField, 'Identity recovery key (or use QR/backup)'),
+        'fixture-recovery-key');
     final username = find.widgetWithText(TextField, 'Username');
     await tester.enterText(username, 'bob');
     final url = find.widgetWithText(TextField, 'Instance URL (https://...)');
@@ -118,10 +130,19 @@ void main() {
 
     await tester.scrollUntilVisible(find.text('Connect'), 200,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('Connect'));
+    await tester.ensureVisible(find.text('Connect'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Connect'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
     await tester.pumpAndSettle();
 
-    expect(app.config, isNotNull);
+    expect(app.config, isNotNull,
+        reason: tester
+            .widgetList<Text>(find.byType(Text))
+            .map((w) => w.data)
+            .join(' | '));
     expect(app.config!.username, 'bob');
     expect(app.config!.domain, 'fedi3.test');
     expect(app.config!.publicBaseUrl, 'https://fedi3.test');

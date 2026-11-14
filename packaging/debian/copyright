@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Fedi3
+Source: https://github.com/redhunt07/Fedi3
+
+Files: *
+Copyright: 2026 RedHunt07 and Fedi3 contributors
+License: AGPL-3.0-only
+ See LICENSE in the upstream source archive for the full license.

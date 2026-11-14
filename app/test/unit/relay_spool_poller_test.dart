@@ -46,6 +46,52 @@ void main() {
     await dir.delete(recursive: true);
   });
 
+  test('wake cursor is isolated by account and relay', () {
+    RelaySpoolPoller make(CoreConfig cfg) =>
+        RelaySpoolPoller(config: cfg, directory: dir, onNewItems: () async {});
+    final first = make(_config());
+    expect(make(_config().copyWith(username: 'bob')).cursorFileName,
+        isNot(first.cursorFileName));
+    expect(make(_config(relayWs: 'wss://other.example')).cursorFileName,
+        isNot(first.cursorFileName));
+  });
+
+  test('failed core wake retries without committing its cursor', () async {
+    var attempts = 0;
+    final client = MockClient((request) async => http.Response(
+        jsonEncode({
+          'latest_id': 1,
+          'items': request.url.queryParameters['after'] == '0'
+              ? [
+                  {'id': 1}
+                ]
+              : [],
+        }),
+        200));
+    final poller = RelaySpoolPoller(
+        config: _config(),
+        directory: dir,
+        client: client,
+        interval: const Duration(milliseconds: 20),
+        onNewItems: () async {
+          attempts++;
+          if (attempts == 1) throw StateError('synthetic start failure');
+        });
+    try {
+      await poller.start();
+      expect(
+          await File('${dir.path}/${poller.cursorFileName}').exists(), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(attempts, 2);
+      expect(
+          jsonDecode(await File('${dir.path}/${poller.cursorFileName}')
+              .readAsString())['last_id'],
+          1);
+    } finally {
+      await poller.stop();
+    }
+  });
+
   test('polls the relay spool and wakes on new items', () async {
     var wakes = 0;
     var seenAfter = '';
@@ -77,7 +123,7 @@ void main() {
     expect(wakes, 1);
     expect(seenAfter, '0');
     final cursor = jsonDecode(
-      await File('${dir.path}${Platform.pathSeparator}relay_spool.json')
+      await File('${dir.path}${Platform.pathSeparator}${poller.cursorFileName}')
           .readAsString(),
     );
     expect(cursor['last_id'], 7);

@@ -33,7 +33,7 @@ void main() {
       };
       final envelope =
           await IdentitySync.seal(package, 'pairing-code-0123456789');
-      expect(envelope['v'], 1);
+      expect(envelope['v'], 2);
       expect(envelope['alg'], 'aes-256-gcm');
       expect(envelope['kdf'], 'hkdf-sha256');
       expect(envelope['salt_b64'], isNotEmpty);
@@ -45,6 +45,36 @@ void main() {
       final opened =
           await IdentitySync.open(envelope, 'pairing-code-0123456789');
       expect(opened, package);
+    });
+
+    test('relay bearer and pairing locator cannot decrypt identity packages',
+        () async {
+      final config = buildTestConfig();
+      final secret = await IdentitySync.recoverySecret('synthetic-private-key');
+      final envelope =
+          await IdentitySync.seal({'private': 'synthetic-private-key'}, secret);
+      await expectLater(IdentitySync.open(envelope, config.relayToken),
+          throwsA(isA<SecretBoxAuthenticationError>()));
+      expect((await IdentitySync.open(envelope, secret))['private'],
+          'synthetic-private-key');
+      const qrSecret = 'random-QR-only-secret-0123456789';
+      final locator = await IdentitySync.pairingId(qrSecret);
+      final paired =
+          await IdentitySync.seal({'private': 'synthetic'}, qrSecret);
+      await expectLater(IdentitySync.open(paired, locator),
+          throwsA(isA<SecretBoxAuthenticationError>()));
+      final client =
+          FakeHttpClient(defaultResponse: FakeHttpResponse(statusCode: 204));
+      await IdentitySync.uploadPairingPackage(
+          relayBase: 'https://relay.example',
+          code: qrSecret,
+          user: 'alice',
+          token: config.relayToken,
+          envelope: paired,
+          client: client);
+      expect(client.lastRequest.url.pathSegments.last, locator);
+      expect(client.lastRequest.url.toString(), isNot(contains(qrSecret)));
+      expect(client.lastBody, isNot(contains(qrSecret)));
     });
 
     test('open rejects the wrong secret', () async {
@@ -305,8 +335,10 @@ void main() {
     test('pairing upload targets the code and user with Bearer auth', () async {
       final client =
           FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
-      client.route('PUT', '/_fedi3/pair/abcd1234',
-          FakeHttpResponse(statusCode: 204, body: ''));
+      final pairingPath =
+          '/_fedi3/pair/${await IdentitySync.pairingId('abcd1234')}';
+      client.route(
+          'PUT', pairingPath, FakeHttpResponse(statusCode: 204, body: ''));
       await IdentitySync.uploadPairingPackage(
         relayBase: 'https://relay.example.test',
         code: 'abcd1234',
@@ -319,8 +351,8 @@ void main() {
       expect(client.lastHeader('Authorization'),
           'Bearer relay-token-0123456789abcdef');
 
-      client.route('GET', '/_fedi3/pair/abcd1234',
-          FakeHttpResponse(statusCode: 410, body: ''));
+      client.route(
+          'GET', pairingPath, FakeHttpResponse(statusCode: 410, body: ''));
       expect(
         await IdentitySync.fetchPairingPackage(
           relayBase: 'https://relay.example.test',
@@ -331,15 +363,16 @@ void main() {
       );
     });
 
-    test('ensurePublished uploads the local identity only when absent',
+    test(
+        'ensurePublished encrypts the local identity with an independent secret',
         () async {
       final client =
           FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
       CoreHttp.useTestClient(client);
       addTearDown(CoreHttp.reset);
       final config = buildTestConfig();
-      client.route('GET', '/_fedi3/users/alice/identity',
-          FakeHttpResponse(statusCode: 404, body: ''));
+      client.json('GET', '/_fedi3/users/alice/identity',
+          {'v': 1, 'ciphertext_b64': 'legacy'});
       client.json('GET', '/_fedi3/identity/export', {
         'public_key_pem': 'public',
         'private_key_pem': 'private',
@@ -357,7 +390,8 @@ void main() {
           jsonDecode(client.requestBodies[client.requestBodies.length - 1])
               as Map<String, dynamic>;
       expect(IdentitySync.looksSealed(envelope), isTrue);
-      final opened = await IdentitySync.open(envelope, config.relayToken);
+      final opened = await IdentitySync.open(
+          envelope, await IdentitySync.recoverySecret('private'));
       expect(opened['identity_private_key_pem'], 'private');
       expect(opened['chat_identity_public_b64'], 'chat-public');
       expect(opened['chat_identity_secret_b64'], 'chat-secret');

@@ -13,6 +13,7 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../services/actor_repository.dart';
+import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/status_avatar.dart';
@@ -52,6 +53,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int? _followersCount;
   int? _followingCount;
   int _profileTab = 0;
+  StreamSubscription<CoreEvent>? _accountEvents;
+  Timer? _accountDebounce;
   Timer? _followPoll;
   Timer? _relationsPoll;
   StreamSubscription<bool>? _activity;
@@ -61,6 +64,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _load();
+    final cfg = widget.appState.config;
+    if (cfg != null && widget.appState.isRunning) {
+      _accountEvents = CoreEventStream(config: cfg).stream().listen((event) {
+        if (event.kind != 'account' || !mounted || !AppActivity.foreground) {
+          return;
+        }
+        _accountDebounce?.cancel();
+        _accountDebounce = Timer(const Duration(milliseconds: 300), () {
+          if (mounted && !_loading) {
+            unawaited(_load(force: true));
+          }
+        });
+      }, onError: (_) {});
+    }
     _relationsPoll = AppActivity.periodic(
         const Duration(seconds: 15), (_) => _refreshRelations());
     _activity = AppActivity.changes.listen((active) {
@@ -70,19 +87,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   void dispose() {
+    _accountEvents?.cancel();
+    _accountDebounce?.cancel();
     _followPoll?.cancel();
     _relationsPoll?.cancel();
     _activity?.cancel();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool force = false}) async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final p = await ActorRepository.instance.getActor(widget.actorUrl);
+      final p = force
+          ? await ActorRepository.instance.refreshActor(widget.actorUrl)
+          : await ActorRepository.instance.getActor(widget.actorUrl);
       if (!mounted) return;
       setState(() => _profile = p);
       unawaited(_refreshRelations());

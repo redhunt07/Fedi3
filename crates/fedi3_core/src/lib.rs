@@ -34,6 +34,7 @@
 
 use std::ffi::{c_char, CString};
 
+pub mod account_sync;
 pub mod ap;
 pub mod chat;
 pub mod crypto_envelope;

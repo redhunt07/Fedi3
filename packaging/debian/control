@@ -1,0 +1,16 @@
+Source: fedi3
+Section: net
+Priority: optional
+Maintainer: RedHunt07 <redhunt07@tutanota.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.99), clang, cmake, ninja-build, pkg-config, libgtk-3-dev, libsecret-1-dev, libjsoncpp-dev, libmpv-dev, libwebkit2gtk-4.1-dev, libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/redhunt07/Fedi3
+Vcs-Git: https://github.com/redhunt07/Fedi3.git
+Vcs-Browser: https://github.com/redhunt07/Fedi3
+
+Package: fedi3
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, libsecret-1-0
+Description: ActivityPub client with peer synchronization
+ Flutter client and local Rust core for profiles, posts, chat and calls.

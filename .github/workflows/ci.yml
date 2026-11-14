@@ -196,11 +196,69 @@ jobs:
           chmod +x scripts/build_core.sh scripts/build_appimage.sh
           FEDI3_APPIMAGE_OUT="$PWD/dist/Fedi3-linux-x86_64.AppImage" scripts/build_appimage.sh release
 
+      - name: Build Debian/Ubuntu binary package
+        run: bash scripts/build_deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fedi3-Debian
+          path: dist/fedi3_*_amd64.deb
+          if-no-files-found: error
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
           name: Fedi3-AppImage
           path: dist/Fedi3-linux-x86_64.AppImage
+          if-no-files-found: error
+
+  android-release:
+    name: Android client release
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/codex/release/')
+    runs-on: ubuntu-24.04
+    needs: [platform-config]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - name: Install NDK and restore existing release signing identity
+        env:
+          SIGNING_STORE: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          SIGNING_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          SIGNING_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          sdkmanager "ndk;28.2.13676358"
+          python3 - <<'PYCODE'
+          import os, pathlib, base64
+          assert os.environ['SIGNING_STORE'], 'Android signing secret is required'
+          target = pathlib.Path('app/android/release.jks')
+          target.write_bytes(base64.b64decode(os.environ['SIGNING_STORE']))
+          target.chmod(0o600)
+          pathlib.Path('app/android/key.properties').write_text(
+              'storeFile=' + str(target.resolve()) + '\n' +
+              'storePassword=' + os.environ['SIGNING_PASSWORD'] + '\n' +
+              'keyAlias=' + os.environ['SIGNING_ALIAS'] + '\n' +
+              'keyPassword=' + os.environ['SIGNING_KEY_PASSWORD'] + '\n')
+          PYCODE
+      - name: Build both supported native cores and release APKs
+        run: bash scripts/build_android.sh release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fedi3-Android
+          path: |
+            app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            app/build/app/outputs/flutter-apk/app-x86_64-release.apk
           if-no-files-found: error
 
   windows-release:
@@ -258,7 +316,7 @@ jobs:
   publish:
     name: Prepare verified client release
     if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/codex/release/')
-    needs: [appimage, windows-release, linux-smoke]
+    needs: [appimage, windows-release, android-release, linux-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -272,6 +330,14 @@ jobs:
         with:
           name: Fedi3-Windows
           path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: Fedi3-Android
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: Fedi3-Debian
+          path: release-assets
       - name: Verify packages and publish the requested client release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -284,16 +350,16 @@ jobs:
           cd release-assets
           test -s Fedi3-linux-x86_64.AppImage
           test -s Fedi3-windows-x64.zip
-          sha256sum Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip > checksums.txt
+          sha256sum Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb > checksums.txt
           sha256sum --check checksums.txt
           if gh release view "$release_tag" --json isDraft >/dev/null 2>&1; then
             test "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = true || { echo "Release is already published"; exit 1; }
             test "$(gh release view "$release_tag" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA" || { echo "Draft release belongs to another commit"; exit 1; }
-            gh release upload "$release_tag" Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip checksums.txt --clobber
+            gh release upload "$release_tag" Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb checksums.txt --clobber
           else
             gh release create "$release_tag" --target "$GITHUB_SHA" --draft --generate-notes \
               --title "Fedi3 $release_tag" \
-              Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip checksums.txt
+              Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb checksums.txt
           fi
           if [[ "$GITHUB_REF" == refs/heads/codex/release/* ]]; then
             gh release edit "$release_tag" --draft=false --latest

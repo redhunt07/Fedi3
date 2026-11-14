@@ -4,6 +4,7 @@
  */
 
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'dart:ui' show AppExitResponse;
 import '../services/app_activity.dart';
@@ -71,7 +72,8 @@ class _AppRootState extends State<AppRoot> {
       // core on demand and stops it when idle. Leave an active call alone.
       if (AppActivity.foreground) {
         unawaited(appState.startCore());
-      } else if (!appState.coreHeld) {
+      } else if (AppActivity.shouldStopCore(
+          platform: defaultTargetPlatform, coreHeld: appState.coreHeld)) {
         unawaited(appState.stopCore());
       }
     }, onExitRequested: () async {

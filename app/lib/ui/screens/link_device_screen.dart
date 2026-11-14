@@ -7,7 +7,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import '../widgets/pairing_scanner.dart';
 
 import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
@@ -29,7 +29,6 @@ class LinkDeviceScreen extends StatefulWidget {
 }
 
 class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
-  MobileScannerController? _controller;
   bool _busy = false;
   bool _done = false;
   String? _status;
@@ -38,51 +37,30 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
 
   bool get _scannerSupported => Platform.isAndroid || Platform.isIOS;
 
-  @override
-  void initState() {
-    super.initState();
-    if (_scannerSupported) {
-      _controller = MobileScannerController(
-        formats: const [BarcodeFormat.qrCode],
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    final controller = _controller;
-    if (controller != null) {
-      unawaited(controller.dispose());
-    }
-    super.dispose();
-  }
-
-  Future<void> _onDetect(BarcodeCapture capture) async {
+  Future<void> _onCode(String codeValue) async {
     if (_busy || _done) return;
-    for (final barcode in capture.barcodes) {
-      final raw = barcode.rawValue?.trim() ?? '';
-      if (raw.isEmpty) continue;
-      final uri = Uri.tryParse(raw);
-      if (uri == null ||
-          uri.scheme.toLowerCase() != 'fedi3' ||
-          uri.host.toLowerCase() != 'pair') {
-        continue;
-      }
-      final relayRaw = uri.queryParameters['relay']?.trim() ?? '';
-      final code = uri.queryParameters['code']?.trim() ?? '';
-      final relayBase = IdentitySync.relayHttpBaseFromWs(relayRaw);
-      if (relayBase.isEmpty || code.isEmpty) {
-        if (_lastInvalidCode != raw) {
-          _lastInvalidCode = raw;
-          if (mounted) {
-            setState(() => _error = context.l10n.linkDeviceInvalidCode);
-          }
-        }
-        continue;
-      }
-      await _link(relayBase: relayBase, code: code);
+    final raw = codeValue.trim();
+    if (raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    if (uri == null ||
+        uri.scheme.toLowerCase() != 'fedi3' ||
+        uri.host.toLowerCase() != 'pair') {
       return;
     }
+    final relayRaw = uri.queryParameters['relay']?.trim() ?? '';
+    final code = uri.queryParameters['code']?.trim() ?? '';
+    final relayBase = IdentitySync.relayHttpBaseFromWs(relayRaw);
+    if (relayBase.isEmpty || code.isEmpty) {
+      if (_lastInvalidCode != raw) {
+        _lastInvalidCode = raw;
+        if (mounted) {
+          setState(() => _error = context.l10n.linkDeviceInvalidCode);
+        }
+      }
+      return;
+    }
+    await _link(relayBase: relayBase, code: code);
+    return;
   }
 
   Future<void> _link({
@@ -95,7 +73,6 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
       _status = null;
     });
     try {
-      await _controller?.stop();
       // The QR appears only after the source uploaded its package, but a scan
       // can still race the upload. Retry briefly before giving up.
       Map<String, dynamic>? sealed;
@@ -113,7 +90,6 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           _busy = false;
           _error = context.l10n.linkDeviceExpired;
         });
-        unawaited(_controller?.start());
         return;
       }
       if (!IdentitySync.looksSealed(sealed)) {
@@ -161,7 +137,6 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
         _status = null;
         _error = context.l10n.linkDeviceError(e.toString());
       });
-      unawaited(_controller?.start());
     }
   }
 
@@ -191,11 +166,9 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
                 : Stack(
                     fit: StackFit.expand,
                     children: [
-                      MobileScanner(
-                        controller: _controller,
-                        onDetect: (capture) {
-                          unawaited(_onDetect(capture));
-                        },
+                      PairingScanner(
+                        enabled: !_busy && !_done,
+                        onCode: (value) => unawaited(_onCode(value)),
                       ),
                       if (_busy)
                         Container(

@@ -1,0 +1,6 @@
+fedi3 (0.12.0-1) UNRELEASED; urgency=medium
+
+  * Initial distribution packaging, encrypted account replication and identity guards.
+  * Source-build submission pending vendored dependencies and target toolchain review.
+
+ -- RedHunt07 <redhunt07@tutanota.com>  Sat, 14 Nov 2026 16:00:00 +0100

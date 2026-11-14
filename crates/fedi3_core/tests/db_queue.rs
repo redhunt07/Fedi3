@@ -570,3 +570,68 @@ fn d90_chat_pending_delivery_queue_round_trip() {
     db.finish_chat_delivery(due[0].id).unwrap();
     assert_eq!(db.count_chat_deliveries().unwrap(), 0);
 }
+
+#[test]
+fn own_publications_survive_cache_ttl_count_and_byte_pruning() {
+    for followed in [false, true] {
+        for mode in 0..14 {
+            let (_dir, path) = temp_db();
+            let db = SocialDb::open(&path).unwrap();
+            let own = "https://self.example/users/alice";
+            db.set_local_meta(&format!("owned_actor:{own}"), "1")
+                .unwrap();
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            for n in 0..3 {
+                let id = format!("https://self.example/objects/{n}");
+                db.upsert_object(&id,serde_json::to_vec(&serde_json::json!({"id":id,"type":"Note","attributedTo":own,"content":"durable"})).unwrap()).unwrap();
+            }
+            conn.execute("UPDATE objects SET updated_at_ms=0,last_access_ms=0", [])
+                .unwrap();
+            if followed {
+                conn.execute(
+                    "INSERT INTO actor_meta(actor_id,is_fedi3,last_seen_ms) VALUES (?1,1,0)",
+                    [own],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO following(actor_id,status,created_at_ms) VALUES (?1,1,0)",
+                    [own],
+                )
+                .unwrap();
+            }
+            if mode >= 7 {
+                conn.execute("UPDATE objects SET actor_id=?1", [own])
+                    .unwrap();
+            }
+            match mode % 7 {
+                0 => {
+                    db.prune_objects_before(i64::MAX, 100).unwrap();
+                }
+                1 => {
+                    db.prune_objects_other_before(i64::MAX, 100).unwrap();
+                }
+                2 => {
+                    db.prune_objects_followed_fedi3_before(i64::MAX, 100)
+                        .unwrap();
+                }
+                3 => {
+                    db.prune_objects_per_actor_other(1, 100).unwrap();
+                }
+                4 => {
+                    db.prune_objects_per_actor_followed_fedi3(1, 100).unwrap();
+                }
+                5 => {
+                    db.prune_object_bytes_per_actor_other(1, 100, 100).unwrap();
+                }
+                _ => {
+                    db.prune_object_bytes_per_actor_followed_fedi3(1, 100, 100)
+                        .unwrap();
+                }
+            }
+            let left: i64 = conn
+                .query_row("SELECT COUNT(*) FROM objects", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(left, 3, "mode={mode},followed={followed}");
+        }
+    }
+}

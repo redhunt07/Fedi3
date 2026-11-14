@@ -24,6 +24,7 @@ class AutoStartCore extends StatefulWidget {
 }
 
 class _AutoStartCoreState extends State<AutoStartCore> {
+  Timer? _accountTimer;
   bool _started = false;
   bool _wasRunning = false;
   Object? _attemptedConfig;
@@ -34,6 +35,11 @@ class _AutoStartCoreState extends State<AutoStartCore> {
     widget.appState.addListener(_onStateChanged);
     _wasRunning = widget.appState.isRunning;
     _kick();
+    _accountTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (AppActivity.foreground) {
+        unawaited(widget.appState.refreshAccountProfile());
+      }
+    });
   }
 
   @override
@@ -52,6 +58,7 @@ class _AutoStartCoreState extends State<AutoStartCore> {
 
   @override
   void dispose() {
+    _accountTimer?.cancel();
     widget.appState.removeListener(_onStateChanged);
     super.dispose();
   }
@@ -107,14 +114,10 @@ class _AutoStartCoreState extends State<AutoStartCore> {
       if (mounted && !widget.appState.isRunning) _started = false;
       final running = widget.appState.config;
       if (!mounted || !widget.appState.isRunning || running == null) return;
-      // A config written before multi-device support has no identity fields:
-      // publish the local identity so another client can log in with the same
-      // account. Best-effort and never blocking the UI.
-      if (running.identityPrivateKeyPem == null ||
-          running.chatIdentityPublicB64 == null ||
-          running.chatIdentitySecretB64 == null) {
-        unawaited(IdentitySync.ensurePublished(running));
-      }
+      // Every existing client may own a legacy token-encrypted blob, including
+      // clients imported through QR. Migrate using the unchanged local identity.
+      // Existing v2 packages are left intact; publishing never blocks the UI.
+      unawaited(IdentitySync.ensurePublished(running));
     });
   }
 

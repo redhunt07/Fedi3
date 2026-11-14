@@ -272,6 +272,26 @@ async fn group_thread_is_announced_and_messages_reach_members() {
     .await
     .expect("group thread was not announced to the member");
 
+    // The member list must expose the peer actor URL so clients can resolve the
+    // interlocutor's avatar and nickname for direct threads.
+    let threads: Value = b
+        .get("/_fedi3/chat/threads?limit=20")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let item = threads["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["thread_id"] == thread.as_str())
+        .expect("group thread missing from member list");
+    assert!(item["peer_actors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str() == Some(a.actor_url().as_str())));
+
     // The creator also sees the group notice in its own history.
     let own: Value = a
         .get(&format!(

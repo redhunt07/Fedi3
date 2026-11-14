@@ -13,6 +13,7 @@ import '../../core/core_api.dart';
 import '../../l10n/l10n_ext.dart';
 import '../../model/chat_models.dart';
 import '../../model/core_config.dart';
+import '../../services/actor_repository.dart';
 import '../../services/core_event_stream.dart';
 import '../../state/app_state.dart';
 import '../widgets/fedi3_ui.dart';
@@ -39,6 +40,8 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _error;
   String? _next;
   List<ChatThreadItem> _threads = const [];
+  final Map<String, ActorProfile> _peerProfiles = {};
+  final Set<String> _peerProfilesInFlight = <String>{};
   StreamSubscription<CoreEvent>? _streamSub;
   Timer? _streamDebounce;
   Timer? _streamRetry;
@@ -163,6 +166,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _next = next is String && next.trim().isNotEmpty ? next : null;
         });
         _updateUnreadCounts(items);
+        unawaited(_resolvePeerProfiles(items));
       }
     } catch (e) {
       final msg = e.toString();
@@ -171,6 +175,55 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Resolves the peer actor of every direct thread so the list can show the
+  /// interlocutor's real avatar and nickname instead of the bare @handle.
+  Future<void> _resolvePeerProfiles(List<ChatThreadItem> items) async {
+    final targets = <String>{};
+    for (final thread in items) {
+      if (thread.kind != 'dm') continue;
+      final actor = _peerActorForThread(thread);
+      if (actor.isEmpty || _peerProfiles.containsKey(actor)) continue;
+      if (_peerProfilesInFlight.contains(actor)) continue;
+      targets.add(actor);
+      if (targets.length >= 40) break;
+    }
+    if (targets.isEmpty) return;
+    _peerProfilesInFlight.addAll(targets);
+    try {
+      final entries = await Future.wait(targets.map((actor) async {
+        try {
+          return MapEntry(
+              actor, await ActorRepository.instance.getActor(actor));
+        } catch (_) {
+          return MapEntry<String, ActorProfile?>(actor, null);
+        }
+      }));
+      if (!mounted) return;
+      final found = <String, ActorProfile>{
+        for (final entry in entries)
+          if (entry.value != null) entry.key: entry.value!,
+      };
+      if (found.isEmpty) return;
+      setState(() => _peerProfiles.addAll(found));
+    } finally {
+      _peerProfilesInFlight.removeAll(targets);
+    }
+  }
+
+  /// Best-effort actor URL for a direct thread. Older cores only return the
+  /// peer username, so fall back to the local actor URL in that case.
+  String _peerActorForThread(ChatThreadItem thread) {
+    if (thread.peerActors.isNotEmpty) return thread.peerActors.first.trim();
+    if (thread.peerUsernames.isEmpty) return '';
+    final username =
+        thread.peerUsernames.first.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (username.isEmpty) return '';
+    final cfg = widget.appState.config;
+    final base = cfg?.publicBaseUrl.trim().replaceAll(RegExp(r'/+$'), '') ?? '';
+    if (base.isEmpty) return '';
+    return '$base/users/${Uri.encodeComponent(username)}';
   }
 
   void _scheduleRetryIfOffline(String msg) {
@@ -382,8 +435,13 @@ class _ChatScreenState extends State<ChatScreen> {
         final peer = thread.peerUsernames.isNotEmpty
             ? thread.peerUsernames.first.trim().replaceFirst(RegExp(r'^@+'), '')
             : '';
+        final peerActor = _peerActorForThread(thread);
+        final peerProfile = peerActor.isEmpty ? null : _peerProfiles[peerActor];
+        final peerNickname = peerProfile?.displayName.trim() ?? '';
         final name = thread.kind == 'dm'
-            ? (peer.isEmpty ? context.l10n.chatDirectMessage : '@$peer')
+            ? (peerNickname.isNotEmpty
+                ? peerNickname
+                : (peer.isEmpty ? context.l10n.chatDirectMessage : peer))
             : (thread.title?.trim().isNotEmpty == true
                 ? thread.title!.trim()
                 : context.l10n.chatGroup);
@@ -422,30 +480,36 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color(UiTokens.brandViolet),
-                        Color(UiTokens.brandCyan),
-                      ],
+                if (thread.kind == 'dm')
+                  _ChatListAvatar(
+                    imageUrl: peerProfile?.iconUrl ?? '',
+                    fallbackLabel: name,
+                  )
+                else
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(UiTokens.brandViolet),
+                          Color(UiTokens.brandCyan),
+                        ],
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      name.characters.first.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                      ),
                     ),
                   ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    name.characters.first.toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 18,
-                    ),
-                  ),
-                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -660,5 +724,63 @@ class _ChatScreenState extends State<ChatScreen> {
         SnackBar(content: Text(e.toString())),
       );
     }
+  }
+}
+
+class _ChatListAvatar extends StatelessWidget {
+  const _ChatListAvatar({
+    required this.imageUrl,
+    required this.fallbackLabel,
+  });
+
+  final String imageUrl;
+  final String fallbackLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl.trim();
+    final fallback = _fallbackAvatar();
+    if (url.isEmpty) return fallback;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    return ClipOval(
+      child: Image.network(
+        url,
+        width: 46,
+        height: 46,
+        fit: BoxFit.cover,
+        cacheWidth: (46 * dpr).round(),
+        filterQuality: FilterQuality.low,
+        errorBuilder: (_, __, ___) => fallback,
+      ),
+    );
+  }
+
+  Widget _fallbackAvatar() {
+    final label = fallbackLabel.trim();
+    final initial = label.isEmpty ? '?' : label.characters.first.toUpperCase();
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(UiTokens.brandViolet),
+            Color(UiTokens.brandCyan),
+          ],
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+          fontSize: 18,
+        ),
+      ),
+    );
   }
 }

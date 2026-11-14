@@ -113,6 +113,8 @@ pub struct CoreStartConfig {
     pub media: Option<crate::media_backend::MediaConfig>,
     pub storage: Option<crate::storage_gc::StorageConfig>,
     pub data_dir: Option<String>,
+    #[serde(default)]
+    pub data_dir_base: Option<String>,
     pub max_date_skew_secs: Option<u64>,
     #[serde(default)]
     pub internal_token: Option<String>,
@@ -195,6 +197,7 @@ impl Default for CoreStartConfig {
             media: None,
             storage: None,
             data_dir: None,
+            data_dir_base: None,
             max_date_skew_secs: Some(3600),
             internal_token: None,
             global_ingest_max_items_per_actor_per_min: None,
@@ -250,12 +253,52 @@ fn validate_domain(domain: &str) -> bool {
     })
 }
 
+fn account_actor(cfg: &CoreStartConfig) -> String {
+    format!(
+        "{}/users/{}",
+        cfg.anchor_actor_url
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&cfg.public_base_url)
+            .trim_end_matches('/'),
+        cfg.username
+    )
+}
 fn data_dir_for(cfg: &CoreStartConfig) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(validate_username(&cfg.username), "invalid account username");
     if let Some(dir) = &cfg.data_dir {
-        Ok(std::path::PathBuf::from(dir))
-    } else {
-        Ok(default_data_dir()?.join("app").join(&cfg.username))
+        return Ok(dir.into());
     }
+    let base = match &cfg.data_dir_base {
+        Some(base) => std::path::PathBuf::from(base),
+        None => default_data_dir()?.join("app"),
+    };
+    let actor = account_actor(cfg);
+    let legacy = base.join(&cfg.username);
+    if legacy.join("fedi3.db").exists() {
+        let social = crate::social_db::SocialDb::open(legacy.join("fedi3.db"))?;
+        let binding = social.get_local_meta("account_actor_binding")?;
+        let previous = social.get_local_meta("public_base_url")?;
+        let legacy_actor = previous
+            .as_ref()
+            .map(|base| format!("{}/users/{}", base.trim_end_matches('/'), cfg.username));
+        if binding.as_deref() == Some(&actor)
+            || binding.is_none()
+                && (legacy_actor.as_deref() == Some(&actor)
+                    || previous.as_deref().map(|s| s.trim_end_matches('/'))
+                        == Some(cfg.public_base_url.trim_end_matches('/'))
+                    || social
+                        .get_local_meta(&format!("owned_actor:{actor}"))?
+                        .is_some())
+        {
+            return Ok(legacy);
+        }
+    }
+    Ok(base.join("accounts").join(format!(
+        "{}-{}",
+        cfg.username,
+        &fedi3_protocol::receipts::sha256(actor.as_bytes())[..24]
+    )))
 }
 
 /// Start the core. This function returns `Ok(handle)` only after the local server is
@@ -377,7 +420,14 @@ fn init_tracing(data_dir: Option<&std::path::Path>) {
     }
 }
 
-pub fn start(cfg: CoreStartConfig) -> Result<u64> {
+pub fn start(mut cfg: CoreStartConfig) -> Result<u64> {
+    if cfg.public_base_url.trim().is_empty() {
+        cfg.public_base_url = if cfg.relay_ws.trim().is_empty() {
+            format!("http://{}", cfg.bind)
+        } else {
+            infer_http_base_from_relay_ws(&cfg.relay_ws)?
+        };
+    }
     crate::init_tls_provider();
     let log_dir = data_dir_for(&cfg).ok();
     init_tracing(log_dir.as_deref());
@@ -442,26 +492,52 @@ pub fn start(cfg: CoreStartConfig) -> Result<u64> {
     crate::social_db::SocialDb::open(&db_path).context("open social db")?;
     crate::delivery_queue::DeliveryQueue::open(&db_path).context("open delivery queue db")?;
 
-    // Identity package import: a provided RSA private key becomes the local identity.
-    // Validate it before writing so a corrupt package cannot destroy an existing good key,
-    // then persist it atomically (0600) and load it through the normal path. A corrupt
-    // PEM fails the start loudly instead of silently generating a new actor identity.
+    let social = crate::social_db::SocialDb::open(&db_path)?;
+    let actor = account_actor(&cfg);
+    if let Some(binding) = social.get_local_meta("account_actor_binding")? {
+        anyhow::ensure!(
+            binding == actor,
+            "data directory belongs to another account; use a separate directory"
+        );
+    }
+    if !data_dir.join("identity_private_key.pem").exists()
+        && cfg
+            .identity_private_key_pem
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+    {
+        anyhow::ensure!(social.get_local_meta("account_actor_binding")?.is_none(),"account private key missing: restore backup or recovery package; existing data retained");
+    }
     if let Some(pem) = cfg
         .identity_private_key_pem
         .as_deref()
-        .filter(|v| !v.trim().is_empty())
+        .filter(|s| !s.trim().is_empty())
     {
-        fedi3_protocol::crypto::rsa_private_key(pem).context("parse identity_private_key_pem")?;
-        // Persist the package bytes unchanged so an exported identity round-trips exactly.
-        crate::keys::write_secret_atomic(
-            &data_dir.join("identity_private_key.pem"),
-            pem.as_bytes(),
-        )?;
+        let incoming = fedi3_protocol::crypto::rsa_public_pem(pem)
+            .context("parse identity_private_key_pem")?;
+        if let Some(public) = social.get_local_meta("account_public_key")? {
+            anyhow::ensure!(
+                public == incoming,
+                "recovery package belongs to a different identity"
+            );
+        }
+        let key_path = data_dir.join("identity_private_key.pem");
+        if key_path.exists() {
+            let existing = std::fs::read_to_string(&key_path)?;
+            anyhow::ensure!(
+                fedi3_protocol::crypto::rsa_public_pem(&existing)? == incoming,
+                "existing account identity differs; no keys or data were overwritten"
+            );
+        } else {
+            crate::keys::write_secret_atomic(&key_path, pem.as_bytes())?;
+        }
     }
 
     // Load (or generate) the identity on the caller thread too: a corrupted key file must not
     // silently produce a new DID after start returned success.
     let identity = crate::keys::load_or_generate_identity(&data_dir)?;
+    social.set_local_meta("account_public_key", &identity.public_key_pem)?;
+    social.set_local_meta("account_actor_binding", &actor)?;
 
     let handle = HANDLE_SEQ.fetch_add(1, Ordering::Relaxed);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -852,6 +928,14 @@ fn run_core(
 
         // The signing key id must be the canonical actor (the anchor when configured), or
         // remote servers reject the signature because the advertised publicKey id differs.
+        // Own publications are durable account data, never evictable cache.
+        // Keep former aliases protected across relay/anchor migrations too.
+        for actor in std::iter::once(crate::ap::canonical_actor_url(&ap_cfg))
+            .chain(std::iter::once(format!("{}/users/{}", ap_cfg.public_base_url.trim_end_matches('/'), ap_cfg.username)))
+            .chain(cfg.legacy_aliases.iter().flatten().cloned())
+            .chain(legacy_aliases_persisted.iter().cloned()) {
+            social.set_local_meta(&format!("owned_actor:{}",actor.trim_end_matches('/')),"1")?;
+        }
         let key_id = format!("{}#main-key", crate::ap::canonical_actor_url(&ap_cfg));
         let key_id_for_fetch = key_id.clone();
 
@@ -1043,6 +1127,8 @@ fn run_core(
         let _ = state
             .social
             .set_local_meta("public_base_url", &public_base_url_norm);
+
+        if cfg.p2p.as_ref().and_then(|p|p.device_sync_enable).unwrap_or(true) {shutdown_handles.push(crate::account_sync::start(state.clone(),shutdown_rx.clone())?);}else{crate::account_sync::initialize(&state)?;}
 
         shutdown_handles.push(crate::storage_gc::start_storage_gc_worker(
             storage_cfg,
@@ -1267,13 +1353,15 @@ fn run_core(
         let net_for_tunnel = net.clone();
         let tunnel = if tunnel_enabled {
             Some(tokio::spawn(async move {
-                crate::tunnel::run_tunnel_with_shutdown(
+                crate::tunnel::run_tunnel_with_options_identity(
                     &user,
                     &relay_ws,
                     &relay_token,
                     router2,
                     shutdown_for_tunnel,
                     net_for_tunnel,
+                    crate::tunnel::TunnelOptions::default(),
+                    true,
                 )
                 .await
             }))

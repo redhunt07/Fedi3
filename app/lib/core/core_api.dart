@@ -1121,6 +1121,14 @@ class CoreApi {
     return _decodeMap(resp, 'relay list');
   }
 
+  Future<Map<String, dynamic>> fetchAccountProfile() async {
+    final response = await _request(
+        method: 'GET',
+        uri: _internal('/_fedi3/account/profile'),
+        headers: _internalHeaders);
+    return _decodeMap(response, 'account profile');
+  }
+
   Future<Map<String, dynamic>> fetchRelayStats() async {
     final uri = _relay('/_fedi3/relay/stats');
     final resp =

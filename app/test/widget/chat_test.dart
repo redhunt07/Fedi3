@@ -7,8 +7,10 @@ import 'dart:convert';
 
 import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
+import 'package:fedi3/ui/screens/chat_screen.dart';
 import 'package:fedi3/ui/screens/chat_search_screen.dart';
 import 'package:fedi3/ui/screens/chat_thread_screen.dart';
+import 'package:fedi3/ui/screens/profile_screen.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -512,5 +514,97 @@ void main() {
 
     expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
     expect(find.byIcon(Icons.insert_drive_file), findsNothing);
+  });
+
+  testWidgets('chat list shows the DM peer nickname instead of the @handle',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json('GET', '/_fedi3/chat/threads', {
+      'items': [
+        {
+          'thread_id': 'dm1',
+          'kind': 'dm',
+          'title': null,
+          'created_at_ms': 1,
+          'updated_at_ms': 2,
+          'last_message_ms': 2,
+          'last_message_preview': 'ciao',
+          'peer_usernames': ['bob'],
+          'peer_actors': ['https://example.test/users/bob'],
+        }
+      ],
+      'next': null,
+    });
+    client.json('GET', '/users/bob', {
+      'type': 'Person',
+      'id': 'https://example.test/users/bob',
+      'preferredUsername': 'bob',
+      'name': 'Bob Rossi',
+    });
+    client.route(
+      'GET',
+      '/_fedi3/stream',
+      FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'}, body: ''),
+    );
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(tester, ChatScreen(appState: app));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Bob Rossi'), findsOneWidget);
+    expect(find.text('@bob'), findsNothing);
+  });
+
+  testWidgets('tapping the DM header nickname opens the peer profile',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    client.json('GET', '/_fedi3/chat/threads/t1', {
+      'items': <dynamic>[],
+      'next': null,
+    });
+    client.json('GET', '/_fedi3/chat/thread/members', {
+      'items': [
+        {
+          'actor_id': 'https://example.test/users/bob',
+          'role': 'member',
+        }
+      ],
+    });
+    client.json('GET', '/users/bob', {
+      'type': 'Person',
+      'id': 'https://example.test/users/bob',
+      'preferredUsername': 'bob',
+      'name': 'Bob Rossi',
+    });
+    client
+        .json('POST', '/_fedi3/chat/status', {'statuses': <String, dynamic>{}});
+    client.json('POST', '/_fedi3/chat/reactions', {'items': <dynamic>[]});
+    client.route(
+      'GET',
+      '/_fedi3/stream',
+      FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'}, body: ''),
+    );
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+
+    final app = await _runningApp();
+    await pumpScreen(
+      tester,
+      ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Bob Rossi'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ProfileScreen), findsOneWidget);
   });
 }

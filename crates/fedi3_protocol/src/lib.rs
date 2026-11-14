@@ -30,3 +30,7 @@ pub mod receipts;
 
 #[cfg(feature = "crypto")]
 pub mod crypto;
+
+pub mod chat;
+
+pub mod account_sync;

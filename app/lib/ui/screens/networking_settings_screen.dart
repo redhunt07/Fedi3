@@ -30,6 +30,7 @@ class NetworkingSettingsScreen extends StatefulWidget {
 }
 
 class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
+  Map<String, dynamic>? _accountSync;
   bool _loadingRelays = false;
   Object? _relayError;
   List<Map<String, dynamic>> _relays = const [];
@@ -62,6 +63,13 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
     _peerExchange = cfg?.p2pPeerExchange ?? true;
     _deviceSync = cfg?.deviceSyncEnable ?? true;
     _loadRelays();
+    CoreApi(config: widget.appState.config!)
+        .fetchAccountProfile()
+        .then((value) {
+      if (mounted) {
+        setState(() => _accountSync = value);
+      }
+    }).catchError((Object _) {});
     _loadDirectory();
   }
 
@@ -350,6 +358,25 @@ class _NetworkingSettingsScreenState extends State<NetworkingSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(UiTokens.padScreen),
         children: [
+          ListTile(
+            leading: Icon(
+                (_accountSync?['error']?.toString().isNotEmpty ?? false)
+                    ? Icons.sync_problem
+                    : Icons.sync),
+            title: Text(Localizations.localeOf(context).languageCode == 'it'
+                ? 'Sincronizzazione account'
+                : 'Account synchronization'),
+            subtitle: Text((_accountSync?['error']?.toString().isNotEmpty ??
+                    false)
+                ? _accountSync!['error'].toString()
+                : (_accountSync?['last_ok'] == null
+                    ? (Localizations.localeOf(context).languageCode == 'it'
+                        ? 'In attesa della prima sincronizzazione'
+                        : 'Waiting for initial synchronization')
+                    : (Localizations.localeOf(context).languageCode == 'it'
+                        ? 'Profilo, follower, seguiti e post sincronizzati'
+                        : 'Profile, followers, following and posts synchronized'))),
+          ),
           _section(context, context.l10n.networkingRelay),
           _infoTile(
             context,

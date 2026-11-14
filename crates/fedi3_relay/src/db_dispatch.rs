@@ -19,7 +19,7 @@ impl DbDispatch {
             probe: Arc::new(Semaphore::new(1)),
         }
     }
-    async fn run<T: Send + 'static>(
+    pub(super) async fn run<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&Db) -> Result<T> + Send + 'static,
     ) -> Result<T> {
@@ -165,6 +165,23 @@ impl DbDispatch {
         self.run(move |db| db.get_relay_pubkey_b64(&relay_url))
             .await
     }
+    pub(super) async fn update_push_registration(
+        &self,
+        user: &str,
+        installation: &str,
+        registration: Option<String>,
+    ) -> Result<()> {
+        let user = user.to_owned();
+        let installation = installation.to_owned();
+        self.run(move |db| {
+            db.update_push_registration(&user, &installation, registration.as_deref())
+        })
+        .await
+    }
+    pub(super) async fn push_registrations(&self, user: &str) -> Result<Vec<String>> {
+        let user = user.to_owned();
+        self.run(move |db| db.push_registrations(&user)).await
+    }
     pub(super) async fn relay_meta_get(&self, key: &str) -> Result<Option<String>> {
         let key = key.to_owned();
         self.run(move |db| db.relay_meta_get(&key)).await
@@ -270,6 +287,19 @@ impl DbDispatch {
     pub(super) async fn prune_pair_sessions(&self, now: i64) -> Result<()> {
         self.run(move |db| db.prune_pair_sessions(now)).await
     }
+    pub(super) async fn insert_chat_spool_bounded(
+        &self,
+        user: &str,
+        envelope: &str,
+        max_rows: i64,
+        max_bytes: i64,
+    ) -> Result<i64> {
+        let user = user.to_owned();
+        let envelope = envelope.to_owned();
+        self.run(move |db| db.insert_chat_spool_bounded(&user, &envelope, max_rows, max_bytes))
+            .await
+    }
+    #[cfg(test)]
     pub(super) async fn insert_chat_spool(&self, username: &str, envelope: &str) -> Result<i64> {
         let username = username.to_owned();
         let envelope = envelope.to_owned();
@@ -289,6 +319,7 @@ impl DbDispatch {
     pub(super) async fn prune_chat_spool(&self, cutoff_ms: i64) -> Result<()> {
         self.run(move |db| db.prune_chat_spool(cutoff_ms)).await
     }
+    #[cfg(test)]
     pub(super) async fn trim_chat_spool(&self, username: &str, keep: i64) -> Result<()> {
         let username = username.to_owned();
         self.run(move |db| db.trim_chat_spool(&username, keep))

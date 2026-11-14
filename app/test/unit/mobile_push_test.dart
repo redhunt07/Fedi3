@@ -51,10 +51,14 @@ void main() {
 
     await native('token', 'a' * 64);
     expect(service.status.value, 'registered');
-    expect(
-        jsonDecode(client.lastBody), {'provider': 'apns', 'token': 'a' * 64});
+    final registration = jsonDecode(client.lastBody) as Map<String, dynamic>;
+    expect(registration['provider'], 'apns');
+    expect(registration['token'], 'a' * 64);
+    final installation = registration['installation_id'];
+    expect(installation, hasLength(32));
     await service.disable();
     expect(client.requests.last.method, 'DELETE');
+    expect(client.lastHeader('X-Fedi3-Push-Installation'), installation);
     expect(calls, contains('disable'));
     final count = client.requests.length;
     await native('token', 'b' * 64);

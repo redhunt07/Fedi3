@@ -113,6 +113,8 @@ async fn sync_with_did_record(
                 .await;
         }
 
+        let _ = crate::account_sync::pull_peer(state, &p.peer_id, did).await;
+
         let since_key = format!("device_sync_since:{}", p.peer_id);
         let since = state
             .social

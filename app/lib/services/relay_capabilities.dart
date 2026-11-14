@@ -29,10 +29,14 @@ class RelayCapabilities {
     String capability,
     String method, {
     Object? body,
+    String? installationId,
   }) async {
     final request = http.Request(method, _endpoint(config, capability))
       ..followRedirects = false
       ..headers['Authorization'] = 'Bearer ${config.relayToken}';
+    if (installationId != null) {
+      request.headers['X-Fedi3-Push-Installation'] = installationId;
+    }
     if (body != null) {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode(body);
@@ -61,11 +65,12 @@ class RelayCapabilities {
   /// Delivery remains disabled until the relay operator configures a gateway.
   static Future<void> registerPush(
       CoreConfig config, String provider, String token,
-      {Map<String, String>? webpushKeys}) async {
+      {Map<String, String>? webpushKeys, String? installationId}) async {
     if (!['unifiedpush', 'apns'].contains(provider)) {
       throw ArgumentError.value(provider, 'provider');
     }
     final response = await _request(config, 'push', 'PUT', body: {
+      if (installationId != null) 'installation_id': installationId,
       'provider': provider,
       'token': token,
       if (webpushKeys != null) 'webpush_keys': webpushKeys,
@@ -93,8 +98,10 @@ class RelayCapabilities {
         as int;
   }
 
-  static Future<void> unregisterPush(CoreConfig config) async {
-    final response = await _request(config, 'push', 'DELETE');
+  static Future<void> unregisterPush(CoreConfig config,
+      {String? installationId}) async {
+    final response = await _request(config, 'push', 'DELETE',
+        installationId: installationId);
     if (response.statusCode != 204) {
       throw StateError('Push removal failed (${response.statusCode})');
     }

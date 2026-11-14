@@ -40,8 +40,11 @@ upper="$(printf '%s' "$triple" | tr 'a-z-' 'A-Z_')"
   env "CARGO_TARGET_${upper}_LINKER=$cc" "CC_${upper}=$cc" "AR_${upper}=$ndk_bin/llvm-ar" \
   cargo build --release --target "$triple" -p fedi3_core --lib --locked)
 
+rm -rf "$repo_root/app/android/app/src/main/jniLibs"
 mkdir -p "$repo_root/app/android/app/src/main/jniLibs/$abi"
 cp "$repo_root/target/$triple/release/libfedi3_core.so" \
   "$repo_root/app/android/app/src/main/jniLibs/$abi/libfedi3_core.so"
 
+python3 "$repo_root/scripts/prepare_fdroid.py"
+(cd "$repo_root/app" && flutter pub get)
 (cd "$repo_root/app" && flutter build apk --release --target-platform "$platform" --split-per-abi)

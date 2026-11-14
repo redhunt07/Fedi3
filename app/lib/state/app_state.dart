@@ -387,8 +387,7 @@ class AppState extends ChangeNotifier {
       final payload = effective.toCoreStartJson();
       final dataDirBase = _coreDataDirBase?.trim();
       if (dataDirBase != null && dataDirBase.isNotEmpty) {
-        payload['data_dir'] =
-            '${dataDirBase.replaceAll(RegExp(r'/+$'), '')}/${effective.username}';
+        payload['data_dir_base'] = dataDirBase.replaceAll(RegExp(r'/+$'), '');
       }
       final handle = _runtime.startJson(jsonEncode(payload));
       if (handle <= 0) {
@@ -408,6 +407,45 @@ class AppState extends ChangeNotifier {
       _startWatchdog();
     }
     notifyListeners();
+  }
+
+  bool _accountProfileRefreshing = false;
+  Future<void> refreshAccountProfile() async {
+    final cfg = _config;
+    if (!isRunning || cfg == null || _accountProfileRefreshing) {
+      return;
+    }
+    _accountProfileRefreshing = true;
+    try {
+      final result = await CoreApi(config: cfg).fetchAccountProfile();
+      if (!identical(cfg, _config) || !isRunning || result['profile'] is! Map) {
+        return;
+      }
+      final p = Map<String, dynamic>.from(result['profile'] as Map);
+      List<String> strings(String key) =>
+          (p[key] as List? ?? []).map((v) => v.toString()).toList();
+      final updated = cfg.copyWith(
+          displayName: p['display_name'] as String? ?? '',
+          summary: p['summary'] as String? ?? '',
+          iconUrl: p['icon_url'] as String? ?? '',
+          iconMediaType: p['icon_media_type'] as String? ?? '',
+          imageUrl: p['image_url'] as String? ?? '',
+          imageMediaType: p['image_media_type'] as String? ?? '',
+          profileFields: (p['profile_fields'] as List? ?? [])
+              .whereType<Map>()
+              .map((v) => ProfileFieldKV.fromJson(Map<String, dynamic>.from(v)))
+              .toList(),
+          manuallyApprovesFollowers: p['manually_approves_followers'] == true,
+          blockedDomains: strings('blocked_domains'),
+          blockedActors: strings('blocked_actors'));
+      if (jsonEncode(cfg.toCoreStartJson()) !=
+          jsonEncode(updated.toCoreStartJson())) {
+        await saveConfig(updated);
+        if (identical(_config, updated)) _activeConfig = updated;
+      }
+    } catch (_) {/* Offline cores retain the last known profile. */} finally {
+      _accountProfileRefreshing = false;
+    }
   }
 
   Future<void> stopCore() async {

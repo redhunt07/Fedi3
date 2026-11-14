@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import '../model/core_config.dart';
@@ -39,7 +40,8 @@ class RelaySpoolPoller {
   bool _polling = false;
   int _lastId = 0;
 
-  static const _cursorFile = 'relay_spool.json';
+  String get cursorFileName =>
+      'relay_spool_${sha256.convert(utf8.encode('${_endpoint().origin}\n${config.username}'))}.json';
 
   bool get enabled =>
       config.relayWs.trim().isNotEmpty && config.relayToken.trim().isNotEmpty;
@@ -100,16 +102,13 @@ class RelaySpoolPoller {
       final latestId = latest is num ? latest.toInt() : _lastId;
       final items = decoded['items'];
       final hasItems = items is List && items.isNotEmpty;
+      // The callback must confirm that a core is running before committing the
+      // wake cursor. A failed start must be retried on the next poll.
+      if (hasItems) await onNewItems();
+      if (!_started) return;
       if (latestId > _lastId) {
         _lastId = latestId;
         await _writeCursor(latestId);
-      }
-      debugPrint(
-        '[spool] status=${response.statusCode} after=$_lastId '
-        'latest=$latestId items=${items is List ? items.length : -1}',
-      );
-      if (hasItems) {
-        await onNewItems();
       }
     } catch (e) {
       debugPrint('[spool] poll failed: $e');
@@ -121,7 +120,7 @@ class RelaySpoolPoller {
   Future<int> _readCursor() async {
     try {
       final file =
-          File('${directory.path}${Platform.pathSeparator}$_cursorFile');
+          File('${directory.path}${Platform.pathSeparator}$cursorFileName');
       if (!await file.exists()) return 0;
       final raw = jsonDecode(await file.readAsString());
       if (raw is Map && raw['last_id'] is num) {
@@ -134,8 +133,10 @@ class RelaySpoolPoller {
   Future<void> _writeCursor(int id) async {
     try {
       final file =
-          File('${directory.path}${Platform.pathSeparator}$_cursorFile');
-      await file.writeAsString(jsonEncode({'last_id': id}));
+          File('${directory.path}${Platform.pathSeparator}$cursorFileName');
+      final temp = File('${file.path}.tmp');
+      await temp.writeAsString(jsonEncode({'last_id': id}), flush: true);
+      await temp.rename(file.path);
     } catch (_) {}
   }
 }

@@ -123,7 +123,7 @@ pub(super) async fn spooled(
     }
 }
 
-fn checked_core_ack(
+pub(super) fn checked_core_ack(
     encoded: &str,
     pem: &str,
     actor: &str,

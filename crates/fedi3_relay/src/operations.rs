@@ -105,6 +105,8 @@ pub(super) struct PushRegistration {
     provider: String,
     token: String,
     #[serde(default)]
+    installation_id: Option<String>,
+    #[serde(default)]
     expires_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     webpush_keys: Option<WebPushKeys>,
@@ -167,6 +169,15 @@ pub(super) async fn push_status(
     }
 }
 
+fn installation_id(value: Option<&str>) -> Option<&str> {
+    let value = value.unwrap_or("legacy");
+    ((value == "legacy" || (16..=128).contains(&value.len()))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+    .then_some(value)
+}
+
 pub(super) async fn push_register(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -219,12 +230,16 @@ pub(super) async fn push_register(
     {
         return (StatusCode::BAD_REQUEST, "invalid APNs token").into_response();
     }
-    // One current installation per account; replacement is atomic in relay_meta.
+    let Some(installation) = installation_id(registration.installation_id.as_deref()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let installation = installation.to_owned();
+    // Atomic update of this installation only; other devices remain registered.
     registration.expires_at_ms = now_ms().saturating_add(30 * 24 * 3600 * 1000);
     let raw = serde_json::to_string(&registration).expect("registration JSON");
     if state
         .db
-        .relay_meta_set(&format!("push:{user}"), &raw)
+        .update_push_registration(&user, &installation, Some(raw))
         .await
         .is_err()
     {
@@ -245,7 +260,21 @@ pub(super) async fn push_unregister(
     if !authorized(&state, &user, &headers).await {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match state.db.relay_meta_set(&format!("push:{user}"), "").await {
+    let supplied = headers.get("X-Fedi3-Push-Installation");
+    let Some(installation) = installation_id(match supplied {
+        Some(v) => match v.to_str() {
+            Ok(v) => Some(v),
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => None,
+    }) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match state
+        .db
+        .update_push_registration(&user, installation, None)
+        .await
+    {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -297,14 +326,14 @@ pub(super) fn notify_user(state: &AppState, user: &str) {
     let user = user.to_string();
     tokio::spawn(async move {
         let _permit = permit;
-        tokio::select! {_=state.shutdown.cancelled()=>{},_=tokio::time::timeout(Duration::from_secs(4),wake_user_inner(&state,&user))=>{}}
+        tokio::select! {_=state.shutdown.cancelled()=>{},_=tokio::time::timeout(Duration::from_secs(100),wake_user_inner(&state,&user))=>{}}
     });
 }
 pub(super) async fn wake_user(state: &AppState, user: &str) {
     let Ok(_permit) = state.push_tasks.clone().try_acquire_owned() else {
         return;
     };
-    let _ = tokio::time::timeout(Duration::from_secs(4), wake_user_inner(state, user)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(100), wake_user_inner(state, user)).await;
 }
 async fn wake_user_inner(state: &AppState, user: &str) {
     let Some((url, token)) = gateway_config() else {
@@ -317,20 +346,23 @@ async fn wake_user_inner(state: &AppState, user: &str) {
     {
         return;
     }
-    // Queue contents, actor identities and relay credentials never enter the wakeup.
-    let raw = state
-        .db
-        .relay_meta_get(&format!("push:{user}"))
-        .await
-        .ok()
-        .flatten();
-    let Some(registration) = raw.and_then(|s| serde_json::from_str::<PushRegistration>(&s).ok())
-    else {
-        return;
-    };
-    if registration.expires_at_ms <= now_ms() {
-        return;
+    let registrations = state.db.push_registrations(user).await.unwrap_or_default();
+    for raw in registrations {
+        let Ok(registration) = serde_json::from_str::<PushRegistration>(&raw) else {
+            continue;
+        };
+        if registration.expires_at_ms <= now_ms() {
+            continue;
+        }
+        // One slow provider must not starve the other installations.
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            send_wakeup(state, &url, &token, registration),
+        )
+        .await;
     }
+}
+async fn send_wakeup(state: &AppState, url: &str, token: &str, registration: PushRegistration) {
     let client = fedi3_protocol::net::guard_client(reqwest::Client::builder(), false)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(4))
@@ -338,7 +370,7 @@ async fn wake_user_inner(state: &AppState, user: &str) {
     let Ok(client) = client else {
         return;
     };
-    if ensure_fetch_target_allowed(&url, false).await.is_err() {
+    if ensure_fetch_target_allowed(url, false).await.is_err() {
         return;
     }
     // The gateway owns provider credentials, endpoint allowlisting and coalescing.

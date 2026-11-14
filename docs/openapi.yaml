@@ -1595,7 +1595,7 @@ paths:
           description: Database non disponibile
     put:
       tags: [relay]
-      summary: Predisposizione push tramite gateway configurato, una installazione per account
+      summary: Registrazione push indipendente per installazione tramite gateway configurato
       security:
         - relayToken: []
       requestBody:
@@ -1607,6 +1607,12 @@ paths:
               required: [provider, token]
               additionalProperties: false
               properties:
+                installation_id:
+                  type: string
+                  minLength: 16
+                  maxLength: 128
+                  pattern: "^[A-Za-z0-9_-]+$"
+                  description: Identificatore locale stabile; assente significa slot legacy
                 provider:
                   type: string
                   enum: [unifiedpush, apns]
@@ -1637,7 +1643,14 @@ paths:
           description: Gateway non configurato o database non disponibile
     delete:
       tags: [relay]
-      summary: Revoca registrazione push
+      summary: Revoca soltanto la registrazione push di questa installazione
+      parameters:
+        - in: header
+          name: X-Fedi3-Push-Installation
+          required: false
+          schema:
+            type: string
+          description: Identificatore da revocare; assente revoca solo lo slot legacy
       security:
         - relayToken: []
       responses:
@@ -1729,6 +1742,53 @@ paths:
           description: Account non autorizzato
         '503':
           description: Registro non disponibile
+  /_fedi3/account/{user}/state:
+    parameters:
+      - {in: path, name: user, required: true, schema: {type: string}}
+    get:
+      summary: Read an encrypted account-state page (relay)
+      security: [{relayToken: []}]
+      parameters:
+        - {in: query, name: after, schema: {type: integer, format: int64, default: 0}}
+      responses:
+        '200':
+          description: Ordered sequence/envelope pairs and continuation cursor; opaque AES-GCM records
+        '401': {description: Invalid account token}
+    put:
+      summary: Merge signed encrypted account revisions (relay)
+      security: [{relayToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key_pem, records]
+              properties:
+                public_key_pem: {type: string}
+                records: {type: array, maxItems: 64, items: {type: object}}
+      responses:
+        '204': {description: Accepted; exact uploaded revisions may be acknowledged}
+        '400': {description: Invalid envelope or signature}
+        '401': {description: Invalid account token}
+        '409': {description: Identity mismatch or per-account capacity exceeded}
+  /_fedi3/account/profile:
+    get:
+      summary: Current replicated profile and last sync result (core)
+      parameters:
+        - {in: header, name: X-Fedi3-Internal, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Profile fields with last_ok and error}
+        '401': {description: Invalid internal token}
+  /.fedi3/device/account:
+    get:
+      summary: Encrypted account-state page for a signed same-account peer request (core)
+      parameters:
+        - {in: query, name: after, schema: {type: integer, default: 0}}
+      responses:
+        '200': {description: Encrypted records; device signature authentication required}
+        '401': {description: Invalid device signature}
+
 components:
   securitySchemes:
     telemetryToken:

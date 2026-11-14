@@ -51,6 +51,7 @@ class MobilePushService {
   AppState? _app;
   CoreConfig? _boundConfig;
   String _scope = '';
+  String _installationId = CoreConfig.randomToken();
   bool _background = false;
   bool _headless = false;
   bool enabled = false;
@@ -73,6 +74,8 @@ class MobilePushService {
     try {
       final settings =
           raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+      _installationId =
+          settings?['installation_id'] as String? ?? _installationId;
       enabled = settings?['enabled'] == true && settings?['scope'] == _scope;
       _vapid = settings?['vapid'] as String?;
       _registration = settings?['scope'] == _scope
@@ -81,6 +84,7 @@ class MobilePushService {
     } catch (_) {
       enabled = false;
     }
+    await _persist();
     app.addListener(_accountChanged);
     if (_android) {
       await UnifiedPushPlatform.instance.initializeCallback(
@@ -232,6 +236,7 @@ class MobilePushService {
     try {
       await RelayCapabilities.registerPush(cfg,
           registration['provider'] as String, registration['token'] as String,
+          installationId: _installationId,
           webpushKeys:
               (registration['webpush_keys'] as Map?)?.cast<String, String>());
       status.value = 'registered';
@@ -244,7 +249,8 @@ class MobilePushService {
     final cfg = captured ?? _boundConfig;
     if (cfg != null) {
       try {
-        await RelayCapabilities.unregisterPush(cfg);
+        await RelayCapabilities.unregisterPush(cfg,
+            installationId: _installationId);
       } catch (_) {
         status.value = 'revocation_pending';
       }
@@ -273,6 +279,7 @@ class MobilePushService {
 
   Future<void> _persist() {
     final value = jsonEncode({
+      'installation_id': _installationId,
       'enabled': enabled,
       'scope': _scope,
       'vapid': _vapid,

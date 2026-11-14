@@ -525,7 +525,7 @@ impl SocialDb {
         Ok(Self { path })
     }
 
-    fn connect(&self) -> Result<Connection> {
+    pub(crate) fn connect(&self) -> Result<Connection> {
         open_with_pragmas(&self.path)
     }
 
@@ -3308,7 +3308,7 @@ impl SocialDb {
             let mut stmt = tx.prepare(
                 r#"
                 SELECT object_id FROM objects
-                WHERE updated_at_ms < ?1 AND COALESCE(pinned,0)=0
+                WHERE updated_at_ms < ?1 AND COALESCE(pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(objects.actor_id,''),CASE WHEN json_valid(CAST(objects.object_json AS TEXT)) THEN json_extract(CAST(objects.object_json AS TEXT),'$.attributedTo') END))
                 LIMIT ?2
                 "#,
             )?;
@@ -3343,7 +3343,7 @@ impl SocialDb {
                 LEFT JOIN actor_meta am ON o.actor_id = am.actor_id
                 LEFT JOIN following f ON o.actor_id = f.actor_id
                 WHERE o.updated_at_ms < ?1
-                  AND COALESCE(o.pinned,0)=0
+                  AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                   AND NOT (COALESCE(am.is_fedi3,0)=1 AND COALESCE(f.status,0)=1)
                 LIMIT ?2
                 "#,
@@ -3378,7 +3378,7 @@ impl SocialDb {
                 JOIN actor_meta am ON o.actor_id = am.actor_id
                 JOIN following f ON o.actor_id = f.actor_id
                 WHERE o.updated_at_ms < ?1
-                  AND COALESCE(o.pinned,0)=0
+                  AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                   AND am.is_fedi3=1
                   AND f.status=1
                 LIMIT ?2
@@ -3418,7 +3418,7 @@ impl SocialDb {
                   LEFT JOIN actor_meta am ON o.actor_id = am.actor_id
                   LEFT JOIN following f ON o.actor_id = f.actor_id
                   WHERE o.actor_id IS NOT NULL
-                    AND COALESCE(o.pinned,0)=0
+                    AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                     AND NOT (COALESCE(am.is_fedi3,0)=1 AND COALESCE(f.status,0)=1)
                 )
                 WHERE rn > ?1
@@ -3463,7 +3463,7 @@ impl SocialDb {
                   JOIN actor_meta am ON o.actor_id = am.actor_id
                   JOIN following f ON o.actor_id = f.actor_id
                   WHERE o.actor_id IS NOT NULL
-                    AND COALESCE(o.pinned,0)=0
+                    AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                     AND am.is_fedi3=1
                     AND f.status=1
                 )
@@ -3508,7 +3508,7 @@ impl SocialDb {
                 FROM objects o
                 LEFT JOIN actor_meta am ON o.actor_id = am.actor_id
                 LEFT JOIN following f ON o.actor_id = f.actor_id
-                WHERE o.actor_id IS NOT NULL AND COALESCE(o.pinned,0)=0
+                WHERE o.actor_id IS NOT NULL AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                   AND NOT (COALESCE(am.is_fedi3,0)=1 AND COALESCE(f.status,0)=1)
                 GROUP BY o.actor_id
                 HAVING SUM(o.size_bytes) > ?1
@@ -3530,7 +3530,7 @@ impl SocialDb {
         for actor_id in actor_ids {
             let mut total: i64 = tx
                 .query_row(
-                    "SELECT COALESCE(SUM(size_bytes),0) FROM objects WHERE actor_id=?1 AND COALESCE(pinned,0)=0",
+                    "SELECT COALESCE(SUM(size_bytes),0) FROM objects WHERE actor_id=?1 AND COALESCE(pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(objects.actor_id,''),CASE WHEN json_valid(CAST(objects.object_json AS TEXT)) THEN json_extract(CAST(objects.object_json AS TEXT),'$.attributedTo') END))",
                     params![actor_id],
                     |r| r.get(0),
                 )
@@ -3543,7 +3543,7 @@ impl SocialDb {
                 r#"
                 SELECT object_id, size_bytes
                 FROM objects
-                WHERE actor_id=?1 AND COALESCE(pinned,0)=0
+                WHERE actor_id=?1 AND COALESCE(pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(objects.actor_id,''),CASE WHEN json_valid(CAST(objects.object_json AS TEXT)) THEN json_extract(CAST(objects.object_json AS TEXT),'$.attributedTo') END))
                 ORDER BY last_access_ms ASC, updated_at_ms ASC
                 LIMIT ?2
                 "#,
@@ -3596,7 +3596,7 @@ impl SocialDb {
                 FROM objects o
                 JOIN actor_meta am ON o.actor_id = am.actor_id
                 JOIN following f ON o.actor_id = f.actor_id
-                WHERE o.actor_id IS NOT NULL AND COALESCE(o.pinned,0)=0
+                WHERE o.actor_id IS NOT NULL AND COALESCE(o.pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(o.actor_id,''),CASE WHEN json_valid(CAST(o.object_json AS TEXT)) THEN json_extract(CAST(o.object_json AS TEXT),'$.attributedTo') END))
                   AND am.is_fedi3=1 AND f.status=1
                 GROUP BY o.actor_id
                 HAVING SUM(o.size_bytes) > ?1
@@ -3618,7 +3618,7 @@ impl SocialDb {
         for actor_id in actor_ids {
             let mut total: i64 = tx
                 .query_row(
-                    "SELECT COALESCE(SUM(size_bytes),0) FROM objects WHERE actor_id=?1 AND COALESCE(pinned,0)=0",
+                    "SELECT COALESCE(SUM(size_bytes),0) FROM objects WHERE actor_id=?1 AND COALESCE(pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(objects.actor_id,''),CASE WHEN json_valid(CAST(objects.object_json AS TEXT)) THEN json_extract(CAST(objects.object_json AS TEXT),'$.attributedTo') END))",
                     params![actor_id],
                     |r| r.get(0),
                 )
@@ -3631,7 +3631,7 @@ impl SocialDb {
                 r#"
                 SELECT object_id, size_bytes
                 FROM objects
-                WHERE actor_id=?1 AND COALESCE(pinned,0)=0
+                WHERE actor_id=?1 AND COALESCE(pinned,0)=0 AND NOT EXISTS (SELECT 1 FROM local_meta own WHERE own.key='owned_actor:' || COALESCE(NULLIF(objects.actor_id,''),CASE WHEN json_valid(CAST(objects.object_json AS TEXT)) THEN json_extract(CAST(objects.object_json AS TEXT),'$.attributedTo') END))
                 ORDER BY last_access_ms ASC, updated_at_ms ASC
                 LIMIT ?2
                 "#,

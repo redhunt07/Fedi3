@@ -14,6 +14,10 @@ class AppActivity {
     _changes.add(next);
   }
 
+  static bool shouldStopCore(
+          {required TargetPlatform platform, required bool coreHeld}) =>
+      platform == TargetPlatform.android && !foreground && !coreHeld;
+
   static Future<void> waitForForeground() async {
     if (!foreground) await changes.firstWhere((value) => value);
   }

@@ -53,6 +53,7 @@ use ed25519_dalek::{Signer as _, Verifier as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use subtle::ConstantTimeEq;
 
+mod account_sync;
 mod db;
 mod db_dispatch;
 mod media_store;
@@ -1484,6 +1485,10 @@ async fn main() {
             get(pair_session_get).put(pair_session_put),
         )
         .route("/_fedi3/chat/spool", get(chat_spool_get))
+        .route(
+            "/_fedi3/account/:user/state",
+            get(account_sync::get_state).put(account_sync::put_state),
+        )
         .route("/users/:user/media", post(media_upload))
         .route(
             "/users/:user/media/:id",
@@ -2344,7 +2349,7 @@ async fn handle_tunnel(
     user: String,
     token: Option<String>,
     headers: HeaderMap,
-    socket: WebSocket,
+    mut socket: WebSocket,
     conn_id: u64,
 ) {
     if state.shutdown.is_cancelled() {
@@ -2391,6 +2396,133 @@ async fn handle_tunnel(
         }
     }
     drop(db);
+
+    let encoded = headers
+        .get("X-Fedi3-Account-Proof")
+        .and_then(|v| v.to_str().ok());
+    let proof = encoded
+        .filter(|s| s.len() < 16384)
+        .and_then(|s| B64.decode(s).ok())
+        .and_then(|b| serde_json::from_slice::<fedi3_protocol::account_sync::TunnelProof>(&b).ok());
+    if let Some(proof) = proof {
+        let nonce = headers
+            .get("Sec-WebSocket-Key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let valid = proof.user == user
+            && proof.nonce == nonce
+            && proof.timestamp.abs_diff(now_ms()) <= 120_000
+            && proof
+                .signature_b64
+                .as_ref()
+                .and_then(|s| B64.decode(s).ok())
+                .is_some_and(|sig| {
+                    fedi3_protocol::crypto::rsa_verify_sha256(
+                        &proof.public_key_pem,
+                        &proof.signing_bytes().unwrap_or_default(),
+                        &sig,
+                    )
+                    .is_ok()
+                });
+        if !valid {
+            warn!(%user,"tunnel identity proof invalid");
+            return;
+        }
+        let check_user = user.clone();
+        if state
+            .db
+            .run(move |db| {
+                db.bind_account_key(&check_user, &proof.actor, &proof.public_key_pem)?;
+                db.claim_account_nonce(&check_user, &proof.nonce)
+            })
+            .await
+            .is_err()
+        {
+            warn!(%user,"tunnel identity mismatch or replay");
+            return;
+        }
+    } else {
+        let check_user = user.clone();
+        if let Ok(Some((actor, pem))) = state.db.run(move |db| db.account_key(&check_user)).await {
+            if std::env::var("FEDI3_RELAY_ALLOW_LEGACY_TUNNELS")
+                .ok()
+                .as_deref()
+                != Some("true")
+            {
+                let nonce = receipts::random_nonce();
+                let id = format!("account-key-proof-{nonce}");
+                let path = "/_fedi3/account/key-proof";
+                let request = RelayHttpRequest {
+                    id: id.clone(),
+                    method: "POST".into(),
+                    path: path.into(),
+                    query: String::new(),
+                    headers: vec![(
+                        fedi3_protocol::receipts::FORWARD_NONCE_HEADER.into(),
+                        nonce.clone(),
+                    )],
+                    body_b64: String::new(),
+                };
+                if socket
+                    .send(Message::Text(serde_json::to_string(&request).unwrap()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let response = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        match socket.recv().await {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(response) =
+                                    serde_json::from_str::<RelayHttpResponse>(&text)
+                                {
+                                    if response.id == id {
+                                        return Some(response);
+                                    }
+                                }
+                            }
+                            Some(Ok(Message::Ping(bytes))) => {
+                                let _ = socket.send(Message::Pong(bytes)).await;
+                            }
+                            Some(Ok(_)) => {}
+                            _ => return None,
+                        }
+                    }
+                })
+                .await
+                .ok()
+                .flatten();
+                let valid = response.is_some_and(|r| {
+                    let encoded = r
+                        .headers
+                        .iter()
+                        .find(|(name, _)| {
+                            name.eq_ignore_ascii_case(fedi3_protocol::receipts::CORE_ACK_HEADER)
+                        })
+                        .map(|(_, v)| v);
+                    let body = B64.decode(r.body_b64).unwrap_or_default();
+                    encoded.is_some_and(|ack| {
+                        receipts::checked_core_ack(
+                            ack,
+                            &pem,
+                            &actor,
+                            &fedi3_protocol::receipts::request_digest(
+                                "POST", path, "", &nonce, b"",
+                            ),
+                            r.status,
+                            &body,
+                        )
+                        .is_ok()
+                    })
+                });
+                if !valid {
+                    warn!(%user,"tunnel identity could not be verified; existing connection preserved");
+                    return;
+                }
+            }
+        }
+    }
 
     info!(%user, "tunnel connected");
 
@@ -3566,6 +3698,67 @@ async fn forward_user_rest(
     forward_to_user(state, user, method, &path, query, headers, body).await
 }
 
+async fn validate_chat_spool_envelope(state: &AppState, body: &Bytes) -> Result<String> {
+    use fedi3_protocol::chat::ChatEnvelope;
+    anyhow::ensure!(
+        !body.is_empty() && body.len() <= SEALED_ENVELOPE_MAX_BYTES,
+        "invalid envelope size"
+    );
+    let mut env: ChatEnvelope = serde_json::from_slice(body)?;
+    anyhow::ensure!(
+        env.v == 1
+            && env.kem_alg == "kyber768"
+            && !env.thread_id.is_empty()
+            && env.thread_id.len() <= 256
+            && !env.message_id.is_empty()
+            && env.message_id.len() <= 256
+            && env.sender_actor.len() <= 2048,
+        "invalid chat envelope"
+    );
+    anyhow::ensure!(
+        env.created_at_ms >= now_ms().saturating_sub(CHAT_SPOOL_RETENTION_MS)
+            && env.created_at_ms <= now_ms().saturating_add(300_000),
+        "expired chat envelope"
+    );
+    anyhow::ensure!(
+        B64.decode(&env.kem_ciphertext_b64)?.len() == 1088
+            && B64.decode(&env.nonce_b64)?.len() == 12
+            && B64.decode(&env.ciphertext_b64)?.len() >= 16,
+        "invalid ciphertext"
+    );
+    let signature = B64.decode(
+        env.signature_b64
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("missing signature"))?,
+    )?;
+    let url = reqwest::Url::parse(&env.sender_actor)?;
+    let user = url
+        .path_segments()
+        .and_then(|mut p| p.next_back())
+        .unwrap_or("");
+    let cached = state.db.get_actor_cache(user).await?;
+    let actor_json = match cached.filter(|raw| {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .is_some_and(|v| v["id"] == env.sender_actor)
+    }) {
+        Some(raw) => raw,
+        None => fetch_actor_document(state, &env.sender_actor).await?,
+    };
+    let actor: serde_json::Value = serde_json::from_str(&actor_json)?;
+    anyhow::ensure!(
+        actor["id"] == env.sender_actor && actor["publicKey"]["owner"] == env.sender_actor,
+        "actor binding mismatch"
+    );
+    let pem =
+        user_public_key_pem(&actor_json).ok_or_else(|| anyhow::anyhow!("missing actor key"))?;
+    anyhow::ensure!(
+        verify_signature_rsa_sha256(&pem, &serde_json::to_string(&env)?, &signature),
+        "invalid signature"
+    );
+    Ok(String::from_utf8(body.to_vec())?)
+}
+
 async fn spool_chat_envelope(
     state: AppState,
     user: String,
@@ -3575,17 +3768,36 @@ async fn spool_chat_envelope(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(envelope) = sealed_envelope(&body, SEALED_ENVELOPE_MAX_BYTES) else {
-        return (StatusCode::BAD_REQUEST, "invalid chat envelope").into_response();
-    };
-    if let Err(e) = state.db.insert_chat_spool(&user, &envelope).await {
-        error!(user=%user, error=%e, "chat spool insert failed");
-        return (StatusCode::BAD_GATEWAY, "chat spool unavailable").into_response();
+    if !state.db.is_user_enabled(&user).await.unwrap_or(false) {
+        return StatusCode::FORBIDDEN.into_response();
     }
-    let _ = state
+    let envelope = match tokio::time::timeout(
+        Duration::from_secs(8),
+        validate_chat_spool_envelope(&state, &body),
+    )
+    .await
+    {
+        Ok(Ok(envelope)) => envelope,
+        _ => return (StatusCode::BAD_REQUEST, "invalid signed chat envelope").into_response(),
+    };
+    if let Err(e) = state
         .db
-        .trim_chat_spool(&user, CHAT_SPOOL_MAX_PER_USER)
-        .await;
+        .insert_chat_spool_bounded(
+            &user,
+            &envelope,
+            CHAT_SPOOL_MAX_PER_USER,
+            state.cfg.spool_max_bytes_per_user as i64,
+        )
+        .await
+    {
+        warn!(user=%user,error=%e,"chat spool rejected envelope");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "chat spool unavailable or full",
+        )
+            .into_response();
+    }
+    operations::notify_user(&state, &user);
     // Live delivery is best effort. The spool already owns durability, so a
     // tunnel that is down must not turn into a sender retry.
     let _ = forward_to_user(state, user, method, &path, query, headers, body).await;
@@ -3683,7 +3895,14 @@ async fn user_identity_get(
     }
     match state.db.get_user_identity(&user).await {
         Ok(Some(envelope)) => match serde_json::from_str::<serde_json::Value>(&envelope) {
-            Ok(value) => axum::Json(value).into_response(),
+            Ok(value) if value["v"] == 2 => {
+                ([(header::CACHE_CONTROL, "no-store")], axum::Json(value)).into_response()
+            }
+            Ok(_) => (
+                StatusCode::GONE,
+                "legacy identity transfer disabled; use an updated existing client",
+            )
+                .into_response(),
             Err(_) => (
                 StatusCode::OK,
                 [("Content-Type", "application/json; charset=utf-8")],
@@ -3724,6 +3943,18 @@ async fn user_identity_put(
     let Some(envelope) = sealed_envelope(&body, SEALED_ENVELOPE_MAX_BYTES) else {
         return (StatusCode::BAD_REQUEST, "invalid identity envelope").into_response();
     };
+
+    if serde_json::from_str::<serde_json::Value>(&envelope)
+        .ok()
+        .and_then(|v| v["v"].as_u64())
+        != Some(2)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "upgrade client: independent identity secret required",
+        )
+            .into_response();
+    }
     match state.db.upsert_user_identity(&user, &envelope).await {
         Ok(()) => (StatusCode::NO_CONTENT, "").into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, format!("db error: {e}")).into_response(),
@@ -3765,6 +3996,18 @@ async fn pair_session_put(
     let Some(envelope) = sealed_envelope(&body, PAIR_ENVELOPE_MAX_BYTES) else {
         return (StatusCode::BAD_REQUEST, "invalid pairing envelope").into_response();
     };
+
+    if serde_json::from_str::<serde_json::Value>(&envelope)
+        .ok()
+        .and_then(|v| v["v"].as_u64())
+        != Some(2)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "upgrade client: independent identity secret required",
+        )
+            .into_response();
+    }
     let expires_at_ms = now_ms().saturating_add(PAIR_SESSION_TTL_MS);
     match state
         .db
@@ -3797,7 +4040,14 @@ async fn pair_session_get(
     }
     match state.db.get_pair_session(&code, now_ms()).await {
         Ok(Some(envelope)) => match serde_json::from_str::<serde_json::Value>(&envelope) {
-            Ok(value) => axum::Json(value).into_response(),
+            Ok(value) if value["v"] == 2 => {
+                ([(header::CACHE_CONTROL, "no-store")], axum::Json(value)).into_response()
+            }
+            Ok(_) => (
+                StatusCode::GONE,
+                "legacy identity transfer disabled; use an updated existing client",
+            )
+                .into_response(),
             Err(_) => (
                 StatusCode::OK,
                 [("Content-Type", "application/json; charset=utf-8")],
@@ -9825,12 +10075,113 @@ mod tests {
             assert_eq!(window[1]["previous_hash"], window[0]["hash"]);
         }
 
+        // Regression: global chat IDs are not per-account counters.
+        db.create_user("chat-trim", "fixture-token-0123456")
+            .await
+            .unwrap();
+        db.create_user("chat-other", "fixture-token-0123456")
+            .await
+            .unwrap();
+        db.insert_chat_spool("chat-trim", "first").await.unwrap();
+        for _ in 0..5 {
+            db.insert_chat_spool("chat-other", "other").await.unwrap();
+        }
+        db.insert_chat_spool("chat-trim", "second").await.unwrap();
+        db.trim_chat_spool("chat-trim", 2).await.unwrap();
+        assert_eq!(
+            db.chat_spool_after("chat-trim", 0, 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        let results = futures_util::future::join_all((0..8).map(|_| {
+            let db = db.clone();
+            async move {
+                db.insert_chat_spool_bounded("quota-test", "accepted", 2, 100)
+                    .await
+                    .is_ok()
+            }
+        }))
+        .await;
+        assert_eq!(results.into_iter().filter(|ok| *ok).count(), 2);
+        let registrations=futures_util::future::join_all((0..8).map(|i| {let db=db.clone();async move {
+            db.update_push_registration("quota-test",&format!("installation-{i:016}"),Some(serde_json::json!({"provider":"apns","token":format!("phone-{i}"),"expires_at_ms":now_ms()+60000}).to_string())).await
+        }})).await;
+        assert!(registrations.iter().all(Result::is_ok));
+        assert_eq!(db.push_registrations("quota-test").await.unwrap().len(), 8);
+        db.update_push_registration("quota-test", "installation-0000000000000000", None)
+            .await
+            .unwrap();
+        assert_eq!(db.push_registrations("quota-test").await.unwrap().len(), 7);
+        db.upsert_user_identity("quota-test", "{}").await.unwrap();
+        db.put_pair_session("pair-code-123456789", "quota-test", "{}", now_ms() + 60000)
+            .await
+            .unwrap();
+
+        let user = "quota-test".to_string();
+        db.run(move |inner| {
+            let public = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/public.pem");
+            inner.bind_account_key(&user, "https://self.example/users/quota-test", public)?;
+            let mut row = fedi3_protocol::account_sync::AccountEnvelope {
+                actor: "https://self.example/users/quota-test".into(),
+                kind: "objects".into(),
+                key: "a".repeat(64),
+                clock: 10,
+                device: "device-1".into(),
+                terminal: false,
+                nonce_b64: B64.encode([0u8; 12]),
+                ciphertext_b64: B64.encode(b"opaque"),
+                signature_b64: None,
+            };
+            inner.store_account_state(&user, &[row.clone()])?;
+            row.clock = 20;
+            row.terminal = true;
+            inner.store_account_state(&user, &[row.clone()])?;
+            row.clock = 100;
+            row.terminal = false;
+            inner.store_account_state(&user, &[row])?;
+            let page = inner.account_state_page(&user, 0)?;
+            assert_eq!(page.items.len(), 1);
+            assert!(page.items[0].1.terminal);
+            inner.claim_account_nonce(&user, "proof-nonce")?;
+            assert!(inner.claim_account_nonce(&user, "proof-nonce").is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
         db.set_disabled("quota-test", true).await.unwrap();
         for item in db.list_user_media("quota-test").await.unwrap() {
             assert!(!db.finish_media_upload(&item).await.unwrap());
             db.delete_media_item("quota-test", &item.id).await.unwrap();
         }
         assert!(db.delete_user("quota-test").await.unwrap());
+        assert!(db.get_user_identity("quota-test").await.unwrap().is_none());
+        assert!(db
+            .get_pair_session("pair-code-123456789", now_ms())
+            .await
+            .unwrap()
+            .is_none());
+        assert!(db
+            .chat_spool_after("quota-test", 0, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .push_registrations("quota-test")
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(db.upsert_user_identity("quota-test", "{}").await.is_err());
+        assert!(db
+            .put_pair_session("late-pair-123456789", "quota-test", "{}", now_ms() + 60000)
+            .await
+            .is_err());
+        assert!(db
+            .insert_chat_spool_bounded("quota-test", "late", 2, 100)
+            .await
+            .is_err());
+
         db.append_forward_receipt(
             "quota-test".into(),
             "https://fixture.invalid".into(),
@@ -10029,8 +10380,21 @@ mod tests {
         conn.execute("INSERT INTO relay_notes(note_id,actor_id,content_text,content_html,note_json,created_at_ms) VALUES ('alice-note',?1,'text','text','{}',0)",[actor]).unwrap();
         conn.execute_batch("INSERT INTO relay_note_tags VALUES ('alice-note','tag')")
             .unwrap();
+        db.upsert_user_identity("alice", "{}").unwrap();
+        db.put_pair_session("pair-session-123456", "alice", "{}", now_ms() + 60000)
+            .unwrap();
+        db.insert_chat_spool("alice", "{}").unwrap();
+        db.update_push_registration(
+            "alice",
+            "installation-0123456",
+            Some(&serde_json::json!({"expires_at_ms":now_ms()+60000}).to_string()),
+        )
+        .unwrap();
         assert!(db.delete_user("alice").unwrap());
         for table in [
+            "user_identity",
+            "pair_sessions",
+            "chat_spool",
             "user_cache",
             "peer_directory",
             "user_blocks",
@@ -10924,7 +11288,7 @@ mod tests {
         let auth = hmap(&[("Authorization", &format!("Bearer {token}"))]);
         let peer: SocketAddr = "127.0.0.1:12345".parse().unwrap();
         let envelope = serde_json::json!({
-            "v": 1,
+            "v": 2,
             "alg": "aes-256-gcm",
             "kdf": "hkdf-sha256",
             "salt_b64": "AA==",
@@ -11037,21 +11401,7 @@ mod tests {
             .await
             .unwrap();
         let peer: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-        let chat_envelope = serde_json::json!({
-            "v": 1,
-            "thread_id": "thread-1",
-            "message_id": "message-1",
-            "sender_actor": "https://relay.example/users/alice",
-            "sender_device": "dev-1",
-            "sender_peer_id": "peer-1",
-            "created_at_ms": 1,
-            "kem_alg": "kyber768",
-            "kem_ciphertext_b64": "AA==",
-            "kem_key_id": "identity",
-            "nonce_b64": "AA==",
-            "ciphertext_b64": "AA=="
-        });
-        let body = Bytes::from(serde_json::to_vec(&chat_envelope).unwrap());
+        let body = signed_chat_fixture(&state).await;
         let response = forward_user_rest(
             State(state.clone()),
             ConnectInfo(peer),
@@ -11067,5 +11417,170 @@ mod tests {
         let rows = state.db.chat_spool_after("alice", 0, 10).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].1.contains("message-1"));
+    }
+    async fn signed_chat_fixture(state: &AppState) -> Bytes {
+        use fedi3_protocol::chat::ChatEnvelope;
+        let private = include_str!("../../fedi3_protocol/tests/fixtures/legacy_rsa/private.pem");
+        let public = fedi3_protocol::crypto::rsa_public_pem(private).unwrap();
+        let actor = "https://relay.example/users/alice";
+        state
+            .db
+            .upsert_actor_cache(
+                "alice",
+                &serde_json::json!({"id":actor,"publicKey":{"owner":actor,"publicKeyPem":public}})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        let mut env = ChatEnvelope {
+            v: 1,
+            thread_id: "thread-1".into(),
+            message_id: "message-1".into(),
+            sender_actor: actor.into(),
+            sender_device: "dev-1".into(),
+            sender_peer_id: "peer-1".into(),
+            created_at_ms: now_ms(),
+            kem_alg: "kyber768".into(),
+            kem_ciphertext_b64: B64.encode([0u8; 1088]),
+            kem_key_id: "identity".into(),
+            nonce_b64: B64.encode([0u8; 12]),
+            ciphertext_b64: B64.encode([0u8; 16]),
+            signature_b64: None,
+        };
+        env.signature_b64 = Some(
+            B64.encode(
+                fedi3_protocol::crypto::rsa_sign_sha256(
+                    private,
+                    &serde_json::to_vec(&env).unwrap(),
+                )
+                .unwrap(),
+            ),
+        );
+        Bytes::from(serde_json::to_vec(&env).unwrap())
+    }
+
+    #[tokio::test]
+    async fn chat_spool_rejects_unsigned_tampered_and_disabled_without_writing() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        state
+            .db
+            .verify_or_register(&state.cfg, "alice", "fixture-token-0123456789")
+            .await
+            .unwrap();
+        let signed = signed_chat_fixture(&state).await;
+        assert!(validate_chat_spool_envelope(&state, &signed).await.is_ok());
+        let mut forged: serde_json::Value = serde_json::from_slice(&signed).unwrap();
+        forged["message_id"] = serde_json::json!("forged");
+        for body in [
+            Bytes::from_static(b"{}"),
+            Bytes::from(serde_json::to_vec(&forged).unwrap()),
+        ] {
+            let response = spool_chat_envelope(
+                state.clone(),
+                "alice".into(),
+                Method::POST,
+                "/_fedi3/chat/inbox".into(),
+                String::new(),
+                HeaderMap::new(),
+                body,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(state
+            .db
+            .chat_spool_after("alice", 0, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        state.db.set_disabled("alice", true).await.unwrap();
+        let response = spool_chat_envelope(
+            state.clone(),
+            "alice".into(),
+            Method::POST,
+            "/_fedi3/chat/inbox".into(),
+            String::new(),
+            HeaderMap::new(),
+            signed,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(state
+            .db
+            .chat_spool_after("alice", 0, 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn chat_spool_trims_by_account_count_not_global_id_distance() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "fixture-token-0123456").unwrap();
+        db.insert_chat_spool("alice", "first").unwrap();
+        let conn = db.open_sqlite_conn().unwrap();
+        conn.execute("INSERT INTO chat_spool(id,username,envelope,created_at_ms) VALUES(30000,'bob','other',0)",[]).unwrap();
+        db.insert_chat_spool("alice", "second").unwrap();
+        db.trim_chat_spool("alice", 20000).unwrap();
+        assert_eq!(db.chat_spool_after("alice", 0, 10).unwrap().len(), 2);
+        db.trim_chat_spool("alice", 1).unwrap();
+        assert_eq!(db.chat_spool_after("alice", 0, 10).unwrap()[0].1, "second");
+    }
+
+    #[test]
+    fn chat_spool_capacity_is_atomic_and_never_evicts_accepted_messages() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "fixture-token-0123456").unwrap();
+        let db = Arc::new(db);
+        let jobs: Vec<_> = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    db.insert_chat_spool_bounded("alice", "accepted", 2, 100)
+                        .is_ok()
+                })
+            })
+            .collect();
+        assert_eq!(
+            jobs.into_iter()
+                .map(|j| j.join().unwrap())
+                .filter(|ok| *ok)
+                .count(),
+            2
+        );
+        assert_eq!(db.chat_spool_after("alice", 0, 10).unwrap().len(), 2);
+        assert!(db
+            .insert_chat_spool_bounded("alice", "oversize", 20, 1)
+            .is_err());
+        assert_eq!(db.chat_spool_after("alice", 0, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn push_installations_register_concurrently_and_revoke_independently() {
+        let (db, _dir) = test_db();
+        db.create_user("alice", "fixture-token-0123456").unwrap();
+        let db = Arc::new(db);
+        db.relay_meta_set(
+            "push:alice",
+            &serde_json::json!({"provider":"apns","token":"legacy","expires_at_ms":now_ms()+60000})
+                .to_string(),
+        )
+        .unwrap();
+        let jobs:Vec<_>=(0..8).map(|i|{let db=db.clone();std::thread::spawn(move || db.update_push_registration("alice",&format!("installation-{i:016}"),Some(&serde_json::json!({"provider":"apns","token":format!("phone-{i}"),"expires_at_ms":now_ms()+60000}).to_string())).unwrap())}).collect();
+        for job in jobs {
+            job.join().unwrap();
+        }
+        assert_eq!(db.push_registrations("alice").unwrap().len(), 9);
+        db.update_push_registration("alice", "installation-0000000000000000", None)
+            .unwrap();
+        assert_eq!(db.push_registrations("alice").unwrap().len(), 8);
+        db.update_push_registration("alice", "legacy", None)
+            .unwrap();
+        assert_eq!(db.push_registrations("alice").unwrap().len(), 7);
+        db.delete_user("alice").unwrap();
+        assert!(db.push_registrations("alice").unwrap().is_empty());
+        assert!(db
+            .update_push_registration("alice", "late", Some("{}"))
+            .is_err());
     }
 }

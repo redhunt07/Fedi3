@@ -9,6 +9,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.cargo/bin:$PATH"
 # Same for the Flutter SDK: fall back to the default checkout when it is absent.
 command -v flutter >/dev/null 2>&1 || export PATH="$HOME/flutter/bin:$PATH"
+# AGP lint uses Java 21 APIs. A JDK 17 default makes release lint crash with
+# NoSuchMethodError: java.util.List.removeLast(); pick JDK 21 when available.
+if [[ -z "${JAVA_HOME:-}" ]]; then
+  for candidate in /usr/lib/jvm/java-21-openjdk /usr/lib/jvm/java-21-openjdk-amd64; do
+    if [[ -d "$candidate" ]]; then
+      export JAVA_HOME="$candidate"
+      break
+    fi
+  done
+fi
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 ndk_root="${FEDI3_ANDROID_NDK:-$sdk_root/ndk/28.2.13676358}"
 ndk_bin="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"

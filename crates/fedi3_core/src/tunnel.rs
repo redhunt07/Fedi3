@@ -104,9 +104,43 @@ pub async fn run_tunnel_with_options<C>(
     relay_ws_url: &str,
     relay_token: &str,
     handler: C,
+    shutdown: watch::Receiver<bool>,
+    metrics: std::sync::Arc<NetMetrics>,
+    options: TunnelOptions,
+) -> anyhow::Result<()>
+where
+    C: Clone
+        + Send
+        + 'static
+        + tower::Service<
+            Request<Body>,
+            Response = http::Response<Body>,
+            Error = std::convert::Infallible,
+        >,
+    C::Future: Send + 'static,
+{
+    run_tunnel_with_options_identity(
+        user,
+        relay_ws_url,
+        relay_token,
+        handler,
+        shutdown,
+        metrics,
+        options,
+        false,
+    )
+    .await
+}
+
+pub async fn run_tunnel_with_options_identity<C>(
+    user: &str,
+    relay_ws_url: &str,
+    relay_token: &str,
+    handler: C,
     mut shutdown: watch::Receiver<bool>,
     metrics: std::sync::Arc<NetMetrics>,
     options: TunnelOptions,
+    sign_identity: bool,
 ) -> anyhow::Result<()>
 where
     C: Clone
@@ -134,6 +168,43 @@ where
         request
             .headers_mut()
             .insert("Authorization", format!("Bearer {relay_token}").parse()?);
+        // The core signs a fresh connection nonce using the account identity.
+        // Generic/mock handlers can omit the proof; production relays reject
+        // such legacy connections once an account key has been pinned.
+        use base64::Engine as _;
+        use tower::ServiceExt;
+        let nonce = request
+            .headers()
+            .get("Sec-WebSocket-Key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let proof_request = Request::builder()
+            .method("POST")
+            .uri("/_fedi3/account/proof")
+            .body(Body::from(serde_json::to_vec(
+                &serde_json::json!({"nonce":nonce}),
+            )?))?;
+        if sign_identity {
+            let Ok(response) = tokio::time::timeout(
+                options.connect_timeout,
+                handler.clone().oneshot(proof_request),
+            )
+            .await?;
+            if response.status().is_success() {
+                if let Ok(bytes) = axum::body::to_bytes(response.into_body(), 16384).await {
+                    if serde_json::from_slice::<fedi3_protocol::account_sync::TunnelProof>(&bytes)
+                        .is_ok()
+                    {
+                        request.headers_mut().insert(
+                            "X-Fedi3-Account-Proof",
+                            base64::engine::general_purpose::STANDARD
+                                .encode(bytes)
+                                .parse()?,
+                        );
+                    }
+                }
+            }
+        }
         let connect = tokio::time::timeout(
             options.connect_timeout,
             tokio_tungstenite::connect_async(request),

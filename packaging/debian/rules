@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+# Source packaging scaffold: supply Flutter and vendored Dart/Rust dependencies
+# in a reviewed offline orig tarball before submitting to Launchpad.
+export CARGO_HOME = $(CURDIR)/.cargo-home
+export PUB_CACHE = $(CURDIR)/vendor/dart
+export PATH := $(CURDIR)/vendor/flutter/bin:$(PATH)
+%:
+	dh $@
+override_dh_auto_configure:
+	test -x vendor/flutter/bin/flutter
+	test -d vendor/rust
+	mkdir -p $(CARGO_HOME)
+	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "vendor/rust"\n' > $(CARGO_HOME)/config.toml
+	cd app && flutter pub get --offline --enforce-lockfile
+override_dh_auto_build:
+	cargo build --release --locked --offline -p fedi3_core --lib
+	cd app && flutter build linux --release --no-pub
+	cp target/release/libfedi3_core.so app/build/linux/x64/release/bundle/lib/
+override_dh_auto_install:
+	install -d debian/fedi3/usr/lib/fedi3 debian/fedi3/usr/bin
+	cp -a app/build/linux/x64/release/bundle/. debian/fedi3/usr/lib/fedi3/
+	printf '#!/bin/sh\nexec /usr/lib/fedi3/fedi3 "$$@"\n' > debian/fedi3/usr/bin/fedi3
+	chmod 755 debian/fedi3/usr/bin/fedi3
+	install -Dm644 deploy/appimage/fedi3.desktop debian/fedi3/usr/share/applications/fedi3.desktop
+	install -Dm644 app/web/icons/Icon-512.png debian/fedi3/usr/share/icons/hicolor/512x512/apps/fedi3.png
+override_dh_auto_test:
+	cargo test --locked --offline -p fedi3_protocol

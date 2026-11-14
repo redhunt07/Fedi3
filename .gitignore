@@ -63,3 +63,12 @@ deploy/p2p_infra/data/*
 # Python tooling caches
 __pycache__/
 *.py[cod]
+
+# Private operational access and Android signing material
+ACCESSI_FEDI3.md
+app/android/key.properties
+*.jks
+*.keystore
+
+# Local Kotlin compiler cache
+app/android/.kotlin/

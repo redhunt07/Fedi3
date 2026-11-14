@@ -317,18 +317,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-          FilledButton.tonal(
-            onPressed: () async {
-              if (widget.appState.isRunning) {
-                await widget.appState.stopCore();
-              } else {
-                await widget.appState.startCore();
-              }
-            },
-            child: Text(widget.appState.isRunning
-                ? context.l10n.coreStop
-                : context.l10n.coreStart),
-          ),
         ],
       ),
     );

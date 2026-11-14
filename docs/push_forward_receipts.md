@@ -42,8 +42,10 @@ Endpoint renewal is retried when the UI resumes. Local disable blocks callbacks
 immediately and requests relay revocation and native unregistration. Account and
 relay changes invalidate the registration scope. Relay revocation can fail while
 offline: the local connector remains disabled, and the server registration expires
-after 30 days unless revoked/replaced earlier. One mobile installation per account
-is currently retained on the relay.
+after 30 days unless revoked/replaced earlier. Each installation has an independent `installation_id` persisted in the OS
+keyring. Up to 32 active registrations are retained per account. DELETE carries
+`X-Fedi3-Push-Installation` and revokes only that device. Requests without an ID
+modify the legacy slot only.
 
 ## Gateway configuration and protocol
 
@@ -94,7 +96,8 @@ settings are configured. Provider failures do not delete the spool.
 
 The relay limits wake attempts to one/account/minute. A separate worker retries
 pending offline accounts in cursor-based batches of 64, eight concurrent requests,
-with four-second HTTP timeouts and no redirects. It does not hold up spool cleanup.
+with per-device three-second attempt bounds and no redirects. A bounded batch
+of at most 32 installations has a 100-second total deadline. It does not hold up spool cleanup.
 Without gateway configuration no outbound wakeups are attempted.
 
 ## Self-hosted gateway and ntfy

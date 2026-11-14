@@ -1,172 +1,102 @@
 # Distribution packages
 
-Fedi3 is published on GitHub Releases as an AppImage, a Windows ZIP and two
-Android APKs. This page covers the store-style channels: F-Droid for Android,
-Flatpak for Linux desktops and the AUR package `fedi3-bin`.
+Release 0.12.0 uses Flutter version `0.12.0+4016`: Android split APK version
+codes are 6016 (arm64-v8a) and 8016 (x86_64). Keep the signing key already trusted
+by installed clients. GitHub Actions reads the existing key from repository
+secrets; it fails instead of silently publishing with a different debug key.
+Never commit `key.properties`, keystores or operational access notes.
 
-The packaging files live in this repository:
+## GitHub release
 
-- `fastlane/metadata/android/`: F-Droid store metadata and screenshots.
-- `packaging/fdroiddata/org.fedi3.client.yml`: F-Droid build recipe.
-- `packaging/flatpak/`: Flatpak manifest, mpv module, desktop file and AppStream
-  metadata.
-- `packaging/aur/`: `fedi3-bin` PKGBUILD and `.SRCINFO`.
+The release workflow tests Rust, Flutter, PostgreSQL and deployment contracts.
+It builds AppImage on Ubuntu 22.04, checks startup on Ubuntu 22.04/24.04, builds
+Windows and both Android ABIs, and creates an amd64 Debian binary package.
+Publishing `codex/release/v0.12.0` requires that branch to match current `main`.
+The workflow publishes assets and SHA256 checksums only after required checks.
+Manual Flatpak bundles and packaging kits may be attached after verification.
 
-## Local verification
+## Android and F-Droid
 
-Checked on 2026-11-12:
+The regular APK keeps camera QR scanning. In an isolated clean checkout,
+`scripts/prepare_fdroid.py` replaces the scanner with a manual pairing-link
+field and removes `mobile_scanner` / Google ML Kit from the dependency graph.
+`scripts/build_android_fdroid.sh` prepares that variant and compiles one ABI.
+Do not run variant preparation in a checkout used to build the regular APK.
 
-| Channel | Check | Result |
-| --- | --- | --- |
-| F-Droid | `fdroid lint` with fdroiddata metadata config | clean |
-| F-Droid | `scripts/build_android_fdroid.sh arm64-v8a` | APK built, versionCode 6015 |
-| F-Droid | x86_64 APK version code | 8015 (from the release build) |
-| Flatpak | `flatpak-builder`, `flatpak install`, 20 s smoke run | app starts, core and libmpv load |
-| AUR | `makepkg -f` for `fedi3-bin` | package built, wrapper/desktop/icon present |
+The metadata in `packaging/fdroiddata/org.fedi3.client.yml` is intentionally
+**disabled pending review**. Removing ML Kit does not make the whole native
+supply chain source-built: WebRTC and media_kit Android artifacts still require
+reviewed source-build recipes and licence checks. Run the F-Droid scanner and
+an isolated offline build before removing `Disabled` or proposing inclusion.
+No acceptance by F-Droid is implied by a successful local APK build or lint.
 
-F-Droid and AUR are prepared but not yet submitted: F-Droid needs a GitLab
-account and merge request; the AUR needs an SSH key registered on
-aur.archlinux.org.
+After resolving those blockers, fork fdroiddata, copy the metadata to
+`metadata/org.fedi3.client.yml` and propose a merge request. Store text and
+screenshots are in `fastlane/metadata/android`. F-Droid normally signs with its
+own key. Plan encrypted identity/data export and restore before any signing-key
+migration; never uninstall an existing account merely to bypass a signature
+mismatch.
 
-## Version and version-code mapping
+References: [inclusion policy](https://f-droid.org/en/docs/Inclusion_Policy/),
+[submission guide](https://f-droid.org/en/docs/Submitting_to_F-Droid_Quick_Start_Guide/).
 
-`app/pubspec.yaml` carries the Flutter build number `4015`. Flutter's
-`--split-per-abi` adds the ABI offset, so the release APKs use:
+## Arch and derivatives
 
-| ABI | Version code |
-| --- | --- |
-| arm64-v8a | 6015 (4015 + 2000) |
-| x86_64 | 8015 (4015 + 4000) |
+`packaging/aur/PKGBUILD` builds `fedi3-bin` from the published AppImage and checks
+its exact SHA256. Its wrapper executes `/opt/fedi3/AppRun`, preserving the same
+rendering/library setup as the tested AppImage. Build as an ordinary user:
 
-The F-Droid recipe encodes the same mapping through `VercodeOperation` and
-`UpdateCheckData`; `CurrentVersionCode` is the highest code, 8015. Bump the
-pubspec version and build number, then update the recipe's `CurrentVersion`,
-`CurrentVersionCode`, `commit` and both `Builds` entries for each release.
-
-## Android: F-Droid
-
-### Build locally
-
-The recipe uses Flutter 3.50.0, Rust 1.99.1, NDK r28c and JDK 21. The helper
-script builds one ABI at a time:
-
-```bash
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-export FEDI3_ANDROID_NDK=$HOME/Android/Sdk/ndk/28.2.13676358
-bash scripts/build_android_fdroid.sh arm64-v8a
-bash scripts/build_android_fdroid.sh x86_64
-```
-
-It compiles `fedi3_core` for the NDK target, copies the resulting
-`libfedi3_core.so` into `app/android/app/src/main/jniLibs/<abi>/` and runs
-`flutter build apk --release --split-per-abi`. The output is
-`app/build/app/outputs/flutter-apk/app-<abi>-release.apk`.
-
-### Submit to F-Droid
-
-1. Fork <https://gitlab.com/fdroid/fdroiddata>.
-2. Copy `packaging/fdroiddata/org.fedi3.client.yml` to `metadata/org.fedi3.client.yml`.
-3. Push the branch and open a merge request against `master`.
-
-The recipe builds both ABIs from source and F-Droid signs the result with its
-own key. The APKs attached to GitHub Releases are signed with the local debug
-key (no `app/android/key.properties` in CI), so the two signatures differ:
-users moving from a sideloaded release APK to the F-Droid build must uninstall
-the old app once. Keep the same signing key for future GitHub releases to avoid
-this for sideload updates.
-
-Notes for reviewers and future releases:
-
-- `mobile_scanner` uses the prebuilt Google MLKit barcode AAR from Maven; it is
-  not rebuilt in the recipe. The rest of the native code (the Rust core and the
-  Flutter plugins) is built from source or comes from Gradle dependencies.
-- `flutter_webrtc` ships prebuilt WebRTC libraries inside its Android AAR; the
-  recipe does not copy them into the repository.
-- The recipe pins the Flutter SDK through the `flutter@stable` srclib and
-  checks out tag `3.50.0`; `.flutter` and `.pub-cache` are excluded from the
-  scanner, while `.flutter/bin/cache` is ignored as binary cache data.
-
-## Linux: Flatpak
-
-The manifest targets the GNOME 50 runtime and SDK, which provide GTK3,
-libsecret, GStreamer and `webkit2gtk-4.1` (needed by the embedded web view).
-`libmpv` is not part of the runtime, so the manifest builds mpv 0.41.0 from
-source. Flutter 3.50.0 is downloaded from the official stable archive with a
-pinned SHA256; the Rust core is compiled with the `rust-stable` SDK extension.
-
-### Build and test locally
-
-```bash
-flatpak-builder --user --force-clean --compose-image-format=png \
-  --repo=/tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build \
-  packaging/flatpak/org.fedi3.client.yml
-flatpak build-export /tmp/fedi3-flatpak-repo /tmp/fedi3-flatpak-build
-flatpak install --user /tmp/fedi3-flatpak-repo org.fedi3.client
-flatpak run org.fedi3.client
-```
-
-Requirements: `org.gnome.Platform//50`, `org.gnome.Sdk//50` and
-`org.freedesktop.Sdk.Extension.rust-stable//25.08` and
-`org.freedesktop.Sdk.Extension.llvm21//25.08` installed from Flathub.
-
-On Arch hosts, if `appstreamcli compose` fails with `media-worker-error`,
-export `VIPSHOME=/usr VIPS_PREFIX=/usr` before running `flatpak-builder`; this
-lets the media worker load the host libvips modules. Flathub builders do not
-need this workaround.
-
-### Flathub
-
-Flathub hosts each app in its own repository under the `flathub` GitHub
-organization. Submit the app first through the new-app flow at
-<https://github.com/flathub/flathub/issues/new?template=new-app.yml>; the
-reviewers create `flathub/org.fedi3.client`. Then open a pull request adding:
-
-- `org.fedi3.client.yml`
-- `mpv.json`
-- `org.fedi3.client.desktop`
-- `org.fedi3.client.metainfo.xml`
-
-The app ID `org.fedi3.client` matches the GTK application ID in
-`app/linux/CMakeLists.txt`. The manifest installs the icon and the AppStream
-metadata, and the app has no proprietary runtime dependency.
-
-## Linux: AUR
-
-`packaging/aur/PKGBUILD` builds the binary package `fedi3-bin` from the published
-AppImage. It extracts the AppImage under `/opt/fedi3`, installs a wrapper in
-`/usr/bin/fedi3` and adds the desktop file and icon. `fedi3-bin` provides
-`fedi3` and conflicts with a source-built `fedi3` package.
-
-Build locally:
-
-```bash
+```sh
 cd packaging/aur
+makepkg --printsrcinfo > .SRCINFO
 makepkg -f
-sudo pacman -U fedi3-bin-0.11.11-1-x86_64.pkg.tar.zst
+sudo pacman -U ./fedi3-bin-0.12.0-1-x86_64.pkg.tar.zst
 ```
 
-Publish to the AUR:
+The AUR accepts PKGBUILD/source metadata, not binary packages. Register a
+maintainer account and SSH public key, clone
+`ssh://aur@aur.archlinux.org/fedi3-bin.git`, copy PKGBUILD and .SRCINFO, commit
+and push. Check for an existing package/maintainer first. The prepared recipe
+is not an automatic submission to Arch's official repositories or to every
+Arch derivative. See [AUR guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines).
 
-```bash
-git clone ssh://aur@aur.archlinux.org/fedi3-bin.git
-cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO fedi3-bin/
-cd fedi3-bin
-git add PKGBUILD .SRCINFO
-git commit -m "fedi3-bin 0.11.11-1"
-git push
-```
+## Debian, Ubuntu and derivatives
 
-Users then install it with `yay -S fedi3-bin` or `paru -S fedi3-bin`.
+`bash scripts/build_deb.sh` packages the verified AppImage into
+`dist/fedi3_0.12.0-1_amd64.deb`, with desktop entry, icon, runtime dependencies
+and no maintainer script that removes user data. Run the builder on Debian or
+Ubuntu with `dpkg-deb`; CI builds it from the Ubuntu 22.04 AppImage. Users can
+install with `sudo apt install ./fedi3_0.12.0-1_amd64.deb`.
 
-## Release checklist
+`packaging/debian` is a **source-package scaffold**, not a PPA-ready upload.
+It requires a reviewed offline source archive containing vendored Rust crates,
+Dart dependencies and the Flutter toolchain; the target builder must also have
+Rust >=1.99. Those toolchains are not assumed to exist in stock Ubuntu series.
+The rules deliberately fail when the required vendor tree is absent instead
+of downloading binaries during an offline Launchpad build.
 
-1. Bump `app/pubspec.yaml` (`version: X.Y.Z+NNNN`).
-2. Build and publish the GitHub release assets with `scripts/release_build_linux.sh`
-   and `scripts/build_android.sh release`.
-3. Update `packaging/fdroiddata/org.fedi3.client.yml` (`commit`,
-   `versionName`, `versionCode`, `CurrentVersion`, `CurrentVersionCode`).
-4. Update `packaging/aur/PKGBUILD` (`pkgver`, AppImage `sha256sums`) and regenerate
-   `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
-5. Update the Flatpak manifest source commit and run the local Flatpak build.
-6. Update the fastlane changelogs under
-   `fastlane/metadata/android/<locale>/changelogs/<versionCode>.txt`.
+For a PPA, supply those sources and build dependencies, replace UNRELEASED with
+the intended Ubuntu suite, run an isolated `sbuild`, sign the `.dsc`/`.changes`
+with the maintainer's OpenPGP key, then upload using `dput`. Launchpad accepts
+source packages and rejects prebuilt .deb uploads. A signed independent APT
+repository can distribute the binary .deb sooner, once its hosting URL and
+repository signing identity have been selected. Neither channel is silently
+created or presented as an official Ubuntu repository.
+
+References: [PPA upload](https://ubuntu.com/docs/launchpad/user/how-to/packaging/ppa-package-upload/),
+[PPA requirements](https://ubuntu.com/docs/launchpad/user/reference/packaging/ppas/ppa/).
+
+## Flatpak and the desktop menu
+
+The menu entry launches `org.fedi3.client`. Update that installed Flatpak rather
+than redirecting its desktop file to an AppImage with a different data location.
+Preserve `~/.var/app/org.fedi3.client` and the OS Secret Service. AppImage and
+Flatpak have separate application-data directories; switching launchers does
+not migrate accounts.
+
+The source manifest in `packaging/flatpak` builds Rust and Flutter inside the
+GNOME 50 SDK, using pinned source and mpv 0.41.0. For the local verified bundle,
+the same already-built Rust core and installed mpv dependency layer may be reused;
+the Flutter binary must be built inside the SDK to match its ABI. A GitHub .flatpak
+bundle is not publication on Flathub. Flathub submission still requires its own
+manifest review and offline dependency preparation.
