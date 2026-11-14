@@ -42,6 +42,33 @@ Map<String, dynamic> _like(String actor, String noteId) => {
 
 void main() {
   testWidgets(
+      'an empty filtered page still permits loading older personal notifications',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client = FakeHttpClient();
+    client.handler = (request) => FakeHttpResponse(
+        body: request.url.path == '/_fedi3/notifications'
+            ? jsonEncode(request.url.queryParameters.containsKey('cursor')
+                ? {
+                    'items': [
+                      _follow('https://older-notifications.test/users/follower')
+                    ]
+                  }
+                : {'items': [], 'next': 'older-page'})
+            : (request.url.path == '/_fedi3/stream' ? '' : '{}'));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, NotificationsScreen(appState: app, active: false));
+    await tester.pumpAndSettle();
+    expect(find.text('Load more'), findsOneWidget);
+    await tester.tap(find.text('Load more'));
+    await tester.pumpAndSettle();
+    expect(find.text('follower'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
       'prepending a follow keeps displayed identity and profile target together',
       (tester) async {
     await setUpPumpEnv(tester);

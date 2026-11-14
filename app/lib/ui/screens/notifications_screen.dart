@@ -536,7 +536,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ),
                   ),
                 ..._groupedNotifications(context, filtered),
-                if (filtered.isNotEmpty || _loading)
+                if (filtered.isNotEmpty || _loading || _cursor != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Center(
