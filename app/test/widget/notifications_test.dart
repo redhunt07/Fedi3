@@ -41,6 +41,37 @@ Map<String, dynamic> _like(String actor, String noteId) => {
     };
 
 void main() {
+  testWidgets('generic inbox activity does not refresh personal notifications',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    var notificationCalls = 0;
+    final client = FakeHttpClient();
+    client.handler = (request) {
+      if (request.url.path == '/_fedi3/notifications') {
+        notificationCalls++;
+        return FakeHttpResponse(body: jsonEncode({'items': []}));
+      }
+      if (request.url.path == '/_fedi3/stream') {
+        return FakeHttpResponse(
+          headers: const {'content-type': 'text/event-stream'},
+          body: 'data: {"kind":"inbox","activity_type":"Like","ts_ms":1}\n\n',
+        );
+      }
+      return FakeHttpResponse(body: '{}');
+    };
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, NotificationsScreen(appState: app));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+    }
+    expect(notificationCalls, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
       'an empty filtered page still permits loading older personal notifications',
       (tester) async {

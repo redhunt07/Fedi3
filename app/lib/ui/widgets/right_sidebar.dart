@@ -98,7 +98,7 @@ class _RightSidebarState extends State<RightSidebar> {
     _streamSub?.cancel();
     _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
-      if (ev.kind != 'notification' && ev.kind != 'inbox') return;
+      if (ev.kind != 'notification') return;
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 450), () {
         if (!mounted) return;

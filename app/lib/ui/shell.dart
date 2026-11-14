@@ -302,7 +302,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _activityStream = CoreEventStream(config: cfg)
         .stream(background: !Platform.isAndroid, reconnect: true)
         .listen((ev) {
-      if (!mounted || (ev.kind != 'inbox' && ev.kind != 'notification')) return;
+      if (!mounted || ev.kind != 'notification') return;
       _activityDebounce?.cancel();
       _activityDebounce = Timer(const Duration(milliseconds: 350), () {
         if (!mounted) return;
