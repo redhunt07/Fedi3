@@ -1,3 +1,4 @@
+import '../../model/profile_content.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -200,12 +201,7 @@ class _HoverCard extends StatelessWidget {
     );
   }
 
-  static String _stripHtml(String s) {
-    return s
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll('&nbsp;', ' ')
-        .trim();
-  }
+  static String _stripHtml(String s) => ProfileContent.toPlainText(s);
 }
 
 class _SmallAvatar extends StatelessWidget {
