@@ -1,7 +1,7 @@
 # Distribution packages
 
-Release 0.12.0 uses Flutter version `0.12.0+4016`: Android split APK version
-codes are 6016 (arm64-v8a) and 8016 (x86_64). Keep the signing key already trusted
+Release 0.12.1 uses Flutter version `0.12.1+4017`: Android split APK version
+codes are 6017 (arm64-v8a) and 8017 (x86_64). Keep the signing key already trusted
 by installed clients. GitHub Actions reads the existing key from repository
 secrets; it fails instead of silently publishing with a different debug key.
 Never commit `key.properties`, keystores or operational access notes.
@@ -11,7 +11,7 @@ Never commit `key.properties`, keystores or operational access notes.
 The release workflow tests Rust, Flutter, PostgreSQL and deployment contracts.
 It builds AppImage on Ubuntu 22.04, checks startup on Ubuntu 22.04/24.04, builds
 Windows and both Android ABIs, and creates an amd64 Debian binary package.
-Publishing `codex/release/v0.12.0` requires that branch to match current `main`.
+Publishing `codex/release/v0.12.1` requires that branch to match current `main`.
 The workflow publishes assets and SHA256 checksums only after required checks.
 Manual Flatpak bundles and packaging kits may be attached after verification.
 
@@ -52,7 +52,7 @@ rendering/library setup as the tested AppImage. Build as an ordinary user:
 cd packaging/aur
 makepkg --printsrcinfo > .SRCINFO
 makepkg -f
-sudo pacman -U ./fedi3-bin-0.12.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./fedi3-bin-0.12.1-1-x86_64.pkg.tar.zst
 ```
 
 The AUR accepts PKGBUILD/source metadata, not binary packages. Register a
@@ -65,10 +65,10 @@ Arch derivative. See [AUR guidelines](https://wiki.archlinux.org/title/AUR_submi
 ## Debian, Ubuntu and derivatives
 
 `bash scripts/build_deb.sh` packages the verified AppImage into
-`dist/fedi3_0.12.0-1_amd64.deb`, with desktop entry, icon, runtime dependencies
+`dist/fedi3_0.12.1-1_amd64.deb`, with desktop entry, icon, runtime dependencies
 and no maintainer script that removes user data. Run the builder on Debian or
 Ubuntu with `dpkg-deb`; CI builds it from the Ubuntu 22.04 AppImage. Users can
-install with `sudo apt install ./fedi3_0.12.0-1_amd64.deb`.
+install with `sudo apt install ./fedi3_0.12.1-1_amd64.deb`.
 
 `packaging/debian` is a **source-package scaffold**, not a PPA-ready upload.
 It requires a reviewed offline source archive containing vendored Rust crates,
@@ -105,7 +105,7 @@ manifest review and offline dependency preparation.
 
 ### Independent APT repository staging
 
-Use `scripts/build_apt_repo.py --output /path/to/repo --unsigned-preview dist/fedi3_0.12.0-1_amd64.deb`
+Use `scripts/build_apt_repo.py --output /path/to/repo --unsigned-preview dist/fedi3_0.12.1-1_amd64.deb`
 to prepare pool/, Packages, Packages.gz and Release for inspection. For hosting,
 replace `--unsigned-preview` with `--signing-key YOUR_EXISTING_OPENPGP_KEY`;
 the script creates InRelease, Release.gpg and the public archive key. Configure
@@ -113,7 +113,7 @@ clients with `signed-by=` pointing at that key. Do not disable APT signature
 checks. The preparation archive is not a live repository URL.
 
 A pacman repository preview can be generated with
-`repo-add fedi3.db.tar.gz fedi3-bin-0.12.0-1-x86_64.pkg.tar.zst`.
+`repo-add fedi3.db.tar.gz fedi3-bin-0.12.1-1-x86_64.pkg.tar.zst`.
 The release preparation archive contains that index; place the separately
 published package beside it. Sign the package and regenerate/sign the database
 with the maintainer's OpenPGP key before enabling a public repository.

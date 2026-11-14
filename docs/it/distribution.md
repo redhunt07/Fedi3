@@ -1,7 +1,7 @@
 # Pacchetti di distribuzione
 
-La versione 0.12.0 usa `0.12.0+4016`: gli APK separati hanno codice 6016
-(arm64-v8a) e 8016 (x86_64). Gli aggiornamenti mantengono la firma già fidata dai
+La versione 0.12.1 usa `0.12.1+4017`: gli APK separati hanno codice 6017
+(arm64-v8a) e 8017 (x86_64). Gli aggiornamenti mantengono la firma già fidata dai
 dispositivi. Le chiavi sono conservate privatamente e nei secret di GitHub Actions;
 non vanno inserite in Git. La CI richiede la firma configurata, verifica Rust,
 Flutter e PostgreSQL e produce AppImage, Windows, APK e .deb con checksum.
@@ -30,7 +30,7 @@ per aggirare una firma diversa. Vedere la [politica di inclusione](https://f-dro
 `packaging/aur/PKGBUILD` e `.SRCINFO` preparano `fedi3-bin`, verificando il
 checksum dell’AppImage pubblicata. Il launcher usa AppRun, conservandone la
 configurazione di librerie e rendering. Per compilare: `makepkg -f` nella
-cartella della ricetta; per installare: `sudo pacman -U ./fedi3-bin-0.12.0-1-x86_64.pkg.tar.zst`.
+cartella della ricetta; per installare: `sudo pacman -U ./fedi3-bin-0.12.1-1-x86_64.pkg.tar.zst`.
 
 AUR riceve ricette, non pacchetti binari. Per inviare la ricetta occorrono
 account e chiave SSH registrati, verifica di eventuali manutentori esistenti,
@@ -42,7 +42,7 @@ Non equivale all’inclusione nei repository ufficiali Arch o delle derivate.
 
 `scripts/build_deb.sh` genera un .deb amd64 dall’AppImage verificata; la CI lo
 costruisce su Ubuntu 22.04. Include dipendenze, icona e voce del menu, senza
-script che cancellino dati utente. Installazione: `sudo apt install ./fedi3_0.12.0-1_amd64.deb`.
+script che cancellino dati utente. Installazione: `sudo apt install ./fedi3_0.12.1-1_amd64.deb`.
 
 `packaging/debian` è una **base per il pacchetto sorgente**, non un caricamento
 PPA pronto. Mancano un archivio sorgente offline revisionato con dipendenze
@@ -71,7 +71,7 @@ I dettagli completi, le procedure e i limiti della preparazione si trovano in
 
 ### Preparazione di un repository APT indipendente
 
-`scripts/build_apt_repo.py --output /percorso/repo --unsigned-preview dist/fedi3_0.12.0-1_amd64.deb`
+`scripts/build_apt_repo.py --output /percorso/repo --unsigned-preview dist/fedi3_0.12.1-1_amd64.deb`
 prepara pool, Packages, Packages.gz e Release. Per pubblicare sostituire
 `--unsigned-preview` con `--signing-key CHIAVE_OPENPGP_ESISTENTE`: vengono generati
 InRelease, Release.gpg e chiave pubblica. I client devono usare `signed-by=`;

@@ -1,3 +1,11 @@
+fedi3 (0.12.1-1) UNRELEASED; urgency=medium
+
+  * Correct personal notifications, profile formatting and per-device presence.
+  * Preserve identity and data; persist chat sends atomically and deduplicate retries.
+  * Source-build submission still requires reviewed offline dependencies.
+
+ -- RedHunt07 <redhunt07@tutanota.com>  Sat, 14 Nov 2026 20:00:00 +0100
+
 fedi3 (0.12.0-1) UNRELEASED; urgency=medium
 
   * Initial distribution packaging, encrypted account replication and identity guards.
