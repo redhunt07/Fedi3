@@ -68,7 +68,7 @@ function Copy-CoreDll([string]$dest) {
 
 Copy-CoreDll (Join-Path $appDir "fedi3_core.dll")
 
-# Se esistono output dir di Flutter, copia anche lì (debug/run).
+# Also copy into existing Flutter output directories for debug/run builds.
 $candidates = @(
   (Join-Path $appDir "build\\windows\\x64\\runner\\Debug\\fedi3_core.dll"),
   (Join-Path $appDir "build\\windows\\x64\\runner\\Release\\fedi3_core.dll"),

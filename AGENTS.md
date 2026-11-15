@@ -80,6 +80,8 @@ flutter run
 - `docs/relay_directory.md`: shared relay directory, latency ranking and discovery.
 
 ## Testing
+- Repeatable source release gates: `bash scripts/verify_release.sh`; see
+  `docs/it/release_checklist.md` and `docs/release_checklist.md`.
 - Flutter: `app/test/` (run via `flutter test` in `app/`).
 - Rust: standard `cargo test` from repo root (workspace).
 
@@ -98,7 +100,7 @@ flutter run
 
 ### Develop relay (Docker)
 - Configure `.env` then `docker compose up -d --build`
-- Logs: `docker compose logs --tail=200 fedi3-relay` (service name in compose)
+- Logs: `docker compose logs --tail=200 relay` (service name in compose)
 - Smoke test: `scripts/relay_smoke_test.sh https://relay.example.com <TOKEN>`
 
 ### Release notes (high level)
@@ -160,7 +162,7 @@ flutter run
 - Mailbox: P2P infra component for message routing.
 
 ## Debugging tips
-- Relay logs: `docker compose logs --tail=200 fedi3-relay` (service name in compose).
+- Relay logs: `docker compose logs --tail=200 relay` (service name in compose).
 - Caddy logs: `docker compose logs --tail=200 caddy`.
 - Core health: use endpoints in "HTTP endpoints" with the internal header.
 - Check relay mesh: `/_fedi3/relay/stats` includes `peer_id` from `/_fedi3/relay/p2p_infra`.
@@ -224,7 +226,8 @@ flutter run
 - Defaults when creating a local profile: `http://127.0.0.1:8787` and
   `ws://127.0.0.1:8787`.
 - If `internal_token` is empty, core generates a random token.
-- `relay_token` is required and must be at least 16 chars (core runtime check).
+- `relay_token` is required for a relay tunnel and must be at least 16 chars
+  (core runtime check); a P2P-only core may omit it.
 - UI validation enforces relay token length >= 16 on onboarding/edit.
 - Relay switch guard: core may require `previous_public_base_url` unless
   `allow_relay_switch_without_migration=true`.

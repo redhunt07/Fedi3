@@ -8,7 +8,7 @@ welcome.
 The project is pre-1.0 and moves quickly. Read this file, the [documentation](docs/README.md)
 and the [FAQ](docs/faq.md) before starting, and keep changes small and
 reviewable. By contributing you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md)
-and to license your work under AGPL-3.0-or-later.
+and to license your work under AGPL-3.0-only.
 
 ## Before opening an issue
 
@@ -242,10 +242,10 @@ own users. See [`relays/README.md`](relays/README.md) and
 
 Forks are encouraged for performance, security, UI/UX, accessibility and
 experimental features. Forks must preserve protocol compatibility whenever
-possible, keep the AGPL-3.0-or-later license and use a distinct name. See
+possible, keep the AGPL-3.0-only license and use a distinct name. See
 [FORK_POLICY.md](FORK_POLICY.md) and [TRADEMARK_AND_NAME.md](TRADEMARK_AND_NAME.md).
 
 ## License
 
-All contributions are released under AGPL-3.0-or-later. See [LICENSE](LICENSE)
+All contributions are released under AGPL-3.0-only. See [LICENSE](LICENSE)
 and [NOTICE](NOTICE). Network-exposed modifications must remain open source.

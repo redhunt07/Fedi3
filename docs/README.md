@@ -1,8 +1,8 @@
 # FEDI3 documentation
 
-English is the default documentation language. Every document has an Italian
-counterpart under [`it/`](it/README.md). Historical audit and verification
-reports are kept under [`audit/`](audit/).
+Maintained guides have English and Italian editions under [`it/`](it/README.md).
+Code comments and docstrings use English. Historical reports under [`audit/`](audit/)
+may retain only their original language.
 
 ## Start here
 
@@ -26,6 +26,7 @@ reports are kept under [`audit/`](audit/).
 
 ## Architecture and protocol
 
+- [Multi-device identity and account synchronization](multi_device_sync.md)
 - [Decentralization model](decentralization.md)
 - [P2P network](p2p_network.md)
 - [Network resilience](network_resilience.md)
@@ -42,6 +43,8 @@ reports are kept under [`audit/`](audit/).
 
 ## Quality and verification
 
+- [Local release readiness, 15 November 2026](audit/release_readiness_2026-11-15.md)
+- [Release checklist](release_checklist.md)
 - [Test plan](test_plan.md)
 - [Release verification 0.11.10](audit/release_0.11.10_2026-11-09.md)
 - [Network resilience verification, 7 November 2026](network_resilience_verification_2026-11-07.md)

@@ -273,7 +273,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
             empty_collection_get(state, req, accept, "featuredTags").await
         }
         ("GET", "/.fedi3/media") => media_p2p_get(state, req).await,
-        // Endpoint interno per la UI: fetch di un oggetto già in cache/DB.
+        // Internal UI endpoint: fetch an object already stored in the cache/database.
         // Esempio: `GET /_fedi3/object?url=<urlencoded>`
         ("GET", "/_fedi3/object") => object_get(state, req).await,
         // Anchor documents (static identity decoupled from the relay transport).
@@ -283,7 +283,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/blocks") => blocks_list(state, req).await,
         ("POST", "/_fedi3/blocks") => blocks_update(state, req).await,
         ("GET", "/_fedi3/audit/recent") => audit_recent(state, req).await,
-        // Endpoint interno per il relay/telemetria: info minime sul peer.
+        // Internal relay/telemetry endpoint: expose minimal peer information.
         ("GET", "/_fedi3/hello") => hello_get(state).await,
         ("GET", "/_fedi3/relays") => relays_list_get(state, req).await,
         ("POST", "/_fedi3/relays") => relays_update_post(state, req).await,
@@ -7131,7 +7131,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
         }
     }
 
-    // Enqueue per delivery affidabile (retry/backoff).
+    // Queue reliable delivery with retry and backoff.
     let mut recipients = extract_recipients(&activity);
     if recipients.is_empty() {
         return simple(StatusCode::BAD_REQUEST, "missing recipients (to/cc)");
@@ -7227,7 +7227,7 @@ async fn outbox_post(state: &ApState, req: Request<Body>) -> Response<Body> {
             .await;
     }
 
-    // Mastodon spesso accetta 202 per outbox processing.
+    // Mastodon commonly returns 202 while processing an outbox activity.
     let _ = parts;
     simple(
         StatusCode::ACCEPTED,
@@ -7877,7 +7877,7 @@ async fn inbox(state: &ApState, req: Request<Body>) -> Response<Body> {
         .social
         .upsert_actor_meta(&summary.actor_url, summary.is_fedi3);
 
-    // Processing minimale: Follow / Accept / Undo (per compatibilità).
+    // Minimal Follow / Accept / Undo processing for compatibility.
     let activity: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(_) => {
@@ -8837,7 +8837,7 @@ async fn process_inbox_activity_inner(
             Ok(())
         }
         "Accept" => {
-            // Se qualcuno accetta un nostro Follow, segna following accepted.
+            // Mark the outgoing follow as accepted when its recipient accepts it.
             let accept_actor = activity.get("actor").and_then(|v| v.as_str()).unwrap_or("");
             let obj = activity.get("object");
             let Some(obj) = obj else { return Ok(()) };
@@ -10503,7 +10503,7 @@ fn simple(status: StatusCode, msg: &str) -> Response<Body> {
 }
 
 fn url_decode(s: &str) -> String {
-    // Decodifica minimale per `resource=` (solo %XX e '+').
+    // Minimal decoding for `resource=`: percent escapes and '+' only.
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;

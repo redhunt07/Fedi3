@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+- Align project notices, contributor policies and Rust package metadata with the maintainer-selected AGPL-3.0-only license.
+
+- Prevent the Android plaintext background credential cache from being created or used on desktop; remove legacy desktop caches only after successful keyring access.
+- Preserve custom relay ports during quick login; keep startup, onboarding, settings and primary actions usable with large text on narrow screens and constrain desktop forms to the shared content width.
+- Pass optional push hostnames to Caddy through Compose, document reproducible release gates in Italian/English and check documentation links in CI.
+
 - Clarify QR export versus camera login, stop the pairing spinner on failure, explain rejected account credentials and retry without history only for payload rejection.
 
 ## [0.12.2] - 2026-11-15

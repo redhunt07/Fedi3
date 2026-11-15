@@ -12,8 +12,8 @@ Le richieste HTTPS sono in sola lettura: non inviano token, log o telemetria.
 La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
-Il sistema di aggiornamento è stato introdotto nella `0.10.0+1`; la linea di
-release corrente è `0.11.11+4015`. I client precedenti alla `0.10.0` richiedono un
+Il sistema di aggiornamento è stato introdotto nella `0.10.0+1`; la
+versione dei sorgenti è `0.12.2+4018` (vedi `app/pubspec.yaml`). I client precedenti alla `0.10.0` richiedono un
 primo aggiornamento manuale.
 
 ## Installazione
@@ -32,7 +32,7 @@ primo aggiornamento manuale.
 - **Linux da sorgenti/pacchetti, macOS e mobile:** usa la pagina della release e
   la fonte di installazione, il gestore pacchetti o lo store di provenienza.
   Il client non sovrascrive file gestiti dal sistema né propone pacchetti x64
-  ad altre architetture. Questa pipeline non produce ancora asset mobile/macOS.
+  ad altre architetture. La CI produce anche APK Android e un pacchetto Debian, ma non asset macOS.
 
 Configurazione del profilo, credenziali nel portachiavi, chiavi private e database
 restano nelle cartelle dati esistenti: non cancellarle durante l’aggiornamento.
@@ -57,10 +57,12 @@ Ogni riga di checksum usa `<64 caratteri esadecimali>  <nome esatto dell’asset
 
 ## Preparazione di una release
 
+Segui la [procedura ripetibile di rilascio](release_checklist.md) per tutti i controlli.
+
 1. Imposta `app/pubspec.yaml` a `X.Y.Z+N`, incrementando versione e build.
 2. Esegui test Rust/Flutter e controlli di deploy. Fai commit del codice revisionato.
 3. Pubblica il tag `vX.Y.Z` corrispondente al pubspec. Una discordanza blocca il pacchetto.
-4. La CI compila core e client insieme per Linux e Windows, calcola i checksum
+4. La CI compila core e client per Linux, Windows e Android, calcola i checksum
    di quei pacchetti e crea una release GitHub **in bozza**.
 5. Scarica e prova entrambi i pacchetti sui rispettivi sistemi, poi pubblica la
    bozza. Il client vede l’aggiornamento solo dopo la pubblicazione come stabile.
@@ -93,7 +95,7 @@ Il controllo resta obbligatorio: nessun advisory è ignorato.
 Il push di `codex/release/vX.Y.Z` richiede la pubblicazione tramite CI. Il branch
 deve puntare al commit corrente di `main` e la versione deve coincidere con il
 pubspec. Gli stessi controlli Rust, Flutter, operativi, compatibilità, audit e
-piattaforme precedono la creazione dei pacchetti Linux/Windows. Il job verifica
+piattaforme precedono la creazione dei pacchetti Linux/Windows/Android. Il job verifica
 i checksum, carica i pacchetti e pubblica la release come ultima stabile. Le
 release già pubblicate non vengono sovrascritte; una bozza esistente deve puntare
 allo stesso commit. I normali tag mantengono il percorso bozza/pubblicazione manuale.

@@ -10,6 +10,7 @@ COPY crates/fedi3_protocol/Cargo.toml crates/fedi3_protocol/Cargo.toml
 COPY crates/fedi3_relay/Cargo.toml crates/fedi3_relay/Cargo.toml
 COPY crates/fedi3_core/Cargo.toml crates/fedi3_core/Cargo.toml
 COPY crates/fedi3_p2p_infra/Cargo.toml crates/fedi3_p2p_infra/Cargo.toml
+COPY crates/fedi3_push_gateway/Cargo.toml crates/fedi3_push_gateway/Cargo.toml
 
 # Copy sources and the public directory embedded by include_str!.
 COPY relays relays
@@ -17,6 +18,7 @@ COPY crates/fedi3_protocol crates/fedi3_protocol
 COPY crates/fedi3_relay crates/fedi3_relay
 COPY crates/fedi3_core crates/fedi3_core
 COPY crates/fedi3_p2p_infra crates/fedi3_p2p_infra
+COPY crates/fedi3_push_gateway crates/fedi3_push_gateway
 
 RUN cargo build -p fedi3_relay --release --locked \
   && strip target/release/fedi3_relay

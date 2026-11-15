@@ -6,6 +6,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:flutter/foundation.dart';
@@ -64,8 +65,10 @@ class ConfigStore {
   }
 
   static const _vault = FlutterSecureStorage(
-      iOptions: IOSOptions(
-          accessibility: KeychainAccessibility.first_unlock_this_device));
+    iOptions: IOSOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+  );
   static const _secretFields = [
     'relayToken',
     'internalToken',
@@ -136,9 +139,10 @@ class ConfigStore {
         return ConfigLoadResult(status: result.status, data: cached);
       }
       return const ConfigLoadResult(
-          status: ConfigLoadStatus.credentialsUnavailable,
-          error:
-              'System credential storage unavailable. Unlock your keyring and restart Fedi3. Existing configuration was preserved.');
+        status: ConfigLoadStatus.credentialsUnavailable,
+        error:
+            'System credential storage unavailable. Unlock your keyring and restart Fedi3. Existing configuration was preserved.',
+      );
     }
   }
 
@@ -175,6 +179,14 @@ class ConfigStore {
   static Future<void> writeBackgroundCache(Map<String, dynamic> cfg) async {
     try {
       final target = backgroundCacheFile();
+      if (!Platform.isAndroid) {
+        // Older clients also wrote this Android-only cache on desktop. Remove
+        // it only after the caller has successfully opened/written the vault.
+        for (final file in [target, File('${target.path}.tmp')]) {
+          if (file.existsSync()) file.deleteSync();
+        }
+        return;
+      }
       target.parent.createSync(recursive: true);
       final tmp = File('${target.path}.tmp');
       tmp.writeAsStringSync(jsonEncode(cfg), flush: true);
@@ -187,7 +199,7 @@ class ConfigStore {
   }
 
   static Map<String, dynamic>? readBackgroundCache() =>
-      _readJsonFile(backgroundCacheFile());
+      Platform.isAndroid ? _readJsonFile(backgroundCacheFile()) : null;
 
   static File configFile() {
     final dir = _configDir();
@@ -223,7 +235,9 @@ class ConfigStore {
           // Recovery still succeeds for this process even if the restore fails.
         }
         return ConfigLoadResult(
-            status: ConfigLoadStatus.recoveredFromBackup, data: parsed);
+          status: ConfigLoadStatus.recoveredFromBackup,
+          data: parsed,
+        );
       }
     }
 
@@ -246,8 +260,10 @@ class ConfigStore {
     _writeAtomically(cfg, keepBackup: true);
   }
 
-  static void _writeAtomically(Map<String, dynamic> cfg,
-      {required bool keepBackup}) {
+  static void _writeAtomically(
+    Map<String, dynamic> cfg, {
+    required bool keepBackup,
+  }) {
     final target = configFile();
     final tmp = _tempFile();
     final encoded = const JsonEncoder.withIndent('  ').convert(cfg);
@@ -257,8 +273,9 @@ class ConfigStore {
       if (previous != null) {
         final bakTmp = File('${backupFile().path}.tmp');
         bakTmp.writeAsStringSync(
-            const JsonEncoder.withIndent('  ').convert(previous),
-            flush: true);
+          const JsonEncoder.withIndent('  ').convert(previous),
+          flush: true,
+        );
         _restrictFile(bakTmp);
         bakTmp.renameSync(backupFile().path);
         _restrictFile(backupFile());
@@ -340,8 +357,12 @@ class ConfigStore {
   }
 
   static String _join(String a, [String? b, String? c, String? d]) {
-    final parts =
-        [a, b, c, d].whereType<String>().where((p) => p.isNotEmpty).toList();
+    final parts = [
+      a,
+      b,
+      c,
+      d,
+    ].whereType<String>().where((p) => p.isNotEmpty).toList();
     final sep = Platform.pathSeparator;
     return parts.join(sep);
   }

@@ -24,8 +24,8 @@ pub struct StorageConfig {
     pub federated_feed_ttl_days: Option<u32>,
     pub federated_feed_prune_batch: Option<u32>,
 
-    /// Se true: mantieni cache "lunga" solo per attori Fedi3 seguiti (following accepted),
-    /// tutto il resto ha TTL aggressivo.
+    /// When true, keep long-lived cache entries only for followed Fedi3 actors
+    /// with accepted follows; all other entries use the shorter TTL.
     pub cache_only_followed_fedi3: Option<bool>,
     pub followed_fedi3_object_ttl_days: Option<u32>,
     pub other_object_ttl_days: Option<u32>,
@@ -38,7 +38,7 @@ pub struct StorageConfig {
     pub max_object_bytes_actors_per_run: Option<u32>,
     pub max_object_bytes_deletes_per_actor: Option<u32>,
 
-    /// Limite massimo per la cache media locale (directory `media/`).
+    /// Maximum size of the local media cache (the `media/` directory).
     pub media_max_local_cache_bytes: Option<u64>,
     pub followed_fedi3_max_media_items_per_actor: Option<u32>,
     pub other_max_media_items_per_actor: Option<u32>,

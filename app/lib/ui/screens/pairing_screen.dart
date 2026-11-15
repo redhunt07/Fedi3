@@ -64,10 +64,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Uri get _qrUri => Uri(
         scheme: 'fedi3',
         host: 'pair',
-        queryParameters: {
-          'relay': _relayBase ?? '',
-          'code': _code ?? '',
-        },
+        queryParameters: {'relay': _relayBase ?? '', 'code': _code ?? ''},
       );
 
   /// Exports this client's identity and publishes the sealed package under a
@@ -192,103 +189,111 @@ class _PairingScreenState extends State<PairingScreen> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: Text(context.l10n.pairingTitle)),
-      body: ListView(
-        padding: const EdgeInsets.all(UiTokens.padScreen),
-        children: [
-          const Center(child: BrandMark(size: 56)),
-          const SizedBox(height: 14),
-          Text(
-            context.l10n.pairingIntro,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 18),
-          if (_ready && _code != null && _relayBase != null)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: scheme.primary.withAlpha(40),
-                      blurRadius: 24,
+      body: Center(
+        child: SizedBox(
+          width: UiTokens.contentMaxWidth,
+          child: ListView(
+            padding: const EdgeInsets.all(UiTokens.padScreen),
+            children: [
+              const Center(child: BrandMark(size: 56)),
+              const SizedBox(height: 14),
+              Text(
+                context.l10n.pairingIntro,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 18),
+              if (_ready && _code != null && _relayBase != null)
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: [
+                        BoxShadow(
+                          color: scheme.primary.withAlpha(40),
+                          blurRadius: 24,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: QrImageView(
-                  data: _qrUri.toString(),
-                  size: 240,
-                  backgroundColor: Colors.white,
-                  eyeStyle: const QrEyeStyle(
-                    eyeShape: QrEyeShape.square,
-                    color: Colors.black,
-                  ),
-                  dataModuleStyle: const QrDataModuleStyle(
-                    dataModuleShape: QrDataModuleShape.square,
-                    color: Colors.black,
-                  ),
-                ),
-              ),
-            )
-          else if (_busy)
-            const Center(
-              child: SizedBox(
-                width: 240,
-                height: 240,
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            ),
-          if (_ready && _relayBase != null) ...[
-            const SizedBox(height: 12),
-            Center(
-              child: Text(
-                _relayBase!,
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-          if (_status != null) ...[
-            const SizedBox(height: 14),
-            Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_busy)
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                    child: QrImageView(
+                      data: _qrUri.toString(),
+                      size: 240,
+                      backgroundColor: Colors.white,
+                      eyeStyle: const QrEyeStyle(
+                        eyeShape: QrEyeShape.square,
+                        color: Colors.black,
+                      ),
+                      dataModuleStyle: const QrDataModuleStyle(
+                        dataModuleShape: QrDataModuleShape.square,
+                        color: Colors.black,
+                      ),
                     ),
-                  if (_busy) const SizedBox(width: 8),
-                  Flexible(child: Text(_status!)),
-                ],
+                  ),
+                )
+              else if (_busy)
+                const Center(
+                  child: SizedBox(
+                    width: 240,
+                    height: 240,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+              if (_ready && _relayBase != null) ...[
+                const SizedBox(height: 12),
+                Center(
+                  child: Text(
+                    _relayBase!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+              if (_status != null) ...[
+                const SizedBox(height: 14),
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_busy)
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      if (_busy) const SizedBox(width: 8),
+                      Flexible(child: Text(_status!)),
+                    ],
+                  ),
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: scheme.error),
+                ),
+              ],
+              const SizedBox(height: 18),
+              AuroraButton(
+                label: context.l10n.pairingRegenerate,
+                onPressed: _busy ? null : _startPairing,
+                icon: Icons.refresh_rounded,
+                expand: true,
               ),
-            ),
-          ],
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: scheme.error),
-            ),
-          ],
-          const SizedBox(height: 18),
-          AuroraButton(
-            label: context.l10n.pairingRegenerate,
-            onPressed: _busy ? null : _startPairing,
-            icon: Icons.refresh_rounded,
-            expand: true,
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _cancel,
+                icon: const Icon(Icons.close_rounded),
+                label: Text(context.l10n.cancel),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _cancel,
-            icon: const Icon(Icons.close_rounded),
-            label: Text(context.l10n.cancel),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -73,7 +73,8 @@ In scope:
   DID derivation, RSA-OAEP envelopes and shared crypto helpers.
 - **P2P infrastructure** (`crates/fedi3_p2p_infra`): mailbox and circuit-relay
   services, peer identity and message routing.
-- **App** (`app/`): token storage in the OS keyring, handling of federated
+- **App** (`app/`): token storage in the OS keyring (Android's keep-alive engine
+  additionally uses an app-private plaintext configuration cache), handling of federated
   HTML and media, URL opening, backup format, permission handling.
 - **Deployment** (`deploy/`, `docker-compose.yml`, scripts): TLS termination,
   container hardening, secret handling, backup and restore paths.

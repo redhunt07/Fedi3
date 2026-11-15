@@ -18,6 +18,28 @@ def check_tag(tag: str) -> None:
 
 
 class ReleaseContract(unittest.TestCase):
+    def test_project_license_is_consistent(self):
+        for manifest in (ROOT / 'crates').glob('*/Cargo.toml'):
+            self.assertIn('license = "AGPL-3.0-only"', manifest.read_text())
+        for name in ['README.md', 'README.it.md', 'CONTRIBUTING.md',
+                     'FORK_POLICY.md', 'TRADEMARK_AND_NAME.md', 'NOTICE']:
+            text = (ROOT / name).read_text()
+            self.assertIn('AGPL-3.0-only', text)
+            self.assertNotIn('AGPL-3.0-or-later', text)
+
+    def test_validation_branches_build_every_package_without_publishing(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        # PyYAML's YAML 1.1 loader interprets the unquoted "on" key as True.
+        triggers = workflow.get('on', workflow.get(True))
+        self.assertIn('codex/verify-release/*', triggers['push']['branches'])
+        for job in ['appimage', 'windows-release', 'android-release', 'linux-smoke']:
+            self.assertIn('refs/heads/codex/verify-release/', workflow['jobs'][job]['if'])
+        self.assertNotIn('refs/heads/codex/verify-release/', workflow['jobs']['publish']['if'])
+        audit = next(s for s in workflow['jobs']['rust']['steps']
+                     if s.get('name') == 'cargo audit (required for releases)')
+        self.assertIn("!startsWith(github.ref, 'refs/heads/codex/verify-release/')",
+                      audit['continue-on-error'])
+
     def test_tag_matches_version(self):
         tag = os.environ.get('FEDI3_RELEASE_TAG')
         if tag:

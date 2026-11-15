@@ -4,7 +4,10 @@ publish_to: "none"
 version: 0.12.2+4018
 
 environment:
+  # Keep the Dart language baseline; locked dependencies require Dart >=3.13.
+  # Reproduce release builds with Flutter 3.50.0, as pinned in CI.
   sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:

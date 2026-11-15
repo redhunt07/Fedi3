@@ -4,6 +4,7 @@
  */
 
 import 'package:material_ui/material_ui.dart';
+
 import 'dart:convert';
 
 import 'package:url_launcher/url_launcher.dart';
@@ -14,6 +15,7 @@ import '../../model/relay_directory.dart';
 import '../../model/ui_prefs.dart';
 import '../../services/relay_directory_service.dart';
 import '../../state/app_state.dart';
+import '../theme/ui_tokens.dart';
 import '../widgets/network_error_card.dart';
 import '../widgets/relay_latency_badge.dart';
 import 'onboarding_screen.dart';
@@ -132,77 +134,89 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
           return Scaffold(
             appBar: AppBar(title: Text(context.l10n.configRecoveryTitle)),
             body: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(Icons.lock_outline, size: 36),
-                      const SizedBox(height: 16),
-                      Text(widget.appState.credentialsUnavailable
-                          ? context.l10n.keyringUnavailableHint
-                          : context.l10n.corruptConfigHint),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                          onPressed: widget.appState.reloadConfig,
-                          child: Text(context.l10n.networkErrorRetry)),
-                    ])),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.lock_outline, size: 36),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.appState.credentialsUnavailable
+                        ? context.l10n.keyringUnavailableHint
+                        : context.l10n.corruptConfigHint,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: widget.appState.reloadConfig,
+                    child: Text(context.l10n.networkErrorRetry),
+                  ),
+                ],
+              ),
+            ),
           );
         }
         return Scaffold(
           appBar: AppBar(title: Text(context.l10n.firstRunTitle)),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Text(context.l10n.firstRunIntro),
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.language),
-                  title: Text(context.l10n.uiLanguage),
-                  subtitle: Text(_localeLabel(context, prefs.localeTag)),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _pickLocale(context, prefs),
-                ),
+          body: Center(
+            child: SizedBox(
+              width: UiTokens.contentMaxWidth,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Text(context.l10n.firstRunIntro),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.language),
+                      title: Text(context.l10n.uiLanguage),
+                      subtitle: Text(_localeLabel(context, prefs.localeTag)),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _pickLocale(context, prefs),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _networkPreviewCard(context),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.login),
+                      title: Text(context.l10n.firstRunLoginTitle),
+                      subtitle: Text(context.l10n.firstRunLoginHint),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => OnboardingScreen(
+                              appState: widget.appState,
+                              mode: OnboardingMode.loginExisting,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.person_add_alt_1),
+                      title: Text(context.l10n.firstRunCreateTitle),
+                      subtitle: Text(context.l10n.firstRunCreateHint),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => OnboardingScreen(
+                              appState: widget.appState,
+                              mode: OnboardingMode.createNew,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              _networkPreviewCard(context),
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.login),
-                  title: Text(context.l10n.firstRunLoginTitle),
-                  subtitle: Text(context.l10n.firstRunLoginHint),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => OnboardingScreen(
-                            appState: widget.appState,
-                            mode: OnboardingMode.loginExisting),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 10),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.person_add_alt_1),
-                  title: Text(context.l10n.firstRunCreateTitle),
-                  subtitle: Text(context.l10n.firstRunCreateHint),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => OnboardingScreen(
-                            appState: widget.appState,
-                            mode: OnboardingMode.createNew),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -225,22 +239,26 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
           shrinkWrap: true,
           children: [
             ListTile(
-                title: Text(context.l10n.uiLanguageSystem),
-                onTap: () => Navigator.pop(context, '')),
+              title: Text(context.l10n.uiLanguageSystem),
+              onTap: () => Navigator.pop(context, ''),
+            ),
             const Divider(height: 1),
             ListTile(
-                title: const Text('English'),
-                onTap: () => Navigator.pop(context, 'en')),
+              title: const Text('English'),
+              onTap: () => Navigator.pop(context, 'en'),
+            ),
             ListTile(
-                title: const Text('Italiano'),
-                onTap: () => Navigator.pop(context, 'it')),
+              title: const Text('Italiano'),
+              onTap: () => Navigator.pop(context, 'it'),
+            ),
           ],
         ),
       ),
     );
     if (value == null) return;
-    await widget.appState
-        .updatePrefs((current) => current.copyWith(localeTag: value));
+    await widget.appState.updatePrefs(
+      (current) => current.copyWith(localeTag: value),
+    );
   }
 
   Widget _networkPreviewCard(BuildContext context) {
@@ -257,8 +275,10 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
                 const Icon(Icons.public),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(context.l10n.firstRunRelayPreviewTitle,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  child: Text(
+                    context.l10n.firstRunRelayPreviewTitle,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
                 IconButton(
                   tooltip: context.l10n.relayDirectoryRefresh,
@@ -270,17 +290,25 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
               ],
             ),
             const SizedBox(height: 2),
-            Text(context.l10n.relayDirectoryHint,
-                style: TextStyle(color: muted, fontSize: 12)),
+            Text(
+              context.l10n.relayDirectoryHint,
+              style: TextStyle(color: muted, fontSize: 12),
+            ),
             if (_loadingPreview && _relayLatencies.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
-                child: Row(children: [
-                  Icon(Icons.hourglass_top, size: 14, color: muted),
-                  const SizedBox(width: 8),
-                  Text(context.l10n.relayDirectoryMeasuring,
-                      style: TextStyle(color: muted, fontSize: 12)),
-                ]),
+                child: Row(
+                  children: [
+                    Icon(Icons.hourglass_top, size: 14, color: muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        context.l10n.relayDirectoryMeasuring,
+                        style: TextStyle(color: muted, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             if (_previewError != null)
               Padding(
@@ -295,38 +323,48 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
             if (_previewError == null) ...[
               const SizedBox(height: 8),
               if (_relayLatencies.isEmpty)
-                Text(context.l10n.relayDirectoryEmpty,
-                    style: TextStyle(color: muted))
+                Text(
+                  context.l10n.relayDirectoryEmpty,
+                  style: TextStyle(color: muted),
+                )
               else
                 for (var i = 0; i < _relayLatencies.length; i++)
                   _relayRow(context, i + 1, _relayLatencies[i]),
               const SizedBox(height: 4),
-              Row(
+              // Let translated actions and large text wrap on narrow screens.
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   if (_measuredAt != null)
-                    Expanded(
-                      child: Text(
-                        context.l10n
-                            .relayLatencyMeasuredAt(_formatTime(_measuredAt!)),
-                        style: TextStyle(color: muted, fontSize: 11),
+                    Text(
+                      context.l10n.relayLatencyMeasuredAt(
+                        _formatTime(_measuredAt!),
                       ),
+                      style: TextStyle(color: muted, fontSize: 11),
                     ),
                   TextButton.icon(
                     onPressed: () => launchUrl(
-                        Uri.parse(RelayDirectory.submitUrl),
-                        mode: LaunchMode.externalApplication),
+                      Uri.parse(RelayDirectory.submitUrl),
+                      mode: LaunchMode.externalApplication,
+                    ),
                     icon: const Icon(Icons.add, size: 16),
                     label: Text(context.l10n.relayDirectoryAddYours),
                   ),
                 ],
               ),
               const Divider(height: 20),
-              Text(context.l10n.firstRunRelayPreviewPeers,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(
+                context.l10n.firstRunRelayPreviewPeers,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 4),
               if (_peerPreview.isEmpty)
-                Text(context.l10n.firstRunRelayPreviewEmpty,
-                    style: TextStyle(color: muted))
+                Text(
+                  context.l10n.firstRunRelayPreviewEmpty,
+                  style: TextStyle(color: muted),
+                )
               else
                 Wrap(
                   spacing: 6,
@@ -363,25 +401,34 @@ class _FirstRunScreenState extends State<FirstRunScreen> {
           children: [
             SizedBox(
               width: 26,
-              child: Text('#$rank',
-                  style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700)),
+              child: Text(
+                '#$rank',
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(entry.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text(entry.host,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: scheme.onSurfaceVariant, fontSize: 11)),
+                  Text(
+                    entry.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    entry.host,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                  ),
                 ],
               ),
             ),

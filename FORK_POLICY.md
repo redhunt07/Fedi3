@@ -1,6 +1,6 @@
 # Fedi3 Fork Policy
 
-Forks are welcome. Fedi3 is AGPL-3.0-or-later software, and the license already
+Forks are welcome. Fedi3 is AGPL-3.0-only software, and the license already
 guarantees the freedom to study, modify, run and redistribute it. This policy
 explains what the project expects from forks in return.
 
@@ -15,7 +15,7 @@ explains what the project expects from forks in return.
 
 ## Requirements
 
-- **Keep the license.** Forks must remain AGPL-3.0-or-later. If you run a
+- **Keep the license.** Forks must remain AGPL-3.0-only. If you run a
   modified version as a network service, users interacting with it over the
   network must be able to obtain the corresponding source.
 - **Preserve attribution.** Keep copyright notices, SPDX headers and the

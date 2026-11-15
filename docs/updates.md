@@ -12,7 +12,7 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
 foreign download URLs and incompatible architectures are rejected. The updater
-was introduced in `0.10.0+1`; the current release line is `0.11.11+4015`. Clients
+was introduced in `0.10.0+1`; the current source version is `0.12.2+4018` (see `app/pubspec.yaml`). Clients
 older than `0.10.0` require a manual first upgrade.
 
 ## Installation
@@ -31,7 +31,8 @@ older than `0.10.0` require a manual first upgrade.
 - **Linux source/package installs, macOS and mobile:** use the release page and
   the installation source/package manager/store that provided the application.
   The client does not replace system-managed files or offer an x64 package to
-  another architecture. This workflow does not yet produce mobile or macOS assets.
+  another architecture. CI also produces Android APKs and a Debian package; macOS assets are not built
+  by this workflow.
 
 Profile configuration, keyring credentials, private keys and databases stay in
 their existing data directories. Do not delete them during an update.
@@ -57,10 +58,12 @@ Each checksum line has the format `<64 hex characters>  <exact asset name>`.
 
 ## Preparing a release
 
+Follow the [reproducible release checklist](release_checklist.md) for all gates.
+
 1. Set `app/pubspec.yaml` to `X.Y.Z+N`, increasing the version and build number.
 2. Run the Rust/Flutter tests and deployment checks. Commit the reviewed source.
 3. Push a tag `vX.Y.Z` matching the pubspec version. A mismatch fails packaging.
-4. CI builds the core and Flutter client together for Linux and Windows, computes
+4. CI builds core and client packages for Linux, Windows and Android, computes
    checksums for those exact packages and creates a **draft** GitHub Release.
 5. Download and smoke-test both packages on their target systems, then publish
    the draft. The client sees the update only once it is published as stable.
@@ -92,7 +95,7 @@ The audit gate remains enforced; no advisory is ignored.
 A push of `codex/release/vX.Y.Z` requests publication through CI. The branch must
 point to the current `main` commit and the version must match pubspec. The same
 Rust, Flutter, operations, compatibility, audit and platform gates run before
-Linux/Windows packaging. The publishing job verifies checksums, uploads the
+Linux/Windows/Android packaging. The publishing job verifies checksums, uploads the
 packages and publishes the release as latest stable. Existing published releases
 are never overwritten, and an existing draft must target the same commit.
 Ordinary tag builds keep the draft/manual-publication path described above.

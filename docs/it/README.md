@@ -1,8 +1,8 @@
 # Documentazione FEDI3
 
-La documentazione predefinita è in inglese, in [`docs/`](../README.md). Questa
-cartella contiene la controparte italiana. I resoconti storici degli audit e
-delle verifiche sono in [`audit/`](audit/).
+Le guide mantenute sono disponibili in italiano qui e in inglese in
+[`docs/`](../README.md). Commenti e docstring del codice sono in inglese.
+I rapporti storici in [`audit/`](audit/) possono conservare solo la lingua originale.
 
 ## Da qui
 
@@ -26,6 +26,7 @@ delle verifiche sono in [`audit/`](audit/).
 
 ## Architettura e protocollo
 
+- [Identità e sincronizzazione multi-dispositivo](multi_device_sync.md)
 - [Modello di decentralizzazione](decentralization.md)
 - [Rete P2P](p2p_network.md)
 - [Resilienza della rete](network_resilience.md)
@@ -42,6 +43,8 @@ delle verifiche sono in [`audit/`](audit/).
 
 ## Qualità e verifiche
 
+- [Verifica locale per il rilascio, 15 novembre 2026](audit/release_readiness_2026-11-15.md)
+- [Procedura di rilascio](release_checklist.md)
 - [Piano dei test](test_plan.md)
 - [Verifica della release 0.11.10](audit/release_0.11.10_2026-11-09.md)
 - [Verifica della resilienza di rete, 7 novembre 2026](network_resilience_verification_2026-11-07.md)
@@ -72,6 +75,6 @@ delle verifiche sono in [`audit/`](audit/).
 
 ## Aggiornamenti e verifiche correnti
 
-- [Aggiornamenti del client](updates.md): release 0.11.9, download verificati e installazione.
+- [Aggiornamenti del client](updates.md): download verificati, installazione e procedure CI.
 - [Compatibilità e sicurezza RSA/WebRTC — 8 novembre 2026](audit/crypto_compatibility_2026-11-08.md).
 - [Annunci](../../ANNOUNCEMENTS.it.md) e [changelog](../../CHANGELOG.md).

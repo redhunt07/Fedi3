@@ -93,6 +93,25 @@ In produzione:
 - token admin conservato in un vault, mai in git
 - non pubblicare la porta 8787 su `0.0.0.0`: il compose la espone solo su `127.0.0.1` per la diagnosi locale
 - fai girare il relay dietro Caddy e lascia `FEDI3_RELAY_TRUST_PROXY_HEADERS=true` solo perché il proxy sovrascrive `X-Forwarded-For`
+- tieni `.env` e `relay-secrets.txt` a mode 600 e fuori da git
+
+Checklist di hardening dell'host (verificata sul VPS di riferimento, vedi
+[deploy_vps.md](deploy_vps.md#sicurezza) e
+[deploy_yunohost.md](deploy_yunohost.md#sicurezza)):
+
+- SSH solo chiave (`PasswordAuthentication no`, `PermitRootLogin no`,
+  `MaxAuthTries 3`) con il drop-in di hardening tenuto alfabeticamente primo;
+- nessun ban IP su SSH quando l'IP dell'operatore è dinamico e SSH rifiuta già
+  le password; mantieni fail2ban per gli altri servizi esposti;
+- il firewall consente solo 80/443, 4001, TURN e la porta dell'agente di
+  supporto;
+- aggiornamenti di sicurezza automatici attivi; verifica con
+  `dnf needs-restarting -r` / `apt-get -s upgrade` e riavvia solo in una
+  finestra scelta;
+- backup pianificati **ed** eseguibili (`chmod +x scripts/*.sh`), con un
+  controllo che l'archivio più recente sia di oggi o ieri;
+- TLS solo 1.2+ al proxy; verifica che l'albero deployato corrisponda al
+  commit di release prima di ricompilare.
 
 ## 8) Documentazione correlata
 

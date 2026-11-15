@@ -10,15 +10,16 @@
 - **Primary data flow:** UI ⇄ local core over HTTP/FFI; the core federates
   through the relay tunnel and P2P transport. The relay is deployed with the
   root `docker-compose.yml`.
-- **Project state:** pre-1.0; current release 0.11.10 (build 2013), supported
-  line 0.11.x. Read `README.md` and `AGENTS.md` for the authoritative layout and
+- **Project state:** pre-1.0; source version is defined by `app/pubspec.yaml`.
+  Read `README.md` and `AGENTS.md` for the authoritative layout and
   commands; do not duplicate them here.
-- **Documentation:** English is the default (`docs/`); every document has an
-  Italian counterpart in `docs/it/`. Historical audits are in `docs/audit/`.
+- **Documentation:** maintained guides have English (`docs/`) and Italian
+  (`docs/it/`) editions; code comments use English. Historical audits may retain
+  their original language in `docs/audit/`.
   Root policy files (`CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`,
   `GOVERNANCE.md`, `FORK_POLICY.md`, `ETHICS.md`, `NETWORK_INTEGRITY.md`,
   `PROTOCOL_COMPATIBILITY.md`, `TRADEMARK_AND_NAME.md`) are English only.
-- **License:** AGPL-3.0-or-later. Network-facing changes must remain open
+- **License:** AGPL-3.0-only. Network-facing changes must remain open
   source.
 
 ## Commands
@@ -70,6 +71,9 @@
 
 ## Testing and debugging
 
+- Repeatable release gates: `bash scripts/verify_release.sh`; follow
+  `docs/it/release_checklist.md` or `docs/release_checklist.md`.
+
 - Rust: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `cargo test --workspace --locked` (CI uses `-- --test-threads=4`).
@@ -92,7 +96,7 @@
 
 ## Safety and licensing
 
-- License: AGPL-3.0-or-later; network-facing changes must remain open source.
+- License: AGPL-3.0-only; network-facing changes must remain open source.
 - Do not commit credentials, `.env`, runtime databases or generated build output.
 - Preserve SPDX headers and copyright notices; add attribution when modifying a
   file substantially.

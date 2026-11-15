@@ -49,9 +49,11 @@ Future<void> pumpScreen(
   Widget child, {
   Locale locale = const Locale('en'),
   double textScale = 1.0,
+  ThemeData? theme,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      theme: theme,
       locale: locale,
       localizationsDelegates: const [
         AppLocalizations.delegate,

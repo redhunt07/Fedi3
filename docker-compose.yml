@@ -203,6 +203,8 @@ services:
       # optional lets a P2P-only .env leave it empty; Caddy still fails
       # clearly if it is started without a domain.
       - FEDI3_DOMAIN=${FEDI3_DOMAIN:-}
+      - FEDI3_NTFY_DOMAIN=${FEDI3_NTFY_DOMAIN:-http://ntfy.invalid}
+      - FEDI3_PUSH_DOMAIN=${FEDI3_PUSH_DOMAIN:-http://push.invalid}
     ports:
       - "80:80"
       - "443:443"

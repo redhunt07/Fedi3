@@ -4,6 +4,10 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-15 — Release preparation checks
+
+Current development changes fix large-text layouts, quick login with custom relay ports and desktop credential-cache isolation. Optional push hostnames now reach Caddy through Compose. The [release checklist](docs/release_checklist.md) documents repeatable checks and package/device validation. These changes are under verification; this entry does not announce a published package.
+
 ## 2026-11-12 — Fedi3 0.11.11 released
 
 Build 0.11.11 (4015) is available on the [release page](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11) with the Linux x86_64 AppImage, the Windows x64 ZIP, the Android arm64-v8a and x86_64 APKs and SHA256 checksums. It collects the work published since 0.11.10: multi-device chat sync with QR pairing, playable voice and video notes, the push-only Android service with lower background drain and P2P suspension, and the optional self-hosted push gateway. The QR login direction is inverted: the already logged-in client shows the code and the new device scans it. [Changelog](CHANGELOG.md) · [Screenshots](README.md#screenshots).

@@ -57,185 +57,215 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         return Scaffold(
           appBar: AppBar(title: Text(context.l10n.settingsTitle)),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            children: [
-              _accountHeader(context, cfg),
-              if (widget.appState.lastError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Text(
-                    widget.appState.lastError!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ),
-              _section(context, context.l10n.presenceTitle),
-              GlassPanel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      context.l10n.presenceHint,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 12,
+          body: Center(
+            child: SizedBox(
+              width: UiTokens.contentMaxWidth,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                children: [
+                  _accountHeader(context, cfg),
+                  if (widget.appState.lastError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        widget.appState.lastError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    PresenceSelector(
-                      selected: presenceFromString(
-                          widget.appState.prefs.presenceStatus),
-                      onChanged: _setPresence,
+                  _section(context, context.l10n.presenceTitle),
+                  GlassPanel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          context.l10n.presenceHint,
+                          style: TextStyle(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        PresenceSelector(
+                          selected: presenceFromString(
+                            widget.appState.prefs.presenceStatus,
+                          ),
+                          onChanged: _setPresence,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  _section(context, context.l10n.settingsAccount),
+                  _tile(
+                    context,
+                    icon: Icons.badge_outlined,
+                    title: context.l10n.profileEditTitle,
+                    subtitle: context.l10n.profileEditHint,
+                    onTap: () => _push(
+                      context,
+                      ProfileEditScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.alternate_email_rounded,
+                    title: context.l10n.settingsAccount,
+                    subtitle: '${cfg.username}@${cfg.domain}',
+                    onTap: () => _push(
+                      context,
+                      EditConfigScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.person_add_alt_1_outlined,
+                    title: context.l10n.settingsFollowRequests,
+                    subtitle: context.l10n.settingsFollowRequestsHint,
+                    onTap: () => _push(
+                      context,
+                      FollowRequestsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.devices_rounded,
+                    title: context.l10n.settingsLinkDevice,
+                    subtitle: context.l10n.settingsLinkDeviceHint,
+                    onTap: () => _linkDevice(context, cfg),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.bookmark_border_rounded,
+                    title: context.l10n.savedTitle,
+                    subtitle: context.l10n.savedHint,
+                    onTap: () =>
+                        _push(context, SavedScreen(appState: widget.appState)),
+                  ),
+                  _section(context, context.l10n.privacyTitle),
+                  _tile(
+                    context,
+                    icon: Icons.lock_outline_rounded,
+                    title: context.l10n.privacyTitle,
+                    subtitle: context.l10n.privacyHint,
+                    onTap: () => _push(
+                      context,
+                      PrivacySettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.shield_outlined,
+                    title: context.l10n.securityTitle,
+                    subtitle: context.l10n.securityHint,
+                    onTap: () => _push(
+                      context,
+                      SecuritySettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.gavel_rounded,
+                    title: context.l10n.moderationTitle,
+                    subtitle: context.l10n.moderationHintTitle,
+                    onTap: () => _push(
+                      context,
+                      ModerationSettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _section(context, context.l10n.networkingTitle),
+                  _tile(
+                    context,
+                    icon: Icons.lan_outlined,
+                    title: context.l10n.networkingTitle,
+                    subtitle: context.l10n.networkingHintTitle,
+                    onTap: () => _push(
+                      context,
+                      NetworkingSettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.hub_rounded,
+                    title: context.l10n.navRelays,
+                    subtitle: context.l10n.settingsRelaysHint,
+                    onTap: () =>
+                        _push(context, RelaysScreen(appState: widget.appState)),
+                  ),
+                  _section(context, context.l10n.uiSettingsTitle),
+                  _tile(
+                    context,
+                    icon: Icons.palette_outlined,
+                    title: context.l10n.uiSettingsTitle,
+                    subtitle: context.l10n.uiSettingsHint,
+                    onTap: () => _push(
+                      context,
+                      UiSettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.translate_rounded,
+                    title: context.l10n.translationTitle,
+                    subtitle: context.l10n.translationHint,
+                    onTap: () => _push(
+                      context,
+                      TranslationSettingsScreen(appState: widget.appState),
+                    ),
+                  ),
+                  // Audio routing is a desktop concern: Android picks the route
+                  // through the system audio policy during a call.
+                  if (defaultTargetPlatform == TargetPlatform.linux ||
+                      defaultTargetPlatform == TargetPlatform.windows ||
+                      defaultTargetPlatform == TargetPlatform.macOS)
+                    _tile(
+                      context,
+                      icon: Icons.headphones_rounded,
+                      title: context.l10n.audioSettingsTitle,
+                      subtitle: context.l10n.audioSettingsHint,
+                      onTap: () => _push(
+                        context,
+                        AudioSettingsScreen(appState: widget.appState),
+                      ),
+                    ),
+                  _section(context, context.l10n.backupTitle),
+                  _tile(
+                    context,
+                    icon: Icons.archive_outlined,
+                    title: context.l10n.backupTitle,
+                    subtitle: context.l10n.backupHint,
+                    onTap: () =>
+                        _push(context, BackupScreen(appState: widget.appState)),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.terminal_rounded,
+                    title: context.l10n.settingsAdvancedDev,
+                    subtitle: context.l10n.settingsAdvancedDevHint,
+                    onTap: () => _push(
+                      context,
+                      DevCoreScreen(appState: widget.appState),
+                    ),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.system_update_alt,
+                    title: context.l10n.clientUpdatesTitle,
+                    subtitle: context.l10n.clientUpdatesHint,
+                    onTap: () => _push(context, const ClientUpdatesScreen()),
+                  ),
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    onPressed: () async {
+                      await widget.appState.stopCore();
+                      await widget.appState.clearConfig();
+                    },
+                    child: Text(context.l10n.settingsResetApp),
+                  ),
+                ],
               ),
-              _section(context, context.l10n.settingsAccount),
-              _tile(
-                context,
-                icon: Icons.badge_outlined,
-                title: context.l10n.profileEditTitle,
-                subtitle: context.l10n.profileEditHint,
-                onTap: () => _push(
-                    context, ProfileEditScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.alternate_email_rounded,
-                title: context.l10n.settingsAccount,
-                subtitle: '${cfg.username}@${cfg.domain}',
-                onTap: () =>
-                    _push(context, EditConfigScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.person_add_alt_1_outlined,
-                title: context.l10n.settingsFollowRequests,
-                subtitle: context.l10n.settingsFollowRequestsHint,
-                onTap: () => _push(
-                    context, FollowRequestsScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.devices_rounded,
-                title: context.l10n.settingsLinkDevice,
-                subtitle: context.l10n.settingsLinkDeviceHint,
-                onTap: () => _linkDevice(context, cfg),
-              ),
-              _tile(
-                context,
-                icon: Icons.bookmark_border_rounded,
-                title: context.l10n.savedTitle,
-                subtitle: context.l10n.savedHint,
-                onTap: () =>
-                    _push(context, SavedScreen(appState: widget.appState)),
-              ),
-              _section(context, context.l10n.privacyTitle),
-              _tile(
-                context,
-                icon: Icons.lock_outline_rounded,
-                title: context.l10n.privacyTitle,
-                subtitle: context.l10n.privacyHint,
-                onTap: () => _push(
-                    context, PrivacySettingsScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.shield_outlined,
-                title: context.l10n.securityTitle,
-                subtitle: context.l10n.securityHint,
-                onTap: () => _push(
-                    context, SecuritySettingsScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.gavel_rounded,
-                title: context.l10n.moderationTitle,
-                subtitle: context.l10n.moderationHintTitle,
-                onTap: () => _push(context,
-                    ModerationSettingsScreen(appState: widget.appState)),
-              ),
-              _section(context, context.l10n.networkingTitle),
-              _tile(
-                context,
-                icon: Icons.lan_outlined,
-                title: context.l10n.networkingTitle,
-                subtitle: context.l10n.networkingHintTitle,
-                onTap: () => _push(context,
-                    NetworkingSettingsScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.hub_rounded,
-                title: context.l10n.navRelays,
-                subtitle: context.l10n.settingsRelaysHint,
-                onTap: () =>
-                    _push(context, RelaysScreen(appState: widget.appState)),
-              ),
-              _section(context, context.l10n.uiSettingsTitle),
-              _tile(
-                context,
-                icon: Icons.palette_outlined,
-                title: context.l10n.uiSettingsTitle,
-                subtitle: context.l10n.uiSettingsHint,
-                onTap: () =>
-                    _push(context, UiSettingsScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.translate_rounded,
-                title: context.l10n.translationTitle,
-                subtitle: context.l10n.translationHint,
-                onTap: () => _push(context,
-                    TranslationSettingsScreen(appState: widget.appState)),
-              ),
-              // Audio routing is a desktop concern: Android picks the route
-              // through the system audio policy during a call.
-              if (defaultTargetPlatform == TargetPlatform.linux ||
-                  defaultTargetPlatform == TargetPlatform.windows ||
-                  defaultTargetPlatform == TargetPlatform.macOS)
-                _tile(
-                  context,
-                  icon: Icons.headphones_rounded,
-                  title: context.l10n.audioSettingsTitle,
-                  subtitle: context.l10n.audioSettingsHint,
-                  onTap: () => _push(
-                      context, AudioSettingsScreen(appState: widget.appState)),
-                ),
-              _section(context, context.l10n.backupTitle),
-              _tile(
-                context,
-                icon: Icons.archive_outlined,
-                title: context.l10n.backupTitle,
-                subtitle: context.l10n.backupHint,
-                onTap: () =>
-                    _push(context, BackupScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.terminal_rounded,
-                title: context.l10n.settingsAdvancedDev,
-                subtitle: context.l10n.settingsAdvancedDevHint,
-                onTap: () =>
-                    _push(context, DevCoreScreen(appState: widget.appState)),
-              ),
-              _tile(
-                context,
-                icon: Icons.system_update_alt,
-                title: context.l10n.clientUpdatesTitle,
-                subtitle: context.l10n.clientUpdatesHint,
-                onTap: () => _push(context, const ClientUpdatesScreen()),
-              ),
-              const SizedBox(height: 20),
-              OutlinedButton(
-                onPressed: () async {
-                  await widget.appState.stopCore();
-                  await widget.appState.clearConfig();
-                },
-                child: Text(context.l10n.settingsResetApp),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -306,11 +336,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       size: 7,
                     ),
                     const SizedBox(width: 6),
-                    Text(
-                      running
-                          ? context.l10n.coreOnline
-                          : context.l10n.coreOffline,
-                      style: Theme.of(context).textTheme.labelSmall,
+                    Flexible(
+                      child: Text(
+                        running
+                            ? context.l10n.coreOnline
+                            : context.l10n.coreOffline,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
                     ),
                   ],
                 ),

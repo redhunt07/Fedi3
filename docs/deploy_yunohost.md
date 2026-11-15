@@ -216,7 +216,151 @@ Re-run the wrapper after changing mode, domain, TURN or seed relays. It keeps
 existing secrets unless `--rotate-secrets` is passed. Switching mode stops the
 previous containers and preserves the named volumes.
 
-### Backups
+### Security
+
+The reference deployment (`fedi3.palermo.nohost.me`) runs Debian 12 with
+YunoHost and its generated nftables firewall. Verified posture:
+
+- **SSH is not exposed directly**: the YunoHost host sits behind a dynamic
+  public IP, so access goes through the reverse tunnel opened by
+  `fedi3-tunnel.service` on the support VPS. From the VPS:
+  ```bash
+  ssh -i /home/rocky/.ssh/fedi3_support -p 2223 panormus@127.0.0.1
+  ```
+  From a workstation the same hop is:
+  ```bash
+  export SSH_ASKPASS=$HOME/.ssh/askpass_fedi3.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0
+  ssh -i ~/.ssh/id_ed25519_fedi3_vps_redhunt07 rocky@51.210.42.24 \
+    'ssh -i /home/rocky/.ssh/fedi3_support -p 2223 panormus@127.0.0.1'
+  ```
+  SSH listens on port 2200, `PermitRootLogin no`, `MaxAuthTries 3`,
+  `LoginGraceTime 30`. Password authentication stays enabled for the `panormus`
+  user (the support key is also authorized); keep the password strong because
+  the tunnel is the only ingress.
+- **fail2ban**: active with 11 jails (`yunohost`, `recidive`, `postfix`,
+  `dovecot`, `nginx-http-auth`, `sasl`, `pam-generic`, `yunohost-portal`,
+  `immich`, `bonfire`, `friendica`). The `sshd` jail is disabled on purpose:
+  tunneled logins appear as `127.0.0.1` and a dynamic-IP ban would lock the
+  operator out. Other services stay protected.
+- **TLS**: nginx serves TLS 1.2/1.3 only (`ssl_protocols TLSv1.2 TLSv1.3;` in
+  `/etc/nginx/nginx.conf`) with HSTS, CSP `upgrade-insecure-requests`,
+  `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`. Keep
+  `/etc/nginx/nginx.conf` in mind on YunoHost upgrades: re-check the
+  `ssl_protocols` line if a package update restores the old template.
+- **Updates**: `unattended-upgrades` is enabled and active; Debian security
+  updates are applied automatically. YunoHost apps and the core are upgraded
+  with `yunohost tools upgrade --system` in a chosen window.
+- **Secrets**: `/opt/fedi3/.env` is mode 600 (`panormus`), and
+  `/opt/fedi3/relay-secrets.txt` is mode 600. The relay port 8787 is published
+  on `127.0.0.1` only; PostgreSQL, Dragonfly and TURN are internal.
+
+### Push notifications (same-domain layout)
+
+The reference deployment runs the `push` Compose profile and mounts both
+services on paths of the relay domain: ntfy under `/ntfy` and the gateway under
+`/_fedi3/push`. Add to `.env`:
+
+```text
+COMPOSE_PROFILES=relay,p2p,turn,push
+FEDI3_RELAY_PUSH_GATEWAY_URL=https://<domain>/_fedi3/push
+FEDI3_RELAY_PUSH_GATEWAY_TOKEN=<at least 32 characters>
+FEDI3_RELAY_PUSH_PROVIDERS=unifiedpush
+FEDI3_RELAY_PUSH_VAPID_PUBLIC_KEY=
+FEDI3_PUSH_GATEWAY_PATH=/_fedi3/push
+FEDI3_PUSH_GATEWAY_VAPID_SUBJECT=mailto:admin@example.org
+FEDI3_PUSH_GATEWAY_VAPID_PRIVATE_KEY=
+FEDI3_NTFY_BASE_URL=https://<domain>
+```
+
+`FEDI3_NTFY_BASE_URL` must stay at the host root: ntfy rejects a base URL that
+contains a path (`/ntfy`). The nginx location still serves ntfy under `/ntfy`,
+and the mobile distributor is configured with that server URL explicitly.
+
+`docker-compose.override.yml` publishes the two services on loopback for nginx
+and gives the relay and gateway public resolvers:
+
+```yaml
+services:
+  relay:
+    dns:
+      - "9.9.9.9"
+      - "1.1.1.1"
+  push_gateway:
+    dns:
+      - "9.9.9.9"
+      - "1.1.1.1"
+    ports:
+      - "127.0.0.1:8090:8090"
+  ntfy:
+    ports:
+      - "127.0.0.1:8080:80"
+```
+
+YunoHost's local resolver maps its own domains to loopback (`::1`). The relay
+validates push endpoints as public HTTPS (`ensure_fetch_target_allowed`) and the
+gateway's SSRF guard rejects private addresses, so both containers need public
+resolvers (or an `/etc/hosts` entry with the public IP).
+
+nginx locations in `/etc/nginx/conf.d/<domain>.d/fedi3.conf`, before
+`location /`:
+
+```nginx
+location = /_fedi3/push {
+    access_by_lua_file /dev/null;
+    proxy_pass http://127.0.0.1:8090/_fedi3/push;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 60s;
+}
+location = /_fedi3/push/healthz {
+    access_by_lua_file /dev/null;
+    proxy_pass http://127.0.0.1:8090/healthz;
+    proxy_set_header Host $host;
+}
+location /ntfy/ {
+    access_by_lua_file /dev/null;
+    proxy_pass http://127.0.0.1:8080/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+}
+```
+
+Verify:
+
+```bash
+curl -fsS https://<domain>/_fedi3/relay/push-config   # enabled=true, providers
+curl -fsS https://<domain>/_fedi3/push/healthz        # ok
+curl -fsS https://<domain>/ntfy/v1/health             # healthy
+```
+
+Register an installation with the account Bearer token:
+
+```bash
+curl -X PUT -H "Authorization: Bearer <USER_TOKEN>" -H 'content-type: application/json' \
+  -d '{"provider":"unifiedpush","token":"https://<domain>/ntfy/<topic>","expires_at_ms":<ms>}' \
+  https://<domain>/_fedi3/relay/push/<user>
+```
+
+Send a wake through the gateway (token = `FEDI3_RELAY_PUSH_GATEWAY_TOKEN`):
+
+```bash
+curl -X POST -H "Authorization: Bearer <GATEWAY_TOKEN>" -H 'content-type: application/json' \
+  -d '{"provider":"unifiedpush","token":"https://<domain>/ntfy/<topic>","event":"sync","ttl_secs":86400}' \
+  https://<domain>/_fedi3/push
+curl -s "https://<domain>/ntfy/<topic>/json?poll=1"   # {"event":"sync"} delivered
+```
+
+### Backupss
 
 YunoHost's backup does not include `/opt/fedi3` or the Docker volumes by
 default. Back up:
@@ -227,8 +371,31 @@ default. Back up:
 - optionally the repository scripts/configuration.
 
 The project's `scripts/backup_relay_pg.sh` and `scripts/backup_relay_media.sh`
-work with the Compose stack; add them to cron or include the volumes in the
-YunoHost backup plan.
+work with the Compose stack. The reference deployment schedules them with
+`/etc/cron.d/fedi3-backups`:
+
+```bash
+sudo mkdir -p /var/backups/fedi3-relay
+sudo chmod 700 /var/backups/fedi3-relay
+sudo tee /etc/cron.d/fedi3-backups >/dev/null <<'EOF'
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 3 * * * root cd /opt/fedi3 && bash ./scripts/backup_relay_pg.sh /var/backups/fedi3-relay >> /var/log/fedi3-backup.log 2>&1
+45 3 * * * root cd /opt/fedi3 && bash ./scripts/backup_relay_media.sh /var/backups/fedi3-relay >> /var/log/fedi3-backup.log 2>&1
+EOF
+sudo chmod +x /opt/fedi3/scripts/*.sh /opt/fedi3/scripts/*.py
+```
+
+Keep the executable bit on the scripts: without it cron logs
+`Permission denied` and no backup is written. Verify the newest file date:
+
+```bash
+sudo ls -1t /var/backups/fedi3-relay | head -2
+sudo tail -20 /var/log/fedi3-backup.log
+```
+
+Include `/opt/fedi3/.env`, `relay-secrets.txt` and the named volumes in the
+YunoHost backup plan as well.
 
 ## Troubleshooting
 

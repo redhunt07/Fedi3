@@ -167,3 +167,10 @@ recupero: sbloccare il portachiavi e premere **Riprova**. Il programma conserva
 configurazione e account e non propone la creazione di un nuovo profilo in
 questa condizione. Un JSON danneggiato viene segnalato separatamente. Non
 cancellare `config.json` per risolvere un problema del portachiavi.
+
+La cache privata in chiaro `background_config.json` serve solo all'engine del
+servizio Android quando il Keystore non è disponibile a quell'engine. I client
+desktop non la usano per aggirare un portachiavi bloccato. Le vecchie copie
+desktop, compreso l'eventuale file temporaneo, vengono eliminate dopo l'accesso
+riuscito al portachiavi; se questo è indisponibile restano conservate per il
+recupero, senza essere caricate.

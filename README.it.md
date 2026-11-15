@@ -1,6 +1,6 @@
 # FEDI3
 
-[![CI](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/redhunt07/Fedi3?include_prereleases&label=release)](https://github.com/redhunt07/Fedi3/releases) [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Rust workspace](https://img.shields.io/badge/core-Rust-f97316.svg)](Cargo.toml) [![Flutter client](https://img.shields.io/badge/client-Flutter-38bdf8.svg)](app)
+[![CI](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/redhunt07/Fedi3/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/redhunt07/Fedi3?include_prereleases&label=release)](https://github.com/redhunt07/Fedi3/releases) [![AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE) [![Rust workspace](https://img.shields.io/badge/core-Rust-f97316.svg)](Cargo.toml) [![Flutter client](https://img.shields.io/badge/client-Flutter-38bdf8.svg)](app)
 
 Autore: **[RedHunt07](https://github.com/redhunt07)** · [English](README.md) · **Italiano**
 
@@ -299,5 +299,5 @@ segue il [Contributor Covenant](CODE_OF_CONDUCT.md).
 
 ## Licenza
 
-AGPL-3.0-or-later. Vedi [LICENSE](LICENSE) e [NOTICE](NOTICE). Le modifiche alle
+AGPL-3.0-only. Vedi [LICENSE](LICENSE) e [NOTICE](NOTICE). Le modifiche alle
 parti esposte in rete devono restare open source.

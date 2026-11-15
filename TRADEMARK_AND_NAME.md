@@ -22,7 +22,7 @@ consistently to avoid confusing users.
 ## Scope
 
 This policy governs naming and presentation only. It does not limit the rights
-granted by AGPL-3.0-or-later: you may reuse, modify and redistribute the code
+granted by AGPL-3.0-only: you may reuse, modify and redistribute the code
 freely, provided you follow the license and do not mislead users about what they
 are running.
 

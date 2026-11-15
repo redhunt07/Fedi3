@@ -37,11 +37,12 @@ la schermata di recupero con **Riprova** e conserva il profilo esistente.
 
 ## Toolchain
 
-Serve Flutter stabile e Rust stabile:
+Usa Flutter 3.50.0, come la CI, e la toolchain Rust fissata in
+`rust-toolchain.toml`:
 
 ```bash
 # Flutter
-git clone https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
+git clone https://github.com/flutter/flutter.git -b 3.50.0 "$HOME/flutter"
 export PATH="$HOME/flutter/bin:$PATH"
 flutter config --enable-linux-desktop
 flutter doctor
@@ -51,7 +52,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-Non installare Flutter dai repository della distribuzione se la versione è vecchia: l'app richiede Dart >= 3.10 e Flutter >= 3.38.
+Per build ripetibili usa la versione Flutter fissata. Il relativo SDK Dart
+soddisfa le dipendenze del client; il lockfile richiede Dart >= 3.13 e Flutter
+>= 3.47, mentre la CI verifica Flutter 3.50.0.
 
 ## Compilare il core
 
@@ -69,6 +72,8 @@ Il file prodotto viene copiato accanto all'eseguibile dell'app.
 cd app
 flutter pub get
 flutter build linux --release
+cd ..
+scripts/build_core.sh release
 ```
 
 Il bundle finito è in `app/build/linux/x64/release/bundle/`.
@@ -115,6 +120,8 @@ flutter config --enable-linux-desktop
 flutter create --platforms=linux .
 flutter pub get
 flutter build linux --release
+cd ..
+scripts/build_core.sh release
 ```
 
 Se i plugin non hanno la cartella `linux/`:

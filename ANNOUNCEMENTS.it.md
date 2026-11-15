@@ -4,6 +4,10 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-15 — Verifiche per la preparazione al rilascio
+
+Le modifiche in sviluppo correggono layout con testo grande, login rapido su porte relay personalizzate e isolamento della cache delle credenziali desktop. I domini push opzionali vengono passati a Caddy tramite Compose. La [procedura di rilascio](docs/it/release_checklist.md) descrive i controlli ripetibili e le prove sui pacchetti e sui dispositivi. Le modifiche sono in verifica; questo annuncio non indica la pubblicazione di un pacchetto.
+
 ## 2026-11-12 — Rilasciata Fedi3 0.11.11
 
 La build 0.11.11 (4015) è disponibile sulla [pagina delle release](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11) con l'AppImage Linux x86_64, lo ZIP Windows x64, gli APK Android arm64-v8a e x86_64 e i checksum SHA256. Raccoglie il lavoro pubblicato da 0.11.10: sincronizzazione chat multi-dispositivo con abbinamento QR, note vocali e video riproducibili, il servizio Android solo-push con minor consumo in background e sospensione P2P, e il push gateway self-hosted opzionale. La direzione del login QR è invertita: il client già loggato mostra il codice e il nuovo dispositivo lo scansiona. [Changelog](CHANGELOG.md) · [Screenshot](README.md#screenshots).

@@ -136,7 +136,10 @@ class _BrandParticlesPainter extends CustomPainter {
       final twinkle = 0.5 + 0.5 * math.sin((progress + i * 0.31) * 2 * math.pi);
       paint.color = Colors.white.withAlpha((28 + 52 * twinkle).round());
       canvas.drawCircle(
-          Offset(x + drift, y), size.width * (0.008 + 0.006 * twinkle), paint);
+        Offset(x + drift, y),
+        size.width * (0.008 + 0.006 * twinkle),
+        paint,
+      );
     }
   }
 
@@ -178,12 +181,15 @@ class _AuroraButtonState extends State<AuroraButton> {
           Icon(widget.icon, size: 18, color: Colors.white),
           const SizedBox(width: 8),
         ],
-        Text(
-          widget.label,
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-              ),
+        Flexible(
+          child: Text(
+            widget.label,
+            textAlign: TextAlign.center,
+            style: Theme.of(context)
+                .textTheme
+                .labelLarge
+                ?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
+          ),
         ),
       ],
     );
@@ -223,7 +229,9 @@ class _AuroraButtonState extends State<AuroraButton> {
                 onTap: widget.onPressed,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: UiTokens.gapLg, vertical: 13),
+                    horizontal: UiTokens.gapLg,
+                    vertical: 13,
+                  ),
                   child: child,
                 ),
               ),
@@ -303,12 +311,7 @@ class GlassPanel extends StatelessWidget {
 
 /// Small pill label used for tags, counters and status hints.
 class PillTag extends StatelessWidget {
-  const PillTag({
-    super.key,
-    required this.label,
-    this.icon,
-    this.color,
-  });
+  const PillTag({super.key, required this.label, this.icon, this.color});
 
   final String label;
   final IconData? icon;
@@ -334,10 +337,10 @@ class PillTag extends StatelessWidget {
           ],
           Text(
             label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: tint,
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(color: tint, fontWeight: FontWeight.w700),
           ),
         ],
       ),
@@ -499,15 +502,13 @@ class EmptyState extends StatelessWidget {
               Text(
                 message!,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
-            if (action != null) ...[
-              const SizedBox(height: 18),
-              action!,
-            ],
+            if (action != null) ...[const SizedBox(height: 18), action!],
           ],
         ),
       ),

@@ -1,4 +1,4 @@
-# Dominio relay in produzione
+# Fedi3 relay + optional self-hosted push (Caddy site blocks).
 {$FEDI3_DOMAIN} {
   encode zstd gzip
   request_body {
@@ -9,6 +9,28 @@
     # network). Caddy appends the real client IP to X-Forwarded-For; the relay
     # reads the last element, so a spoofed prefix cannot change the rate-limit
     # key (H-13 / C5).
+    trusted_proxies private_ranges
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+
+# Self-hosted push stack (Compose profile "push").
+# Set FEDI3_NTFY_DOMAIN / FEDI3_PUSH_DOMAIN in .env to the real hostnames.
+# Unset variables fall back to *.invalid site blocks, which never receive
+# traffic. HTTP-only defaults avoid certificate requests for reserved names.
+{$FEDI3_NTFY_DOMAIN:http://ntfy.invalid} {
+  encode zstd gzip
+  reverse_proxy ntfy:80 {
+    trusted_proxies private_ranges
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+
+{$FEDI3_PUSH_DOMAIN:http://push.invalid} {
+  encode zstd gzip
+  reverse_proxy push_gateway:8090 {
     trusted_proxies private_ranges
     header_up X-Real-IP {remote_host}
     header_up X-Forwarded-Proto {scheme}

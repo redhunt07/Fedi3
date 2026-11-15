@@ -166,3 +166,9 @@ unlock the keyring and press **Retry**. The program keeps configuration and
 account and does not propose creating a new profile in this condition. A
 corrupted JSON is reported separately. Do not delete `config.json` to solve a
 keyring problem.
+
+The private plaintext `background_config.json` cache exists only for Android's
+keep-alive engine when the Keystore is unavailable to that engine. Desktop
+clients do not use it to bypass a locked vault. Legacy desktop copies (including
+a pending temporary file) are removed after successful vault access; unavailable
+vaults preserve them for recovery without loading them.

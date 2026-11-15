@@ -37,11 +37,12 @@ the recovery screen with **Retry** and keeps the existing profile.
 
 ## Toolchain
 
-You need stable Flutter and stable Rust:
+Use Flutter 3.50.0, matching CI, and the Rust toolchain pinned in
+`rust-toolchain.toml`:
 
 ```bash
 # Flutter
-git clone https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
+git clone https://github.com/flutter/flutter.git -b 3.50.0 "$HOME/flutter"
 export PATH="$HOME/flutter/bin:$PATH"
 flutter config --enable-linux-desktop
 flutter doctor
@@ -51,7 +52,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-Do not install Flutter from distribution repositories if the version is old: the app requires Dart >= 3.10 and Flutter >= 3.38.
+Use the pinned Flutter version for reproducible builds. The Dart SDK bundled
+with that Flutter release satisfies the application dependencies. The lockfile
+requires Dart >= 3.13 and Flutter >= 3.47; CI verifies Flutter 3.50.0.
 
 ## Building the core
 
@@ -69,6 +72,8 @@ The produced file is copied next to the app executable.
 cd app
 flutter pub get
 flutter build linux --release
+cd ..
+scripts/build_core.sh release
 ```
 
 The finished bundle is in `app/build/linux/x64/release/bundle/`.
@@ -114,6 +119,8 @@ flutter config --enable-linux-desktop
 flutter create --platforms=linux .
 flutter pub get
 flutter build linux --release
+cd ..
+scripts/build_core.sh release
 ```
 
 If the plugins do not have the `linux/` directory:
