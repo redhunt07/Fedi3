@@ -22,7 +22,8 @@ impl AccountEnvelope {
     pub fn valid_kind(&self) -> bool {
         matches!(
             self.kind.as_str(),
-            "profile"
+            "personal_notifications"
+                | "profile"
                 | "followers"
                 | "following"
                 | "inbox_follows"

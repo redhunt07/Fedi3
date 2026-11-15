@@ -1,0 +1,1 @@
+Sincronizzazione delle notifiche personali tra dispositivi, avvisi senza duplicati e risveglio Android in background. Identità e dati esistenti conservati.

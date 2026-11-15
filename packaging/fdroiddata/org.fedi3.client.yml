@@ -11,9 +11,9 @@ AutoName: Fedi3
 RepoType: git
 Repo: https://github.com/redhunt07/Fedi3.git
 Builds:
-- versionName: 0.12.1
-  versionCode: 6017
-  commit: v0.12.1
+- versionName: 0.12.2
+  versionCode: 6018
+  commit: v0.12.2
   sudo:
   - apt-get update
   - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless
@@ -45,9 +45,9 @@ Builds:
   - bash scripts/build_android_fdroid.sh arm64-v8a
   output: app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
   ndk: r28c
-- versionName: 0.12.1
-  versionCode: 8017
-  commit: v0.12.1
+- versionName: 0.12.2
+  versionCode: 8018
+  commit: v0.12.2
   sudo:
   - apt-get update
   - apt-get install -y build-essential clang cmake pkg-config openjdk-21-jdk-headless
@@ -85,7 +85,7 @@ VercodeOperation:
 - '%c + 2000'
 - '%c + 4000'
 UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: 0.12.1
-CurrentVersionCode: 8017
+CurrentVersion: 0.12.2
+CurrentVersionCode: 8018
 Disabled: Native artifact provenance review pending, especially media_kit native JAR
   downloads from GitHub. WebRTC Maven artifacts also need licence/provenance validation.

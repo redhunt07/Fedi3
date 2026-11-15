@@ -1,0 +1,1 @@
+Sync personal notifications across devices, prevent duplicate alerts, and wake Android background sync for social activity. Preserve existing identities and data.

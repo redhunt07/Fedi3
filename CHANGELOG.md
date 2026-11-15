@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-15
+
+- Replicate only personal social notifications between paired devices, including existing history, without copying unrelated timeline activity.
+- Persist device-local notification alert claims so startup, concurrent UI/background consumers, retries and replay cannot display the same alert twice. Historical imports restore the notification feed silently.
+- Wake background Android sync when encrypted personal notifications change even without chat messages; acknowledge the wake cursor only after synchronization succeeds.
+- Negotiate notification replication with relay and peer endpoints so older clients can continue syncing supported account records.
+
 ## [0.12.1] - 2026-11-14
 
 - Keep notification row identities stable when new events arrive; ignore stale profile lookups.

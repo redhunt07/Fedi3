@@ -122,7 +122,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _streamSub?.cancel();
     _streamSub = CoreEventStream(config: cfg).stream().listen((ev) {
       if (!mounted) return;
-      if (ev.kind != 'notification') return;
+      if (ev.kind != 'notification' && ev.kind != 'notifications_sync') return;
       // Debounce refresh bursts.
       _streamDebounce?.cancel();
       _streamDebounce = Timer(const Duration(milliseconds: 350), () {

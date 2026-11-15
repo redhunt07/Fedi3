@@ -1123,6 +1123,26 @@ class CoreApi {
     return _decodeMap(resp, 'relay list');
   }
 
+  Future<int> claimNotificationAlerts() async {
+    final response = await _request(
+        method: 'POST',
+        uri: _internal('/_fedi3/notifications/claim'),
+        headers: _jsonHeaders,
+        body: '{}');
+    return (_decodeMap(response, 'notification alerts')['items'] as List? ??
+            const [])
+        .length;
+  }
+
+  Future<void> refreshAccountState() async {
+    await _request(
+        method: 'POST',
+        uri: _internal('/_fedi3/account/refresh'),
+        headers: _jsonHeaders,
+        body: '{}',
+        anySuccess: true);
+  }
+
   Future<Map<String, dynamic>> fetchAccountProfile() async {
     final response = await _request(
         method: 'GET',

@@ -31,6 +31,7 @@ const TABLES: &[&str] = &[
     "object_meta",
     "object_tags",
     "object_attachments",
+    "personal_notifications",
 ];
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
@@ -48,6 +49,7 @@ fn now() -> i64 {
         .as_millis() as i64
 }
 fn schema(db: &SocialDb) -> Result<()> {
+    crate::notifications::schema(db)?;
     db.connect()?.execute_batch("CREATE TABLE IF NOT EXISTS account_replica(kind TEXT NOT NULL,key TEXT NOT NULL,clock INTEGER NOT NULL,device TEXT NOT NULL,deleted INTEGER NOT NULL,data TEXT NOT NULL,dirty INTEGER NOT NULL,PRIMARY KEY(kind,key)); CREATE TABLE IF NOT EXISTS account_profile(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL);")?;
     Ok(())
 }
@@ -109,6 +111,20 @@ pub fn profile_value(cfg: &ApConfig) -> Value {
 }
 pub fn initialize(state: &ApState) -> Result<()> {
     schema(&state.social)?;
+    if state
+        .social
+        .get_local_meta("notification_replication_v1")?
+        .is_none()
+    {
+        state.social.connect()?.execute(
+            "DELETE FROM local_meta WHERE key LIKE 'account_relay_cursor:%'",
+            [],
+        )?;
+        state
+            .social
+            .set_local_meta("notification_replication_v1", "1")?;
+    }
+    crate::notifications::backfill(state)?;
     state.social.set_local_meta(
         "account_replica_key_salt",
         &sha256(&encryption_key(&state.private_key_pem)),
@@ -595,6 +611,14 @@ pub fn apply(db: &SocialDb, record: &Record) -> Result<bool> {
             )?;
         }
     }
+    if record.kind == "personal_notifications" && !record.deleted {
+        crate::notifications::mirror(
+            &tx,
+            record.data["activity_id"]
+                .as_str()
+                .context("notification id")?,
+        )?;
+    }
     tx.execute("INSERT INTO account_replica VALUES(?1,?2,?3,?4,?5,?6,0) ON CONFLICT(kind,key) DO UPDATE SET clock=excluded.clock,device=excluded.device,deleted=excluded.deleted,data=excluded.data,dirty=0",params![record.kind,record.key,record.clock,record.device,record.deleted,serde_json::to_string(&record.data)?])?;
     tx.commit()?;
     Ok(true)
@@ -695,7 +719,7 @@ pub async fn sync_once(state: &ApState, base: &str, token: &str) -> Result<()> {
     loop {
         let response = state
             .http
-            .get(format!("{endpoint}?after={after}"))
+            .get(format!("{endpoint}?after={after}&notifications=1"))
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(15))
             .send()
@@ -728,11 +752,17 @@ pub async fn sync_once(state: &ApState, base: &str, token: &str) -> Result<()> {
             after = seq;
         }
         if page_changed {
-            for kind in ["account", "outbox"] {
+            for kind in ["account", "outbox", "notifications_sync"] {
                 let _ = state
                     .ui_events
                     .send(crate::ui_events::UiEvent::new(kind, None, None));
             }
+        }
+        if page_changed {
+            let _ =
+                state
+                    .ui_events
+                    .send(crate::ui_events::UiEvent::new("notification", None, None));
         }
         state
             .social
@@ -813,16 +843,21 @@ pub fn start(
                 let db = state.social.clone();
                 let _ = tokio::task::spawn_blocking(move || capture(&db)).await;
             }
-            tokio::select! {_=crate::power::sleep(5,60,300)=>{},_=shutdown.changed()=>{if *shutdown.borrow(){break;}}}
+            tokio::select! {_=state.social.account_notify.notified()=>{},_=crate::power::sleep(5,60,300)=>{},_=shutdown.changed()=>{if *shutdown.borrow(){break;}}}
         }
     }))
 }
 
-pub fn peer_page(state: &ApState, offset: usize) -> Result<Vec<AccountEnvelope>> {
+pub fn peer_page(
+    state: &ApState,
+    offset: usize,
+    notifications: bool,
+) -> Result<Vec<AccountEnvelope>> {
     let mut page = Vec::new();
     let mut size = 0;
     for record in records(&state.social, false, 0)?
         .into_iter()
+        .filter(|r| notifications || r.kind != "personal_notifications")
         .skip(offset)
         .take(64)
     {
@@ -849,7 +884,7 @@ pub async fn pull_peer(state: &ApState, peer: &str, did: &str) -> Result<()> {
     let mut offset = 0;
     loop {
         let path = "/.fedi3/device/account";
-        let query = format!("?offset={offset}");
+        let query = format!("?offset={offset}&notifications=1");
         let uri: http::Uri = format!("http://localhost{path}{query}").parse()?;
         let mut headers = HeaderMap::new();
         headers.insert("Host", "localhost".parse()?);
@@ -898,6 +933,14 @@ pub async fn pull_peer(state: &ApState, peer: &str, did: &str) -> Result<()> {
         }
         offset += items.len();
     }
+    let _ = state.ui_events.send(crate::ui_events::UiEvent::new(
+        "notifications_sync",
+        None,
+        None,
+    ));
+    let _ = state
+        .ui_events
+        .send(crate::ui_events::UiEvent::new("notification", None, None));
     let db = state.social.clone();
     tokio::task::spawn_blocking(move || capture(&db)).await??;
     let _ = state
@@ -917,6 +960,72 @@ mod tests {
         db.set_local_meta("account_initial_pull", "1").unwrap();
         (dir, db)
     }
+    #[test]
+    fn personal_notifications_replicate_without_timeline_and_claim_once_after_restart() {
+        let (_a_dir, a) = db("notification-origin");
+        let (b_dir, b) = db("notification-recipient");
+        let activity = serde_json::json!({"id":"https://sender.example/follow/1","type":"Follow","actor":"https://sender.example/users/bob","object":"https://me.example/users/alice"});
+        let ts = now() + 10;
+        a.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO personal_notifications VALUES(?1,?2,?3,'Follow',?4)",
+                params![
+                    activity["id"].as_str().unwrap(),
+                    ts,
+                    activity["actor"].as_str().unwrap(),
+                    serde_json::to_vec(&activity).unwrap()
+                ],
+            )
+            .unwrap();
+        a.store_inbox_activity(
+            "unrelated-timeline",
+            Some("other"),
+            Some("Like"),
+            b"{}".to_vec(),
+        )
+        .unwrap();
+        capture(&a).unwrap();
+        let notification = records(&a, false, 0)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.kind == "personal_notifications")
+            .unwrap();
+        assert!(!records(&a, false, 0)
+            .unwrap()
+            .iter()
+            .any(|r| r.kind == "inbox_items"));
+        assert!(apply(&b, &notification).unwrap());
+        assert_eq!(b.list_inbox_notifications(20, None).unwrap().items.len(), 1);
+        // Two independent consumers (UI and background engine) race for the same alert.
+        let one = b.clone();
+        let two = b.clone();
+        let t = std::thread::spawn(move || crate::notifications::claim(&one).unwrap().len());
+        let claimed = crate::notifications::claim(&two).unwrap().len() + t.join().unwrap();
+        assert_eq!(claimed, 1);
+        let mut replay = notification.clone();
+        replay.clock += 100;
+        assert!(apply(&b, &replay).unwrap());
+        assert_eq!(b.list_inbox_notifications(20, None).unwrap().items.len(), 1);
+        assert!(crate::notifications::claim(&b).unwrap().is_empty());
+        drop(b);
+        let reopened = SocialDb::open(b_dir.path().join("fedi3.db")).unwrap();
+        assert!(crate::notifications::claim(&reopened).unwrap().is_empty());
+    }
+
+    #[test]
+    fn historical_notification_import_restores_feed_without_alerting() {
+        let (_a_dir, a) = db("notification-history-a");
+        let (_b_dir, b) = db("notification-history-b");
+        a.connect().unwrap().execute("INSERT INTO personal_notifications VALUES('old-follow',1,'https://old.example/users/bob','Follow',?1)",[serde_json::to_vec(&serde_json::json!({"id":"old-follow","type":"Follow","actor":"https://old.example/users/bob","object":"me"})).unwrap()]).unwrap();
+        capture(&a).unwrap();
+        for r in records(&a, false, 0).unwrap() {
+            apply(&b, &r).unwrap();
+        }
+        assert_eq!(b.list_inbox_notifications(20, None).unwrap().items.len(), 1);
+        assert!(crate::notifications::claim(&b).unwrap().is_empty());
+    }
+
     #[test]
     fn local_write_during_download_is_retained_and_queued() {
         let (_dir, db) = db("racing-local-write");

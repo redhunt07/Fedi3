@@ -191,6 +191,13 @@ Future<void> backgroundMain() async {
     }
   };
 
+  Future<void> showPendingActivityAlerts() async {
+    if (await CoreApi(config: cfg).claimNotificationAlerts() == 0) return;
+    await NotificationService.showActivityNotification(
+        title: l10n.activityNotificationTitle,
+        body: l10n.activityNotificationBody);
+  }
+
   Future<void> startBackgroundCore({bool pushOnly = true}) async {
     if (starting) throw StateError("Core startup pending");
     starting = true;
@@ -223,10 +230,11 @@ Future<void> backgroundMain() async {
           .listen((ev) async {
         if (pushOnly) armQuiet();
         if (ev.kind == 'notification') {
-          await NotificationService.showActivityNotification(
-            title: l10n.activityNotificationTitle,
-            body: l10n.activityNotificationBody,
-          );
+          try {
+            await showPendingActivityAlerts();
+          } catch (e) {
+            debugPrint('[bg] activity alert deferred: $e');
+          }
         } else if (ev.kind == 'chat' && ev.activityType == 'call') {
           await calls?.poll();
         } else if (ev.kind == 'chat' &&
@@ -263,6 +271,11 @@ Future<void> backgroundMain() async {
       }, onError: (_) {
         unawaited(stopBackgroundCore());
       });
+      try {
+        await showPendingActivityAlerts();
+      } catch (e) {
+        debugPrint('[bg] activity alert deferred: $e');
+      }
       if (pushOnly) {
         armQuiet();
         armHardStop();
@@ -280,6 +293,19 @@ Future<void> backgroundMain() async {
     config: cfg,
     directory: support,
     onNewItems: startBackgroundCore,
+    onNewNotifications: (cursor) async {
+      final api = CoreApi(config: cfg);
+      await api.refreshAccountState();
+      for (var i = 0; i < 30; i++) {
+        final profile = await api.fetchAccountProfile();
+        if (((profile['cursor'] as num?)?.toInt() ?? 0) >= cursor) {
+          await showPendingActivityAlerts();
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+      throw TimeoutException('Personal notification sync is still pending');
+    },
   );
   if (poller.enabled) {
     await poller.start();

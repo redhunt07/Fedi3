@@ -265,3 +265,13 @@ remain queued. The optional `client_message_id` must be reused for an ambiguous
 retry; reuse with different content is rejected. Retry workers and self-sync use
 the durable queue. UI presence keys use complete actor URLs, and missing presence
 is not treated as evidence that a classic ActivityPub account is online.
+
+## Personal notifications (0.12.2)
+
+Only activities classified as personal notifications are replicated in encrypted `personal_notifications` account records. Normal timeline activity is excluded. Each device mirrors these activities into its own inbox without re-running federation side effects. Existing history is restored silently.
+
+Alert claims are stored only in the local device database. `POST /_fedi3/notifications/claim` atomically claims pending alerts for the UI or headless worker and does not mark the notification feed read. Replays and restarts cannot claim the same activity twice.
+
+The authenticated relay chat-spool response also includes an opaque `notifications_cursor`. Android's existing keep-alive poller wakes the core when that cursor changes, requests an immediate account refresh, and acknowledges the cursor only after it has been applied. External push providers remain optional/configurable; OS restrictions on long suspension still apply.
+
+New relay and peer requests opt in with `notifications=1`; older clients continue receiving their supported account records. On upgrade, the account cursor is reset once to retrieve notification history previously skipped by an older client. Local identity, posts, relationships and chat data are retained. Update the relay before installing 0.12.2 clients.

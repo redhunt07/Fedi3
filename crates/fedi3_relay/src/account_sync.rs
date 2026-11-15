@@ -8,7 +8,7 @@ pub(super) struct Upload {
 }
 impl Db {
     pub(super) fn init_account_state(&self) -> Result<()> {
-        let sql="CREATE TABLE IF NOT EXISTS account_keys(username TEXT PRIMARY KEY,actor TEXT NOT NULL,pem TEXT NOT NULL); CREATE TABLE IF NOT EXISTS account_state(seq INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL,kind TEXT NOT NULL,row_key TEXT NOT NULL,clock BIGINT NOT NULL,device TEXT NOT NULL,terminal INTEGER NOT NULL DEFAULT 0,envelope TEXT NOT NULL,UNIQUE(username,kind,row_key)); CREATE INDEX IF NOT EXISTS account_state_cursor ON account_state(username,seq); CREATE TABLE IF NOT EXISTS account_tunnel_nonces(username TEXT NOT NULL,nonce TEXT NOT NULL,created_at_ms BIGINT NOT NULL,PRIMARY KEY(username,nonce));";
+        let sql="CREATE TABLE IF NOT EXISTS account_keys(username TEXT PRIMARY KEY,actor TEXT NOT NULL,pem TEXT NOT NULL); CREATE TABLE IF NOT EXISTS account_state(seq INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL,kind TEXT NOT NULL,row_key TEXT NOT NULL,clock BIGINT NOT NULL,device TEXT NOT NULL,terminal INTEGER NOT NULL DEFAULT 0,envelope TEXT NOT NULL,UNIQUE(username,kind,row_key)); CREATE INDEX IF NOT EXISTS account_state_cursor ON account_state(username,seq); CREATE INDEX IF NOT EXISTS account_notification_cursor ON account_state(username,kind,seq); CREATE TABLE IF NOT EXISTS account_tunnel_nonces(username TEXT NOT NULL,nonce TEXT NOT NULL,created_at_ms BIGINT NOT NULL,PRIMARY KEY(username,nonce));";
         match self.driver {
             DbDriver::Sqlite => {
                 let c = self.open_sqlite_conn()?;
@@ -203,10 +203,25 @@ impl Db {
         }
         Ok(())
     }
+    pub(super) fn notification_cursor(&self, user: &str) -> Result<i64> {
+        match self.driver {
+            DbDriver::Sqlite => Ok(self.open_sqlite_conn()?.query_row("SELECT COALESCE(MAX(seq),0) FROM account_state WHERE username=?1 AND kind='personal_notifications'",[user],|r|r.get(0))?),
+            DbDriver::Postgres => Ok(self.open_pg_conn()?.query_one("SELECT COALESCE(MAX(seq),0)::BIGINT FROM account_state WHERE username=$1 AND kind='personal_notifications'",&[&user])?.get(0)),
+        }
+    }
+    #[cfg(test)]
     pub(super) fn account_state_page(&self, user: &str, after: i64) -> Result<AccountPage> {
+        self.account_state_page_for_client(user, after, true)
+    }
+    fn account_state_page_for_client(
+        &self,
+        user: &str,
+        after: i64,
+        notifications: bool,
+    ) -> Result<AccountPage> {
         let rows:Vec<(i64,String)>=match self.driver {
-   DbDriver::Sqlite=>{let c=self.open_sqlite_conn()?;let mut q=c.prepare("SELECT seq,envelope FROM account_state WHERE username=?1 AND seq>?2 ORDER BY seq LIMIT 64")?;let rows=q.query_map(params![user,after],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;rows}
-   DbDriver::Postgres=>self.open_pg_conn()?.query("SELECT seq,envelope FROM account_state WHERE username=$1 AND seq>$2 ORDER BY seq LIMIT 64",&[&user,&after])?.into_iter().map(|r|(r.get(0),r.get(1))).collect(),
+   DbDriver::Sqlite=>{let c=self.open_sqlite_conn()?;let mut q=c.prepare("SELECT seq,envelope FROM account_state WHERE username=?1 AND seq>?2 AND (?3 OR kind<>'personal_notifications') ORDER BY seq LIMIT 64")?;let rows=q.query_map(params![user,after,notifications],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;rows}
+   DbDriver::Postgres=>self.open_pg_conn()?.query("SELECT seq,envelope FROM account_state WHERE username=$1 AND seq>$2 AND ($3 OR kind<>'personal_notifications') ORDER BY seq LIMIT 64",&[&user,&after,&notifications])?.into_iter().map(|r|(r.get(0),r.get(1))).collect(),
   };
         let mut page = AccountPage {
             items: vec![],
@@ -237,12 +252,18 @@ pub(super) async fn get_state(
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0)
         .max(0);
+    let notifications = query_value(query.as_deref(), "notifications").as_deref() == Some("1");
     match state
         .db
-        .run(move |db| db.account_state_page(&user, after))
+        .run(move |db| db.account_state_page_for_client(&user, after, notifications))
         .await
     {
-        Ok(v) => ([(header::CACHE_CONTROL, "no-store")], axum::Json(v)).into_response(),
+        Ok(mut v) => {
+            if !notifications {
+                v.items.retain(|(_, e)| e.kind != "personal_notifications");
+            }
+            ([(header::CACHE_CONTROL, "no-store")], axum::Json(v)).into_response()
+        }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -287,6 +308,11 @@ pub(super) async fn put_state(
             return StatusCode::BAD_REQUEST.into_response();
         }
     }
+    let wake = upload
+        .records
+        .iter()
+        .any(|e| e.kind == "personal_notifications");
+    let wake_user = user.clone();
     match state
         .db
         .run(move |db| {
@@ -295,7 +321,12 @@ pub(super) async fn put_state(
         })
         .await
     {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            if wake {
+                operations::notify_user(&state, &wake_user);
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             warn!(error=%e,"account replication rejected");
             (

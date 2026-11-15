@@ -1,3 +1,4 @@
+use rusqlite::OptionalExtension;
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -347,7 +348,24 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
             if let Err(resp) = require_internal(state, req.headers()) {
                 return resp;
             }
-            axum::Json(serde_json::json!({"profile":crate::account_sync::current_profile(&state.social).ok().flatten(),"last_ok":state.social.get_local_meta("account_sync_last_ok").ok().flatten(),"error":state.social.get_local_meta("account_sync_error").ok().flatten()})).into_response()
+            let base = state
+                .cfg
+                .relay_base_url
+                .as_deref()
+                .unwrap_or("")
+                .trim_end_matches('/');
+            let key = format!(
+                "account_relay_cursor:{}",
+                fedi3_protocol::receipts::sha256(base.as_bytes())
+            );
+            let cursor = state
+                .social
+                .get_local_meta(&key)
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            axum::Json(serde_json::json!({"profile":crate::account_sync::current_profile(&state.social).ok().flatten(),"cursor":cursor,"last_ok":state.social.get_local_meta("account_sync_last_ok").ok().flatten(),"error":state.social.get_local_meta("account_sync_error").ok().flatten()})).into_response()
         }
         ("GET", "/_fedi3/identity/export") => identity_export_get(state, req).await,
         // Chat snapshot (internal): recent history carried by the pairing package.
@@ -391,6 +409,22 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/reactions/me") => reactions_me_get(state, req).await,
         ("GET", "/_fedi3/reactions/actors") => reactions_actors_get(state, req).await,
         ("GET", "/_fedi3/notifications") => notifications_get(state, req).await,
+        ("POST", "/_fedi3/notifications/claim") => {
+            if let Err(resp) = require_internal(state, req.headers()) {
+                return resp;
+            }
+            match crate::notifications::claim(&state.social) {
+                Ok(items) => axum::Json(serde_json::json!({"items":items})).into_response(),
+                Err(e) => simple(StatusCode::BAD_GATEWAY, &format!("notification claim: {e}")),
+            }
+        }
+        ("POST", "/_fedi3/account/refresh") => {
+            if let Err(resp) = require_internal(state, req.headers()) {
+                return resp;
+            }
+            state.social.account_notify.notify_one();
+            simple(StatusCode::ACCEPTED, "scheduled")
+        }
         ("POST", "/_fedi3/sync/legacy") => legacy_sync_trigger(state, req).await,
         // Global timeline (P2P gossip) endpoints.
         ("POST", "/_fedi3/global/ingest") => global_ingest(state, req).await,
@@ -430,7 +464,13 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
                 .find_map(|s| s.strip_prefix("offset="))
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(0);
-            match crate::account_sync::peer_page(state, offset) {
+            let notifications = parts
+                .uri
+                .query()
+                .unwrap_or("")
+                .split('&')
+                .any(|q| q == "notifications=1");
+            match crate::account_sync::peer_page(state, offset, notifications) {
                 Ok(page) => axum::Json(page).into_response(),
                 Err(_) => simple(StatusCode::SERVICE_UNAVAILABLE, "account state unavailable"),
             }
@@ -8536,7 +8576,7 @@ fn abuse_key_for_actor(actor_url: &str) -> String {
     format!("actor:{}", short_hash(actor_url))
 }
 
-fn activity_dedup_id(activity: &serde_json::Value) -> String {
+pub(crate) fn activity_dedup_id(activity: &serde_json::Value) -> String {
     if let Some(id) = activity.get("id").and_then(|v| v.as_str()) {
         let id = id.trim();
         if !id.is_empty() {
@@ -8579,6 +8619,42 @@ fn canonicalize_json(v: &serde_json::Value) -> serde_json::Value {
 }
 
 pub(crate) async fn process_inbox_activity(
+    state: &ApState,
+    activity: &serde_json::Value,
+) -> anyhow::Result<()> {
+    process_inbox_activity_inner(state, activity).await?;
+    let me = canonical_actor_url(&state.cfg);
+    let handle = format!("@{}@{}", state.cfg.username, state.cfg.domain);
+    let stored: Option<Vec<u8>> = state
+        .social
+        .connect()?
+        .query_row(
+            "SELECT activity_json FROM inbox_items WHERE activity_id=?1",
+            [activity_dedup_id(activity)],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let accepted_bytes = canonical_json_bytes(activity);
+    if stored.as_deref() == Some(accepted_bytes.as_slice())
+        && is_notification(state, activity, &me, &handle)
+        && crate::notifications::record(state, activity, false)?
+    {
+        let _ = state.ui_events.send(UiEvent::new(
+            "notification",
+            activity
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            activity
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ));
+    }
+    Ok(())
+}
+
+async fn process_inbox_activity_inner(
     state: &ApState,
     activity: &serde_json::Value,
 ) -> anyhow::Result<()> {
@@ -8786,6 +8862,7 @@ pub(crate) async fn process_inbox_activity(
                         state
                             .social
                             .set_following(accept_actor, FollowingStatus::Accepted)?;
+                        persist_personal_follow_response(state, activity)?;
                         let act_id = activity
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -8824,6 +8901,7 @@ pub(crate) async fn process_inbox_activity(
             state
                 .social
                 .set_following(obj_object, FollowingStatus::Accepted)?;
+            persist_personal_follow_response(state, activity)?;
             let act_id = activity
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -8858,6 +8936,7 @@ pub(crate) async fn process_inbox_activity(
                         state.social.get_following_status(reject_actor)
                     {
                         let _ = state.social.remove_following(reject_actor);
+                        persist_personal_follow_response(state, activity)?;
                         let act_id = activity
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -8885,6 +8964,7 @@ pub(crate) async fn process_inbox_activity(
             }
             let _ = state.social.remove_following(obj_object);
             let _ = store_generic_activity(state, activity);
+            persist_personal_follow_response(state, activity)?;
             let act_id = activity
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -8953,6 +9033,26 @@ pub(crate) async fn process_inbox_activity(
         }
         _ => Ok(()),
     }
+}
+
+// Called only after the embedded response has been validated against our follow.
+// Some peers omit the recipient or send only a Follow reference; retain its
+// personal-notification meaning without re-fetching it on another device.
+fn persist_personal_follow_response(state: &ApState, activity: &Value) -> anyhow::Result<()> {
+    let mut notification = activity.clone();
+    let me = canonical_actor_url(&state.cfg);
+    if !value_has_actor(notification.get("to"), &me) {
+        let mut to = notification
+            .get("to")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        to.push(Value::String(me));
+        notification["to"] = Value::Array(to);
+    }
+    store_generic_activity(state, &notification)?;
+    crate::notifications::record(state, &notification, false)?;
+    Ok(())
 }
 
 fn store_generic_activity(state: &ApState, activity: &serde_json::Value) -> anyhow::Result<()> {
@@ -9166,8 +9266,7 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
         Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
     };
 
-    let base = state.cfg.public_base_url.trim_end_matches('/');
-    let me_actor = format!("{base}/users/{}", state.cfg.username);
+    let me_actor = canonical_actor_url(&state.cfg);
     let my_handle = format!("@{}@{}", state.cfg.username, state.cfg.domain);
 
     let mut items = Vec::<serde_json::Value>::new();
@@ -9203,7 +9302,12 @@ async fn notifications_get(state: &ApState, req: Request<Body>) -> Response<Body
     .into_response()
 }
 
-fn is_notification(state: &ApState, activity: &Value, me_actor: &str, my_handle: &str) -> bool {
+pub(crate) fn is_notification(
+    state: &ApState,
+    activity: &Value,
+    me_actor: &str,
+    my_handle: &str,
+) -> bool {
     notification_for_account(activity, me_actor, my_handle, |object| {
         let id = object
             .as_str()

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct SocialDb {
     path: PathBuf,
+    pub(crate) account_notify: std::sync::Arc<tokio::sync::Notify>,
     pub(crate) chat_notify: std::sync::Arc<tokio::sync::Notify>,
 }
 
@@ -526,6 +527,7 @@ impl SocialDb {
         Ok(Self {
             path,
             chat_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            account_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         })
     }
 

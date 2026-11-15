@@ -49,6 +49,7 @@ pub mod legacy_sync;
 pub mod media_backend;
 pub mod net_metrics;
 pub mod net_policy;
+mod notifications;
 pub mod object_fetch;
 pub mod p2p;
 pub mod p2p_sync;

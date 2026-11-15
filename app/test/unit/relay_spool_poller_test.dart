@@ -46,6 +46,58 @@ void main() {
     await dir.delete(recursive: true);
   });
 
+  test('notification-only changes wake core and retry failed synchronization',
+      () async {
+    var wakes = 0;
+    var notifications = 0;
+    final client = MockClient((_) async => http.Response(
+        jsonEncode({'items': [], 'latest_id': 0, 'notifications_cursor': 42}),
+        200));
+    final poller = RelaySpoolPoller(
+        config: _config(),
+        directory: dir,
+        client: client,
+        interval: const Duration(milliseconds: 20),
+        onNewItems: () async {
+          wakes++;
+        },
+        onNewNotifications: (cursor) async {
+          expect(cursor, 42);
+          notifications++;
+          if (notifications == 1) throw StateError('sync not complete');
+        });
+    try {
+      await poller.start();
+      expect(
+          await File('${dir.path}/${poller.cursorFileName}').exists(), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(wakes, 2);
+      expect(notifications, 2);
+      final saved = jsonDecode(
+          await File('${dir.path}/${poller.cursorFileName}').readAsString());
+      expect(saved['notifications_cursor'], 42);
+    } finally {
+      await poller.stop();
+    }
+    var restoredWakes = 0;
+    final restored = RelaySpoolPoller(
+        config: _config(),
+        directory: dir,
+        client: MockClient((_) async => http.Response(
+            jsonEncode(
+                {'items': [], 'latest_id': 0, 'notifications_cursor': 42}),
+            200)),
+        onNewItems: () async {
+          restoredWakes++;
+        });
+    try {
+      await restored.start();
+      expect(restoredWakes, 0);
+    } finally {
+      await restored.stop();
+    }
+  });
+
   test('wake cursor is isolated by account and relay', () {
     RelaySpoolPoller make(CoreConfig cfg) =>
         RelaySpoolPoller(config: cfg, directory: dir, onNewItems: () async {});

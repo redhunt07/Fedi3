@@ -4195,7 +4195,11 @@ async fn chat_spool_get(
             Err(_) => continue,
         }
     }
-    axum::Json(serde_json::json!({"items": items, "latest_id": latest_id})).into_response()
+    let notifications_cursor = match state.db.run(move |db| db.notification_cursor(&user)).await {
+        Ok(cursor) => cursor,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    axum::Json(serde_json::json!({"items": items, "latest_id": latest_id, "notifications_cursor":notifications_cursor})).into_response()
 }
 
 /// Route a request for a user hosted on a peer relay (relay mesh). Returns `None` when the

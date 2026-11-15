@@ -25,6 +25,7 @@ class RelaySpoolPoller {
     required this.config,
     required this.directory,
     required this.onNewItems,
+    this.onNewNotifications,
     this.interval = const Duration(seconds: 15),
     http.Client? client,
   }) : _client = client ?? http.Client();
@@ -32,6 +33,7 @@ class RelaySpoolPoller {
   final CoreConfig config;
   final Directory directory;
   final Future<void> Function() onNewItems;
+  final Future<void> Function(int cursor)? onNewNotifications;
   final Duration interval;
   final http.Client _client;
 
@@ -39,6 +41,7 @@ class RelaySpoolPoller {
   bool _started = false;
   bool _polling = false;
   int _lastId = 0;
+  int _notificationsCursor = 0;
 
   String get cursorFileName =>
       'relay_spool_${sha256.convert(utf8.encode('${_endpoint().origin}\n${config.username}'))}.json';
@@ -104,10 +107,15 @@ class RelaySpoolPoller {
       final hasItems = items is List && items.isNotEmpty;
       // The callback must confirm that a core is running before committing the
       // wake cursor. A failed start must be retried on the next poll.
-      if (hasItems) await onNewItems();
+      final notificationCursor =
+          (decoded['notifications_cursor'] as num?)?.toInt() ?? 0;
+      final hasNotifications = notificationCursor > _notificationsCursor;
+      if (hasItems || hasNotifications) await onNewItems();
+      if (hasNotifications) await onNewNotifications?.call(notificationCursor);
       if (!_started) return;
-      if (latestId > _lastId) {
+      if (latestId > _lastId || hasNotifications) {
         _lastId = latestId;
+        _notificationsCursor = notificationCursor;
         await _writeCursor(latestId);
       }
     } catch (e) {
@@ -124,6 +132,8 @@ class RelaySpoolPoller {
       if (!await file.exists()) return 0;
       final raw = jsonDecode(await file.readAsString());
       if (raw is Map && raw['last_id'] is num) {
+        _notificationsCursor =
+            (raw['notifications_cursor'] as num?)?.toInt() ?? 0;
         return (raw['last_id'] as num).toInt();
       }
     } catch (_) {}
@@ -135,7 +145,10 @@ class RelaySpoolPoller {
       final file =
           File('${directory.path}${Platform.pathSeparator}$cursorFileName');
       final temp = File('${file.path}.tmp');
-      await temp.writeAsString(jsonEncode({'last_id': id}), flush: true);
+      await temp.writeAsString(
+          jsonEncode(
+              {'last_id': id, 'notifications_cursor': _notificationsCursor}),
+          flush: true);
       await temp.rename(file.path);
     } catch (_) {}
   }

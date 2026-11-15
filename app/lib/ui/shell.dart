@@ -306,20 +306,28 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       _activityDebounce?.cancel();
       _activityDebounce = Timer(const Duration(milliseconds: 350), () {
         if (!mounted) return;
-        if (_index == 3 && AppActivity.foreground) {
-          widget.appState.clearUnreadNotifications();
-          return;
-        }
-        if (AppActivity.foreground) {
-          unawaited(SoundService.playActivity());
-          return;
-        }
-        unawaited(NotificationService.showActivityNotification(
-          title: context.l10n.activityNotificationTitle,
-          body: context.l10n.activityNotificationBody,
-        ));
+        unawaited(_showPendingActivityAlerts());
       });
     }, onError: (_) {}, onDone: () {});
+    unawaited(_showPendingActivityAlerts());
+  }
+
+  Future<void> _showPendingActivityAlerts() async {
+    final cfg = widget.appState.config;
+    if (cfg == null) return;
+    try {
+      final count = await CoreApi(config: cfg).claimNotificationAlerts();
+      if (!mounted || count == 0) return;
+      if (_index == 3 && AppActivity.foreground) {
+        widget.appState.clearUnreadNotifications();
+      } else if (AppActivity.foreground) {
+        await SoundService.playActivity();
+      } else {
+        await NotificationService.showActivityNotification(
+            title: context.l10n.activityNotificationTitle,
+            body: context.l10n.activityNotificationBody);
+      }
+    } catch (_) {/* The durable claim remains pending on transport failure. */}
   }
 
   void _startChatStream() {

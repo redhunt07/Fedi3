@@ -455,6 +455,22 @@ paths:
                       properties:
                         name: {type: string}
                         count: {type: integer}
+  /_fedi3/notifications/claim:
+    post:
+      tags: [core]
+      summary: Atomically claim pending device-local social alerts without marking notifications read
+      security: [{internalToken: []}]
+      responses:
+        '200': {description: 'items containing activity_id, ts and type; retries do not reclaim the same alert'}
+        '403': {description: Invalid internal token}
+  /_fedi3/account/refresh:
+    post:
+      tags: [core]
+      summary: Wake the serialized account-sync worker
+      security: [{internalToken: []}]
+      responses:
+        '202': {description: Scheduled; account/profile exposes the applied relay cursor}
+        '403': {description: Invalid internal token}
   /_fedi3/notifications:
     get:
       tags: [core]
@@ -981,6 +997,7 @@ paths:
                         id: {type: integer}
                         envelope: {type: object, additionalProperties: true}
                   latest_id: {type: integer}
+                  notifications_cursor: {type: integer, description: Authenticated opaque personal-notification revision}
   /_fedi3/reactions:
     get:
       tags: [core]
@@ -1761,6 +1778,7 @@ paths:
       security: [{relayToken: []}]
       parameters:
         - {in: query, name: after, schema: {type: integer, format: int64, default: 0}}
+        - {in: query, name: notifications, description: Opt into personal-notification envelopes; omitted for older clients, schema: {type: integer, enum: [0, 1], default: 0}}
       responses:
         '200':
           description: Ordered sequence/envelope pairs and continuation cursor; opaque AES-GCM records
@@ -1789,7 +1807,7 @@ paths:
       parameters:
         - {in: header, name: X-Fedi3-Internal, required: true, schema: {type: string}}
       responses:
-        '200': {description: Profile fields with last_ok and error}
+        '200': {description: 'Profile fields with last_ok, error and applied account-state cursor'}
         '401': {description: Invalid internal token}
   /.fedi3/device/account:
     get:

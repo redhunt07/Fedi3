@@ -252,3 +252,156 @@ async fn reset_device_keeps_old_contact_offline_without_disconnects_between_pair
     }
     drop(desktop);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn personal_follow_notification_reaches_both_devices_and_alert_survives_restart_once() {
+    std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
+    let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_DIRECTORY_URLS", "")]).await;
+    let a = fedi3_core::test_support::TempDir::new("notifications-a");
+    let b = fedi3_core::test_support::TempDir::new("notifications-b");
+    let sender = fedi3_core::test_support::TempDir::new("notifications-sender");
+    let pem = fedi3_protocol::crypto::rsa_generate_private_pem().unwrap();
+    let mut ca = cfg(&relay, a.path(), &pem, port());
+    let mut cb = cfg(&relay, b.path(), &pem, port());
+    ca.p2p = Some(fedi3_core::p2p::P2pConfig {
+        enable: false,
+        device_sync_enable: Some(true),
+        ..Default::default()
+    });
+    cb.p2p = ca.p2p.clone();
+    let _a_core = Core(runtime::start(ca.clone()).unwrap());
+    let b_core = Core(runtime::start(cb.clone()).unwrap());
+    let mut cs = cfg(
+        &relay,
+        sender.path(),
+        &fedi3_protocol::crypto::rsa_generate_private_pem().unwrap(),
+        port(),
+    );
+    cs.username = "bob".into();
+    cs.p2p = ca.p2p.clone();
+    let _sender = Core(runtime::start(cs.clone()).unwrap());
+    let client = reqwest::Client::new();
+    let actor = format!("{}/users/alice", relay.base_url());
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let response = client
+        .post(format!("http://{}/_fedi3/social/follow", cs.bind))
+        .header("X-Fedi3-Internal", "test-internal-token")
+        .json(&json!({"actor":actor}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().await.unwrap()
+    );
+    let adb = a.path().join("fedi3.db");
+    let bdb = b.path().join("fedi3.db");
+    until(|| {
+        count(&adb, "personal_notifications") == 1 && count(&bdb, "personal_notifications") == 1
+    })
+    .await;
+    for config in [&ca, &cb] {
+        let body: serde_json::Value = client
+            .get(format!("http://{}/_fedi3/notifications", config.bind))
+            .header("X-Fedi3-Internal", "test-internal-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body["items"][0]["activity"]["type"], "Follow");
+    }
+    until(|| count(&sender.path().join("fedi3.db"), "personal_notifications") == 1).await;
+    let accepted: serde_json::Value = client
+        .get(format!("http://{}/_fedi3/notifications", cs.bind))
+        .header("X-Fedi3-Internal", "test-internal-token")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(accepted["items"][0]["activity"]["type"], "Accept");
+    assert_eq!(
+        client
+            .post(format!("http://{}/_fedi3/notifications/claim", ca.bind))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    // Do not open SSE or claim on B before restarting: startup must retain the alert.
+    let claim = |bind: String| {
+        let client = client.clone();
+        async move {
+            client
+                .post(format!("http://{bind}/_fedi3/notifications/claim"))
+                .header("X-Fedi3-Internal", "test-internal-token")
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        claim(ca.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        claim(ca.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    drop(b_core);
+    let _b_core = Core(runtime::start(cb.clone()).unwrap());
+    assert_eq!(
+        claim(cb.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        claim(cb.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    let spool: serde_json::Value = client
+        .get(format!("{}/_fedi3/chat/spool?user=alice", relay.base_url()))
+        .bearer_auth("account-test-token-0123456789")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(spool["notifications_cursor"].as_i64().unwrap() > 0);
+    // An older client must never receive an unsupported notification record.
+    let old: serde_json::Value = client
+        .get(format!("{}/_fedi3/account/alice/state", relay.base_url()))
+        .bearer_auth("account-test-token-0123456789")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(old["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row[1]["kind"] != "personal_notifications"));
+}

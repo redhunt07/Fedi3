@@ -270,3 +270,13 @@ restano in coda. `client_message_id` si riutilizza in caso di risposta ambigua:
 lo stesso identificativo con testo diverso viene rifiutato. La presenza usa URL
 completi degli attori e non attribuisce lo stato online ai classici utenti AP
 omonimi privi di una presenza propria.
+
+## Notifiche personali (0.12.2)
+
+La replica cifrata `personal_notifications` contiene soltanto attività classificate come notifiche personali, escludendo le normali attività della timeline. Ogni dispositivo importa l’attività nella propria inbox senza ripetere gli effetti federativi. Lo storico viene recuperato senza nuovi avvisi.
+
+Gli avvisi da mostrare sono registrati nel solo database locale. `POST /_fedi3/notifications/claim` li assegna atomicamente alla UI o al servizio in background, senza marcarli letti nella schermata notifiche. Replay e riavvii non assegnano nuovamente lo stesso evento.
+
+La risposta autenticata dello spool relay include anche il cursore opaco `notifications_cursor`. Il poller Android esistente risveglia il core quando cambia, richiede la sincronizzazione e conferma il cursore solo dopo l’importazione. I provider push esterni restano opzionali e configurabili; rimangono applicabili le restrizioni del sistema operativo durante sospensioni prolungate.
+
+Relay e peer recenti richiedono `notifications=1`; i client precedenti continuano a ricevere i record già supportati. Al primo aggiornamento si azzera soltanto il cursore di replica per recuperare lo storico saltato dai client precedenti. Identità, post, relazioni e chat locali sono conservati. Aggiornare il relay prima dei client 0.12.2.
