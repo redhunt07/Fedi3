@@ -2673,11 +2673,11 @@ class AppLocalizationsIt extends AppLocalizations {
   String get onboardingLoginWithQr => 'Accedi con QR';
 
   @override
-  String get pairingTitle => 'Collega un dispositivo';
+  String get pairingTitle => 'Mostra QR per un altro dispositivo';
 
   @override
   String get pairingIntro =>
-      'Mostra questo codice QR al dispositivo che vuoi collegare. Scade dopo 10 minuti.';
+      'Questo dispositivo esporta l’account già connesso. Sull’altro dispositivo apri Login → Accedi con QR per leggere questo codice. Scade dopo 10 minuti. Non creare un altro account.';
 
   @override
   String get pairingRegenerate => 'Nuovo codice';
@@ -2745,4 +2745,8 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get networkingDeviceSyncHint =>
       'Replica chat, conferme di lettura e segnalazione delle chiamate su ogni client collegato a questo account.';
+
+  @override
+  String get pairingAuthenticationRejected =>
+      'Il relay ha rifiutato il token dell’account di questo dispositivo. Questa schermata genera un QR; per leggere quello mostrato dal PC usa Login → Accedi con QR sul telefono. Conserva i dati esistenti e genera il codice da un dispositivo già connesso.';
 }

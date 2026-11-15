@@ -13,6 +13,16 @@ import '../core/core_api.dart';
 import '../core/core_http.dart';
 import '../model/core_config.dart';
 
+/// A rejected pairing upload, without reflecting an untrusted relay body.
+class PairingUploadException implements Exception {
+  const PairingUploadException(this.statusCode);
+  final int statusCode;
+  bool get authenticationRejected => statusCode == 401 || statusCode == 403;
+  bool get canRetryWithoutHistory => statusCode == 400 || statusCode == 413;
+  @override
+  String toString() => 'Pairing upload rejected (HTTP $statusCode)';
+}
+
 /// Sealed account identity transfer for multi-device login and QR pairing.
 ///
 /// The relay only stores the sealed envelope: the AES-256-GCM key is derived
@@ -455,8 +465,7 @@ class IdentitySync {
         )
         .timeout(CoreHttp.totalTimeout);
     if (resp.statusCode != 204) {
-      throw StateError(
-          'pairing upload failed: ${resp.statusCode} ${resp.body.trim()}');
+      throw PairingUploadException(resp.statusCode);
     }
   }
 

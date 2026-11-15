@@ -4961,13 +4961,13 @@ abstract class AppLocalizations {
   /// No description provided for @pairingTitle.
   ///
   /// In en, this message translates to:
-  /// **'Link a device'**
+  /// **'Show QR for another device'**
   String get pairingTitle;
 
   /// No description provided for @pairingIntro.
   ///
   /// In en, this message translates to:
-  /// **'Show this QR code to the device you want to link. It expires in 10 minutes.'**
+  /// **'This device exports the account already signed in here. On the other device, open Login → Log in with QR to scan this code. It expires after 10 minutes. Do not create another account.'**
   String get pairingIntro;
 
   /// No description provided for @pairingRegenerate.
@@ -5077,6 +5077,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Replicate chats, receipts and call signalling to every linked client of this account.'**
   String get networkingDeviceSyncHint;
+
+  /// No description provided for @pairingAuthenticationRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The relay rejected this device’s account token. This screen creates a QR; to scan the QR shown on your PC, use Login → Log in with QR on the phone. Keep existing account data and use a device that is already connected to generate the code.'**
+  String get pairingAuthenticationRejected;
 }
 
 class _AppLocalizationsDelegate

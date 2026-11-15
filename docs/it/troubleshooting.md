@@ -186,3 +186,9 @@ successiva, oppure ricompila con `scripts/build_appimage.sh` corretto. Conserva
 dati e credenziali nel portachiavi. Il controllo SHA256 non rileva questo
 conflitto ABI. Vedi [aggiornamenti del client](updates.md) per la procedura di
 aggiornamento.
+
+## Il collegamento QR apre il generatore invece della fotocamera
+
+Impostazioni → Collega un nuovo dispositivo esporta l’account già connesso su quel dispositivo. Mostrare il QR sul PC esistente; sul nuovo telefono usare Login → Accedi con QR. Non creare un secondo account con lo stesso nome per collegare un dispositivo.
+
+`pairing upload failed: 401 invalid token` indica che il relay ha rifiutato il token del dispositivo che sta esportando l’account. Non è un errore dei permessi della fotocamera. Generare il QR da un dispositivo funzionante e conservare l’eventuale profilo locale prima di recuperare un telefono configurato con credenziali diverse. Non resettare i token del relay né cancellare i dati dell’app come tentativo di risoluzione.

@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+- Clarify QR export versus camera login, stop the pairing spinner on failure, explain rejected account credentials and retry without history only for payload rejection.
+
 ## [0.12.2] - 2026-11-15
 
 - Replicate only personal social notifications between paired devices, including existing history, without copying unrelated timeline activity.

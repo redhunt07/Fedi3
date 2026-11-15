@@ -2660,11 +2660,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get onboardingLoginWithQr => 'Log in with QR';
 
   @override
-  String get pairingTitle => 'Link a device';
+  String get pairingTitle => 'Show QR for another device';
 
   @override
   String get pairingIntro =>
-      'Show this QR code to the device you want to link. It expires in 10 minutes.';
+      'This device exports the account already signed in here. On the other device, open Login → Log in with QR to scan this code. It expires after 10 minutes. Do not create another account.';
 
   @override
   String get pairingRegenerate => 'New code';
@@ -2731,4 +2731,8 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get networkingDeviceSyncHint =>
       'Replicate chats, receipts and call signalling to every linked client of this account.';
+
+  @override
+  String get pairingAuthenticationRejected =>
+      'The relay rejected this device’s account token. This screen creates a QR; to scan the QR shown on your PC, use Login → Log in with QR on the phone. Keep existing account data and use a device that is already connected to generate the code.';
 }

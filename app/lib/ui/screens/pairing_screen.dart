@@ -144,10 +144,14 @@ class _PairingScreenState extends State<PairingScreen> {
           token: config.relayToken,
           envelope: envelope,
         );
-      } catch (_) {
+      } on PairingUploadException catch (e) {
         // The relay may reject a large snapshot envelope (e.g. 400): retry
         // once without it so the identity pairing still succeeds.
-        if (chatSnapshot == null || chatSnapshot.isEmpty) rethrow;
+        if (!e.canRetryWithoutHistory ||
+            chatSnapshot == null ||
+            chatSnapshot.isEmpty) {
+          rethrow;
+        }
         final fallbackPackage = IdentitySync.buildPackage(config, exported);
         final fallbackEnvelope = await IdentitySync.seal(fallbackPackage, code);
         await IdentitySync.uploadPairingPackage(
@@ -171,7 +175,9 @@ class _PairingScreenState extends State<PairingScreen> {
         _ready = false;
         _busy = false;
         _status = null;
-        _error = context.l10n.pairingError(e.toString());
+        _error = e is PairingUploadException && e.authenticationRejected
+            ? context.l10n.pairingAuthenticationRejected
+            : context.l10n.pairingError(e.toString());
       });
     }
   }
@@ -226,7 +232,7 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
               ),
             )
-          else
+          else if (_busy)
             const Center(
               child: SizedBox(
                 width: 240,

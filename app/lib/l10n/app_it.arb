@@ -1210,8 +1210,8 @@
   "callSwitchCamera": "Cambia fotocamera",
   "callSwitchCameraFailed": "Impossibile cambiare fotocamera.",
   "onboardingLoginWithQr": "Accedi con QR",
-  "pairingTitle": "Collega un dispositivo",
-  "pairingIntro": "Mostra questo codice QR al dispositivo che vuoi collegare. Scade dopo 10 minuti.",
+  "pairingTitle": "Mostra QR per un altro dispositivo",
+  "pairingIntro": "Questo dispositivo esporta l’account già connesso. Sull’altro dispositivo apri Login → Accedi con QR per leggere questo codice. Scade dopo 10 minuti. Non creare un altro account.",
   "pairingRegenerate": "Nuovo codice",
   "pairingWaiting": "QR pronto. Scansionalo con il dispositivo che vuoi collegare.",
   "pairingPreparing": "Preparazione del codice QR…",
@@ -1243,5 +1243,6 @@
   "settingsLinkDevice": "Collega un nuovo dispositivo",
   "settingsLinkDeviceHint": "Aggiungi questo account su un altro telefono o computer.",
   "networkingDeviceSync": "Sincronizza l’attività tra dispositivi",
-  "networkingDeviceSyncHint": "Replica chat, conferme di lettura e segnalazione delle chiamate su ogni client collegato a questo account."
+  "networkingDeviceSyncHint": "Replica chat, conferme di lettura e segnalazione delle chiamate su ogni client collegato a questo account.",
+  "pairingAuthenticationRejected": "Il relay ha rifiutato il token dell’account di questo dispositivo. Questa schermata genera un QR; per leggere quello mostrato dal PC usa Login → Accedi con QR sul telefono. Conserva i dati esistenti e genera il codice da un dispositivo già connesso."
 }

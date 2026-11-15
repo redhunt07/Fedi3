@@ -184,3 +184,9 @@ in current packages (0.11.9). Install 0.10.1 or newer, or rebuild with the
 corrected `scripts/build_appimage.sh`. Keep all existing data and keyring
 credentials. SHA256 integrity checks alone cannot detect this ABI mismatch. See
 [client updates](updates.md) for the upgrade procedure.
+
+## QR pairing opens a generator instead of the camera
+
+Settings → Link a new device exports the account already signed in on that device. Show this QR on the existing PC; on the new phone use Login → Log in with QR. Do not create a second account with the same username to link a device.
+
+`pairing upload failed: 401 invalid token` means the relay rejected the exporting device’s account token. It does not indicate a camera permission problem. Generate the QR on a working device and preserve any existing local profile before recovering a phone configured with different credentials. Do not reset relay tokens or delete application data as a troubleshooting shortcut.

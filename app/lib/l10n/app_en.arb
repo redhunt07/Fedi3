@@ -1218,8 +1218,8 @@
   "callSwitchCamera": "Switch camera",
   "callSwitchCameraFailed": "Could not switch the camera.",
   "onboardingLoginWithQr": "Log in with QR",
-  "pairingTitle": "Link a device",
-  "pairingIntro": "Show this QR code to the device you want to link. It expires in 10 minutes.",
+  "pairingTitle": "Show QR for another device",
+  "pairingIntro": "This device exports the account already signed in here. On the other device, open Login → Log in with QR to scan this code. It expires after 10 minutes. Do not create another account.",
   "pairingRegenerate": "New code",
   "pairingWaiting": "QR ready. Scan it with the device you want to link.",
   "pairingPreparing": "Preparing the QR code…",
@@ -1251,5 +1251,6 @@
   "settingsLinkDevice": "Link a new device",
   "settingsLinkDeviceHint": "Add this account to another phone or computer.",
   "networkingDeviceSync": "Sync activity across devices",
-  "networkingDeviceSyncHint": "Replicate chats, receipts and call signalling to every linked client of this account."
+  "networkingDeviceSyncHint": "Replicate chats, receipts and call signalling to every linked client of this account.",
+  "pairingAuthenticationRejected": "The relay rejected this device’s account token. This screen creates a QR; to scan the QR shown on your PC, use Login → Log in with QR on the phone. Keep existing account data and use a device that is already connected to generate the code."
 }
