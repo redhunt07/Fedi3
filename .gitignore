@@ -72,3 +72,4 @@ app/android/key.properties
 
 # Local Kotlin compiler cache
 app/android/.kotlin/
+.taste-skill/

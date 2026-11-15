@@ -1002,7 +1002,7 @@ async fn landing_page_is_served_and_nodeinfo_identifies_the_project() {
     assert_eq!(italian.status(), 200);
     let italian_html = italian.text().await.unwrap();
     assert!(italian_html.contains("lang=\"it\""));
-    assert!(italian_html.contains("Social federato con l'account"));
+    assert!(italian_html.contains("Social federato, l'account"));
 
     let css = relay.get("/assets/landing/style.css").await;
     assert_eq!(css.status(), 200);

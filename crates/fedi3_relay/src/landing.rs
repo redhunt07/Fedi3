@@ -180,11 +180,14 @@ async fn serve(req: RootRequest, lang: Lang, path: &'static str) -> Response {
     let origin = escape_html(&format!("{scheme}://{host}"));
     let users = state.db.count_users().await.unwrap_or(0);
     let html = render(lang, &origin, users);
+    // The page embeds the user count and carries content-hashed asset URLs, so
+    // it must be revalidated on every visit: a cached copy would keep pointing
+    // at the previous stylesheet after a relay upgrade.
     (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=300"),
+            (header::CACHE_CONTROL, "public, max-age=0, must-revalidate"),
         ],
         html,
     )

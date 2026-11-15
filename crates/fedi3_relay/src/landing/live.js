@@ -504,6 +504,25 @@
     const h = Math.max(1, rect.height);
     ctx.clearRect(0, 0, w, h);
 
+    // A quiet grid keeps the chart readable while it collects its first
+    // samples, instead of showing one flat line on an empty ground.
+    ctx.strokeStyle = 'rgba(38, 59, 82, 0.35)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 4; i += 1) {
+      const y = Math.round((h / 4) * i) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(38, 59, 82, 0.25)';
+    for (let x = 40; x < w; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, h);
+      ctx.stroke();
+    }
+
     ctx.strokeStyle = 'rgba(38, 59, 82, 0.7)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -636,6 +655,34 @@
   });
 
   document.addEventListener('visibilitychange', onVisibility);
+
+  // ---------------------------------------------------------------- nav position
+
+  // Mark the section the visitor is reading, so the fixed bar says where they
+  // are instead of looking the same on every screen.
+  const navLinks = [...document.querySelectorAll('.nav__links a[href^="#"]')];
+  if (navLinks.length && 'IntersectionObserver' in window) {
+    const bySection = new Map(navLinks.map((a) => [a.getAttribute('href').slice(1), a]));
+    const spy = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const link = bySection.get(entry.target.id);
+          if (!link) continue;
+          if (entry.isIntersecting) {
+            for (const other of navLinks) other.removeAttribute('aria-current');
+            link.setAttribute('aria-current', 'true');
+          }
+        }
+      },
+      { rootMargin: '-40% 0px -55% 0px' }
+    );
+    for (const section of document.querySelectorAll('main > section[id], footer.closing[id]')) {
+      spy.observe(section);
+    }
+  }
+
+  // The mesh is this page's dealt moment: mark it mounted once it has drawn.
+  if (meshCanvas) panel.setAttribute('data-moment-mounted', '');
 
   // ---------------------------------------------------------------- bootstrap
 
