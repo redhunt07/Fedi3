@@ -71,7 +71,7 @@ class _AppRootState extends State<AppRoot> {
       // The push-only keep-alive service owns the background: it starts the
       // core on demand and stops it when idle. Leave an active call alone.
       if (AppActivity.foreground) {
-        unawaited(appState.startCore());
+        unawaited(appState.ensureCoreRunning());
       } else if (AppActivity.shouldStopCore(
           platform: defaultTargetPlatform, coreHeld: appState.coreHeld)) {
         unawaited(appState.stopCore());

@@ -120,6 +120,15 @@ class AppState extends ChangeNotifier {
     return _probeHealth(cfg);
   }
 
+  /// Supervisors may outlive a native handle stopped by another Flutter engine.
+  /// Clear that stale ownership before asking startCore to reuse its config.
+  Future<bool> ensureCoreRunning() async {
+    if (isRunning && await probeCoreHealth()) return true;
+    await stopCore();
+    await startCore();
+    return isRunning && await probeCoreHealth();
+  }
+
   @override
   void notifyListeners() {
     if (!_disposed) super.notifyListeners();

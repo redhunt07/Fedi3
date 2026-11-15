@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Replicate only personal social notifications between paired devices, including existing history, without copying unrelated timeline activity.
 - Persist device-local notification alert claims so startup, concurrent UI/background consumers, retries and replay cannot display the same alert twice. Historical imports restore the notification feed silently.
 - Wake background Android sync when encrypted personal notifications change even without chat messages; acknowledge the wake cursor only after synchronization succeeds.
+- Recover stale native core handles after Android UI/background engine handoff so notification wakes actually restart the local core.
 - Retain all authenticated device tunnels and route to a surviving device when the most recent client goes idle; credential revocation closes every account tunnel.
 - Negotiate notification replication with relay and peer endpoints so older clients can continue syncing supported account records.
 

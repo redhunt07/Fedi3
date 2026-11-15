@@ -203,13 +203,8 @@ Future<void> backgroundMain() async {
     final wasUp = coreUp;
     starting = true;
     try {
-      final healthy = appState.isRunning && await appState.probeCoreHealth();
-      if (!healthy) {
-        debugPrint('[bg] starting core for wake');
-        await appState.startCore();
-      }
-      if (!await appState.probeCoreHealth()) {
-        throw StateError("Background core did not start");
+      if (!await appState.ensureCoreRunning()) {
+        throw StateError(appState.lastError ?? "Background core did not start");
       }
       appState.setPowerMode(CorePowerMode.background);
       coreUp = true;

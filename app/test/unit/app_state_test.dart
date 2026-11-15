@@ -27,6 +27,33 @@ class DelayedStopCore extends FakeCoreRuntime implements AsyncCoreStop {
 }
 
 void main() {
+  test('background recovery replaces a stale handle even with unchanged config',
+      () async {
+    final core = FakeCoreRuntime(handle: 7);
+    final app = buildTestAppState(
+        config: buildTestConfig(),
+        core: core,
+        healthCheck: (_) async => core.startCalls >= 2);
+    await app.startCore();
+    final originalConfig = core.lastConfigJson;
+    expect(app.isRunning, isTrue);
+    expect(await app.ensureCoreRunning(), isTrue);
+    expect(core.startCalls, 2);
+    expect(core.stoppedHandles, [7]);
+    expect(core.lastConfigJson, originalConfig);
+    app.dispose();
+  });
+
+  test('background recovery keeps a healthy owned core', () async {
+    final core = FakeCoreRuntime();
+    final app = buildTestAppState(config: buildTestConfig(), core: core);
+    await app.startCore();
+    expect(await app.ensureCoreRunning(), isTrue);
+    expect(core.startCalls, 1);
+    expect(core.stopCalls, 0);
+    app.dispose();
+  });
+
   test('a failed first start still installs an automatic recovery watchdog',
       () async {
     final core =
