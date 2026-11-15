@@ -12,8 +12,11 @@ COPY crates/fedi3_core/Cargo.toml crates/fedi3_core/Cargo.toml
 COPY crates/fedi3_p2p_infra/Cargo.toml crates/fedi3_p2p_infra/Cargo.toml
 COPY crates/fedi3_push_gateway/Cargo.toml crates/fedi3_push_gateway/Cargo.toml
 
-# Copy sources and the public directory embedded by include_str!.
+# Copy sources and every directory embedded by include_str!/include_bytes!
+# (the public relay directory, the landing assets and the client favicon).
 COPY relays relays
+COPY docs/assets docs/assets
+COPY app/web/favicon.png app/web/favicon.png
 COPY crates/fedi3_protocol crates/fedi3_protocol
 COPY crates/fedi3_relay crates/fedi3_relay
 COPY crates/fedi3_core crates/fedi3_core
