@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+- Redesign the relay landing page: the first screen now names the product and shows the client at full size, every section fills one screen, screenshots carry no captions, links and buttons answer the pointer, the closing screen pairs the download action with a relay-mesh diagram, and stylesheet/script URLs carry a content hash so a relay upgrade busts caches without a version bump.
 ## [0.12.3] - 2026-11-15
 
 - Serve a bilingual public landing page from the relay binary (`/` in English, `/it` in Italian, `/en` redirect) with embedded stylesheet, banner, favicon and screenshots, so links shared in the fediverse no longer end on a 404. User subdomains keep forwarding their root to the local core in base-domain mode.

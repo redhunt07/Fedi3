@@ -19,6 +19,7 @@
 //! Screenshots are reused from `docs/assets` instead of being duplicated.
 
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::{
     body::Bytes,
@@ -190,6 +191,21 @@ async fn serve(req: RootRequest, lang: Lang, path: &'static str) -> Response {
         .into_response()
 }
 
+/// Content hash of the embedded landing assets: cache busting must follow the
+/// bytes, not the release version, or a relay upgraded without a version bump
+/// keeps serving the previous stylesheet and script for a day.
+fn asset_tag() -> &'static str {
+    static TAG: OnceLock<String> = OnceLock::new();
+    TAG.get_or_init(|| {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in STYLE.bytes().chain(LIVE_JS.bytes()) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:012x}")
+    })
+}
+
 fn render(lang: Lang, origin: &str, users: u64) -> String {
     let template = match lang {
         Lang::En => PAGE_EN,
@@ -198,6 +214,7 @@ fn render(lang: Lang, origin: &str, users: u64) -> String {
     template
         .replace("{{origin}}", origin)
         .replace("{{version}}", env!("CARGO_PKG_VERSION"))
+        .replace("{{asset_tag}}", asset_tag())
         .replace("{{users}}", &users.to_string())
 }
 
@@ -227,6 +244,8 @@ mod tests {
             assert!(html.contains("https://relay.example/"));
             assert!(!html.contains("{{origin}}"));
             assert!(!html.contains("{{version}}"));
+            assert!(!html.contains("{{asset_tag}}"));
+            assert!(html.contains("style.css?v="));
             assert!(!html.contains("{{users}}"));
             assert!(html.contains(": 7"));
         }

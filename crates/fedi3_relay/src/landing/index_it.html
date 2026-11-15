@@ -1,8 +1,11 @@
 <!doctype html>
-<html lang="it">
+<html lang="it" class="m-enter" data-type="software" data-enter>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="page-type" content="software">
+<meta name="site-kind" content="software">
+<meta name="theme-color" content="#070b12">
 <title>Fedi3 — social federato con le chiavi sul tuo dispositivo</title>
 <meta name="description" content="Fedi3 è un'app social federata: client Flutter con core Rust locale, chat cifrata end-to-end, livello P2P e compatibilità ActivityPub. Le chiavi restano sul tuo dispositivo; il relay è opzionale.">
 <link rel="canonical" href="{{origin}}/it">
@@ -17,44 +20,43 @@
 <meta property="og:locale" content="it_IT">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/assets/landing/favicon.png" type="image/png">
-<link rel="stylesheet" href="/assets/landing/style.css?v={{version}}">
+<link rel="stylesheet" href="/assets/landing/style.css?v={{asset_tag}}">
 </head>
 <body>
+<a class="skip" href="#main">Vai al contenuto</a>
 <div class="wrap">
   <header class="topbar">
     <a class="brand" href="/it">FEDI3</a>
     <nav>
       <a href="#live">Live</a>
-      <a href="#cos-e">Cos'è</a>
-      <a href="#schermate">Schermate</a>
-      <a href="#inizia">Come iniziare</a>
+      <a href="#cos-e">Core</a>
+      <a href="#schermate">Client</a>
+      <a href="#inizia">Installa</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/redhunt07/Fedi3">Sorgente</a>
       <a href="/" hreflang="en" lang="en">English</a>
     </nav>
   </header>
 
-  <main>
-    <div class="hero">
-      <div>
-        <h1>Il tuo account vive <em>sul tuo dispositivo</em>.</h1>
-        <p class="lead">Fedi3 è un'app social federata costruita attorno a un core Rust locale: le chiavi di firma e le chat cifrate restano sul telefono o sul desktop, un livello peer-to-peer ti rende raggiungibile anche senza server e ActivityPub ti tiene in contatto con il resto del fediverso.</p>
+  <main id="main">
+    <div class="hero" data-enter>
+      <div class="hero-copy">
+        <p class="eyebrow">Social federato · core locale · P2P</p>
+        <h1>Social federato con l'account <em>sul tuo dispositivo</em>.</h1>
+        <p class="lead">Fedi3 è un'app social federata in cui account, chiavi di firma e chat cifrate restano in un core Rust locale sul tuo telefono o desktop. ActivityPub ti tiene in contatto con Mastodon e Misskey; un livello peer-to-peer ti rende raggiungibile senza server.</p>
         <div class="cta">
           <a class="btn primary" href="https://github.com/redhunt07/Fedi3/releases/latest">Scarica {{version}}</a>
           <a class="btn" href="#inizia">Unisciti a questo relay</a>
-          <a class="btn" href="https://github.com/redhunt07/Fedi3/tree/main/docs/it">Documentazione</a>
         </div>
-        <p class="note">AppImage Linux, pacchetto Debian/Ubuntu, Windows x64 e APK Android con checksum SHA256. Software pre-1.0: iOS e macOS non sono ancora pubblicati.</p>
+        <p class="facts"><span>Linux</span><span>Windows</span><span>Android</span><span>AGPL-3.0-only</span><span>pre-1.0</span></p>
       </div>
-      <div class="hero-art">
+      <figure class="hero-art">
         <img src="/assets/landing/timeline.png" alt="Timeline del client desktop Fedi3 con note dal fediverso" width="1280" height="720">
-        <p class="caption">Il client desktop: timeline, media e note federate.</p>
-      </div>
+      </figure>
     </div>
-
     <section id="live">
-      <h2>La rete, in tempo reale</h2>
-      <p class="sub">Numeri reali da questo relay: raggiungibilità della mesh, peer connessi e traffico del relay. Il traffico P2P diretto tra dispositivi non passa dal relay, quindi non è conteggiato qui.</p>
+      <h2>La rete dei relay, in tempo reale</h2>
+      <p class="sub">Numeri reali da questo relay: raggiungibilità della mesh, peer connessi e traffico del relay. Sono solo contatori aggregati, azzerati al riavvio; il traffico P2P diretto tra dispositivi non passa dal relay e non è conteggiato qui.</p>
       <div class="live-panel" data-live-endpoint="/_fedi3/relay/live" data-label-live="live" data-label-retry="riconnessione" data-label-wait="connessione" data-label-collecting="raccolta campioni…">
         <div class="live-stage">
           <canvas id="live-mesh" role="img" aria-label="Mesh dei relay animata"></canvas>
@@ -79,67 +81,61 @@
             <div class="live-spark-head">
               <span class="k">Peer e relay online · finestra scorrevole</span>
               <span class="live-spark-values"><span class="v-relays">relay <span id="live-spark-relays">—</span></span> · <span class="v-peers">peer <span id="live-spark-peers">—</span></span></span>
+              <a class="raw-link" href="/_fedi3/relay/live">JSON grezzo</a>
             </div>
             <canvas id="live-spark" role="img" aria-label="Peer online nel tempo"></canvas>
           </div>
-          <p class="live-note">Solo contatori aggregati; si azzerano al riavvio del relay. Aggiornamento ogni 12 s. <a href="/_fedi3/relay/live">JSON grezzo</a>.</p>
         </div>
       </div>
       <noscript><p class="sub">La vista live richiede JavaScript; i numeri grezzi sono su <a href="/_fedi3/relay/live">/_fedi3/relay/live</a>.</p></noscript>
     </section>
 
     <section id="cos-e">
-      <h2>Cosa lo rende diverso</h2>
+      <h2>Come funziona il core locale</h2>
       <p class="sub">Fedi3 non è l'ennesima istanza ospitata: è un client con un core locale che appartiene a te, più un relay opzionale per la federazione e la consegna differita.</p>
-      <div class="grid">
+            <div class="grid">
         <div class="card">
-          <h3>Le chiavi restano sul dispositivo</h3>
-          <p>Firma ActivityPub e cifratura delle chat avvengono nel core locale. Il relay conserva ciphertext e dati pubblici; non vede mai le tue chiavi private.</p>
+          <h3>Chiavi locali</h3>
+          <p>Firma e cifratura delle chat avvengono nel core locale. Il relay conserva ciphertext e dati pubblici; non vede mai le chiavi private.</p>
         </div>
         <div class="card">
-          <h3>Resiliente per progetto</h3>
-          <p>Un livello libp2p (DHT, prenotazione relay, DCUtR, mDNS) porta note e chat direttamente tra i peer. Un account solo-P2P funziona senza alcun relay; il relay aggiunge raggiungibilità e spool per l'offline.</p>
+          <h3>Consegna P2P</h3>
+          <p>Un livello libp2p porta note e chat direttamente tra i peer. Un account solo-P2P funziona senza alcun relay.</p>
         </div>
         <div class="card">
-          <h3>Compatibile con il fediverso</h3>
-          <p>Actor ActivityPub, inbox e outbox, firme HTTP e WebFinger. Puoi parlare con Mastodon, Misskey e le altre istanze, e migrare un account esistente tramite gli alias legacy.</p>
+          <h3>Compatibilità col fediverso</h3>
+          <p>Actor ActivityPub, inbox e outbox, firme HTTP e WebFinger: Mastodon e Misskey vedono un actor normale.</p>
         </div>
         <div class="card">
-          <h3>Chat e chiamate</h3>
-          <p>Chat 1:1 e di gruppo cifrata end-to-end (AES-256-GCM con chiavi derivate da Kyber768), chiamate audio e video con fallback ICE/TURN, condivisione schermo su desktop.</p>
+          <h3>Chat e chiamate cifrate</h3>
+          <p>Chat 1:1 e di gruppo cifrata con chiavi derivate da Kyber768, chiamate audio e video su ICE/TURN, condivisione schermo su desktop.</p>
         </div>
         <div class="card">
-          <h3>Sviluppato allo scoperto</h3>
-          <p>AGPL-3.0-only, workspace Rust e client Flutter, controlli di rilascio ripetibili e log di trasparenza del relay firmati.</p>
+          <h3>Codice aperto</h3>
+          <p>AGPL-3.0-only, verifiche di release riproducibili e log di trasparenza del relay firmati.</p>
         </div>
         <div class="card">
-          <h3>Leggero sul telefono</h3>
-          <p>I profili di alimentazione in background riducono la CPU in idle a circa l'1% di un core sui dispositivi Android provati, con notifiche che non tengono acceso il core.</p>
+          <h3>Batteria Android</h3>
+          <p>I profili in background riducono la CPU inattiva a circa l'1% di un core su dispositivi Android testati.</p>
         </div>
       </div>
     </section>
 
-    <section id="schermate">
-      <h2>Schermate</h2>
-      <p class="sub">Client desktop e Android, interfaccia in inglese.</p>
+        <section id="schermate">
+      <h2>Il client Fedi3</h2>
+      <p class="sub">Il client desktop come funziona oggi: chat cifrata e profilo con note federate.</p>
       <div class="shots">
         <figure class="shot">
-          <img src="/assets/landing/timeline.png" alt="Timeline del client desktop Fedi3" loading="lazy" width="1280" height="720">
-          <figcaption>Timeline home</figcaption>
+          <img src="/assets/landing/chat.png" alt="Chat cifrata end-to-end di Fedi3" loading="lazy" width="1280" height="720">
         </figure>
         <figure class="shot">
-          <img src="/assets/landing/chat.png" alt="Chat cifrata di Fedi3" loading="lazy" width="1280" height="720">
-          <figcaption>Chat cifrata end-to-end</figcaption>
-        </figure>
-        <figure class="shot">
-          <img src="/assets/landing/profile.png" alt="Pagina profilo di Fedi3" loading="lazy" width="1280" height="720">
-          <figcaption>Profilo e note</figcaption>
+          <img src="/assets/landing/profile.png" alt="Profilo Fedi3 con note federate" loading="lazy" width="1280" height="720">
         </figure>
       </div>
     </section>
 
     <section id="inizia">
-      <h2>Come iniziare</h2>
+      <h2>Installa Fedi3</h2>
       <p class="sub">Servono un client e un modo per essere raggiungibile. Il secondo può essere questo relay, un relay tuo, oppure niente se usi solo il P2P.</p>
       <div class="steps">
         <div class="step">
@@ -164,7 +160,7 @@ docker compose up -d --build</code></pre>
     </section>
 
     <section id="faq">
-      <h2>FAQ</h2>
+      <h2>FAQ su Fedi3</h2>
       <details>
         <summary>Serve un server?</summary>
         <p>No. Un account solo-P2P continua a funzionare senza relay. Il relay serve per la federazione con le istanze classiche e per la consegna store-and-forward quando il dispositivo è offline.</p>
@@ -190,6 +186,49 @@ docker compose up -d --build</code></pre>
         <p>Instrada il traffico ActivityPub firmato, mantiene una coda offline con limiti, conserva i media se configurato e pubblica uno snapshot di trasparenza firmato che puoi fissare in modo indipendente. Vedi <a href="/transparency">la pagina della politica</a>.</p>
       </details>
     </section>
+
+
+    <section id="download">
+      <div class="closing-split">
+        <div>
+          <h2>Prova Fedi3</h2>
+          <p class="sub">Scarica il pacchetto per il tuo sistema, oppure unisciti a questo relay con il client che hai già.</p>
+          <div class="cta">
+            <a class="btn primary" href="https://github.com/redhunt07/Fedi3/releases/latest">Scarica {{version}}</a>
+            <a class="btn" href="#inizia">Unisciti a questo relay</a>
+          </div>
+        </div>
+        <div class="closing-visual" aria-hidden="true">
+          <svg viewBox="0 0 480 340" role="img" aria-label="Mesh dei relay: un relay centrale collegato a relay online e a un peer offline">
+          <g stroke="#33506c" stroke-width="1.4" fill="none">
+            <line x1="240" y1="170" x2="96" y2="84"/>
+            <line x1="240" y1="170" x2="386" y2="72"/>
+            <line x1="240" y1="170" x2="84" y2="262"/>
+            <line x1="240" y1="170" x2="392" y2="268"/>
+            <line x1="240" y1="170" x2="240" y2="302"/>
+          </g>
+          <g stroke="#7dd3fc" stroke-width="1.4" stroke-dasharray="4 5" fill="none" opacity=".8">
+            <line x1="240" y1="170" x2="392" y2="268"/>
+          </g>
+          <g>
+            <circle cx="240" cy="170" r="22" fill="rgba(196,161,255,.16)"/>
+            <circle cx="240" cy="170" r="10" fill="#c4a1ff"/>
+            <circle cx="96" cy="84" r="7" fill="#c4a1ff"/>
+            <circle cx="386" cy="72" r="7" fill="#c4a1ff"/>
+            <circle cx="84" cy="262" r="7" fill="#c4a1ff"/>
+            <circle cx="392" cy="268" r="7" fill="#7dd3fc"/>
+            <circle cx="240" cy="302" r="7" fill="#c4a1ff"/>
+          </g>
+          <g fill="#7dd3fc" opacity=".9">
+            <circle cx="168" cy="127" r="2.6"/>
+            <circle cx="316" cy="120" r="2.6"/>
+            <circle cx="162" cy="216" r="2.6"/>
+            <circle cx="240" cy="236" r="2.6"/>
+          </g>
+        </svg>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="footer">
@@ -204,6 +243,6 @@ docker compose up -d --build</code></pre>
     </div>
   </footer>
 </div>
-<script src="/assets/landing/live.js?v={{version}}" defer></script>
+<script src="/assets/landing/live.js?v={{asset_tag}}" defer></script>
 </body>
 </html>
