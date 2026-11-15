@@ -84,7 +84,7 @@ pub struct ChatPayload {
 pub struct ChatAttachment {
     pub id: String,
     pub url: String,
-    #[serde(rename = "mediaType")]
+    #[serde(rename = "mediaType", alias = "media_type", default)]
     pub media_type: String,
     pub name: Option<String>,
     pub width: Option<u32>,
@@ -1293,6 +1293,26 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod route_tests {
     use super::*;
+
+    #[test]
+    fn received_media_accepts_legacy_types_and_serializes_canonically() {
+        for (field, media_type) in [("mediaType", "audio/mp4"), ("media_type", "video/mp4")] {
+            let attachment: ChatAttachment = serde_json::from_value(serde_json::json!({
+                "id": "note", "url": "https://example.invalid/media/note", field: media_type
+            }))
+            .unwrap();
+            assert_eq!(attachment.media_type, media_type);
+            let encoded = serde_json::to_value(attachment).unwrap();
+            assert_eq!(encoded["mediaType"], media_type);
+            assert!(encoded.get("media_type").is_none());
+        }
+        let attachment: ChatAttachment = serde_json::from_value(serde_json::json!({
+            "id": "legacy", "url": "https://example.invalid/media/note.m4a"
+        }))
+        .unwrap();
+        assert!(attachment.media_type.is_empty());
+    }
+
     #[tokio::test]
     async fn stalled_direct_route_does_not_delay_live_relay() {
         let direct = std::future::pending::<Result<ChatSendOutcome>>();

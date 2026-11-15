@@ -104,22 +104,24 @@ available to answer for a few hours works better.
 
 ### Release announcement (English, short)
 
-> Fedi3 0.12.3 is out. A federated social app where the account lives in a local
-> Rust core on your device: keys stay local, chat is end-to-end encrypted, and a
+> Fedi3 0.12.4 is out. A federated social app where the account lives in a local
+> Rust core on your device: keys stay local, chat messages are end-to-end encrypted, and a
 > P2P layer keeps you reachable without a server. ActivityPub keeps you
 > connected to Mastodon and Misskey. Linux, Windows, Android, checksums
 > published. Still pre-1.0, and honest about it.
 > https://fedi3.redhunt07.ovh/ — the relay page now shows the network live.
+> Voice/video playback fixes and media attachments in post replies. Media files are not E2EE.
 > #FediVerse #ActivityPub #OpenSource
 
 ### Release announcement (Italian, short)
 
-> È uscita Fedi3 0.12.2: un'app social federata in cui l'account vive in un core
-> Rust locale sul tuo dispositivo. Le chiavi restano in locale, la chat è cifrata
+> È uscita Fedi3 0.12.4: un'app social federata in cui l'account vive in un core
+> Rust locale sul tuo dispositivo. Le chiavi restano in locale, i messaggi di chat sono cifrati
 > end-to-end e un livello P2P ti rende raggiungibile senza server. ActivityPub ti
 > tiene collegato a Mastodon e Misskey. Linux, Windows e Android con checksum.
 > Pre-1.0, e lo diciamo.
 > https://fedi3.redhunt07.ovh/it
+> Correzioni audio/video e allegati nelle risposte ai post. I file media non sono E2EE.
 > #fediverso #ActivityPub #softwarelibero
 
 ### Show HN

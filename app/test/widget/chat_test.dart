@@ -10,6 +10,8 @@ import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/screens/chat_screen.dart';
 import 'package:fedi3/ui/screens/chat_search_screen.dart';
 import 'package:fedi3/ui/screens/chat_thread_screen.dart';
+import 'package:fedi3/ui/screens/media_viewer_screen.dart';
+import 'package:fedi3/ui/widgets/inline_media_tile.dart';
 import 'package:fedi3/ui/screens/profile_screen.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -30,7 +32,12 @@ Future<AppState> _runningApp() async {
 
 /// Minimal audioplayers platform mock: the voice-note tile must reach its
 /// ready state without a native plugin in widget tests.
-void _mockAudioPlugin() {
+void _mockAudioPlugin({
+  int sourceFailures = 0,
+  List<MethodCall>? calls,
+  List<MockStreamHandlerEventSink>? events,
+}) {
+  final sinks = <String, MockStreamHandlerEventSink>{};
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   messenger.setMockMethodCallHandler(
@@ -40,17 +47,29 @@ void _mockAudioPlugin() {
   messenger.setMockMethodCallHandler(
     const MethodChannel('xyz.luan/audioplayers'),
     (call) async {
+      calls?.add(call);
+      final args = call.arguments is Map ? call.arguments as Map : const {};
+      final playerId = args['playerId']?.toString() ?? '';
+      if (call.method == 'setSourceUrl') {
+        sinks[playerId]?.success(<String, dynamic>{
+          'event': 'audio.onPrepared',
+          'value': true,
+        });
+      }
+      if (call.method == 'seek') {
+        sinks[playerId]?.success({'event': 'audio.onSeekComplete'});
+      }
+      if (call.method == 'setSourceUrl' && sourceFailures > 0) {
+        sourceFailures--;
+        throw PlatformException(code: 'temporary_network_error');
+      }
       if (call.method == 'create') {
-        final args = call.arguments is Map ? call.arguments as Map : const {};
-        final playerId = args['playerId']?.toString() ?? '';
         messenger.setMockStreamHandler(
           EventChannel('xyz.luan/audioplayers/events/$playerId'),
           MockStreamHandler.inline(
             onListen: (arguments, sink) {
-              sink.success(<String, dynamic>{
-                'event': 'audio.onPrepared',
-                'value': true,
-              });
+              sinks[playerId] = sink;
+              events?.add(sink);
             },
           ),
         );
@@ -473,29 +492,47 @@ void main() {
   });
 
   testWidgets(
-      'audio note with an empty mediaType is still a playable voice bubble',
+      'received voice note with missing MIME keeps play after failure and retries',
       (tester) async {
     await setUpPumpEnv(tester);
-    _mockAudioPlugin();
-    final client = _attachmentClient(_attachmentMessage(
-      attachmentId: 'a1',
-      url: 'https://fedi3.test/media/note.m4a',
+    final calls = <MethodCall>[];
+    final events = <MockStreamHandlerEventSink>[];
+    _mockAudioPlugin(sourceFailures: 1, calls: calls, events: events);
+    CoreHttp.useTestClient(_attachmentClient(_attachmentMessage(
+      attachmentId: 'retry-audio',
+      url: 'https://fedi3.test/media/voice',
       mediaType: '',
-      name: 'note.m4a',
-    ));
-    CoreHttp.useTestClient(client);
+      name: 'voice.m4a',
+    )));
     addTearDown(CoreHttp.reset);
-
     final app = await _runningApp();
-    await pumpScreen(
-      tester,
-      ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'),
-    );
+    await pumpScreen(tester,
+        ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'));
     await tester.pumpAndSettle();
 
-    // The recipient sees the existing voice-note bubble, not a plain file row.
     expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
     expect(find.byIcon(Icons.insert_drive_file), findsNothing);
+    expect(calls.where((c) => c.method == 'setSourceUrl'), hasLength(1),
+        reason: calls.map((c) => c.method).join(', '));
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(calls.where((c) => c.method == 'setSourceUrl'), hasLength(2));
+    expect(calls.where((c) => c.method == 'resume'), hasLength(1));
+    expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'pause'), hasLength(1));
+    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    events.single.success({'event': 'audio.onComplete'});
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(calls.where((c) => c.method == 'resume'), hasLength(2));
+    expect(calls.where((c) => c.method == 'seek'), hasLength(1));
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pumpAndSettle();
   });
 
   testWidgets(
@@ -523,6 +560,42 @@ void main() {
 
     expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
     expect(find.byIcon(Icons.insert_drive_file), findsNothing);
+    expect(tester.widget<InlineMediaTile>(find.byType(InlineMediaTile)).muted,
+        isFalse);
+  });
+
+  testWidgets('fullscreen opens the selected received video attachment',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    MediaKit.ensureInitialized();
+    final message = _attachmentMessage(
+      attachmentId: 'first',
+      url: 'http://127.0.0.1:1/media/first.mp4',
+      mediaType: 'video/mp4',
+      name: 'first.mp4',
+    );
+    final body = jsonDecode(message['body_json'] as String) as Map;
+    (body['attachments'] as List).add({
+      'id': 'second',
+      'url': 'http://127.0.0.1:1/media/second.mp4',
+      'media_type': 'application/octet-stream',
+      'name': 'second.mp4',
+    });
+    message['body_json'] = jsonEncode(body);
+    CoreHttp.useTestClient(_attachmentClient(message));
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester,
+        ChatThreadScreen(appState: app, threadId: 't1', title: 'Thread'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.play_circle_fill), findsNWidgets(2));
+    await tester.tap(find.byIcon(Icons.open_in_full).last);
+    await tester.pumpAndSettle();
+    final viewer =
+        tester.widget<MediaViewerScreen>(find.byType(MediaViewerScreen));
+    expect(viewer.initialIndex, 1);
+    expect(
+        viewer.attachments[viewer.initialIndex].url, endsWith('/second.mp4'));
   });
 
   testWidgets('chat list shows the DM peer nickname instead of the @handle',

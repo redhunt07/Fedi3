@@ -29,6 +29,7 @@ import 'inline_media_tile.dart';
 import 'link_preview_card.dart';
 import 'mention_pill.dart';
 import 'reaction_picker.dart';
+import 'reply_composer.dart';
 import 'status_avatar.dart';
 import '../../state/reaction_store.dart';
 import '../../state/emoji_store.dart';
@@ -65,7 +66,6 @@ class _NoteCardState extends State<NoteCard> {
   bool _showRaw = false;
   bool _hovered = false;
   bool _replying = false;
-  final TextEditingController _replyCtrl = TextEditingController();
   bool _showThread = false;
   bool _threadLoading = false;
   String? _threadError;
@@ -184,12 +184,6 @@ class _NoteCardState extends State<NoteCard> {
       EmojiStore.addAll(widget.item.note.emojis);
       _loadFlags(widget.item.note.id);
     }
-  }
-
-  @override
-  void dispose() {
-    _replyCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _loadActors() async {
@@ -667,7 +661,6 @@ class _NoteCardState extends State<NoteCard> {
                               onPressed: canAct
                                   ? () => setState(() {
                                         _replying = !_replying;
-                                        if (!_replying) _replyCtrl.clear();
                                       })
                                   : null,
                               icon: const Icon(Icons.reply),
@@ -824,30 +817,17 @@ class _NoteCardState extends State<NoteCard> {
                 ],
                 if (_replying) ...[
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: _replyCtrl,
-                    minLines: 1,
-                    maxLines: 5,
-                    decoration: InputDecoration(
-                        hintText: context.l10n.activityReplyHint),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: () => setState(() {
-                          _replying = false;
-                          _replyCtrl.clear();
-                        }),
-                        child: Text(context.l10n.activityCancel),
-                      ),
-                      const Spacer(),
-                      FilledButton(
-                        onPressed: () => _sendInlineReply(
-                            context, api, note.id, note.attributedTo),
-                        child: Text(context.l10n.activitySend),
-                      ),
-                    ],
+                  ReplyComposer(
+                    key: ValueKey(note.id),
+                    api: api,
+                    inReplyTo: note.id,
+                    replyToActor: note.attributedTo,
+                    onCancel: () => setState(() => _replying = false),
+                    onSent: () {
+                      setState(() => _replying = false);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(context.l10n.settingsOk)));
+                    },
                   ),
                 ],
                 if (_showRaw && widget.rawActivity != null)
@@ -1213,7 +1193,6 @@ class _NoteCardState extends State<NoteCard> {
         _myEmojiIds.clear();
         _reactionsOpen = false;
         _replying = false;
-        _replyCtrl.clear();
       });
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -1600,31 +1579,6 @@ class _NoteCardState extends State<NoteCard> {
         );
       },
     );
-  }
-
-  Future<void> _sendInlineReply(BuildContext context, CoreApi api,
-      String inReplyTo, String replyToActor) async {
-    final body = _replyCtrl.text.trim();
-    if (body.isEmpty) return;
-    try {
-      await api.postNote(
-          content: body,
-          public: true,
-          mediaIds: const [],
-          inReplyTo: inReplyTo,
-          replyToActor: replyToActor);
-      if (!context.mounted) return;
-      setState(() {
-        _replying = false;
-        _replyCtrl.clear();
-      });
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
-    }
   }
 
   Future<void> _loadThreadParents(CoreApi api, String start) async {

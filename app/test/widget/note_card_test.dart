@@ -9,6 +9,7 @@ import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/model/note_models.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/widgets/note_card.dart';
+import 'package:fedi3/ui/widgets/reply_composer.dart';
 import 'package:fedi3/ui/widgets/status_avatar.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -105,6 +106,20 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(opened, contains('https://external.example/article'));
   });
+  testWidgets('timeline reply exposes the media attachment composer',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    CoreHttp.useTestClient(FakeHttpClient(defaultResponse: FakeHttpResponse()));
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, NoteCard(appState: app, item: _item()));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byIcon(Icons.reply));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(ReplyComposer), findsOneWidget);
+    expect(find.byTooltip('Attach media'), findsOneWidget);
+  });
+
   testWidgets('AW-08 note card like triggers the correct outbox call',
       (tester) async {
     await setUpPumpEnv(tester);

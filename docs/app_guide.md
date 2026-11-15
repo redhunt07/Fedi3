@@ -63,6 +63,7 @@ The configuration is saved atomically in the app data directory, with `600` perm
 ## Publishing
 
 - The composer accepts text, media and visibility (public, unlisted, followers, direct).
+- Replies from the timeline and activity view accept up to eight media attachments, including replies without text. Remove unwanted files before sending; failed sends keep the draft and reuse completed uploads.
 - The text is always converted to HTML with escaping: the characters `<`, `>`, `&`, `"` and `'` do not break rendering nor open injection.
 - MFM syntax (`**bold**`, `:emoji:`) is supported.
 - Direct notes do not appear in the public outbox.
@@ -71,6 +72,7 @@ The configuration is saved atomically in the app data directory, with `600` perm
 
 - Chats are 1:1 or group. Delivery prefers the P2P circuit; when that is unavailable the envelope is posted over HTTPS to the peer's relay path (`/users/<name>/_fedi3/chat/inbox`), so chat works in relay-only deployments too. The message body stays end-to-end encrypted either way.
 - Chat messages use AES-256-GCM with per-message keys derived from Kyber768 through HKDF-SHA256 and RSA-SHA256 signatures. The relay does not see the chat content. RSA-OAEP is used separately for compatibility/spool envelopes.
+- Chat attachment files are uploaded separately to the configured media backend without end-to-end encryption. The encrypted chat payload protects their URLs and metadata, not the file bytes. Anyone who obtains a media URL can fetch it; the storage operator can read the file.
 - It supports reactions, files, GIFs and read status.
 - The notification service declares `remoteMessaging` on Android 14+ (falling back to
   `dataSync` below): Android 15 caps `dataSync` foreground services at six hours per day.

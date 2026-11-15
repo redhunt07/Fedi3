@@ -1023,6 +1023,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get composeAddMediaPath => 'Add media (path)';
 
   @override
+  String get replyRemoveAttachment => 'Remove attachment';
+
+  @override
   String get composeAddMedia => 'Attach media';
 
   @override

@@ -4,6 +4,10 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-16 — Fedi3 0.12.4
+
+Fedi3 0.12.4 (build 4020) corregge la riproduzione delle note vocali e video e aggiunge allegati alle risposte ai post. Un invio fallito conserva la bozza e riutilizza i file caricati. Corretti metadati, istruzioni e informazioni sulla privacy dei siti pubblici. I file allegati nel backend media non sono cifrati end-to-end. Aggiornare prima il relay e conservare profili e dati. [Release](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.4) · [Note / Notes](docs/releases/v0.12.4.md).
+
 ## 2026-11-15 — Fedi3 0.12.3
 
 Fedi3 0.12.3 (build 4019) rende visibile e verificabile il relay pubblico: la pagina di atterraggio bilingue mostra in tempo reale la mesh dei relay, i peer e gli utenti connessi e il traffico reale di relay e federazione, mentre `nodeinfo/2.0` identifica il relay come Fedi3 con la versione reale. Il comportamento del client non cambia rispetto alla 0.12.2; i pacchetti sono ricostruiti alla 0.12.3+4019. Aggiornare il relay per ottenere la nuova pagina. [Release e download](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.3) · [Note italiane e inglesi](docs/releases/v0.12.3.md).

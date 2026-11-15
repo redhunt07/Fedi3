@@ -1550,7 +1550,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       attachments.add({
         'id': a.id,
         'url': a.url,
-        'media_type': a.mediaType,
+        'mediaType': a.mediaType,
         if (a.name != null && a.name!.trim().isNotEmpty) 'name': a.name,
       });
     }
@@ -2633,6 +2633,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: _ChatAudioTile(
+              key: ValueKey(_resolveMediaUrl(a.url)),
               url: _resolveMediaUrl(a.url),
               isSelf: isSelf,
             ),
@@ -2652,7 +2653,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     name: a.name,
                     cacheWidth: 320,
                     autoplay: false,
-                    muted: true,
+                    muted: false,
                     poster: true,
                     onOpen: () => _openMediaViewer(attachments, a),
                   ),
@@ -2791,6 +2792,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           url: focus.url,
           mediaType: _effectiveMediaType(focus),
           attachments: items,
+          initialIndex: items.indexWhere((a) => a.url == focus.url),
         ),
       ),
     );
@@ -3137,7 +3139,7 @@ class _AttachOption extends StatelessWidget {
 
 /// Voice note bubble: play/pause, progress and duration for audio attachments.
 class _ChatAudioTile extends StatefulWidget {
-  const _ChatAudioTile({required this.url, this.isSelf = false});
+  const _ChatAudioTile({super.key, required this.url, this.isSelf = false});
 
   final String url;
   final bool isSelf;
@@ -3153,12 +3155,12 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
   bool _playing = false;
   bool _loading = false;
   bool _failed = false;
+  bool _completed = false;
+  Future<void>? _preparation;
 
   @override
   void initState() {
     super.initState();
-    // Load the source up front so the duration is visible before playback.
-    unawaited(_prepare());
     _player.onDurationChanged.listen((d) {
       if (mounted) setState(() => _duration = d);
     });
@@ -3174,8 +3176,12 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
       setState(() {
         _playing = false;
         _position = Duration.zero;
+        _completed = true;
       });
     });
+    // Keep preparation serialized with play/retry; a failed preload must not
+    // permanently remove the recipient's play button.
+    _preparation = _prepare();
   }
 
   @override
@@ -3186,10 +3192,16 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
 
   Future<void> _prepare() async {
     try {
+      await _player.setReleaseMode(ReleaseMode.stop);
       await _player.setSourceUrl(widget.url);
       final duration = await _player.getDuration();
-      if (mounted && duration != null && duration > Duration.zero) {
-        setState(() => _duration = duration);
+      if (mounted) {
+        setState(() {
+          _failed = false;
+          if (duration != null && duration > Duration.zero) {
+            _duration = duration;
+          }
+        });
       }
     } catch (_) {
       if (mounted) setState(() => _failed = true);
@@ -3197,24 +3209,33 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
   }
 
   Future<void> _toggle() async {
-    if (_failed) return;
+    if (_loading) return;
+    setState(() => _loading = true);
     try {
+      await _preparation;
+      if (!mounted) return;
+      if (_failed) {
+        _preparation = _prepare();
+        await _preparation;
+        if (!mounted || _failed) return;
+      }
       if (_playing) {
         await _player.pause();
         return;
       }
-      if (_duration > Duration.zero && _position >= _duration) {
+      if (_completed || (_duration > Duration.zero && _position >= _duration)) {
         await _player.seek(Duration.zero);
+        _completed = false;
       }
-      setState(() => _loading = true);
       await _player.resume();
-      if (mounted) setState(() => _loading = false);
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _failed = true;
       });
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -3250,7 +3271,8 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
             height: 40,
             child: IconButton(
               padding: EdgeInsets.zero,
-              tooltip: _playing ? 'Pause' : 'Play',
+              tooltip:
+                  _failed ? context.l10n.retry : (_playing ? 'Pause' : 'Play'),
               onPressed: _loading ? null : _toggle,
               icon: _loading
                   ? SizedBox(
@@ -3262,11 +3284,7 @@ class _ChatAudioTileState extends State<_ChatAudioTile> {
                       ),
                     )
                   : Icon(
-                      _failed
-                          ? Icons.error_outline_rounded
-                          : _playing
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
+                      _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       color: fg,
                       size: 26,
                     ),

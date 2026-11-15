@@ -14,12 +14,12 @@ un relay pubblico opzionale per federazione e consegna offline.
 **Sito pubblico:** [redhunt07.github.io/Fedi3/it](https://redhunt07.github.io/Fedi3/it/) ·
 [English](https://redhunt07.github.io/Fedi3/) — guide, confronti e download.
 
-> **Stato: pre-1.0 — release [0.12.3](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.3) (build 4019).**
+> **Stato: pre-1.0 — release [0.12.4](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.4) (build 4020).**
 > I pacchetti comprendono AppImage Linux x86_64, Debian/Ubuntu amd64, Windows x64
 > e APK Android arm64-v8a/x86_64, con checksum SHA256. Gli APK usano l'identità
 > di firma release configurata; per aggiornare serve un certificato compatibile.
-> Non sono inclusi pacchetti iOS/macOS. Vedi le [note bilingui](docs/releases/v0.12.3.md)
-> e il [rapporto di verifica](docs/it/audit/release_readiness_2026-11-15.md).
+> Non sono inclusi pacchetti iOS/macOS. Vedi le [note bilingui](docs/releases/v0.12.4.md)
+> e il [rapporto di verifica](docs/it/audit/release_0.12.4_2026-11-16.md).
 
 ## Screenshot
 

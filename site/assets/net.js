@@ -125,7 +125,7 @@
     ctx.font = '600 10px ui-monospace, Menlo, monospace';
     ctx.textAlign = 'center';
     ctx.fillStyle = COLORS.text;
-    ctx.fillText('CORE LOCALE', cx, cy + 30);
+    ctx.fillText(canvas.dataset.coreLabel || 'LOCAL CORE', cx, cy + 30);
 
     for (const n of nodes) {
       const p = nodePos(n, rx, ry);
@@ -170,7 +170,7 @@
 
   function start() {
     if (paused) return;
-    if (running || reduced.matches || !visible) return;
+    if (running || reduced.matches || !visible || document.hidden) return;
     running = true;
     raf = requestAnimationFrame(frame);
   }
@@ -191,7 +191,7 @@
     pauseBtn.addEventListener('click', () => {
       paused = !paused;
       pauseBtn.setAttribute('aria-pressed', String(paused));
-      pauseBtn.textContent = paused ? 'Riprendi animazione' : 'Pausa animazione';
+      pauseBtn.textContent = paused ? pauseBtn.dataset.resumeLabel : pauseBtn.dataset.pauseLabel;
       if (paused) stop();
       else if (visible) start();
     });

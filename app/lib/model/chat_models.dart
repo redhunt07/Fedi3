@@ -245,11 +245,13 @@ class ChatAttachment {
   final String? blurhash;
 
   factory ChatAttachment.fromJson(Map<String, dynamic> json) {
+    final mediaType = json['mediaType']?.toString().trim() ?? '';
     return ChatAttachment(
       id: json['id']?.toString() ?? '',
       url: json['url']?.toString() ?? '',
-      mediaType:
-          json['mediaType']?.toString() ?? json['media_type']?.toString() ?? '',
+      mediaType: mediaType.isNotEmpty
+          ? mediaType
+          : json['media_type']?.toString().trim() ?? '',
       name: json['name']?.toString(),
       width: (json['width'] as num?)?.toInt(),
       height: (json['height'] as num?)?.toInt(),

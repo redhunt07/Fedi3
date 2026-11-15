@@ -9,14 +9,14 @@
 <meta name="site-kind" content="software">
 <meta name="theme-color" content="#070b12">
 <link rel="canonical" href="{{origin}}/it">
-<link rel="alternate" hreflang="it" href="{{origin}}/">
-<link rel="alternate" hreflang="en" href="{origin}/">
+<link rel="alternate" hreflang="it" href="{{origin}}/it">
+<link rel="alternate" hreflang="en" href="{{origin}}/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Fedi3">
 <meta property="og:title" content="Fedi3 — social federato con le chiavi sul tuo dispositivo">
 <meta property="og:description" content="Un'app social federata con un core Rust locale: le chiavi non lasciano il dispositivo, il livello P2P funziona anche senza server e ActivityPub ti tiene collegato al fediverso.">
 <meta property="og:url" content="{{origin}}/it">
-<meta property="og:image" content="{origin}/assets/landing/timeline.png">
+<meta property="og:image" content="{{origin}}/assets/landing/timeline.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/assets/landing/favicon.png" type="image/png">
 <link rel="stylesheet" href="/assets/landing/style.css?v={{asset_tag}}">
@@ -74,7 +74,7 @@
       <div class="live-panel split" data-live-endpoint="/_fedi3/relay/live" data-label-live="live" data-label-retry="riconnessione" data-label-wait="connessione" data-label-collecting="raccolta campioni…">
         <div class="live-copy">
           <h2>La rete relay di Fedi3, in tempo reale</h2>
-          <p class="sub">Numeri reali da questo relay: raggiungibilità della mesh, peer connessi e traffico del relay. Sono solo contatori aggregati, azzerati al riavvio; il traffico P2P diretto tra dispositivi non passa dal relay e non è conteggiato qui.</p>
+          <p class="sub">Numeri reali da questo relay: raggiungibilità della mesh, peer connessi e traffico del relay. Sono dati aggregati; i contatori del traffico ripartono da zero al riavvio e il traffico P2P diretto tra dispositivi non passa dal relay e non è conteggiato qui.</p>
           <div class="live-tiles">
 <div class="live-tile"><span class="k">Utenti online</span><strong id="live-users-online">—</strong><small id="live-users-total">—</small></div>
 <div class="live-tile"><span class="k">Peer online</span><strong id="live-peers-online">—</strong><small id="live-peers-seen">—</small></div>
@@ -86,7 +86,7 @@
         </div>
         <div class="live-visual">
           <div class="live-stage">
-            <canvas id="live-mesh" role="img" aria-label="Animated relay mesh"></canvas>
+            <canvas id="live-mesh" role="img" aria-label="Rete animata dei relay"></canvas>
             <div class="live-badge" id="live-status" data-state="wait" aria-live="polite">connessione</div>
             <ul class="live-legend">
 <li><span class="live-dot on"></span>relay online</li>
@@ -101,7 +101,7 @@
             <a class="raw-link" href="/_fedi3/relay/live">JSON grezzo</a>
           </div>
           <div class="live-spark-wrap">
-            <canvas id="live-spark" role="img" aria-label="Peers online over time"></canvas>
+            <canvas id="live-spark" role="img" aria-label="Peer online nel tempo"></canvas>
           </div>
         </div>
       </div>
@@ -172,11 +172,11 @@
 <div class="step">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7.5l3.2 3M17 7.5l-3.2 3M7 16.5l3.2-3M17 16.5l-3.2-3"/></svg></span>
 <h3>Scegli un relay</h3>
-<p>In Impostazioni → Rete inserisci un URL relay e un token di almeno 16 caratteri. Sui relay con registrazione libera l'account nasce alla prima connessione; altrimenti chiedi un token all'operatore. Puoi saltarlo per un account solo-P2P.</p>
+<p>In Impostazioni → Account inserisci un URL relay e un token di almeno 16 caratteri. Sui relay con registrazione libera l'account nasce alla prima connessione; altrimenti chiedi un token all'operatore. Puoi saltarlo per un account solo-P2P.</p>
 </div>
         </div>
         <div class="install-mock" data-ui="relay-settings">
-          <div class="mock-bar"><span class="mock-title">Settings · Networking</span><span class="mock-state">connected</span></div>
+          <div class="mock-bar"><span class="mock-title">Settings · Account</span><span class="mock-state">connected</span></div>
           <div class="mock-body">
             <p class="mock-label">Relay URL</p>
             <p class="mock-field">{{origin}}</p>
@@ -208,7 +208,7 @@
 <div class="faq-item">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 1 1 3.7 2.4c-.9.5-1.1 1-1.1 1.9"/><path d="M12 17h.01"/></svg></span>
 <h3>Il relay può leggere i miei messaggi?</h3>
-<p>Le note pubbliche sono pubbliche per natura. La chat privata è cifrata end-to-end nel client; il relay conserva ciphertext e instrada. Non c'è ancora forward secrecy: il limite è documentato.</p>
+<p>Le note pubbliche sono pubbliche per natura. La chat privata è cifrata end-to-end nel client; il relay conserva ciphertext e instrada. Gli allegati nel backend media non sono cifrati end-to-end. Non c'è ancora forward secrecy: il limite è documentato.</p>
 </div>
 <div class="faq-item">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 1 1 3.7 2.4c-.9.5-1.1 1-1.1 1.9"/><path d="M12 17h.01"/></svg></span>

@@ -71,6 +71,7 @@ La configurazione viene salvata in modo atomico nella directory dati dell'app, c
 
 - Le chat sono 1:1 o di gruppo. La consegna preferisce il circuito P2P; quando non è disponibile l'envelope viene inviato via HTTPS al percorso del peer sul relay (`/users/<nome>/_fedi3/chat/inbox`), così la chat funziona anche nelle installazioni solo-relay. In entrambi i casi il contenuto resta cifrato end-to-end.
 - I messaggi della chat usano AES-256-GCM con chiavi per messaggio derivate da Kyber768 tramite HKDF-SHA256 e firme RSA-SHA256. Il relay non vede il contenuto della chat. RSA-OAEP è usato separatamente per envelope di compatibilità/spool.
+- I file allegati alle chat vengono caricati separatamente nel backend media configurato senza cifratura end-to-end. Il payload cifrato della chat protegge URL e metadati, non i byte dei file. Chi ottiene un URL media può scaricarlo; il gestore dello storage può leggere il file.
 - Supporta reazioni, file, GIF e stato di lettura.
 - Il servizio notifiche dichiara `remoteMessaging` su Android 14+ (con fallback a `dataSync`
   sotto): Android 15 limita i foreground service `dataSync` a sei ore al giorno.

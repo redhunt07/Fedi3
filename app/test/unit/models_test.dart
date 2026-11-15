@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 
+import 'package:fedi3/model/chat_models.dart';
 import 'package:fedi3/model/core_config.dart';
 import 'package:fedi3/model/ui_prefs.dart';
 import 'package:fedi3/services/backup_codec.dart';
@@ -14,6 +15,18 @@ import 'package:flutter_test/flutter_test.dart';
 import '../support/test_config.dart';
 
 void main() {
+  test('received attachments preserve legacy MIME types with empty camelCase',
+      () {
+    for (final type in ['audio/mp4', 'video/mp4']) {
+      final attachment = ChatAttachment.fromJson({
+        'id': 'received',
+        'url': 'https://example.invalid/media/opaque-id',
+        'mediaType': ' ',
+        'media_type': type,
+      });
+      expect(attachment.mediaType, type);
+    }
+  });
   group('CoreConfig serialization (AM-01..04)', () {
     test('peer discovery options survive edits and reach the Rust core', () {
       final cfg = buildTestConfig().copyWith(

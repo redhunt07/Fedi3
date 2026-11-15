@@ -10,13 +10,13 @@
 <meta name="theme-color" content="#070b12">
 <link rel="canonical" href="{{origin}}/">
 <link rel="alternate" hreflang="it" href="{{origin}}/it">
-<link rel="alternate" hreflang="en" href="{origin}/">
+<link rel="alternate" hreflang="en" href="{{origin}}/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Fedi3">
 <meta property="og:title" content="Fedi3 — federated social with the keys on your device">
 <meta property="og:description" content="A federated social app with a local Rust core: your keys never leave your device, the P2P layer keeps working without a server, and ActivityPub keeps you connected to the fediverse.">
 <meta property="og:url" content="{{origin}}/">
-<meta property="og:image" content="{origin}/assets/landing/timeline.png">
+<meta property="og:image" content="{{origin}}/assets/landing/timeline.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/assets/landing/favicon.png" type="image/png">
 <link rel="stylesheet" href="/assets/landing/style.css?v={{asset_tag}}">
@@ -74,7 +74,7 @@
       <div class="live-panel split" data-live-endpoint="/_fedi3/relay/live" data-label-live="live" data-label-retry="reconnecting" data-label-wait="connecting" data-label-collecting="collecting samples…">
         <div class="live-copy">
           <h2>The Fedi3 relay network, live</h2>
-          <p class="sub">Real numbers from this relay: relay mesh reachability, connected peers and relay traffic. Counters are aggregate only and reset when the relay restarts; direct device-to-device P2P traffic never passes through the relay, so it is not counted here.</p>
+          <p class="sub">Real numbers from this relay: relay mesh reachability, connected peers and relay traffic. These are aggregate data; traffic counters reset when the relay restarts, and direct device-to-device P2P traffic never passes through the relay, so it is not counted here.</p>
           <div class="live-tiles">
 <div class="live-tile"><span class="k">Users online</span><strong id="live-users-online">—</strong><small id="live-users-total">—</small></div>
 <div class="live-tile"><span class="k">Peers online</span><strong id="live-peers-online">—</strong><small id="live-peers-seen">—</small></div>
@@ -172,11 +172,11 @@
 <div class="step">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7.5l3.2 3M17 7.5l-3.2 3M7 16.5l3.2-3M17 16.5l-3.2-3"/></svg></span>
 <h3>Pick a relay</h3>
-<p>In Settings → Networking enter a relay URL and a token of at least 16 characters. On relays that allow self-registration the account is created on first connection; otherwise ask the operator for a token. Skip it for a P2P-only account.</p>
+<p>In Settings → Account enter a relay URL and a token of at least 16 characters. On relays that allow self-registration the account is created on first connection; otherwise ask the operator for a token. Skip it for a P2P-only account.</p>
 </div>
         </div>
         <div class="install-mock" data-ui="relay-settings">
-          <div class="mock-bar"><span class="mock-title">Settings · Networking</span><span class="mock-state">connected</span></div>
+          <div class="mock-bar"><span class="mock-title">Settings · Account</span><span class="mock-state">connected</span></div>
           <div class="mock-body">
             <p class="mock-label">Relay URL</p>
             <p class="mock-field">{{origin}}</p>
@@ -208,7 +208,7 @@
 <div class="faq-item">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 1 1 3.7 2.4c-.9.5-1.1 1-1.1 1.9"/><path d="M12 17h.01"/></svg></span>
 <h3>Can the relay read my messages?</h3>
-<p>Public posts are public by nature. Private chat is encrypted end to end in the client; the relay stores ciphertext and routes it. There is no forward secrecy yet: this limitation is documented.</p>
+<p>Public posts are public by nature. Private chat is encrypted end to end in the client; the relay stores ciphertext and routes it. Attachments in the media backend are not end-to-end encrypted. There is no forward secrecy yet: this limitation is documented.</p>
 </div>
 <div class="faq-item">
 <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 1 1 3.7 2.4c-.9.5-1.1 1-1.1 1.9"/><path d="M12 17h.01"/></svg></span>

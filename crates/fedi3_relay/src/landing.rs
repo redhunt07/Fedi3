@@ -245,7 +245,12 @@ mod tests {
         for lang in [Lang::En, Lang::It] {
             let html = render(lang, "https://relay.example", 7);
             assert!(html.contains("https://relay.example/"));
-            assert!(!html.contains("{{origin}}"));
+            assert!(!html.contains("{origin}"));
+            assert!(html.contains("hreflang=\"it\" href=\"https://relay.example/it\""));
+            assert!(html.contains("hreflang=\"en\" href=\"https://relay.example/\""));
+            assert!(html.contains(
+                "property=\"og:image\" content=\"https://relay.example/assets/landing/timeline.png\""
+            ));
             assert!(!html.contains("{{version}}"));
             assert!(!html.contains("{{asset_tag}}"));
             assert!(html.contains("style.css?v="));

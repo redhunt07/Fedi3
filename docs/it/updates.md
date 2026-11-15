@@ -13,7 +13,7 @@ La versione locale proviene dai metadati dell’app installata. Sono proposte
 solo release stabili `vX.Y.Z` strettamente più recenti. Bozze, prerelease,
 metadati invalidi, URL esterni e pacchetti per altre architetture sono esclusi.
 Il sistema di aggiornamento è stato introdotto nella `0.10.0+1`; la
-versione dei sorgenti è `0.12.3+4019` (vedi `app/pubspec.yaml`). I client precedenti alla `0.10.0` richiedono un
+versione dei sorgenti è `0.12.4+4020` (vedi `app/pubspec.yaml`). I client precedenti alla `0.10.0` richiedono un
 primo aggiornamento manuale.
 
 ## Installazione

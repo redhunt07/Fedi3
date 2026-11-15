@@ -1,0 +1,1 @@
+Voice notes: retry playback after loading errors, pause and replay. Video notes: sound and correct fullscreen selection. Post replies now support media attachments, including media-only replies, with upload reuse after failed sends. Public sites: corrected links, setup instructions and privacy information. Keep your existing profile and data.

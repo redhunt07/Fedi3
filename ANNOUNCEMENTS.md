@@ -4,6 +4,10 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-16 — Fedi3 0.12.4
+
+Fedi3 0.12.4 (build 4020) fixes voice/video note playback and adds media attachments to post replies. Failed sends preserve the reply draft and reuse uploaded files. Public-site metadata, setup instructions and privacy information have been corrected. Attachment files in the media backend are not end-to-end encrypted. Upgrade the relay first and keep existing profiles and data. [Release](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.4) · [Note / Notes](docs/releases/v0.12.4.md).
+
 ## 2026-11-15 — Fedi3 0.12.3
 
 Fedi3 0.12.3 (build 4019) makes the public relay visible and verifiable: the bilingual landing page now shows the relay mesh, connected peers and users, and real relay/federation traffic live, while `nodeinfo/2.0` identifies the relay as Fedi3 with its real version. Client behaviour is unchanged from 0.12.2; packages are rebuilt at 0.12.3+4019. Upgrade the relay to get the new page. [Release and downloads](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.3) · [Italian and English notes](docs/releases/v0.12.3.md).

@@ -17,6 +17,9 @@
 
   const panel = document.querySelector('.live-panel');
   if (!panel) return;
+  const italian = document.documentElement.lang === 'it';
+  const totalLabel = italian ? ' totali' : ' total';
+  const seenLabel = italian ? ' visti in 30 giorni' : ' seen in 30 days';
 
   const endpoint = panel.getAttribute('data-live-endpoint') || '/_fedi3/relay/live';
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -192,17 +195,17 @@
     if (ui.updated) ui.updated.textContent = clock(now);
 
     tween(ui.usersOnline, Number(data.users && data.users.online) || 0, int);
-    if (ui.usersTotal) ui.usersTotal.textContent = int(data.users && data.users.total) + ' total';
+    if (ui.usersTotal) ui.usersTotal.textContent = int(data.users && data.users.total) + totalLabel;
     tween(ui.peersOnline, state.peersOnline, int);
-    if (ui.peersSeen) ui.peersSeen.textContent = int(peersSeen) + ' seen in 30 days';
+    if (ui.peersSeen) ui.peersSeen.textContent = int(peersSeen) + seenLabel;
     tween(ui.relaysOnline, Number(data.relays && data.relays.online) || 0, int);
     if (ui.relaysOffline) ui.relaysOffline.textContent = int(data.relays && data.relays.offline) + ' offline';
     if (ui.meshInfo) {
       const mesh = data.mesh || {};
       ui.meshInfo.textContent = 'sync ' + int(mesh.sync_secs) + 's · hops ' + int(mesh.max_hops);
     }
-    if (ui.tunnelTotal) ui.tunnelTotal.textContent = bytes(tunnelTotal) + ' total';
-    if (ui.fetchTotal) ui.fetchTotal.textContent = bytes(fetchTotal) + ' total';
+    if (ui.tunnelTotal) ui.tunnelTotal.textContent = bytes(tunnelTotal) + totalLabel;
+    if (ui.fetchTotal) ui.fetchTotal.textContent = bytes(fetchTotal) + totalLabel;
 
     if (reduceMotion) {
       paintRates(true);
@@ -216,13 +219,13 @@
     if (meshCanvas) {
       meshCanvas.setAttribute(
         'aria-label',
-        'Relay mesh: ' +
+        (italian ? 'Rete relay: ' : 'Relay mesh: ') +
           int(data.relays && data.relays.online) +
-          ' relays online, ' +
+          (italian ? ' relay online, ' : ' relays online, ') +
           int(data.relays && data.relays.offline) +
           ' offline, ' +
           int(state.peersOnline) +
-          ' peers online.'
+          (italian ? ' peer online.' : ' peers online.')
       );
     }
   };
@@ -482,7 +485,7 @@
 
     if (onlineRelays.length === 0 && state.relays.length > 0) {
       ctx.fillStyle = 'rgba(' + COLORS.text + ', 0.5)';
-      ctx.fillText('no relay reachable yet', cx, cy - 34);
+      ctx.fillText(italian ? 'nessun relay raggiungibile' : 'no relay reachable yet', cx, cy - 34);
     } else if (onlineRelays.length < state.relays.length) {
       ctx.fillStyle = 'rgba(' + COLORS.text + ', 0.5)';
       ctx.fillText(offlineRelays.length + ' offline', cx, cy - 34);
@@ -490,7 +493,7 @@
 
     if (state.relays.length > nodes.length) {
       ctx.fillStyle = 'rgba(' + COLORS.text + ', 0.45)';
-      ctx.fillText('+' + (state.relays.length - nodes.length) + ' more relays', cx, cy + 52);
+      ctx.fillText('+' + (state.relays.length - nodes.length) + (italian ? ' altri relay' : ' more relays'), cx, cy + 52);
     }
   };
 

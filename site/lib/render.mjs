@@ -10,8 +10,8 @@
 // (site/assets/brand.css): fixed nav, one screen per section, 12-column splits,
 // cards, screenshots, FAQ grid and the closing screen.
 
-export const VERSION = '0.12.3';
-export const BUILD = '4019';
+export const VERSION = '0.12.4';
+export const BUILD = '4020';
 export const REPO = 'https://github.com/redhunt07/Fedi3';
 export const RELAY = 'https://fedi3.redhunt07.ovh';
 export const RELAY_DIRECTORY = `${REPO}/blob/main/relays/relays.json`;
@@ -178,10 +178,15 @@ ${frameHead('Timeline', 'Federated')}
 </div>`;
 };
 
-export const networkVisual = () => `<div class="net-stage" data-visual>
-<canvas id="fedi3-net" data-relays="${attr(base('assets/relays.json'))}" role="img" aria-label="Schema animato della rete Fedi3: core locale, relay Fedi3, peer e istanze ActivityPub"></canvas>
-<button class="net-pause" type="button" aria-pressed="false">Pausa animazione</button>
+export const networkVisual = (lang = 'it') => {
+  const en = lang === 'en';
+  const pause = en ? 'Pause animation' : 'Pausa animazione';
+  const resume = en ? 'Resume animation' : 'Riprendi animazione';
+  return `<div class="net-stage" data-visual>
+<canvas id="fedi3-net" data-core-label="${en ? 'LOCAL CORE' : 'CORE LOCALE'}" data-relays="${attr(base('assets/relays.json'))}" role="img" aria-label="${en ? 'Animated Fedi3 network diagram: local core, Fedi3 relays, peers and ActivityPub instances' : 'Schema animato della rete Fedi3: core locale, relay Fedi3, peer e istanze ActivityPub'}"></canvas>
+<button class="net-pause" type="button" aria-pressed="false" data-pause-label="${pause}" data-resume-label="${resume}">${pause}</button>
 </div>`;
+};
 
 const CLOSING_SVG = `<svg viewBox="0 0 480 340" role="img" aria-label="Mappa della rete Fedi3: un core locale collegato a relay e istanze del Fediverso">
 <g stroke="#33506c" stroke-width="1.4" fill="none">

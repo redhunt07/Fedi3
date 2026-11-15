@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-11-16
+
+- Keep voice-note play available after loading failures, retry preparation and preserve the source for replay.
+- Play received video notes with sound and open the selected attachment in fullscreen.
+- Accept legacy attachment MIME fields and use canonical metadata when forwarding.
+- Add media attachments and media-only replies to timeline and activity reply editors; preserve failed drafts and reuse successful uploads.
+- Correct relay social/language metadata, public-site setup instructions, localization and privacy information, including the lack of end-to-end encryption for media attachment files.
+
 - Redesign the relay landing page: the first screen names the product and shows the client at full size, every section fills one screen, screenshots carry no captions, links and buttons answer the pointer, the closing screen pairs the download action with a relay-mesh diagram, and stylesheet/script URLs carry a content hash so a relay upgrade busts caches without a version bump.
 - Rebuild the landing page on the layout kit's contract: one fixed navigation bar on the page's container, the hero as a single text column and product visual on the first screen, every section and the closing footer exactly one screen with its heading first, the install steps beside a real Settings → Networking mock, FAQ answers open from the start, and a full-screen phone menu drawn with CSS only. The bar now marks the section in view, and the raw JSON link has a visible focus ring and a 44px target.
 - Serve the landing HTML with `Cache-Control: public, max-age=0, must-revalidate`: the page embeds the user count and points at content-hashed assets, so a cached copy would keep the previous stylesheet after an upgrade.

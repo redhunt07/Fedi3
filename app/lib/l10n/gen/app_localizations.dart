@@ -1934,6 +1934,12 @@ abstract class AppLocalizations {
   /// **'Add media (path)'**
   String get composeAddMediaPath;
 
+  /// No description provided for @replyRemoveAttachment.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove attachment'**
+  String get replyRemoveAttachment;
+
   /// No description provided for @composeAddMedia.
   ///
   /// In en, this message translates to:

@@ -14,6 +14,7 @@ import '../../services/actor_repository.dart';
 import '../../state/app_state.dart';
 import '../utils/open_url.dart';
 import 'status_avatar.dart';
+import 'reply_composer.dart';
 
 class ActivityCard extends StatefulWidget {
   const ActivityCard({
@@ -360,46 +361,28 @@ class _ActivityCardState extends State<ActivityCard> {
 
   Future<void> _reply(BuildContext context, CoreApi api, String inReplyTo,
       String replyToActor) async {
-    final ctrl = TextEditingController();
-    try {
-      final text = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(context.l10n.activityReplyTitle),
-          content: TextField(
-            controller: ctrl,
-            decoration:
-                InputDecoration(hintText: context.l10n.activityReplyHint),
-            maxLines: 5,
-            minLines: 1,
+    final sent = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(dialogContext.l10n.activityReplyTitle),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: ReplyComposer(
+              api: api,
+              inReplyTo: inReplyTo,
+              replyToActor: replyToActor,
+              onCancel: () => Navigator.of(dialogContext).pop(false),
+              onSent: () => Navigator.of(dialogContext).pop(true),
+            ),
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(context.l10n.activityCancel)),
-            FilledButton(
-                onPressed: () => Navigator.of(context).pop(ctrl.text),
-                child: Text(context.l10n.activitySend)),
-          ],
         ),
-      );
-      final body = text?.trim() ?? '';
-      if (body.isEmpty) return;
-      await api.postNote(
-          content: body,
-          public: true,
-          mediaIds: const [],
-          inReplyTo: inReplyTo,
-          replyToActor: replyToActor);
-      if (!context.mounted) return;
+      ),
+    );
+    if (sent == true && context.mounted) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(context.l10n.settingsOk)));
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.settingsErr(e.toString()))));
-    } finally {
-      ctrl.dispose();
     }
   }
 }

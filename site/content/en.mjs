@@ -75,7 +75,7 @@ const home = {
         copy: prose(`<p>The peer-to-peer layer uses libp2p with DHT, relay reservation, DCUtR and mDNS: two devices find each other and talk with no server in between. A P2P-only account works with no relay at all.</p>
 <p>A Fedi3 relay delivers activities while the device is offline and bridges to classic instances. Use a public one or install your own with Docker Compose.</p>`)
           + relayList(RELAYS, 'Public relays listed in the project directory. The directory is open: any operator can add their own relay.'),
-        visual: networkVisual(),
+        visual: networkVisual('en'),
       }),
     },
     {
@@ -151,7 +151,7 @@ const home = {
       body: faqVisual() + faqGrid([
         { q: 'Is Fedi3 an alternative to Mastodon?', a: 'It is a fediverse client, so it speaks ActivityPub with Mastodon and Misskey. The difference is not the protocol: it is where the account lives.' },
         { q: 'Do I need to run a server to use Fedi3?', a: 'No. A peer-to-peer account works with no relay. A relay handles federation with classic instances and delivery while the device is offline.' },
-        { q: 'What does the Fedi3 relay see?', a: 'Public posts are public. Private chat is encrypted in the client: the relay keeps ciphertext and public data. There is no forward secrecy yet.' },
+        { q: 'What does the Fedi3 relay see?', a: 'Public posts are public. Private chat is encrypted in the client: the relay keeps ciphertext and public data. Attachments in the media backend are not end-to-end encrypted. There is no forward secrecy yet.' },
         { q: 'Which platforms does Fedi3 run on?', a: 'Linux (AppImage and Debian/Ubuntu package), Windows x64 and Android (arm64-v8a and x86_64). iOS and macOS are in the Flutter project but have no published packages.' },
         { q: 'Is Fedi3 ready for everyone?', a: 'It is pre-1.0. Core functions work and are tested, but minor releases can change things. Release notes say what is open.' },
         { q: 'What licence does Fedi3 use?', a: 'AGPL-3.0-only. The code is on GitHub and every release publishes packages with SHA256 checksums.' },
@@ -172,7 +172,7 @@ const home = {
   faq: [
     { q: 'Is Fedi3 an alternative to Mastodon?', a: 'It is a fediverse client, so it speaks ActivityPub with Mastodon and Misskey. The difference is not the protocol: it is where the account lives. On Mastodon the account sits in the instance; on Fedi3 it sits in the local core on your device.' },
     { q: 'Do I need to run a server to use Fedi3?', a: 'No. A peer-to-peer account works with no relay. A relay handles federation with classic instances and delivery while the device is offline.' },
-    { q: 'What does the Fedi3 relay see?', a: 'Public posts are public. Private chat is encrypted in the client: the relay keeps ciphertext and public data. There is no forward secrecy yet, and the limitation is documented.' },
+    { q: 'What does the Fedi3 relay see?', a: 'Public posts are public. Private chat is encrypted in the client: the relay keeps ciphertext and public data. Attachments in the media backend are not end-to-end encrypted. There is no forward secrecy yet, and the limitation is documented.' },
     { q: 'Which platforms does Fedi3 run on?', a: 'Linux (AppImage and Debian/Ubuntu package), Windows x64 and Android (arm64-v8a and x86_64). iOS and macOS are in the Flutter project but have no published packages.' },
     { q: 'Is Fedi3 ready for everyone?', a: 'It is pre-1.0. Core functions work and are tested, but minor releases can change things. Release notes say what is open.' },
     { q: 'What licence does Fedi3 use?', a: 'AGPL-3.0-only. The code is on GitHub and every release publishes packages with SHA256 checksums.' },
@@ -252,7 +252,7 @@ const fediverse = {
       sub: 'An instance is a server: its uptime is yours and its administration is yours.',
       body: prose(`<p>An instance is a single point: if it falls your account is unreachable, if it changes rules your presence changes, if the admin loses interest you migrate. Federation spreads the conversation while identity stays on the device.</p>
 <p>There is a privacy limit too: direct messages on a classic instance pass through and stay on the server, so the administrator can read them. End-to-end encryption is not part of the Mastodon or Misskey model.</p>
-<p>The cost shows in small communities: running a server for a few dozen people is ongoing work. The fediverse works better when taking part does not require becoming an administrator.</p>`) + brief('The consequence', `<p>When identity sits on the device, the server becomes a service you can change. You can change relay without changing account, and stay reachable with no relay at all through the peer-to-peer layer.</p>`),
+<p>The cost shows in small communities: running a server for a few dozen people is ongoing work. The fediverse works better when taking part does not require becoming an administrator.</p>`) + brief('The consequence', `<p>When identity sits on the device, the server becomes a service you can change. You can migrate to another relay while keeping your local keys, and stay reachable with no relay at all through the peer-to-peer layer.</p>`),
     },
     {
       id: 'fedi3',
@@ -399,7 +399,7 @@ const activitypub = {
       sub: 'A relay is not an instance: it is a service that helps delivery and discovery.',
       body: splitBlock({ copy: prose(`<p>A federation relay forwards activities between instances and helps small servers see content they would otherwise miss. It does not host your identity and does not replace your instance.</p>
 <p>Fedi3 uses the relay for two things: delivery while the device is offline, and federation with classic instances. The peer-to-peer layer adds direct delivery between devices, which does not pass through the relay.</p>
-<p>Public relays are listed in an open directory in the repository; any operator can add their own. The relay also publishes aggregate metrics and a signed transparency snapshot.</p>`) + relayList(RELAYS, 'Fedi3 relay directory: two public relays as of 15 November 2026.'), visual: networkVisual() }),
+<p>Public relays are listed in an open directory in the repository; any operator can add their own. The relay also publishes aggregate metrics and a signed transparency snapshot.</p>`) + relayList(RELAYS, 'Fedi3 relay directory: two public relays as of 15 November 2026.'), visual: networkVisual('en') }),
     },
     {
       id: 'fedi3',
@@ -520,7 +520,7 @@ const vsMastodon = {
       h2: 'What changes for your account',
       sub: 'Migrating between Mastodon instances is an operation; on Fedi3 the identity is already on the device.',
       body: prose(`<p>On Mastodon, changing instance means moving the account, updating followers and living with the limits of the new server. The @user@domain address changes, and so does the history others see.</p>
-<p>On Fedi3 the identity is created and stays on the device. The relay is a service you can change: the private key does not move, and the profile does not depend on a hoster domain.</p>
+<p>On Fedi3 the identity is created and stays on the device. The relay is a service you can change: the private key stays on the device. Changing domain changes ActivityPub URLs; use the migration procedure to link the old profile to the new one.</p>
 <p>That does not make Fedi3 immune to problems: a lost device is an identity to recover, which is why the project supports transfer between devices with a QR code and an encrypted spool.</p>`) + brief('The practical point', `<p>If your worry is losing an account when an instance closes, Fedi3 solves it at the root: the account is not hosted. If you want a community that is already busy, Mastodon remains the direct choice.</p>`),
     },
     {
@@ -747,8 +747,8 @@ const download = {
   lang: 'en',
   slug: 'download/',
   title: 'Download Fedi3 for Linux, Windows and Android',
-  description: 'Fedi3 0.12.3 packages for Linux AppImage and Debian/Ubuntu, Windows x64 and Android. SHA256 checksums, AGPL-3.0-only licence, a three-step install.',
-  keywords: ['download fedi3', 'fedi3 linux', 'fedi3 windows', 'fedi3 android', 'fedi3 appimage', 'fedi3 apk', 'fediverse client', 'fedi3 0.12.3'],
+  description: 'Fedi3 0.12.4 packages for Linux AppImage and Debian/Ubuntu, Windows x64 and Android. SHA256 checksums, AGPL-3.0-only licence, a three-step install.',
+  keywords: ['download fedi3', 'fedi3 linux', 'fedi3 windows', 'fedi3 android', 'fedi3 appimage', 'fedi3 apk', 'fediverse client', 'fedi3 0.12.4'],
   subject: 'Downloading and installing Fedi3',
   ogImage: 'assets/og/fedi3-download.png',
   ogAlt: 'Download Fedi3 for Linux, Windows and Android',
@@ -795,7 +795,7 @@ const download = {
         { title: 'Download the package', text: 'Open the releases page and take the file for your system. Check the version and file name in the asset table.' },
         { title: 'Verify the checksum', text: 'Compare the file SHA256 with the one published in the release. On Linux: sha256sum Fedi3-*.AppImage.' },
         { title: 'Start the client', text: 'Install or run the package. On first start the local core creates the identity on the device and shows onboarding.' },
-        { title: 'Set up the network', text: 'In Settings, Networking, enter a relay and a token of at least 16 characters, or keep the profile peer-to-peer only.' },
+        { title: 'Set up the network', text: 'In Settings → Account, enter a relay and a token of at least 16 characters, or keep the profile peer-to-peer only.' },
       ]) + `<p class="sub gap">The project public relay is <a href="${RELAY}">${RELAY.replace(/^https?:\/\//, '')}</a>. You can also install your own with Docker Compose following the <a href="${DOCS}/deploy_relay.md">deployment guide</a>.</p>`,
     },
     {
@@ -804,7 +804,7 @@ const download = {
       h2: 'Fedi3 first run: identity on the device',
       sub: 'The profile is yours from the first second, with no registration form on an instance.',
       body: prose(`<p>The core generates the key pair, builds the identity and prepares the ActivityPub actor. The profile exists without a network: you can write, encrypt and keep content before configuring a relay.</p>
-<p>When you add a relay, the core publishes the actor and federation begins. If you change relay, the identity stays the same: only the service that delivers activities changes.</p>`) + brief('What you do not need', `<p>You skip the account on an instance, the domain and the hosting bill. The relay is optional, and the peer-to-peer layer covers the cases without a server.</p>`),
+<p>When you add a relay, the core publishes the actor and federation begins. If you change relay, local keys stay the same, but ActivityPub URLs may change: follow the migration procedure.</p>`) + brief('What you do not need', `<p>You skip the account on an instance, the domain and the hosting bill. The relay is optional, and the peer-to-peer layer covers the cases without a server.</p>`),
     },
     {
       id: 'relay',
@@ -920,10 +920,10 @@ const faq = {
       h2: 'Security and privacy',
       sub: 'What is encrypted, what is public and what the relay can see.',
       body: faqVisual() + qaList([
-        { q: 'Is chat end-to-end encrypted?', a: 'Yes, private chat is encrypted in the client. The relay keeps ciphertext and public data; private keys stay on the device. There is no forward secrecy yet, and the limitation is documented.' },
+        { q: 'Is chat end-to-end encrypted?', a: 'Yes, private chat is encrypted in the client. The relay keeps ciphertext and public data; private keys stay on the device. Attachments in the media backend are not end-to-end encrypted. There is no forward secrecy yet, and the limitation is documented.' },
         { q: 'Are public posts private?', a: 'No. A public post is public by definition: the relay, federated instances and anyone with timeline access can see it.' },
-        { q: 'Where are my private keys?', a: 'In the local core on the device, in the system keyring. They are not uploaded to the relay.' },
-        { q: 'What happens if I lose the device?', a: 'The identity is on the device: the project supports transfer between devices with a QR code and an encrypted spool. Without a backup the identity has to be recreated.' },
+        { q: 'Where are my private keys?', a: 'In the local core files and database on the device. Access tokens are in the system keyring; private keys are not sent to the relay in plaintext.' },
+        { q: 'What happens if I lose the device?', a: 'The identity is on the device: the project supports transfer between devices with a QR code and an encrypted spool. Without an identity backup or another paired device, the identity has to be recreated.' },
         { q: 'Can the relay censor my posts?', a: 'The relay can refuse to deliver, but activities are signed by the client: the relay cannot alter them without breaking the signature.' },
       ]),
     },
@@ -935,7 +935,7 @@ const faq = {
       body: faqVisual() + qaList([
         { q: 'Do I need a relay to use Fedi3?', a: 'No. A peer-to-peer account works with no relay. A relay handles federation with classic instances and delivery while the device is offline.' },
         { q: 'How do I choose a relay?', a: 'The project directory lists public relays with operator and contact. Use a public one or install your own with Docker Compose.' },
-        { q: 'Can I change relay without losing the account?', a: 'Yes. The identity sits in the local core: changing relay changes the delivery service; the account stays.' },
+        { q: 'Can I change relay without losing the account?', a: 'You can keep your local keys, but changing domain changes ActivityPub URLs. Use the migration procedure, which may require the previous public URL and credentials for the old relay.' },
         { q: 'How does the peer-to-peer layer work?', a: 'It uses libp2p with DHT, relay reservation, DCUtR and mDNS to find and connect two devices. Direct delivery does not pass through the relay.' },
         { q: 'Does the relay collect telemetry?', a: 'It publishes aggregate metrics and a signed transparency snapshot. Counters are aggregate, not individual profiles.' },
       ]),
@@ -965,7 +965,7 @@ const faq = {
   ],
   faq: [
     { q: 'Is Fedi3 an alternative to Mastodon and Misskey?', a: 'It is a fediverse client: it speaks ActivityPub and stands next to Mastodon and Misskey. The difference is where the account lives; the protocol stays ActivityPub.' },
-    { q: 'Is chat end-to-end encrypted?', a: 'Yes, private chat is encrypted in the client. The relay keeps ciphertext and public data; private keys stay on the device. There is no forward secrecy yet, and the limitation is documented.' },
+    { q: 'Is chat end-to-end encrypted?', a: 'Yes, private chat is encrypted in the client. The relay keeps ciphertext and public data; private keys stay on the device. Attachments in the media backend are not end-to-end encrypted. There is no forward secrecy yet, and the limitation is documented.' },
     { q: 'Do I need a relay to use Fedi3?', a: 'No. A peer-to-peer account works with no relay. A relay handles federation with classic instances and delivery while the device is offline.' },
     { q: 'Which platforms does Fedi3 run on?', a: 'Linux (AppImage, Debian/Ubuntu), Windows x64 and Android (arm64-v8a, x86_64). iOS and macOS are in the Flutter project but have no published packages.' },
     { q: 'What licence does Fedi3 use?', a: 'AGPL-3.0-only. The code is on GitHub, every release publishes SHA256 checksums and the verification gates are repeatable.' },

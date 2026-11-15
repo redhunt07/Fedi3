@@ -247,7 +247,7 @@ const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.map((u) => `  <url>
     <loc>${SITE}/${u}</loc>
-    <lastmod>2026-11-15</lastmod>
+    <lastmod>2026-11-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>${u === '' || u === 'it/' ? '1.0' : u.includes('vs/') || u === 'download/' || u === 'it/download/' ? '0.9' : '0.8'}</priority>
   </url>`).join('\n')}
@@ -258,6 +258,12 @@ write('sitemap.xml', sitemap);
 // ---------------------------------------------------------------- feed
 
 const feedEntries = [
+  {
+    title: 'Fedi3 0.12.4: note vocali e video, allegati nelle risposte',
+    link: `${REPO}/releases/tag/v0.12.4`,
+    date: '2026-11-16',
+    summary: 'Correzioni alla riproduzione dei media ricevuti, allegati nelle risposte ai post e informazioni corrette sui siti pubblici.',
+  },
   {
     title: 'Fedi3 0.12.3: landing page bilingue e vista live del relay',
     link: `${REPO}/releases/tag/v0.12.3`,
@@ -297,7 +303,7 @@ const atom = `<?xml version="1.0" encoding="utf-8"?>
   <link href="${SITE}/feed.xml" rel="self"/>
   <link href="${SITE}/it/"/>
   <id>${SITE}/feed.xml</id>
-  <updated>2026-11-15T18:00:00Z</updated>
+  <updated>2026-11-15T23:00:00Z</updated>
   <author><name>RedHunt07</name><uri>${REPO}</uri></author>
   <rights>${LICENSE}</rights>
 ${feedEntries.map((e) => `  <entry>

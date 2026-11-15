@@ -452,6 +452,7 @@
   "composeDropMediaHint": "Images, videos or audio — or choose files",
   "composeChooseFiles": "Choose files",
   "composeAddMediaPath": "Add media (path)",
+  "replyRemoveAttachment": "Remove attachment",
   "composeAddMedia": "Attach media",
   "composeDropHere": "Drop files to attach",
   "composeClearDraft": "Clear draft",

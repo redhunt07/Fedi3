@@ -816,6 +816,38 @@ async fn h05_valid_small_image_is_accepted() {
     assert_eq!(v["height"], 1);
 }
 
+#[tokio::test]
+async fn media_only_reply_keeps_parent_and_uploaded_attachment_in_outbox() {
+    let core = TestCore::new().unwrap();
+    let upload = upload_media(&core, "reply.png", "image/png", pixel_png()).await;
+    assert_eq!(upload.status(), StatusCode::CREATED);
+    let media: Value = upload.json().await.unwrap();
+    let parent = format!("{}/notes/parent", core.base_url);
+    let activity = json!({
+        "type": "Create", "actor": core.actor_url(),
+        "to": ["https://www.w3.org/ns/activitystreams#Public"],
+        "object": {"type": "Note", "content": "", "inReplyTo": parent,
+                   "attachment": [media["id"]]}
+    });
+    let path = format!("/users/{}/outbox", core.username);
+    let response = core.post_internal(&path, &json_body(&activity)).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let outbox: Value = core
+        .get(&format!("{path}?page=true"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let reply = outbox["orderedItems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["object"]["inReplyTo"] == parent)
+        .unwrap();
+    assert_eq!(reply["object"]["content"], "");
+    assert_eq!(reply["object"]["attachment"][0]["url"], media["url"]);
+}
+
 // ---------------------------------------------------------------------------
 // H-19: SQLite file permissions.
 // ---------------------------------------------------------------------------

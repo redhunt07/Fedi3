@@ -78,7 +78,9 @@ class FakeHttpClient extends http.BaseClient {
     sendCount++;
     requests.add(request);
     if (request is http.Request) {
-      requestBodies.add(request.body);
+      // Media uploads are binary and need not be valid UTF-8. Recording them
+      // must not turn a successful fake upload into a transport exception.
+      requestBodies.add(utf8.decode(request.bodyBytes, allowMalformed: true));
     } else {
       requestBodies.add('');
     }
