@@ -52,9 +52,29 @@ attendeva 100 ms e leggeva il file prima della fine della scrittura. Il test ora
 attende la comparsa del cursore con un limite di 5 secondi; il comportamento del
 servizio non cambia. La pipeline viene rieseguita sul commit con il test corretto.
 
-Al commit sorgenti restano in corso le build finali dei pacchetti GitHub Actions. Il maintainer ha richiesto commit,
-push, aggiornamento dei siti/relay e preparazione della nuova release. Gli
-esiti finali sono registrati dai controlli di deploy/CI e dal resoconto conclusivo.
+La release [v0.12.4](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.4) è
+pubblicata come ultima stabile dal commit `5fb980e`. Tutti i 14 job della
+[CI di release](https://github.com/redhunt07/Fedi3/actions/runs/43773343370) sono
+superati, incluse build dei pacchetti e avvio AppImage su Ubuntu 22.04 e 24.04.
+
+Scaricati tutti e cinque i pacchetti: SHA256 coincidenti con `checksums.txt` e
+con i digest degli asset GitHub. Archivio Windows con CRC valido, eseguibile e
+DLL del core presenti; intestazione AppImage valida. Le firme dei due APK sono
+valide e coincidono con il certificato della 0.12.3. VersionCode 6020 (arm64-v8a)
+e 8020 (x86_64), versionName 0.12.4 e rispettivi core nativi presenti.
+
+I siti aggiornati superano il controllo HTTP/ancore su 46 URL senza errori.
+FAQ e pannello live verificati nel browser senza errori console. Il feed usa la
+data effettiva di pubblicazione della release. Rimossi i container temporanei di
+ripristino e prova; conservati i backup privati e l'immagine di rollback.
+
+| Package | SHA256 |
+| --- | --- |
+| `Fedi3-linux-x86_64.AppImage` | `e5b2136c6ff8c204f78fcfce6df9b475c6028f9dcaab1dcde8f48ef067d577d7` |
+| `Fedi3-windows-x64.zip` | `7a70d5ea4b456fc3c2cece97ab4b057904e8c81130055ee09c6dc943b6e77320` |
+| `app-arm64-v8a-release.apk` | `9218d0425a9b3f530d19417c1ad836a91b6a5322f34b7991cc11d60364e02780` |
+| `app-x86_64-release.apk` | `030f618ba0b88f29e081f92b3f025e4a989f5352211971bad7b69840abec884e` |
+| `fedi3_0.12.4-1_amd64.deb` | `dc10c34965709738fc47529880b49566dad3df3d0461bb66cf71ee0f3e743a68` |
 
 I test widget audio simulano il plugin nativo: non provano decodifica e uscita
 audio del file sul dispositivo dell'utente che ha segnalato il problema.

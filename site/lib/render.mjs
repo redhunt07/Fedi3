@@ -310,7 +310,7 @@ function articleNode(page) {
     description: page.description,
     inLanguage: page.lang,
     datePublished: '2026-11-15',
-    dateModified: page.modified || '2026-11-15',
+    dateModified: page.modified || '2026-11-16',
     author: { '@id': `${SITE}/#org` },
     publisher: { '@id': `${SITE}/#org` },
     mainEntityOfPage: abs(page.slug),

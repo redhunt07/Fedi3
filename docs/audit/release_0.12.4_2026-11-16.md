@@ -51,9 +51,29 @@ and read the cursor before the atomic write completed. It now waits for cursor
 persistence with a five-second bound; service behaviour is unchanged. The release
 pipeline is rerun against the commit with the corrected test.
 
-At the source commit, final GitHub Actions package builds are still pending. The maintainer requested commit,
-push, website/relay updates and preparation of the new app release. Final
-outcomes are recorded by the deployment/CI checks and the completion report.
+Release [v0.12.4](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.4) was
+published as the latest stable release from commit `5fb980e`. All 14 jobs in the
+[release CI](https://github.com/redhunt07/Fedi3/actions/runs/43773343370) passed,
+including package builds and AppImage startup on Ubuntu 22.04 and 24.04.
+
+All five published packages were downloaded. Their SHA256 values match both
+`checksums.txt` and the GitHub asset digests. The Windows archive passed its CRC
+check and contains the client executable and core DLL. The AppImage header is valid.
+Both Android APK signatures verify and match the 0.12.3 certificate; version codes
+are 6020 (arm64-v8a) and 8020 (x86_64), with versionName 0.12.4 and their native cores.
+
+The updated public sites passed an HTTP/anchor check of 46 URLs without errors.
+The updated FAQ and relay live view were inspected in the browser without console
+errors. The feed uses the actual release publication timestamp. Temporary restore
+and candidate containers were removed; private backups and the rollback image remain.
+
+| Package | SHA256 |
+| --- | --- |
+| `Fedi3-linux-x86_64.AppImage` | `e5b2136c6ff8c204f78fcfce6df9b475c6028f9dcaab1dcde8f48ef067d577d7` |
+| `Fedi3-windows-x64.zip` | `7a70d5ea4b456fc3c2cece97ab4b057904e8c81130055ee09c6dc943b6e77320` |
+| `app-arm64-v8a-release.apk` | `9218d0425a9b3f530d19417c1ad836a91b6a5322f34b7991cc11d60364e02780` |
+| `app-x86_64-release.apk` | `030f618ba0b88f29e081f92b3f025e4a989f5352211971bad7b69840abec884e` |
+| `fedi3_0.12.4-1_amd64.deb` | `dc10c34965709738fc47529880b49566dad3df3d0461bb66cf71ee0f3e743a68` |
 
 Widget audio tests simulate the native plugin; they do not prove decoding or
 audio output for the reporting user's particular received file and device.

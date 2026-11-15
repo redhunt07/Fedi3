@@ -262,6 +262,7 @@ const feedEntries = [
     title: 'Fedi3 0.12.4: note vocali e video, allegati nelle risposte',
     link: `${REPO}/releases/tag/v0.12.4`,
     date: '2026-11-16',
+    updated: '2026-11-15T23:34:38Z',
     summary: 'Correzioni alla riproduzione dei media ricevuti, allegati nelle risposte ai post e informazioni corrette sui siti pubblici.',
   },
   {
@@ -296,6 +297,9 @@ const feedEntries = [
   },
 ];
 
+const feedTimestamp = (entry) => entry.updated || `${entry.date}T12:00:00Z`;
+const feedUpdated = feedEntries.map(feedTimestamp).sort().at(-1);
+
 const atom = `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xml:lang="it">
   <title>Fedi3 — novità del progetto</title>
@@ -303,14 +307,14 @@ const atom = `<?xml version="1.0" encoding="utf-8"?>
   <link href="${SITE}/feed.xml" rel="self"/>
   <link href="${SITE}/it/"/>
   <id>${SITE}/feed.xml</id>
-  <updated>2026-11-15T23:00:00Z</updated>
+  <updated>${feedUpdated}</updated>
   <author><name>RedHunt07</name><uri>${REPO}</uri></author>
   <rights>${LICENSE}</rights>
 ${feedEntries.map((e) => `  <entry>
     <title>${e.title.replace(/&/g, '&amp;')}</title>
     <link href="${e.link}"/>
     <id>${e.link}</id>
-    <updated>${e.date}T12:00:00Z</updated>
+    <updated>${feedTimestamp(e)}</updated>
     <summary>${e.summary.replace(/&/g, '&amp;')}</summary>
   </entry>`).join('\n')}
 </feed>
