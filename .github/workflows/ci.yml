@@ -361,23 +361,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_tag="${GITHUB_REF_NAME##*/}"
+          notes_file="$GITHUB_WORKSPACE/docs/releases/$release_tag.md"
+          test -s "$notes_file"
           if [[ "$GITHUB_REF" == refs/heads/codex/release/* ]]; then
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
             test "$main_sha" = "$GITHUB_SHA" || { echo "Release request is not current main"; exit 1; }
           fi
           cd release-assets
-          test -s Fedi3-linux-x86_64.AppImage
-          test -s Fedi3-windows-x64.zip
-          sha256sum Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb > checksums.txt
+          version="${release_tag#v}"
+          packages=(Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip
+            app-arm64-v8a-release.apk app-x86_64-release.apk "fedi3_${version}-1_amd64.deb")
+          for package in "${packages[@]}"; do test -s "$package"; done
+          sha256sum "${packages[@]}" > checksums.txt
           sha256sum --check checksums.txt
           if gh release view "$release_tag" --json isDraft >/dev/null 2>&1; then
             test "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = true || { echo "Release is already published"; exit 1; }
             test "$(gh release view "$release_tag" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA" || { echo "Draft release belongs to another commit"; exit 1; }
-            gh release upload "$release_tag" Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb checksums.txt --clobber
+            gh release edit "$release_tag" --notes-file "$notes_file" --title "Fedi3 $release_tag"
+            gh release upload "$release_tag" "${packages[@]}" checksums.txt --clobber
           else
-            gh release create "$release_tag" --target "$GITHUB_SHA" --draft --generate-notes \
+            gh release create "$release_tag" --target "$GITHUB_SHA" --draft --notes-file "$notes_file" \
               --title "Fedi3 $release_tag" \
-              Fedi3-linux-x86_64.AppImage Fedi3-windows-x64.zip app-*-release.apk fedi3_*_amd64.deb checksums.txt
+              "${packages[@]}" checksums.txt
           fi
           if [[ "$GITHUB_REF" == refs/heads/codex/release/* ]]; then
             gh release edit "$release_tag" --draft=false --latest

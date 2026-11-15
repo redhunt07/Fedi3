@@ -40,6 +40,17 @@ class ReleaseContract(unittest.TestCase):
         self.assertIn("!startsWith(github.ref, 'refs/heads/codex/verify-release/')",
                       audit['continue-on-error'])
 
+    def test_release_notes_include_both_languages(self):
+        version = re.search(r'^version: ([^+]+)',
+                            (ROOT / 'app/pubspec.yaml').read_text(), re.M).group(1)
+        notes = (ROOT / f'docs/releases/v{version}.md').read_text()
+        self.assertIn('## Italiano', notes)
+        self.assertIn('## English', notes)
+        workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        publish = str(workflow['jobs']['publish'])
+        self.assertIn('--notes-file', publish)
+        self.assertNotIn('--generate-notes', publish)
+
     def test_tag_matches_version(self):
         tag = os.environ.get('FEDI3_RELEASE_TAG')
         if tag:

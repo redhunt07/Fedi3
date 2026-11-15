@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-15
+
 - Align project notices, contributor policies and Rust package metadata with the maintainer-selected AGPL-3.0-only license.
 
 - Prevent the Android plaintext background credential cache from being created or used on desktop; remove legacy desktop caches only after successful keyring access.
@@ -12,8 +14,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Pass optional push hostnames to Caddy through Compose, document reproducible release gates in Italian/English and check documentation links in CI.
 
 - Clarify QR export versus camera login, stop the pairing spinner on failure, explain rejected account credentials and retry without history only for payload rejection.
-
-## [0.12.2] - 2026-11-15
 
 - Replicate only personal social notifications between paired devices, including existing history, without copying unrelated timeline activity.
 - Persist device-local notification alert claims so startup, concurrent UI/background consumers, retries and replay cannot display the same alert twice. Historical imports restore the notification feed silently.
