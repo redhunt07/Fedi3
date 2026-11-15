@@ -108,12 +108,12 @@ maintainer disponibile a rispondere per qualche ora, funziona meglio.
 
 ### Annuncio di release (italiano, breve)
 
-> È uscita Fedi3 0.12.2: un'app social federata in cui l'account vive in un core
+> È uscita Fedi3 0.12.3: un'app social federata in cui l'account vive in un core
 > Rust locale sul tuo dispositivo. Le chiavi restano in locale, la chat è cifrata
 > end-to-end e un livello P2P ti rende raggiungibile senza server. ActivityPub ti
 > tiene collegato a Mastodon e Misskey. Linux, Windows e Android con checksum.
 > Pre-1.0, e lo diciamo.
-> https://fedi3.redhunt07.ovh/it
+> https://fedi3.redhunt07.ovh/it — la pagina del relay ora mostra la rete in tempo reale.
 > #fediverso #ActivityPub #softwarelibero
 
 ### Annuncio di release (inglese, breve)

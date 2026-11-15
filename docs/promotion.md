@@ -104,12 +104,12 @@ available to answer for a few hours works better.
 
 ### Release announcement (English, short)
 
-> Fedi3 0.12.2 is out. A federated social app where the account lives in a local
+> Fedi3 0.12.3 is out. A federated social app where the account lives in a local
 > Rust core on your device: keys stay local, chat is end-to-end encrypted, and a
 > P2P layer keeps you reachable without a server. ActivityPub keeps you
 > connected to Mastodon and Misskey. Linux, Windows, Android, checksums
 > published. Still pre-1.0, and honest about it.
-> https://fedi3.redhunt07.ovh/
+> https://fedi3.redhunt07.ovh/ — the relay page now shows the network live.
 > #FediVerse #ActivityPub #OpenSource
 
 ### Release announcement (Italian, short)

@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_core"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_p2p_infra"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_protocol"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_push_gateway"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_relay"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "aes-gcm",
  "anyhow",

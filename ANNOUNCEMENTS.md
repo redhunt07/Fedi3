@@ -4,6 +4,10 @@ Official updates from the maintainers. This page is read directly from the Git
 repository and the client checks it periodically. The Italian counterpart is
 [ANNOUNCEMENTS.it.md](ANNOUNCEMENTS.it.md).
 
+## 2026-11-15 — Fedi3 0.12.3
+
+Fedi3 0.12.3 (build 4019) makes the public relay visible and verifiable: the bilingual landing page now shows the relay mesh, connected peers and users, and real relay/federation traffic live, while `nodeinfo/2.0` identifies the relay as Fedi3 with its real version. Client behaviour is unchanged from 0.12.2; packages are rebuilt at 0.12.3+4019. Upgrade the relay to get the new page. [Release and downloads](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.3) · [Italian and English notes](docs/releases/v0.12.3.md).
+
 ## 2026-11-15 — Fedi3 0.12.2
 
 Fedi3 0.12.2 (build 4018) brings encrypted personal-notification replication, durable per-device alert claims, Android notification wakes and surviving paired-device relay tunnels. It also fixes desktop credential-cache isolation, custom relay ports and large-text layouts. Packages cover Linux AppImage, Debian/Ubuntu, Windows and Android, with SHA256 checksums. Upgrade the relay before clients. [Release and downloads](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.2) · [Italian and English notes](docs/releases/v0.12.2.md).

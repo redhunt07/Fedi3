@@ -1,7 +1,7 @@
 name: fedi3
 description: Personal ActivityPub instance client (Flutter UI + Rust core)
 publish_to: "none"
-version: 0.12.2+4018
+version: 0.12.3+4019
 
 environment:
   # Keep the Dart language baseline; locked dependencies require Dart >=3.13.

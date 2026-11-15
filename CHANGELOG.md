@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-15
+
 - Serve a bilingual public landing page from the relay binary (`/` in English, `/it` in Italian, `/en` redirect) with embedded stylesheet, banner, favicon and screenshots, so links shared in the fediverse no longer end on a 404. User subdomains keep forwarding their root to the local core in base-domain mode.
 - Report `software.name = fedi3`, the release version and repository metadata in relay `nodeinfo/2.0`, so FediDB, fediverse.observer and other directories can classify the relay as Fedi3 instead of an unknown product.
 - Align the Rust crate versions with the release version published by the client.
