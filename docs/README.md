@@ -12,6 +12,14 @@ may retain only their original language.
 - [Troubleshooting](troubleshooting.md)
 - [Screenshots](../README.md#screenshots) of the desktop and Android clients
 
+## Project and community
+
+- [Promotion and launch kit](promotion.md)
+- [Governance](../GOVERNANCE.md)
+- [Ethics](../ETHICS.md)
+- [Contributing](../CONTRIBUTING.md)
+- [Code of conduct](../CODE_OF_CONDUCT.md)
+
 ## Deployment and operations
 
 - [Server installation, Debian and Arch](deploy_server.md)

@@ -94,6 +94,33 @@ In production:
 - run the relay behind Caddy and leave `FEDI3_RELAY_TRUST_PROXY_HEADERS=true` only because the proxy overwrites `X-Forwarded-For`
 - keep `.env` and `relay-secrets.txt` at mode 600 and outside git
 
+### Public landing page and nodeinfo
+
+The relay binary serves its own landing page, so a link posted in the fediverse
+does not end on a 404:
+
+- `GET /` — English page;
+- `GET /it` — Italian page;
+- `GET /en` — permanent redirect to `/`;
+- `GET /assets/landing/*` — stylesheet, banner, favicon and screenshots embedded
+  in the binary (no volume or static mount needed);
+- `GET /nodeinfo/2.0` — reports `software.name = fedi3`, the release version and
+  `metadata.repository`, so directories such as FediDB and fediverse.observer
+  can classify the relay as Fedi3 instead of an unknown product.
+- `GET /_fedi3/relay/live` — aggregate snapshot for the live view: online users,
+  peers, relay reachability and process-wide traffic counters. No usernames or
+  peer ids are included; responses are `Cache-Control: no-store` and rate-limited
+  per client IP.
+
+In base-domain mode (`FEDI3_RELAY_BASE_DOMAIN`), requests to `<user>.<domain>`
+keep being forwarded to the user core, including `/`. Nothing needs to change
+in Caddy: it already proxies the site to the relay. The page loads no external
+fonts; the live mesh view uses one same-origin script (`/assets/landing/live.js`)
+and falls back to the raw `/_fedi3/relay/live` JSON when JavaScript is disabled.
+The CSP documented in `.env.example` allows it because `script-src` falls back to
+`default-src 'self'`; a stricter policy that blocks same-origin scripts only
+disables the animation, not the page.
+
 Host hardening checklist (verified on the reference VPS, see
 [deploy_vps.md](deploy_vps.md#security) and
 [deploy_yunohost.md](deploy_yunohost.md#security)):
@@ -116,3 +143,4 @@ Host hardening checklist (verified on the reference VPS, see
 - [server installation](deploy_server.md) — automated Debian/Arch installer
 - [VPS deployment](deploy_vps.md) — reference deployment on `fedi3.redhunt07.ovh`
 - [backup and restore](ops_backup_restore.md) — PostgreSQL and media backups
+- [promotion and launch kit](promotion.md) — directory submissions and fediverse presence

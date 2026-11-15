@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fedi3 — federated social with the keys on your device</title>
+<meta name="description" content="Fedi3 is a federated social app: a Flutter client with a local Rust core, end-to-end encrypted chat, a P2P layer and ActivityPub compatibility. Keys stay on your device; a relay is optional.">
+<link rel="canonical" href="{{origin}}/">
+<link rel="alternate" hreflang="it" href="{{origin}}/it">
+<link rel="alternate" hreflang="en" href="{{origin}}/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Fedi3">
+<meta property="og:title" content="Fedi3 — federated social with the keys on your device">
+<meta property="og:description" content="A federated social app with a local Rust core: your keys never leave your device, the P2P layer keeps working without a server, and ActivityPub keeps you connected to the fediverse.">
+<meta property="og:url" content="{{origin}}/">
+<meta property="og:image" content="{{origin}}/assets/landing/timeline.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/assets/landing/favicon.png" type="image/png">
+<link rel="stylesheet" href="/assets/landing/style.css?v={{version}}">
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <a class="brand" href="/">FEDI3</a>
+    <nav>
+      <a href="#live">Live</a>
+      <a href="#what">What it is</a>
+      <a href="#screens">Screenshots</a>
+      <a href="#start">Get started</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/redhunt07/Fedi3">Source</a>
+      <a href="/it" hreflang="it" lang="it">Italiano</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div>
+        <h1>Your account lives <em>on your device</em>.</h1>
+        <p class="lead">Fedi3 is a federated social app built around a local Rust core: signing keys and encrypted chats stay on your phone or desktop, a peer-to-peer layer keeps you reachable without a server, and ActivityPub keeps you talking to the wider fediverse.</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/redhunt07/Fedi3/releases/latest">Download {{version}}</a>
+          <a class="btn" href="#start">Join this relay</a>
+          <a class="btn" href="https://github.com/redhunt07/Fedi3/tree/main/docs">Documentation</a>
+        </div>
+        <p class="note">Linux AppImage, Debian/Ubuntu package, Windows x64 and Android APKs with SHA256 checksums. Pre-1.0 software: iOS and macOS builds are not published yet.</p>
+      </div>
+      <div class="hero-art">
+        <img src="/assets/landing/timeline.png" alt="Fedi3 desktop timeline with posts from the fediverse" width="1280" height="720">
+        <p class="caption">The desktop client: timeline, media and federated posts.</p>
+      </div>
+    </div>
+
+    <section id="live">
+      <h2>The network, live</h2>
+      <p class="sub">Real numbers from this relay: relay mesh reachability, connected peers and relay traffic. Direct device-to-device P2P traffic never passes through the relay, so it is not counted here.</p>
+      <div class="live-panel" data-live-endpoint="/_fedi3/relay/live" data-label-live="live" data-label-retry="reconnecting" data-label-wait="connecting" data-label-collecting="collecting samples…">
+        <div class="live-stage">
+          <canvas id="live-mesh" role="img" aria-label="Animated relay mesh"></canvas>
+          <div class="live-badge" id="live-status" data-state="wait" aria-live="polite">connecting</div>
+          <ul class="live-legend">
+            <li><span class="live-dot on"></span>relay online</li>
+            <li><span class="live-dot off"></span>relay offline</li>
+            <li><span class="live-dot peer"></span>peers online</li>
+          </ul>
+          <p class="live-caption">updated <span id="live-updated">—</span></p>
+        </div>
+        <div class="live-readout">
+          <div class="live-tiles">
+            <div class="live-tile"><span class="k">Users online</span><strong id="live-users-online">—</strong><small id="live-users-total">—</small></div>
+            <div class="live-tile"><span class="k">Peers online</span><strong id="live-peers-online">—</strong><small id="live-peers-seen">—</small></div>
+            <div class="live-tile"><span class="k">Relays online</span><strong id="live-relays-online">—</strong><small id="live-relays-offline">—</small></div>
+            <div class="live-tile"><span class="k">Relay traffic</span><strong id="live-tunnel-rate">—</strong><small id="live-tunnel-total">—</small></div>
+            <div class="live-tile"><span class="k">Federation traffic</span><strong id="live-fetch-rate">—</strong><small id="live-fetch-total">—</small></div>
+            <div class="live-tile"><span class="k">Uptime</span><strong id="live-uptime">—</strong><small id="live-mesh-info">—</small></div>
+          </div>
+          <div class="live-spark-wrap">
+            <div class="live-spark-head">
+              <span class="k">Peers and relays online · rolling window</span>
+              <span class="live-spark-values"><span class="v-relays">relays <span id="live-spark-relays">—</span></span> · <span class="v-peers">peers <span id="live-spark-peers">—</span></span></span>
+            </div>
+            <canvas id="live-spark" role="img" aria-label="Peers online over time"></canvas>
+          </div>
+          <p class="live-note">Aggregate counters only; they reset when the relay restarts. Polled every 12 s. <a href="/_fedi3/relay/live">Raw JSON</a>.</p>
+        </div>
+      </div>
+      <noscript><p class="sub">The live view needs JavaScript; the raw numbers are at <a href="/_fedi3/relay/live">/_fedi3/relay/live</a>.</p></noscript>
+    </section>
+
+    <section id="what">
+      <h2>What makes it different</h2>
+      <p class="sub">Fedi3 is not another hosted instance. It is a client plus a local core you own, with an optional relay for federation and offline delivery.</p>
+      <div class="grid">
+        <div class="card">
+          <h3>Keys stay on the device</h3>
+          <p>ActivityPub signing and chat encryption happen in the local core. The relay stores ciphertext and public data; it never holds your private keys.</p>
+        </div>
+        <div class="card">
+          <h3>Resilient by design</h3>
+          <p>A libp2p layer (DHT, relay reservation, DCUtR, mDNS) carries posts and chat directly between peers. A P2P-only account works without any relay; a relay adds reach and store-and-forward.</p>
+        </div>
+        <div class="card">
+          <h3>Compatible with the fediverse</h3>
+          <p>ActivityPub actors, inbox and outbox, HTTP signatures and WebFinger. You can talk to Mastodon, Misskey and other instances, and migrate an existing account with legacy aliases.</p>
+        </div>
+        <div class="card">
+          <h3>Chat and calls</h3>
+          <p>End-to-end encrypted 1:1 and group chat (AES-256-GCM with Kyber768-derived keys), audio and video calls over ICE/TURN, screen sharing on desktop.</p>
+        </div>
+        <div class="card">
+          <h3>Built in the open</h3>
+          <p>AGPL-3.0-only, Rust workspace and Flutter client, reproducible release checks and signed relay transparency logs.</p>
+        </div>
+        <div class="card">
+          <h3>Light on the phone</h3>
+          <p>Background profiles cut idle CPU to roughly 1% of a core on tested Android devices, with notifications that do not keep the core running.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="screens">
+      <h2>Screenshots</h2>
+      <p class="sub">Desktop and Android clients, English UI.</p>
+      <div class="shots">
+        <figure class="shot">
+          <img src="/assets/landing/timeline.png" alt="Fedi3 desktop timeline" loading="lazy" width="1280" height="720">
+          <figcaption>Home timeline</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="/assets/landing/chat.png" alt="Fedi3 encrypted chat" loading="lazy" width="1280" height="720">
+          <figcaption>End-to-end encrypted chat</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="/assets/landing/profile.png" alt="Fedi3 profile page" loading="lazy" width="1280" height="720">
+          <figcaption>Profile and posts</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="start">
+      <h2>Get started</h2>
+      <p class="sub">You need a client and a way to be reachable. That second part can be this relay, your own relay, or nothing at all if you only use P2P.</p>
+      <div class="steps">
+        <div class="step">
+          <h3>Install the client</h3>
+          <p>Download the package for your system from the <a href="https://github.com/redhunt07/Fedi3/releases/latest">release page</a> and verify the SHA256 checksum.</p>
+        </div>
+        <div class="step">
+          <h3>Create a local profile</h3>
+          <p>The first run creates the identity on your device. The core starts automatically; there is no separate server process to manage.</p>
+        </div>
+        <div class="step">
+          <h3>Pick a relay</h3>
+          <p>In <strong>Settings → Networking</strong> enter a relay URL and a token of at least 16 characters. On relays that allow self-registration the account is created on first connection; otherwise ask the operator for a token. Skip it for a P2P-only account. Public relays are listed in the <a href="/_fedi3/relay/directory">relay directory</a> and in <a href="https://github.com/redhunt07/Fedi3/blob/main/relays/relays.json">relays.json</a>.</p>
+        </div>
+      </div>
+      <p class="sub gap">Accounts on this relay: {{users}}. The relay publishes its <a href="/transparency">transparency policy</a>. To run your own:</p>
+      <pre><code>git clone https://github.com/redhunt07/Fedi3.git
+cd Fedi3
+cp .env.example .env
+# set FEDI3_DOMAIN, FEDI3_RELAY_ADMIN_TOKEN and the database credentials
+docker compose up -d --build</code></pre>
+    </section>
+
+    <section id="faq">
+      <h2>FAQ</h2>
+      <details>
+        <summary>Do I need to run a server?</summary>
+        <p>No. A P2P-only account keeps working without a relay. A relay is useful for federation with classic instances and for store-and-forward delivery while your device is offline.</p>
+      </details>
+      <details>
+        <summary>Is it a Mastodon replacement?</summary>
+        <p>It speaks ActivityPub, so it interoperates with Mastodon and Misskey rather than replacing them. The difference is where the account lives: in a local core on your device instead of a hosted instance.</p>
+      </details>
+      <details>
+        <summary>Can the relay read my messages?</summary>
+        <p>Public posts are public by nature. Private chat is encrypted end to end in the client; the relay stores ciphertext and routes it. There is no forward secrecy yet: this limitation is documented.</p>
+      </details>
+      <details>
+        <summary>Which platforms are supported?</summary>
+        <p>Linux (AppImage, Debian/Ubuntu), Windows x64 and Android (arm64-v8a and x86_64). The Flutter project also contains iOS and macOS runners, but no iOS/macOS packages are published yet.</p>
+      </details>
+      <details>
+        <summary>Is it ready for everyone?</summary>
+        <p>It is pre-1.0. The core features work and are tested, but expect breaking changes between minor releases. Release notes list what changed and what is still open.</p>
+      </details>
+      <details>
+        <summary>What does this relay do with my data?</summary>
+        <p>It routes signed ActivityPub traffic, keeps a bounded offline queue, stores media when configured, and publishes a signed transparency snapshot you can pin independently. See <a href="/transparency">the policy page</a>.</p>
+      </details>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="row">
+      <span>Fedi3 {{version}} · pre-1.0 · AGPL-3.0-only</span>
+      <span>
+        <a href="https://github.com/redhunt07/Fedi3">Source</a> ·
+        <a href="https://github.com/redhunt07/Fedi3/tree/main/docs">Docs</a> ·
+        <a href="/transparency">Transparency</a> ·
+        <a href="/_fedi3/relay/stats">Relay stats</a>
+      </span>
+    </div>
+  </footer>
+</div>
+<script src="/assets/landing/live.js?v={{version}}" defer></script>
+</body>
+</html>

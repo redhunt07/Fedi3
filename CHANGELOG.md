@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+- Serve a bilingual public landing page from the relay binary (`/` in English, `/it` in Italian, `/en` redirect) with embedded stylesheet, banner, favicon and screenshots, so links shared in the fediverse no longer end on a 404. User subdomains keep forwarding their root to the local core in base-domain mode.
+- Report `software.name = fedi3`, the release version and repository metadata in relay `nodeinfo/2.0`, so FediDB, fediverse.observer and other directories can classify the relay as Fedi3 instead of an unknown product.
+- Align the Rust crate versions with the release version published by the client.
+- Turn the relay landing page into a live view: an animated mesh of reachable and offline relays, connected peers and users, and real relay/federation traffic counters polled from the new public aggregate endpoint `/_fedi3/relay/live`. The animation pauses when hidden or off-screen and respects `prefers-reduced-motion`.
+- Add the English and Italian promotion launch kit (`docs/promotion.md`, `docs/it/promotion.md`) with directory submissions, fediverse presence rules, ready-to-post texts and a first-month checklist.
+
 ## [0.12.2] - 2026-11-15
 
 - Align project notices, contributor policies and Rust package metadata with the maintainer-selected AGPL-3.0-only license.

@@ -95,6 +95,35 @@ In produzione:
 - fai girare il relay dietro Caddy e lascia `FEDI3_RELAY_TRUST_PROXY_HEADERS=true` solo perché il proxy sovrascrive `X-Forwarded-For`
 - tieni `.env` e `relay-secrets.txt` a mode 600 e fuori da git
 
+### Pagina pubblica e nodeinfo
+
+Il binario del relay serve una propria pagina pubblica, così un link pubblicato
+nel fediverso non finisce su un 404:
+
+- `GET /` — pagina in inglese;
+- `GET /it` — pagina in italiano;
+- `GET /en` — redirect permanente a `/`;
+- `GET /assets/landing/*` — foglio di stile, banner, favicon e screenshot
+  incorporati nel binario (nessun volume o mount statico necessario);
+- `GET /nodeinfo/2.0` — riporta `software.name = fedi3`, la versione della
+  release e `metadata.repository`, così directory come FediDB e
+  fediverse.observer classificano il relay come Fedi3 invece che come prodotto
+  sconosciuto.
+- `GET /_fedi3/relay/live` — istantanea aggregata per la vista live: utenti
+  online, peer, raggiungibilità dei relay e contatori di traffico a livello di
+  processo. Non contiene username né peer id; le risposte sono
+  `Cache-Control: no-store` e hanno un limite per IP.
+
+In modalità base domain (`FEDI3_RELAY_BASE_DOMAIN`) le richieste a
+`<utente>.<dominio>` continuano a essere inoltrate al core dell'utente, incluso
+`/`. Non serve cambiare Caddy: il sito è già in proxy verso il relay. La pagina
+non carica font esterni; la vista live usa un solo script same-origin
+(`/assets/landing/live.js`) e ripiega sul JSON grezzo di
+`/_fedi3/relay/live` quando JavaScript è disabilitato. La CSP documentata in
+`.env.example` lo consente perché `script-src` ricade su `default-src 'self'`;
+una policy più restrittiva che blocca gli script same-origin disattiva solo
+l'animazione, non la pagina.
+
 Checklist di hardening dell'host (verificata sul VPS di riferimento, vedi
 [deploy_vps.md](deploy_vps.md#sicurezza) e
 [deploy_yunohost.md](deploy_yunohost.md#sicurezza)):
@@ -118,3 +147,4 @@ Checklist di hardening dell'host (verificata sul VPS di riferimento, vedi
 - [installazione del server](deploy_server.md) — installer automatico per Debian/Arch
 - [deploy su VPS](deploy_vps.md) — deployment di riferimento su `fedi3.redhunt07.ovh`
 - [backup e ripristino](ops_backup_restore.md) — backup di PostgreSQL e media
+- [promozione e kit di lancio](promotion.md) — invio alle directory e presenza nel fediverso

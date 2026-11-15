@@ -977,3 +977,146 @@ async fn concurrent_media_uploads_obey_quota_and_account_deletion_removes_blobs(
         assert!(!relay.dir.join("media").join(key).exists());
     }
 }
+
+#[tokio::test]
+async fn landing_page_is_served_and_nodeinfo_identifies_the_project() {
+    let relay = TestRelay::start().await;
+    relay.register("alice", &user_token()).await;
+
+    let root = relay.get("/").await;
+    assert_eq!(root.status(), 200);
+    let content_type = root
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.starts_with("text/html"));
+    let html = root.text().await.unwrap();
+    assert!(html.contains("Fedi3"));
+    assert!(html.contains("/assets/landing/style.css"));
+    assert!(!html.contains("{{origin}}"));
+    assert!(!html.contains("{{version}}"));
+
+    let italian = relay.get("/it").await;
+    assert_eq!(italian.status(), 200);
+    let italian_html = italian.text().await.unwrap();
+    assert!(italian_html.contains("<html lang=\"it\">"));
+    assert!(italian_html.contains("Il tuo account vive"));
+
+    let css = relay.get("/assets/landing/style.css").await;
+    assert_eq!(css.status(), 200);
+    assert!(css
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/css"));
+    assert_eq!(
+        relay.get("/assets/landing/timeline.png").await.status(),
+        200
+    );
+    assert_eq!(relay.get("/assets/landing/missing.png").await.status(), 404);
+
+    let english_alias = relay.get("/en").await;
+    assert_eq!(english_alias.status(), 308);
+    assert_eq!(
+        english_alias
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "/"
+    );
+
+    let nodeinfo = relay.get("/nodeinfo/2.0").await;
+    assert_eq!(nodeinfo.status(), 200);
+    let body: Value = nodeinfo.json().await.unwrap();
+    assert_eq!(body["software"]["name"], "fedi3");
+    assert_eq!(body["software"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["usage"]["users"]["total"], 1);
+    assert_eq!(
+        body["metadata"]["repository"],
+        "https://github.com/redhunt07/Fedi3"
+    );
+    assert_eq!(body["metadata"]["nodeType"], "relay");
+}
+
+#[tokio::test]
+async fn user_subdomain_root_is_still_forwarded_to_the_core() {
+    let relay = TestRelay::start_with_env(&[
+        ("FEDI3_RELAY_BASE_DOMAIN", "relay.example"),
+        ("FEDI3_RELAY_PUBLIC_URL", "http://relay.example"),
+    ])
+    .await;
+    relay.register("alice", &user_token()).await;
+
+    // The relay host itself serves the landing page.
+    let landing = relay.get_with("/", &[("Host", "relay.example")]).await;
+    assert_eq!(landing.status(), 200);
+
+    // A user subdomain keeps forwarding its root: no tunnel is connected in
+    // this test, so the forwarder answers with an error instead of the page.
+    let forwarded = relay
+        .get_with("/", &[("Host", "alice.relay.example")])
+        .await;
+    assert_ne!(forwarded.status(), 200);
+}
+
+#[tokio::test]
+async fn live_endpoint_is_public_aggregate_only_and_not_cached() {
+    let relay = TestRelay::start().await;
+    relay.register("alice", &user_token()).await;
+
+    let resp = relay.get("/_fedi3/relay/live").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "no-store"
+    );
+    let body: Value = resp.json().await.unwrap();
+
+    assert_eq!(body["users"]["total"], 1);
+    assert_eq!(body["users"]["online"], 0);
+    assert_eq!(body["relays"]["total"], 0);
+    assert!(body["relays"]["items"].is_array());
+    assert!(body["traffic"]["tunnel_request_bytes"].is_number());
+    assert!(body["traffic"]["fetch_bytes"].is_number());
+    assert!(body["mesh"]["sync_secs"].as_u64().unwrap() >= 5);
+    assert!(body["uptime_secs"].is_number());
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+
+    // No usernames or peer ids leak into the aggregate snapshot.
+    assert!(body.get("users").unwrap().get("username").is_none());
+    assert!(body["relays"]["items"].as_array().unwrap().is_empty());
+
+    // The snapshot is cached for a few seconds so a busy landing page does not
+    // hit the database once per visitor.
+    let cached: Value = relay.get("/_fedi3/relay/live").await.json().await.unwrap();
+    assert_eq!(cached["timestamp_ms"], body["timestamp_ms"]);
+}
+
+#[tokio::test]
+async fn landing_page_references_the_live_view_assets() {
+    let relay = TestRelay::start().await;
+    let html = relay.get("/").await.text().await.unwrap();
+    assert!(html.contains("id=\"live-mesh\""));
+    assert!(html.contains("/assets/landing/live.js?v="));
+    assert!(html.contains("data-live-endpoint=\"/_fedi3/relay/live\""));
+
+    let js = relay.get("/assets/landing/live.js").await;
+    assert_eq!(js.status(), 200);
+    assert!(js
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/javascript"));
+}

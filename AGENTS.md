@@ -78,6 +78,8 @@ flutter run
 - `docs/audit/`: historical audit reports and remediation plans.
 - `docs/openapi.yaml`: OpenAPI 3.1 specification for core and relay.
 - `docs/relay_directory.md`: shared relay directory, latency ranking and discovery.
+- `docs/promotion.md`: launch kit for directories, fediverse presence and post templates.
+- `docs/distribution.md`: packages, F-Droid, AUR and Debian notes.
 
 ## Testing
 - Repeatable source release gates: `bash scripts/verify_release.sh`; see

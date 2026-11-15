@@ -12,6 +12,14 @@ I rapporti storici in [`audit/`](audit/) possono conservare solo la lingua origi
 - [Diagnostica](troubleshooting.md)
 - [Screenshot](../../README.it.md#screenshot) del client desktop e Android
 
+## Progetto e comunità
+
+- [Promozione e kit di lancio](promotion.md)
+- [Governance](../../GOVERNANCE.md)
+- [Etica](../../ETHICS.md)
+- [Contribuire](../../CONTRIBUTING.md)
+- [Codice di condotta](../../CODE_OF_CONDUCT.md)
+
 ## Deploy e operazioni
 
 - [Installazione del server, Debian e Arch](deploy_server.md)

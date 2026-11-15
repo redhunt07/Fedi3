@@ -38,7 +38,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 use tokio::sync::RwLock as TokioRwLock;
@@ -56,6 +56,7 @@ use subtle::ConstantTimeEq;
 mod account_sync;
 mod db;
 mod db_dispatch;
+mod landing;
 mod media_store;
 mod operations;
 mod receipt_db;
@@ -64,6 +65,20 @@ use db_dispatch::DbDispatch;
 
 static REQ_ID: AtomicU64 = AtomicU64::new(1);
 static TUNNEL_CONN_ID: AtomicU64 = AtomicU64::new(1);
+static STARTED_AT: OnceLock<Instant> = OnceLock::new();
+// Aggregate counters for the public live page. They are process-wide, reset on
+// restart and never per-user, so the landing page can show real traffic without
+// exposing anything about a single account.
+static FORWARD_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static TUNNEL_REQUEST_BYTES: AtomicU64 = AtomicU64::new(0);
+static TUNNEL_RESPONSE_BYTES: AtomicU64 = AtomicU64::new(0);
+static FETCH_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static FETCH_BYTES: AtomicU64 = AtomicU64::new(0);
+// The live snapshot is polled by every visitor: cache the serialized body for a
+// few seconds so a busy landing page cannot turn into a database load test.
+static LIVE_CACHE: OnceLock<Mutex<(Instant, String)>> = OnceLock::new();
+const LIVE_CACHE_TTL: Duration = Duration::from_secs(5);
+const LIVE_RATE_LIMIT_PER_MIN: u32 = 600;
 const DB_BATCH_DELETE_MAX: usize = 500;
 /// Current relay schema version. Bumped by every numbered migration.
 const SCHEMA_VERSION: i64 = 2;
@@ -1172,6 +1187,7 @@ async fn fetch_directory_seeds(http: &reqwest::Client, self_url: Option<&str>) -
 
 #[tokio::main]
 async fn main() {
+    let _ = STARTED_AT.set(Instant::now());
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -1476,6 +1492,10 @@ async fn main() {
     });
 
     let app = Router::new()
+        .route("/", any(landing::root))
+        .route("/it", any(landing::root_it))
+        .route("/en", get(landing::root_en))
+        .route("/assets/landing/:name", get(landing::asset))
         .route("/tunnel/:user", get(tunnel_ws))
         .route("/register", post(register))
         .route("/_fedi3/relay/push-config", get(operations::push_config))
@@ -1526,6 +1546,7 @@ async fn main() {
         .route("/admin/users/:user/rotate_token", post(admin_rotate_token))
         .route("/admin/audit", get(admin_audit_list))
         .route("/_fedi3/relay/stats", get(relay_stats))
+        .route("/_fedi3/relay/live", get(relay_live))
         .route("/_fedi3/relay/me", get(relay_me))
         .route("/_fedi3/relay/relays", get(relay_list))
         .route("/_fedi3/relay/peers", get(relay_peers))
@@ -3653,16 +3674,20 @@ async fn nodeinfo_links(State(state): State<AppState>, headers: HeaderMap) -> im
     .into_response()
 }
 
-async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
+async fn nodeinfo_2(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let total_users = {
         let db = state.db.clone();
         db.count_users().await.unwrap_or(0)
     };
+    let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
 
     axum::Json(NodeInfo2 {
         version: "2.0".to_string(),
+        // Directory crawlers (FediDB, fediverse.observer) group servers by
+        // software.name. Report the project name, not the internal binary
+        // name, or the relay shows up as an unknown "fedi3-relay" product.
         software: NodeInfoSoftware {
-            name: "fedi3-relay".to_string(),
+            name: "fedi3".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
         protocols: vec!["activitypub".to_string()],
@@ -3674,7 +3699,12 @@ async fn nodeinfo_2(State(state): State<AppState>) -> impl IntoResponse {
         usage: NodeInfoUsage {
             users: NodeInfoUsers { total: total_users },
         },
-        metadata: serde_json::json!({}),
+        metadata: serde_json::json!({
+            "nodeName": "Fedi3 relay",
+            "nodeType": "relay",
+            "repository": "https://github.com/redhunt07/Fedi3",
+            "homepage": format!("{scheme}://{host}/"),
+        }),
     })
 }
 
@@ -4556,6 +4586,9 @@ async fn forward_to_user_inner(
         req,
         resp_tx,
     };
+    // The tunnel carries base64 payloads inside JSON frames, so the encoded
+    // length is the real wire cost of this request.
+    let request_wire_bytes = msg.req.body_b64.len() as u64;
 
     // Bounded send: a full channel means the client stopped reading.
     match tokio::time::timeout(
@@ -4594,7 +4627,10 @@ async fn forward_to_user_inner(
             )
             .await;
         }
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => {
+            FORWARD_REQUESTS.fetch_add(1, Ordering::Relaxed);
+            TUNNEL_REQUEST_BYTES.fetch_add(request_wire_bytes, Ordering::Relaxed);
+        }
     }
 
     let resp =
@@ -4636,6 +4672,7 @@ async fn forward_to_user_inner(
             Ok(Ok(resp)) => resp,
         };
     let mut resp = resp;
+    TUNNEL_RESPONSE_BYTES.fetch_add(resp.body_b64.len() as u64, Ordering::Relaxed);
 
     // Any retryable failure is queued for the next reconnect instead of being
     // lost (H-11 / C4). GETs are cache/fetch probes and are not spooled, so a
@@ -6870,6 +6907,148 @@ async fn relay_stats(
         }
     };
     axum::Json(telemetry).into_response()
+}
+
+/// Public aggregate snapshot for the landing page animation.
+///
+/// Everything here is a count or a process-wide byte counter: no usernames, no
+/// peer ids, no per-account data. Counters reset on restart, so clients must
+/// treat a decrease as a restart instead of negative traffic.
+async fn relay_live(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !state
+        .limiter
+        .check(
+            client_ip(&state.cfg, &peer, &headers),
+            "live",
+            LIVE_RATE_LIMIT_PER_MIN,
+        )
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response();
+    }
+
+    let cache =
+        LIVE_CACHE.get_or_init(|| Mutex::new((Instant::now() - LIVE_CACHE_TTL, String::new())));
+    {
+        let guard = cache.lock().await;
+        if !guard.1.is_empty() && guard.0.elapsed() < LIVE_CACHE_TTL {
+            return live_response(guard.1.clone());
+        }
+    }
+
+    let now = now_ms();
+    let online_users = state.tunnels.read().await.len() as u64;
+    let online_peers = online_peer_sessions(&*state.peer_sessions.read().await, now).len() as u64;
+    let peers_seen_cutoff_ms = now.saturating_sub(30 * 24 * 3600 * 1000);
+
+    let (total_users, peers_seen, known_peers, relay_rows) = {
+        let db = state.db.clone();
+        let total_users = db.count_users_total().await.unwrap_or(0);
+        let peers_seen = db
+            .count_peers_seen_since(peers_seen_cutoff_ms)
+            .await
+            .unwrap_or(0);
+        let known_peers = db
+            .list_peer_directory("", 500)
+            .await
+            .map(|v| v.len() as u64)
+            .unwrap_or(0);
+        let relay_rows = db.list_relays(200).await.unwrap_or_default();
+        (total_users, peers_seen, known_peers, relay_rows)
+    };
+
+    // A relay that synced within three mesh intervals is reachable; below that
+    // it is shown as offline instead of pretending the mesh is complete.
+    let online_window_secs = state.cfg.peer_sync_secs.saturating_mul(3).max(300);
+    let online_window_ms = (online_window_secs as i64) * 1000;
+    let self_url = state
+        .cfg
+        .public_url
+        .as_deref()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_string();
+
+    let mut relays_online = 0u64;
+    let mut relays_offline = 0u64;
+    let mut items = Vec::new();
+    for (url, base_domain, last_seen_ms, _, _) in relay_rows {
+        if url.trim_end_matches('/') == self_url {
+            continue;
+        }
+        let online = last_seen_ms > 0 && last_seen_ms >= now.saturating_sub(online_window_ms);
+        if online {
+            relays_online += 1;
+        } else {
+            relays_offline += 1;
+        }
+        items.push(serde_json::json!({
+            "url": url,
+            "base_domain": base_domain,
+            "last_seen_ms": last_seen_ms,
+            "online": online,
+        }));
+    }
+
+    let (scheme, host) = origin_for_links_with_cfg(&state.cfg, &headers);
+    let uptime_secs = STARTED_AT
+        .get()
+        .map(|started| started.elapsed().as_secs())
+        .unwrap_or(0);
+
+    let body = serde_json::json!({
+        "relay_url": format!("{scheme}://{host}"),
+        "timestamp_ms": now,
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": uptime_secs,
+        "users": { "online": online_users, "total": total_users },
+        "peers": {
+            "online": online_peers,
+            "seen_30d": peers_seen,
+            "known": known_peers,
+        },
+        "relays": {
+            "online": relays_online,
+            "offline": relays_offline,
+            "total": relays_online + relays_offline,
+            "items": items,
+        },
+        "mesh": {
+            "sync_secs": state.cfg.peer_sync_secs,
+            "max_hops": state.cfg.peer_max_hops,
+            "online_window_secs": online_window_secs,
+        },
+        "traffic": {
+            "forward_requests": FORWARD_REQUESTS.load(Ordering::Relaxed),
+            "tunnel_request_bytes": TUNNEL_REQUEST_BYTES.load(Ordering::Relaxed),
+            "tunnel_response_bytes": TUNNEL_RESPONSE_BYTES.load(Ordering::Relaxed),
+            "fetch_requests": FETCH_REQUESTS.load(Ordering::Relaxed),
+            "fetch_bytes": FETCH_BYTES.load(Ordering::Relaxed),
+        },
+    });
+
+    let body = body.to_string();
+    {
+        let mut guard = cache.lock().await;
+        *guard = (Instant::now(), body.clone());
+    }
+    live_response(body)
+}
+
+fn live_response(body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::CONTENT_TYPE, "application/json"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn relay_me(
@@ -9561,6 +9740,8 @@ async fn fetch_peer_json<T: serde::de::DeserializeOwned>(
         anyhow::bail!("fetch {url:?} failed with status {status}");
     }
     let body = read_body_capped(resp, max_bytes).await?;
+    FETCH_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    FETCH_BYTES.fetch_add(body.len() as u64, Ordering::Relaxed);
     serde_json::from_slice(&body).map_err(|e| anyhow::anyhow!("invalid JSON from {url:?}: {e}"))
 }
 

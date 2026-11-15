@@ -374,6 +374,10 @@ To be created once and reused:
 | RW-02 | integration | webfinger with invalid `Host` in host-routing | 421/404 (new) |
 | RW-03 | unit | Canonical redirect with explicit port | No loop (new) |
 | RW-04 | unit | `host_only` with port | Port preserved where needed |
+| RL-01 | integration | `GET /` and `GET /it` | Landing page HTML, assets embedded, no 404 |
+| RL-02 | integration | `GET /` on a user subdomain in host-routing | Forwarded to the core, not the landing page |
+| RL-03 | integration | `GET /nodeinfo/2.0` | `software.name = fedi3`, release version, repository metadata |
+| RL-04 | integration | `GET /_fedi3/relay/live` | Public aggregate counts, no usernames, `Cache-Control: no-store` |
 
 ### 4.9 Move notice, telemetry, WebRTC signaling
 
