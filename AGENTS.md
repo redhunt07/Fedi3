@@ -34,6 +34,7 @@ workspace plus a Flutter app and deployment assets.
 - `deploy/`: Dockerfiles, compose, entrypoints, infra assets.
 - `relays/`: shared relay directory (`relays.json`) and contribution guide.
 - `scripts/`: build and ops scripts (core build, relay smoke test, backups).
+- `site/`: generated public website (GitHub Pages) with its content modules, renderer and assets; see `docs/website.md`.
 - `dist/`, `target/`: build outputs. Avoid editing.
 - `.env.example`: relay config template (used by docker compose).
 
@@ -79,6 +80,7 @@ flutter run
 - `docs/openapi.yaml`: OpenAPI 3.1 specification for core and relay.
 - `docs/relay_directory.md`: shared relay directory, latency ranking and discovery.
 - `docs/promotion.md`: launch kit for directories, fediverse presence and post templates.
+- `docs/website.md`: generated public site, build, deploy and checks.
 - `docs/distribution.md`: packages, F-Droid, AUR and Debian notes.
 
 ## Testing
