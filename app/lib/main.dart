@@ -200,6 +200,7 @@ Future<void> backgroundMain() async {
 
   Future<void> startBackgroundCore({bool pushOnly = true}) async {
     if (starting) throw StateError("Core startup pending");
+    final wasUp = coreUp;
     starting = true;
     try {
       final healthy = appState.isRunning && await appState.probeCoreHealth();
@@ -278,7 +279,7 @@ Future<void> backgroundMain() async {
       }
       if (pushOnly) {
         armQuiet();
-        armHardStop();
+        if (!wasUp) armHardStop();
       }
     } catch (e) {
       debugPrint('[bg] core start failed: $e');

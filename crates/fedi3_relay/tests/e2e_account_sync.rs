@@ -4,7 +4,14 @@ use common::TestRelay;
 use fedi3_core::runtime::{self, CoreStartConfig};
 use serde_json::json;
 use std::time::{Duration, Instant};
+// Core power mode and diagnostic hooks are process-wide. Isolate scenarios;
+// the independent cores inside each scenario still run concurrently.
+static SCENARIO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn debug_panics() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_test_writer()
+        .try_init();
     std::panic::set_hook(Box::new(|info| eprintln!("{info}")));
 }
 struct Core(u64);
@@ -50,6 +57,8 @@ fn count(path: &std::path::Path, table: &str) -> i64 {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_account_converges_across_two_cores_and_offline_restart() {
+    let _scenario = SCENARIO.lock().await;
+    debug_panics();
     let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_DIRECTORY_URLS", "")]).await;
     let a = fedi3_core::test_support::TempDir::new("account-a");
     let b = fedi3_core::test_support::TempDir::new("account-b");
@@ -185,6 +194,8 @@ async fn complete_account_converges_across_two_cores_and_offline_restart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reset_device_keeps_old_contact_offline_without_disconnects_between_paired_devices() {
+    let _scenario = SCENARIO.lock().await;
+    debug_panics();
     let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_DIRECTORY_URLS", "")]).await;
     let a = fedi3_core::test_support::TempDir::new("session-desktop");
     let b = fedi3_core::test_support::TempDir::new("session-old-phone");
@@ -255,6 +266,8 @@ async fn reset_device_keeps_old_contact_offline_without_disconnects_between_pair
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn personal_follow_notification_reaches_both_devices_and_alert_survives_restart_once() {
+    let _scenario = SCENARIO.lock().await;
+    debug_panics();
     std::env::set_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH", "true");
     let relay = TestRelay::start_with_env(&[("FEDI3_RELAY_DIRECTORY_URLS", "")]).await;
     let a = fedi3_core::test_support::TempDir::new("notifications-a");
@@ -404,4 +417,30 @@ async fn personal_follow_notification_reaches_both_devices_and_alert_survives_re
         .unwrap()
         .iter()
         .all(|row| row[1]["kind"] != "personal_notifications"));
+    // The most recently routed device goes idle. The authenticated older
+    // desktop must remain routable, rather than only appearing online.
+    drop(_b_core);
+    let again = client.post(format!("http://{}/users/bob/outbox",cs.bind))
+        .header("X-Fedi3-Internal","test-internal-token")
+        .json(&json!({"type":"Follow","actor":format!("{}/users/bob",relay.base_url()),"object":actor,"to":[actor]}))
+        .send().await.unwrap();
+    assert!(again.status().is_success());
+    until(|| count(&adb, "personal_notifications") == 2).await;
+    assert_eq!(count(&bdb, "personal_notifications"), 1);
+    let _phone_after_idle = Core(runtime::start(cb.clone()).unwrap());
+    until(|| count(&bdb, "personal_notifications") == 2).await;
+    assert_eq!(
+        claim(cb.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        claim(cb.bind.clone()).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 }

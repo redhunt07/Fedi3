@@ -258,6 +258,7 @@ struct CollectionPage<T> {
 struct AppState {
     shutdown: CancellationToken,
     tunnels: Arc<RwLock<HashMap<String, TunnelHandle>>>,
+    tunnel_connections: Arc<RwLock<HashMap<u64, RegisteredTunnel>>>,
     inflight_per_user: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     peer_hello: Arc<RwLock<HashMap<String, PeerHello>>>,
     peer_sessions: Arc<RwLock<HashMap<u64, PeerSession>>>,
@@ -339,6 +340,13 @@ struct TunnelHandle {
     tx: mpsc::Sender<TunnelRequest>,
     conn_id: u64,
     inflight: Arc<RwLock<HashMap<String, oneshot::Sender<RelayHttpResponse>>>>,
+}
+
+#[derive(Clone)]
+struct RegisteredTunnel {
+    user: String,
+    handle: TunnelHandle,
+    closed: CancellationToken,
 }
 
 struct TunnelRequest {
@@ -1272,6 +1280,7 @@ async fn main() {
     let state = AppState {
         shutdown: CancellationToken::new(),
         tunnels: Arc::new(RwLock::new(HashMap::new())),
+        tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
         inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
         peer_hello: Arc::new(RwLock::new(HashMap::new())),
         peer_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -2394,6 +2403,8 @@ async fn tunnel_ws(
 }
 
 async fn install_tunnel(state: &AppState, user: String, tunnel: TunnelHandle) -> bool {
+    // Keep this lock order for registration, disconnect and credential revocation.
+    let mut connections = state.tunnel_connections.write().await;
     let mut tunnels = state.tunnels.write().await;
     if tunnels
         .get(&user)
@@ -2401,8 +2412,59 @@ async fn install_tunnel(state: &AppState, user: String, tunnel: TunnelHandle) ->
     {
         return false;
     }
+    connections.insert(
+        tunnel.conn_id,
+        RegisteredTunnel {
+            user: user.clone(),
+            handle: tunnel.clone(),
+            closed: CancellationToken::new(),
+        },
+    );
     tunnels.insert(user, tunnel);
     true
+}
+
+async fn remove_tunnel(state: &AppState, user: &str, conn_id: u64) {
+    let changed = {
+        let mut connections = state.tunnel_connections.write().await;
+        connections.remove(&conn_id);
+        let mut tunnels = state.tunnels.write().await;
+        if tunnels.get(user).map(|t| t.conn_id) != Some(conn_id) {
+            false
+        } else {
+            let survivor = connections
+                .values()
+                .filter(|t| t.user == user && !t.closed.is_cancelled() && !t.handle.tx.is_closed())
+                .max_by_key(|t| t.handle.conn_id)
+                .map(|t| t.handle.clone());
+            if let Some(survivor) = survivor {
+                tunnels.insert(user.to_owned(), survivor);
+            } else {
+                tunnels.remove(user);
+            }
+            true
+        }
+    };
+    if changed {
+        state.peer_hello.write().await.remove(user);
+    }
+}
+
+async fn disconnect_user_tunnels(state: &AppState, user: &str) {
+    {
+        let mut connections = state.tunnel_connections.write().await;
+        let mut tunnels = state.tunnels.write().await;
+        connections.retain(|_, t| {
+            if t.user == user {
+                t.closed.cancel();
+                false
+            } else {
+                true
+            }
+        });
+        tunnels.remove(user);
+    }
+    state.peer_hello.write().await.remove(user);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2614,7 +2676,15 @@ async fn handle_tunnel(
         return; // A newer authenticated connection already owns this account.
     }
 
-    let session_closed = tokio_util::sync::CancellationToken::new();
+    let Some(session_closed) = state
+        .tunnel_connections
+        .read()
+        .await
+        .get(&conn_id)
+        .map(|t| t.closed.clone())
+    else {
+        return;
+    };
     let hello_closed = session_closed.clone();
     // Fetch peer hello (best-effort) and store it for telemetry/online peer id.
     let hello_state = state.clone();
@@ -2738,6 +2808,7 @@ async fn handle_tunnel(
     tokio::select! {
         _ = &mut writer => { reader.abort(); let _ = reader.await; },
         _ = &mut reader => { writer.abort(); let _ = writer.await; },
+        _ = session_closed.cancelled() => { writer.abort(); reader.abort(); let _ = writer.await; let _ = reader.await; },
     }
     drop(connection_lifetime);
     session_closed.cancel();
@@ -2745,14 +2816,7 @@ async fn handle_tunnel(
     // Dropping senders wakes requests whose core did not answer by the deadline.
     inflight.write().await.clear();
 
-    {
-        let mut tunnels = state.tunnels.write().await;
-        if tunnels.get(&user).map(|t| t.conn_id) == Some(conn_id) {
-            tunnels.remove(&user);
-            drop(tunnels);
-            state.peer_hello.write().await.remove(&user);
-        }
-    }
+    remove_tunnel(&state, &user, conn_id).await;
     info!(%user, "tunnel disconnected");
 }
 
@@ -6668,6 +6732,7 @@ async fn admin_disable_user(
     let db = state.db.clone();
     match db.set_disabled(&user, true).await {
         Ok(()) => {
+            disconnect_user_tunnels(&state, &user).await;
             let _ = db
                 .insert_admin_audit(
                     "admin_disable_user",
@@ -6762,6 +6827,7 @@ async fn admin_rotate_token(
     let db = state.db.clone();
     match db.rotate_token(&user, &token).await {
         Ok(()) => {
+            disconnect_user_tunnels(&state, &user).await;
             let _ = db
                 .insert_admin_audit(
                     "admin_rotate_token",
@@ -7910,6 +7976,7 @@ async fn admin_delete_user(
     if state.db.set_disabled(&user, true).await.is_err() {
         return (StatusCode::BAD_GATEWAY, "cannot prepare account deletion").into_response();
     }
+    disconnect_user_tunnels(&state, &user).await;
     loop {
         let batch = match state.db.list_user_media(&user).await {
             Ok(batch) => batch,
@@ -7948,9 +8015,6 @@ async fn admin_delete_user(
             }
         }
     }
-
-    // Drop the tunnel sender (best-effort disconnect).
-    state.tunnels.write().await.remove(&user);
 
     let db = state.db.clone();
     match db.delete_user(&user).await {
@@ -10545,6 +10609,7 @@ mod tests {
         let state = AppState {
             shutdown: CancellationToken::new(),
             tunnels: Arc::new(RwLock::new(HashMap::new())),
+            tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
             inflight_per_user: Arc::new(RwLock::new(HashMap::new())),
             peer_hello: Arc::new(RwLock::new(HashMap::new())),
             peer_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -11018,6 +11083,33 @@ mod tests {
         assert!(install_tunnel(&state, "alice".into(), handle(2)).await);
         assert!(!install_tunnel(&state, "alice".into(), handle(1)).await);
         assert_eq!(state.tunnels.read().await["alice"].conn_id, 2);
+    }
+
+    #[tokio::test]
+    async fn paired_tunnel_disconnect_routes_to_survivor_and_revocation_closes_all() {
+        let (state, _dir) = test_state(test_cfg()).await;
+        let (a, _a_rx) = mpsc::channel(1);
+        let (b, _b_rx) = mpsc::channel(1);
+        let (c, _c_rx) = mpsc::channel(1);
+        let handle = |tx, conn_id| TunnelHandle {
+            tx,
+            conn_id,
+            inflight: Arc::new(RwLock::new(HashMap::new())),
+        };
+        assert!(install_tunnel(&state, "alice".into(), handle(a, 1)).await);
+        assert!(install_tunnel(&state, "alice".into(), handle(b, 2)).await);
+        assert!(install_tunnel(&state, "bob".into(), handle(c, 3)).await);
+        let alice_closed = state.tunnel_connections.read().await[&1].closed.clone();
+        let bob_closed = state.tunnel_connections.read().await[&3].closed.clone();
+        remove_tunnel(&state, "alice", 2).await;
+        assert_eq!(state.tunnels.read().await["alice"].conn_id, 1);
+        disconnect_user_tunnels(&state, "alice").await;
+        assert!(alice_closed.is_cancelled());
+        assert!(!bob_closed.is_cancelled());
+        assert!(!state.tunnels.read().await.contains_key("alice"));
+        assert_eq!(state.tunnels.read().await["bob"].conn_id, 3);
+        remove_tunnel(&state, "alice", 1).await;
+        assert!(!state.tunnels.read().await.contains_key("alice"));
     }
 
     #[tokio::test]
