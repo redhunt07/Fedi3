@@ -18,5 +18,4 @@ app/linux/
 app/macos/
 app/android/
 app/ios/
-app/web/
 *.log
