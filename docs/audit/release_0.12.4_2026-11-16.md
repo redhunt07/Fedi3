@@ -17,7 +17,7 @@ and deployment verification. Release notes are in [v0.12.4](../releases/v0.12.4.
 
 ## Source verification
 
-The Rust workspace gates, compatibility oracle, dependency audit, Python
+**360 Rust tests passed** (4 ignored in the ordinary suite). The Rust workspace gates, compatibility oracle, dependency audit, Python
 contracts, platform checks and ShellCheck passed. The full Flutter suite passed
 with **278 tests**, including a narrow layout at 200% text, reply retry and
 media removal. The Rust media-only reply regression additionally passed with a
@@ -41,8 +41,17 @@ image is retained. The candidate relay is built separately from production.
 
 ## Publication and limitations
 
-At the release commit, final GitHub Actions package builds, Pages deployment
-and production relay replacement are pending. The maintainer requested commit,
+Pages was deployed by workflow `43772826777` and verified over HTTP. Relay
+0.12.4 was tested with a temporary database and networking disabled, then deployed
+in production: health/readiness and nodeinfo confirm the version. Volumes,
+credentials, identities and configuration were preserved after replacement.
+
+The first CI run exposed a race in the existing spool test: it slept for 100 ms
+and read the cursor before the atomic write completed. It now waits for cursor
+persistence with a five-second bound; service behaviour is unchanged. The release
+pipeline is rerun against the commit with the corrected test.
+
+At the source commit, final GitHub Actions package builds are still pending. The maintainer requested commit,
 push, website/relay updates and preparation of the new app release. Final
 outcomes are recorded by the deployment/CI checks and the completion report.
 

@@ -35,6 +35,16 @@ CoreConfig _config({String relayWs = 'wss://relay.example.org/ws'}) =>
       'apRelays': [],
     });
 
+Future<void> _waitForCursor(File file) async {
+  final elapsed = Stopwatch()..start();
+  while (!await file.exists()) {
+    if (elapsed.elapsed > const Duration(seconds: 5)) {
+      fail('The retried poll never committed its cursor');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
+
 void main() {
   late Directory dir;
 
@@ -70,7 +80,7 @@ void main() {
       await poller.start();
       expect(
           await File('${dir.path}/${poller.cursorFileName}').exists(), isFalse);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForCursor(File('${dir.path}/${poller.cursorFileName}'));
       expect(wakes, 2);
       expect(notifications, 2);
       final saved = jsonDecode(
@@ -133,7 +143,7 @@ void main() {
       await poller.start();
       expect(
           await File('${dir.path}/${poller.cursorFileName}').exists(), isFalse);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForCursor(File('${dir.path}/${poller.cursorFileName}'));
       expect(attempts, 2);
       expect(
           jsonDecode(await File('${dir.path}/${poller.cursorFileName}')

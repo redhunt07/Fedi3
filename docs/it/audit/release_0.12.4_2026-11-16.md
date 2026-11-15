@@ -17,7 +17,7 @@ sorgenti dalle verifiche di pacchetti e deploy. Note: [v0.12.4](../../releases/v
 
 ## Controlli sui sorgenti
 
-Superati i gate Rust, l'oracolo di compatibilità, l'audit dipendenze, i contratti
+**360 test Rust superati** (4 ignorati nella suite ordinaria). Superati i gate Rust, l'oracolo di compatibilità, l'audit dipendenze, i contratti
 Python, i controlli piattaforme e ShellCheck. La suite Flutter completa supera
 **278 test**, inclusi layout stretto al 200%, nuovo tentativo e rimozione degli
 allegati. Il test Rust aggiuntivo della risposta solo multimediale supera la
@@ -42,8 +42,17 @@ viene costruito separatamente dalla produzione.
 
 ## Pubblicazione e limiti
 
-Al commit di release sono ancora in corso build finali GitHub Actions, deploy
-Pages e sostituzione del relay pubblico. Il maintainer ha richiesto commit,
+Il sito Pages è stato pubblicato dal workflow `43772826777` e verificato via
+HTTP. Il relay 0.12.4 è stato provato con database temporaneo e rete disabilitata,
+poi aggiornato in produzione: health/readiness e nodeinfo confermano la versione.
+Volumi, credenziali, identità e configurazione risultano conservati dopo il deploy.
+
+La prima esecuzione CI ha rilevato una corsa nel test preesistente dello spool:
+attendeva 100 ms e leggeva il file prima della fine della scrittura. Il test ora
+attende la comparsa del cursore con un limite di 5 secondi; il comportamento del
+servizio non cambia. La pipeline viene rieseguita sul commit con il test corretto.
+
+Al commit sorgenti restano in corso le build finali dei pacchetti GitHub Actions. Il maintainer ha richiesto commit,
 push, aggiornamento dei siti/relay e preparazione della nuova release. Gli
 esiti finali sono registrati dai controlli di deploy/CI e dal resoconto conclusivo.
 
