@@ -11,11 +11,12 @@ interoperable with the fediverse and resilient without giving up compatibility
 with classic ActivityPub instances. It is a Flutter client backed by a local
 Rust core, plus an optional public relay for federation and offline delivery.
 
-> **Status: pre-1.0 — current release [0.11.11](https://github.com/redhunt07/Fedi3/releases/tag/v0.11.11) (build 4015).**
-> Linux x86_64, Android arm64-v8a/x86_64 and Windows x64 builds are published on
-> the release page with SHA256 checksums. Android APKs are sideload builds signed
-> with the local debug key; iOS and macOS are buildable from source but are not
-> part of the published packages. See [release verification](docs/audit/release_0.11.11_2026-11-12.md).
+> **Status: pre-1.0 — release [0.12.2](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.2) (build 4018).**
+> Packages include Linux x86_64 AppImage, Debian/Ubuntu amd64, Windows x64 and
+> Android arm64-v8a/x86_64 APKs with SHA256 checksums. Android APKs use the
+> configured release signing identity; updates require a matching certificate.
+> iOS/macOS packages are not included. See the [bilingual release notes](docs/releases/v0.12.2.md)
+> and [verification report](docs/audit/release_readiness_2026-11-15.md).
 
 ## Screenshots
 

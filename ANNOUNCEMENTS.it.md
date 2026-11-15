@@ -4,6 +4,10 @@ Aggiornamenti ufficiali dai maintainer. Questa pagina è letta direttamente dal
 repository Git e il client la controlla periodicamente. La controparte inglese è
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md).
 
+## 2026-11-15 — Fedi3 0.12.2
+
+Fedi3 0.12.2 (build 4018) introduce replica cifrata delle notifiche personali, richieste di avviso persistenti per dispositivo, risveglio Android per le notifiche e continuità dei tunnel relay tra dispositivi associati. Corregge inoltre isolamento della cache credenziali desktop, porte relay personalizzate e layout con testo grande. I pacchetti comprendono AppImage Linux, Debian/Ubuntu, Windows e Android, con checksum SHA256. Aggiornare il relay prima dei client. [Release e download](https://github.com/redhunt07/Fedi3/releases/tag/v0.12.2) · [Note italiane e inglesi](docs/releases/v0.12.2.md).
+
 ## 2026-11-15 — Verifiche per la preparazione al rilascio
 
 Le modifiche in sviluppo correggono layout con testo grande, login rapido su porte relay personalizzate e isolamento della cache delle credenziali desktop. I domini push opzionali vengono passati a Caddy tramite Compose. La [procedura di rilascio](docs/it/release_checklist.md) descrive i controlli ripetibili e le prove sui pacchetti e sui dispositivi. Le modifiche sono in verifica; questo annuncio non indica la pubblicazione di un pacchetto.
