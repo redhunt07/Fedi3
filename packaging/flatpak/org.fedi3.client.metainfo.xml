@@ -25,6 +25,9 @@
   <url type="bugtracker">https://github.com/redhunt07/Fedi3/issues</url>
   <url type="vcs-browser">https://github.com/redhunt07/Fedi3</url>
   <releases>
+    <release version="0.12.5" date="2026-11-16"/>
+    <release version="0.12.4" date="2026-11-16"/>
+    <release version="0.12.3" date="2026-11-15"/>
     <release version="0.12.2" date="2026-11-15"/>
     <release version="0.12.1" date="2026-11-14"/>
   </releases>

@@ -46,13 +46,18 @@ modules:
     sources:
       - type: git
         url: https://github.com/redhunt07/Fedi3.git
-        commit: 69fafc4b5cc5e742f22694d0b3dd6ac5bc7d67ca
+        commit: 319bdedcaf07ca742f39db1115cc71402c35004b
+      # Release metadata can advance without making the pinned source refer to
+      # its own commit; overlay this file from the packaging checkout.
+      - type: file
+        path: org.fedi3.client.metainfo.xml
+        dest: packaging/flatpak
       - type: archive
         url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.50.0-stable.tar.xz
         sha256: 6ea2d806fd57269ae783e6788e2a81fc26eaad782f1e0d0ff38623bb765ff9f5
         strip-components: 0
     build-commands:
-      - cargo build --release -p fedi3_core --locked
+      - cargo build --release -p fedi3_core --lib --locked
       - flutter --disable-analytics
       - cd app && flutter pub get --enforce-lockfile
       - cd app && flutter build linux --release --no-pub --suppress-analytics
