@@ -97,6 +97,7 @@ Notes:
 - `libmpv` must be present on the build host: the script bundles it into the AppImage. Without it videos do not start.
 - The app initializes `media_kit` at startup, so the bundled `libmpv` is used automatically.
 - The generated AppRun enables software rendering by default (`FEDI3_SOFTWARE_RENDERING=1`). Set `FEDI3_SOFTWARE_RENDERING=0` to use the GPU.
+- On the NVIDIA proprietary driver, Flutter 3.50.0 draws the window shifted by half its height because `glBlitFramebuffer` is blocklisted. The Linux runner (`app/linux/runner/main.cc`) selects the Mesa EGL vendor before GTK starts and prefers zink (GL on Vulkan) when a NVIDIA Vulkan ICD is present, falling back to llvmpipe. Set `MESA_LOADER_DRIVER_OVERRIDE=llvmpipe` to force software rendering, or `__EGL_VENDOR_LIBRARY_FILENAMES` to pick a different EGL vendor. The engine fix ships in Flutter 3.50.1, after which the fallback can be dropped.
 
 ## Bundle verification
 
