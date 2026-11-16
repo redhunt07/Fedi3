@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [0.12.6] - 2026-11-16
 
+- Populate Discover from both cached public P2P and federated posts, deduplicating before stable pagination and excluding private inbox/outbox history.
+
 - Restore same-account attachments uploaded from another device when their local media metadata is missing; persist the downloaded MIME type, size and filename for subsequent offline reads.
 - Restrict missing-metadata recovery to local clients in hybrid mode, avoiding relay forwarding loops and preserving P2P-only policy.
 

@@ -300,6 +300,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/timeline/unified") => timeline_unified(state, req).await,
         ("GET", "/_fedi3/timeline/federated") => timeline_federated(state, req).await,
         ("GET", "/_fedi3/timeline/dht") => global_timeline(state, req).await,
+        ("GET", "/_fedi3/timeline/discover") => discover_timeline(state, req).await,
         ("GET", "/_fedi3/note/replies") => note_replies_get(state, req).await,
         ("GET", "/_fedi3/search/notes") => search_notes(state, req).await,
         ("GET", "/_fedi3/search/users") => search_users(state, req).await,
@@ -2833,6 +2834,53 @@ async fn global_timeline(state: &ApState, req: Request<Body>) -> Response<Body> 
       "total": total,
       "items": items,
       "next": next,
+    }))
+    .into_response()
+}
+
+async fn discover_timeline(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _body) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query = parts.uri.query().unwrap_or("");
+    let limit = query
+        .split('&')
+        .find_map(|part| part.strip_prefix("limit="))
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let cursor_value = query
+        .split('&')
+        .find_map(|part| part.strip_prefix("cursor="))
+        .map(url_decode);
+    let cursor = if let Some(value) = cursor_value.as_deref() {
+        let Some((ms, id)) = value.split_once(':') else {
+            return simple(StatusCode::BAD_REQUEST, "invalid discovery cursor");
+        };
+        let Ok(ms) = ms.parse::<i64>() else {
+            return simple(StatusCode::BAD_REQUEST, "invalid discovery cursor");
+        };
+        if id.is_empty() {
+            return simple(StatusCode::BAD_REQUEST, "invalid discovery cursor");
+        }
+        Some((ms, id))
+    } else {
+        None
+    };
+    let page = match state.social.list_discover_feed(limit, cursor) {
+        Ok(page) => page,
+        Err(error) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {error}")),
+    };
+    let raw = page
+        .items
+        .into_iter()
+        .map(|item| item.activity_json)
+        .collect();
+    axum::Json(serde_json::json!({
+        "total": page.total,
+        "items": timeline_values(state, raw),
+        "next": page.next,
     }))
     .into_response()
 }

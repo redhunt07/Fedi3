@@ -12,7 +12,7 @@ HTTPS requests and do not send profile tokens, log files or telemetry.
 The version comes from the installed application metadata. Only a strictly
 newer `vX.Y.Z` stable release is offered. Drafts, prereleases, invalid metadata,
 foreign download URLs and incompatible architectures are rejected. The updater
-was introduced in `0.10.0+1`; the current source version is `0.12.6+6023` (see `app/pubspec.yaml`). Clients
+was introduced in `0.10.0+1`; the current source version is `0.12.6+6024` (see `app/pubspec.yaml`). Clients
 older than `0.10.0` require a manual first upgrade.
 
 ## Installation

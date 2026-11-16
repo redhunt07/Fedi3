@@ -12,7 +12,7 @@ RepoType: git
 Repo: https://github.com/redhunt07/Fedi3.git
 Builds:
 - versionName: 0.12.6
-  versionCode: 8023
+  versionCode: 8024
   commit: v0.12.6
   sudo:
   - apt-get update
@@ -46,7 +46,7 @@ Builds:
   output: app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
   ndk: r28c
 - versionName: 0.12.6
-  versionCode: 10023
+  versionCode: 10024
   commit: v0.12.6
   sudo:
   - apt-get update
@@ -86,6 +86,6 @@ VercodeOperation:
 - '%c + 4000'
 UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
 CurrentVersion: 0.12.6
-CurrentVersionCode: 10023
+CurrentVersionCode: 10024
 Disabled: Native artifact provenance review pending, especially media_kit native JAR
   downloads from GitHub. WebRTC Maven artifacts also need licence/provenance validation.

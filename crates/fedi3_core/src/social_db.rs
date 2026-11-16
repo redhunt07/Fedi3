@@ -1455,6 +1455,59 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
+    /// Discover combines the public P2P and federation caches, excluding private
+    /// inbox/outbox history. Deduplicate before applying the pagination window.
+    pub fn list_discover_feed(
+        &self,
+        limit: u32,
+        cursor: Option<(i64, &str)>,
+    ) -> Result<CollectionPage<GlobalFeedItem>> {
+        let conn = self.connect()?;
+        let limit = limit.clamp(1, 200) as i64;
+        let total = conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT activity_id FROM global_feed UNION SELECT activity_id FROM federated_feed)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        let mut stmt = conn.prepare(
+            r#"
+            WITH candidates AS (
+              SELECT activity_id, created_at_ms, actor_id, activity_json, 0 AS priority FROM global_feed
+              UNION ALL
+              SELECT activity_id, created_at_ms, actor_id, activity_json, 1 AS priority FROM federated_feed
+            ), ranked AS (
+              SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY activity_id ORDER BY created_at_ms DESC, priority ASC
+              ) AS row_num FROM candidates
+            )
+            SELECT activity_id, created_at_ms, actor_id, activity_json FROM ranked
+            WHERE row_num=1 AND (
+              ?1 IS NULL OR created_at_ms < ?1 OR (created_at_ms=?1 AND activity_id < ?2)
+            )
+            ORDER BY created_at_ms DESC, activity_id DESC LIMIT ?3
+            "#,
+        )?;
+        let (cursor_ms, cursor_id) = cursor.map_or((None, None), |(ms, id)| (Some(ms), Some(id)));
+        let items = stmt
+            .query_map(params![cursor_ms, cursor_id, limit], |row| {
+                Ok(GlobalFeedItem {
+                    activity_id: row.get(0)?,
+                    created_at_ms: row.get(1)?,
+                    actor_id: row.get(2)?,
+                    activity_json: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let next = if items.len() as i64 == limit {
+            items
+                .last()
+                .map(|item| format!("{}:{}", item.created_at_ms, item.activity_id))
+        } else {
+            None
+        };
+        Ok(CollectionPage { total, items, next })
+    }
+
     pub fn list_unified_feed(
         &self,
         limit: u32,

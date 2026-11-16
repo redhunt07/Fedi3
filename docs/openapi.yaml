@@ -367,6 +367,23 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Timeline'
+  /_fedi3/timeline/discover:
+    get:
+      tags: [core]
+      summary: Scopri dai feed pubblici P2P e federati, deduplicati
+      description: Richiede X-Fedi3-Internal. Esclude la cronologia privata inbox/outbox.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: cursor
+          in: query
+          description: Cursore opaco restituito da next; distingue gli elementi con lo stesso timestamp.
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/Timeline'
+        '400':
+          description: Cursore non valido
   /_fedi3/note/replies:
     get:
       tags: [core]
