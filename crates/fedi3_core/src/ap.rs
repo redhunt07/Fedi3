@@ -1128,7 +1128,51 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
 
     match media_store::load_media(&state.data_dir, stored_name) {
         Ok((bytes, mime)) => (StatusCode::OK, [("Content-Type", mime)], bytes).into_response(),
-        Err(_) => simple(StatusCode::NOT_FOUND, "not found"),
+        Err(_) => {
+            // Another device may have uploaded this account's attachment before this
+            // core had a media row. Only a local client may restore it from the relay:
+            // tunnel/P2P requests must not recurse through the public media route.
+            let local_client = req
+                .extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .is_some_and(|peer| peer.0.ip().is_loopback())
+                && req
+                    .extensions()
+                    .get::<AuthenticatedRelayForward>()
+                    .is_none();
+            let url = format!(
+                "{}/users/{}/media/{stored_name}",
+                state.cfg.public_base_url.trim_end_matches('/'),
+                state.cfg.username
+            );
+            let same_server = url.parse::<Uri>().ok().is_some_and(|target| {
+                target.authority().map(|a| a.as_str())
+                    == req
+                        .headers()
+                        .get(header::HOST)
+                        .and_then(|h| h.to_str().ok())
+            });
+            if local_client && !same_server && state.post_delivery_mode != PostDeliveryMode::P2pOnly
+            {
+                let item = crate::social_db::MediaItem {
+                    id: stored_name.into(),
+                    url,
+                    media_type: "application/octet-stream".into(),
+                    size: 0,
+                    created_at_ms: now_ms(),
+                    local_name: None,
+                    actor_id: Some(canonical_actor_url(&state.cfg)),
+                    last_access_ms: now_ms(),
+                    width: None,
+                    height: None,
+                    blurhash: None,
+                };
+                if let Ok(Some((bytes, mime))) = fetch_and_cache_media(state, &item).await {
+                    return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
+                }
+            }
+            simple(StatusCode::NOT_FOUND, "not found")
+        }
     }
 }
 
@@ -1195,8 +1239,8 @@ async fn fetch_and_cache_media(
         let _ = state.social.upsert_media(
             &item.id,
             &item.url,
-            &item.media_type,
-            item.size,
+            &mime,
+            bytes.len() as i64,
             Some(&stored_name),
             Some(&me),
             item.width,

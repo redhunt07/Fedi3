@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-11-16
+
+- Restore same-account attachments uploaded from another device when their local media metadata is missing; persist the downloaded MIME type, size and filename for subsequent offline reads.
+- Restrict missing-metadata recovery to local clients in hybrid mode, avoiding relay forwarding loops and preserving P2P-only policy.
+
 ## [0.12.5] - 2026-11-16
 
 - Recover profile posts, replies and media from the complete persisted history; paginate public posts before filtering out relationship activities.

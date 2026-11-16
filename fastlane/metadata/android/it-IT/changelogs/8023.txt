@@ -1,0 +1,1 @@
+Ripristinati profili, post, risposte, media e suggerimenti follow. La ricerca combinata evita il 503. P2P mobile su HTTPS/443 e recupero nella cache persistente dei media caricati da un altro dispositivo. Identità e dati esistenti preservati.
