@@ -414,6 +414,37 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/Search'
+  /_fedi3/profile/activities:
+    get:
+      tags: [core]
+      summary: Cronologia persistente di un profilo per la UI locale
+      description: Unisce inbox, outbox locale e feed P2P e federato; applica modifiche e cancellazioni.
+      security: [{internalToken: []}]
+      parameters:
+        - name: actor
+          in: query
+          required: true
+          schema: {type: string, format: uri}
+        - name: cursor
+          in: query
+          description: Offset restituito dalla pagina precedente (200 righe per pagina).
+          schema: {type: string}
+      responses:
+        '200':
+          description: Attività disponibili localmente, con oggetti idratati
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next]
+                properties:
+                  items:
+                    type: array
+                    items: {type: object}
+                  next:
+                    type: [string, 'null']
+        '400': {description: Actor mancante}
+        '403': {description: Invalid internal token}
   /_fedi3/suggested/actors:
     get:
       tags: [core]

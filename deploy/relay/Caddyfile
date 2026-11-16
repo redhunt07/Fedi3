@@ -4,6 +4,11 @@
   request_body {
     max_size 64MB
   }
+  # Encrypted P2P circuits share HTTPS/443 with the relay. The WS listener
+  # stays inside the Compose network; it is never exposed as a plaintext port.
+  handle /_fedi3/p2p {
+    reverse_proxy p2p_infra:4002
+  }
   reverse_proxy relay:8787 {
     # Only trust forwarding headers coming from private ranges (the compose
     # network). Caddy appends the real client IP to X-Forwarded-For; the relay

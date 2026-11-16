@@ -41,9 +41,13 @@ class NoteAttachment {
   final String mediaType;
 
   static List<NoteAttachment> parseList(dynamic raw) {
-    if (raw is! List) return const [];
+    final items = raw is List
+        ? raw
+        : (raw is Map || raw is String)
+            ? [raw]
+            : const [];
     final out = <NoteAttachment>[];
-    for (final it in raw) {
+    for (final it in items) {
       if (it is String) {
         final s = it.trim();
         if (s.isNotEmpty) out.add(NoteAttachment(url: s, mediaType: ''));
@@ -55,6 +59,13 @@ class NoteAttachment {
       final u = m['url'];
       if (u is String) url = u.trim();
       if (u is Map) url = (u['href'] as String?)?.trim() ?? '';
+      if (u is List) {
+        for (final link in u) {
+          if (link is String) url = link.trim();
+          if (link is Map) url = (link['href'] as String?)?.trim() ?? '';
+          if (url.isNotEmpty) break;
+        }
+      }
       final mt = (m['mediaType'] as String?)?.trim() ?? '';
       if (url.isNotEmpty) out.add(NoteAttachment(url: url, mediaType: mt));
     }

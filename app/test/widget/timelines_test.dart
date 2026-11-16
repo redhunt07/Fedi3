@@ -65,6 +65,21 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('an empty filtered page keeps pagination available',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client = FakeHttpClient();
+    _routeTimelines(client,
+        statusCode: 200, body: '{"items":[],"next":"older"}');
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(tester, TimelinesScreen(appState: app));
+    await tester.pumpAndSettle();
+    expect(find.text('Load more'), findsWidgets);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('AW-03 timeline shows the loading skeleton, not an error',
       (tester) async {
     await setUpPumpEnv(tester);

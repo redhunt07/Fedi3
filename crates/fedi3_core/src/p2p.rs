@@ -631,33 +631,27 @@ where
 
     // Circuit relay transport must be combined at the "raw" (pre-upgrade) layer, then upgraded.
     let raw_tcp = || tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
-    let raw_ws = || {
-        websocket::Config::new(tcp::tokio::Transport::new(
-            tcp::Config::default().nodelay(true),
-        ))
-    };
-    let raw_ws_or_tcp = libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp());
-    // The hickory system resolver reads Android's DNS servers through
-    // ndk-context and *panics* when the host app never initialised it. Losing
-    // DNS must not disable P2P: IP multiaddresses (including the relay
-    // infrastructure address) still work.
-    let dns_transport = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        libp2p::dns::tokio::Transport::system(raw_ws_or_tcp)
-    }));
-    let raw_ws_or_tcp = match dns_transport {
-        Ok(Ok(transport)) => transport.boxed(),
-        Ok(Err(e)) => {
-            tracing::warn!(
-                error = %e,
-                "system DNS transport unavailable; using IP multiaddresses only"
-            );
-            libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp()).boxed()
-        }
-        Err(_) => {
-            tracing::warn!("system DNS resolver panicked; using IP multiaddresses only");
-            libp2p::core::transport::choice::OrTransport::new(raw_ws(), raw_tcp()).boxed()
+    // Resolve TCP inside the WebSocket layer so TLS retains the original host
+    // and SNI, rather than validating the relay's IP against its DNS certificate.
+    let dns_tcp = || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            libp2p::dns::tokio::Transport::system(raw_tcp())
+        }));
+        match result {
+            Ok(Ok(transport)) => transport.boxed(),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "system DNS unavailable; using IP multiaddresses only");
+                raw_tcp().boxed()
+            }
+            Err(_) => {
+                tracing::warn!("system DNS resolver panicked; using IP multiaddresses only");
+                raw_tcp().boxed()
+            }
         }
     };
+    let raw_ws = websocket::Config::new(dns_tcp());
+    let raw_ws_or_tcp =
+        libp2p::core::transport::choice::OrTransport::new(raw_ws, dns_tcp()).boxed();
     let relay_transport = relay_transport.boxed();
     let raw_stream =
         libp2p::core::transport::choice::OrTransport::new(relay_transport, raw_ws_or_tcp);
@@ -826,16 +820,16 @@ where
             tracing::warn!(%addr, "relay reservation requires a terminal peer ID");
             continue;
         };
-        let prefer_tcp = addr.iter().any(|p| matches!(p, Protocol::Tcp(_)));
         match relay_choice.get(&relay_peer) {
-            Some(existing) if existing.iter().any(|p| matches!(p, Protocol::Tcp(_))) => {}
-            Some(_) if !prefer_tcp => {}
+            Some(existing) if relay_address_priority(existing) <= relay_address_priority(&addr) => {
+            }
             _ => {
                 relay_choice.insert(relay_peer, addr);
             }
         }
     }
-    for (relay_peer, mut addr) in relay_choice {
+    for (relay_peer, selected) in &relay_choice {
+        let mut addr = selected.clone();
         addr.push(Protocol::P2pCircuit);
         match swarm.listen_on(addr.clone()) {
             Ok(id) => {
@@ -845,7 +839,7 @@ where
             Err(e) => {
                 tracing::warn!(%addr, error=%e, "relay reservation listen failed");
                 relay_retry.insert(addr, tokio::time::Instant::now() + Duration::from_secs(5));
-                *relay_attempts.entry(relay_peer).or_insert(0) += 1;
+                *relay_attempts.entry(*relay_peer).or_insert(0) += 1;
             }
         }
     }
@@ -1164,15 +1158,23 @@ where
                         let Some(relay_peer) = relay_peer_of(&addr) else {
                             continue;
                         };
-                        let already = relay_listeners
-                            .values()
-                            .any(|a| relay_peer_of(a) == Some(relay_peer))
-                            || relay_retry
-                                .keys()
-                                .any(|a| relay_peer_of(a) == Some(relay_peer));
-                        if already {
+                        if relay_choice.get(&relay_peer).is_some_and(|previous| {
+                            relay_address_priority(previous) <= relay_address_priority(&addr)
+                        }) {
                             continue;
                         }
+                        // Upgrade a failed/raw-port reservation when HTTPS discovery
+                        // advertises a reachable WSS endpoint for the same relay.
+                        let old: Vec<_> = relay_listeners.iter()
+                            .filter(|(_, a)| relay_peer_of(a) == Some(relay_peer))
+                            .map(|(id, _)| *id).collect();
+                        for id in old {
+                            relay_listeners.remove(&id);
+                            relay_listener_started.remove(&id);
+                            swarm.remove_listener(id);
+                        }
+                        relay_retry.retain(|a, _| relay_peer_of(a) != Some(relay_peer));
+                        relay_choice.insert(relay_peer, addr.clone());
                         addr.push(Protocol::P2pCircuit);
                         match swarm.listen_on(addr.clone()) {
                             Ok(id) => {
@@ -1825,6 +1827,22 @@ where
     Ok(())
 }
 
+fn relay_address_priority(addr: &Multiaddr) -> u8 {
+    let secure = addr
+        .iter()
+        .any(|p| matches!(p, Protocol::Tls | Protocol::Wss(_)));
+    let ws = addr
+        .iter()
+        .any(|p| matches!(p, Protocol::Ws(_) | Protocol::Wss(_)));
+    if secure && ws {
+        0
+    } else if addr.iter().any(|p| matches!(p, Protocol::Tcp(_))) {
+        1
+    } else {
+        2
+    }
+}
+
 pub fn start_p2p<S>(
     cfg: P2pConfig,
     keypair: identity::Keypair,
@@ -2359,6 +2377,15 @@ mod connectivity_tests {
     // The remote handler then makes a request back through the same swarm.
     #[tokio::test]
     async fn circuit_recovers_from_unavailable_relay_and_handles_nested_requests() {
+        exercise_circuit(false).await;
+    }
+
+    #[tokio::test]
+    async fn websocket_circuit_handles_nested_requests() {
+        exercise_circuit(true).await;
+    }
+
+    async fn exercise_circuit(use_websocket: bool) {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("fedi3_core::p2p=debug,libp2p_relay=debug")
             .with_test_writer()
@@ -2367,7 +2394,8 @@ mod connectivity_tests {
         let relay_key = identity::Keypair::generate_ed25519();
         let relay_peer = PeerId::from(relay_key.public());
         let relay_port = port();
-        let relay_addr = format!("/dns4/localhost/tcp/{relay_port}/p2p/{relay_peer}");
+        let ws = if use_websocket { "/ws" } else { "" };
+        let relay_addr = format!("/dns4/localhost/tcp/{relay_port}{ws}/p2p/{relay_peer}");
         let cfg = P2pConfig {
             enable: true,
             force_relay_only: Some(true),
@@ -2413,11 +2441,14 @@ mod connectivity_tests {
             .unwrap_or_else(|_| panic!("callback already set"));
         // Let the first reservation attempt fail before bringing up the relay.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let transport = tcp::tokio::Transport::new(tcp::Config::default())
-            .upgrade(upgrade::Version::V1)
-            .authenticate(noise::Config::new(&relay_key).unwrap())
-            .multiplex(yamux::Config::default())
-            .boxed();
+        let transport = libp2p::core::transport::choice::OrTransport::new(
+            websocket::Config::new(tcp::tokio::Transport::new(tcp::Config::default())),
+            tcp::tokio::Transport::new(tcp::Config::default()),
+        )
+        .upgrade(upgrade::Version::V1)
+        .authenticate(noise::Config::new(&relay_key).unwrap())
+        .multiplex(yamux::Config::default())
+        .boxed();
         let behaviour = TestRelay {
             relay: relay::Behaviour::new(relay_peer, Default::default()),
             identify: identify::Behaviour::new(identify::Config::new(
@@ -2432,7 +2463,9 @@ mod connectivity_tests {
             libp2p::swarm::Config::with_tokio_executor()
                 .with_idle_connection_timeout(Duration::from_secs(60)),
         );
-        let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{relay_port}").parse().unwrap();
+        let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{relay_port}{ws}")
+            .parse()
+            .unwrap();
         swarm.add_external_address(listen_addr.clone());
         swarm.listen_on(listen_addr).unwrap();
         let (reserved_tx, mut reserved_rx) = mpsc::channel(8);
@@ -2482,5 +2515,21 @@ mod connectivity_tests {
         }
         stop.send(true).unwrap();
         relay_task.abort();
+    }
+}
+
+#[cfg(test)]
+mod relay_transport_priority_tests {
+    use super::*;
+    #[test]
+    fn secure_websocket_is_preferred_to_filtered_raw_ports() {
+        let tcp: Multiaddr = "/ip4/192.0.2.1/tcp/4001".parse().unwrap();
+        let quic: Multiaddr = "/ip4/192.0.2.1/udp/4001/quic-v1".parse().unwrap();
+        let wss: Multiaddr =
+            "/dns4/relay.example/tcp/443/tls/sni/relay.example/x-parity-ws/%2F_fedi3%2Fp2p"
+                .parse()
+                .unwrap();
+        assert!(relay_address_priority(&wss) < relay_address_priority(&tcp));
+        assert!(relay_address_priority(&tcp) < relay_address_priority(&quic));
     }
 }

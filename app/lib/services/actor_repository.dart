@@ -248,30 +248,52 @@ class ActorRepository {
   /// Fetches one outbox page and returns the next page URL when present.
   /// Pass [pageUrl] to fetch a subsequent page.
   Future<OutboxPage> fetchOutboxPage(String outboxUrl,
-      {int limit = 20, String? pageUrl}) async {
+      {int limit = 20, String? pageUrl, CoreConfig? config}) async {
     Map<String, dynamic>? page;
     if (pageUrl != null && pageUrl.trim().isNotEmpty) {
-      page = await _fetchJson(pageUrl.trim());
+      page = await _fetchJson(_localCollectionUrl(pageUrl.trim(), config));
     } else {
-      final first = await _fetchJson(outboxUrl);
+      final first = await _fetchJson(_localCollectionUrl(outboxUrl, config));
       if (first == null) return const OutboxPage(items: [], next: null);
       page = first;
       final firstLink = first['first'];
-      if (firstLink is String && firstLink.trim().isNotEmpty) {
-        page = await _fetchJson(firstLink.trim());
+      if (first['orderedItems'] is List || first['items'] is List) {
+        page = first;
+      } else if (firstLink is String && firstLink.trim().isNotEmpty) {
+        page = await _fetchJson(_localCollectionUrl(firstLink.trim(), config));
+      } else if (firstLink is Map &&
+          (firstLink['orderedItems'] is List || firstLink['items'] is List)) {
+        page = firstLink.cast<String, dynamic>();
       } else if (firstLink is Map) {
         final href = (firstLink['id'] as String?)?.trim() ??
             (firstLink['href'] as String?)?.trim() ??
             '';
-        if (href.isNotEmpty) page = await _fetchJson(href);
+        if (href.isNotEmpty) {
+          page = await _fetchJson(_localCollectionUrl(href, config));
+        }
       }
     }
 
-    final items = (page?['orderedItems'] as List<dynamic>? ?? const []);
+    final items = (page?['orderedItems'] as List<dynamic>? ??
+        page?['items'] as List<dynamic>? ??
+        const []);
     final out = <Map<String, dynamic>>[];
     for (final it in items) {
-      if (it is Map) out.add(it.cast<String, dynamic>());
-      if (out.length >= limit) break;
+      if (it is Map) {
+        final item = it.cast<String, dynamic>();
+        // Some servers expose bare objects rather than Create activities.
+        if (item['type'] == 'Note' || item['type'] == 'Article') {
+          out.add({
+            'id': item['id'],
+            'type': 'Create',
+            'actor': item['attributedTo'],
+            'published': item['published'],
+            'object': item,
+          });
+        } else {
+          out.add(item);
+        }
+      }
     }
 
     String? next;
@@ -356,8 +378,8 @@ class ActorRepository {
     return null;
   }
 
-  // Own relationship collections live in the local core database. Avoid a
-  // round trip through the public relay tunnel just to read our own state.
+  // Own collections live in the local core database. Avoid a round trip
+  // through the public relay tunnel just to read our own state.
   String _localCollectionUrl(String url, CoreConfig? config) {
     if (config == null) return url;
     final public = Uri.tryParse(config.publicBaseUrl);
@@ -373,7 +395,9 @@ class ActorRepository {
     }
     final basePath = public.path.replaceFirst(RegExp(r'/$'), '');
     final actor = '$basePath/users/${Uri.encodeComponent(config.username)}';
-    if (uri.path != '$actor/followers' && uri.path != '$actor/following') {
+    if (uri.path != '$actor/followers' &&
+        uri.path != '$actor/following' &&
+        uri.path != '$actor/outbox') {
       return url;
     }
     return config.localBaseUri

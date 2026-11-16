@@ -519,6 +519,7 @@ struct RelayConfig {
     p2p_infra_multiaddrs: Vec<String>,
     p2p_infra_host: Option<String>,
     p2p_infra_port: u16,
+    p2p_infra_wss_enable: bool,
     telemetry_interval_secs: u64,
     max_body_bytes: usize,
     http_timeout_secs: u64,
@@ -2198,6 +2199,8 @@ fn load_config() -> Result<RelayConfig> {
         p2p_infra_multiaddrs,
         p2p_infra_host,
         p2p_infra_port,
+        p2p_infra_wss_enable: std::env::var("FEDI3_P2P_INFRA_WSS_ENABLE")
+            .is_ok_and(|v| matches!(v.as_str(), "true" | "1")),
         telemetry_interval_secs,
         max_body_bytes,
         http_timeout_secs,
@@ -7103,10 +7106,17 @@ fn relay_p2p_infra_multiaddrs(cfg: &RelayConfig) -> Vec<String> {
         return Vec::new();
     }
     let port = cfg.p2p_infra_port;
-    vec![
+    let mut addrs = Vec::new();
+    if cfg.p2p_infra_wss_enable {
+        addrs.push(format!(
+            "/dns4/{host}/tcp/443/tls/sni/{host}/x-parity-ws/%2F_fedi3%2Fp2p/p2p/{peer_id}"
+        ));
+    }
+    addrs.extend([
         format!("/dns4/{host}/tcp/{port}/p2p/{peer_id}"),
         format!("/dns4/{host}/udp/{port}/quic-v1/p2p/{peer_id}"),
-    ]
+    ]);
+    addrs
 }
 
 async fn relay_p2p_infra(State(state): State<AppState>) -> impl IntoResponse {
@@ -9999,6 +10009,18 @@ mod tests {
     static TEST_DIR_ID: AtomicU64 = AtomicU64::new(1);
     static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
+    #[test]
+    fn wss_infrastructure_is_advertised_only_when_tls_proxy_is_enabled() {
+        let mut cfg = test_cfg();
+        cfg.p2p_infra_host = Some("relay.example".into());
+        cfg.p2p_infra_peer_id = Some("peer".into());
+        assert_eq!(relay_p2p_infra_multiaddrs(&cfg).len(), 2);
+        cfg.p2p_infra_wss_enable = true;
+        let addrs = relay_p2p_infra_multiaddrs(&cfg);
+        assert_eq!(addrs.len(), 3);
+        assert!(addrs[0].contains("/tcp/443/tls/sni/relay.example/x-parity-ws/%2F_fedi3%2Fp2p/"));
+    }
+
     pub(super) fn test_cfg() -> RelayConfig {
         RelayConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
@@ -10013,6 +10035,7 @@ mod tests {
             p2p_infra_multiaddrs: Vec::new(),
             p2p_infra_host: None,
             p2p_infra_port: 4001,
+            p2p_infra_wss_enable: false,
             telemetry_interval_secs: 30,
             max_body_bytes: 1024 * 1024,
             http_timeout_secs: 5,

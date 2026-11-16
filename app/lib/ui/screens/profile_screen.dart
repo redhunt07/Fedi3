@@ -1,4 +1,6 @@
 import '../../model/profile_content.dart';
+import '../../model/note_models.dart';
+import '../utils/media_url.dart';
 import '../../services/app_activity.dart';
 /*
  * SPDX-FileCopyrightText: 2026 RedHunt07 - FEDI3 Project
@@ -68,7 +70,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final cfg = widget.appState.config;
     if (cfg != null && widget.appState.isRunning) {
       _accountEvents = CoreEventStream(config: cfg).stream().listen((event) {
-        if (event.kind != 'account' || !mounted || !AppActivity.foreground) {
+        if (!const {'account', 'timeline', 'inbox', 'outbox'}
+                .contains(event.kind) ||
+            !mounted ||
+            !AppActivity.foreground) {
           return;
         }
         _accountDebounce?.cancel();
@@ -108,23 +113,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() => _profile = p);
       unawaited(_refreshRelations());
-      if (p?.outbox.isNotEmpty ?? false) {
-        final page = await ActorRepository.instance
-            .fetchOutboxPage(p!.outbox, limit: 20);
-        if (!mounted) return;
-        // The remote outbox can contain activities from another identity
-        // (for example after a migration), so keep only the posts authored by
-        // this profile and merge the public posts the local core already
-        // cached for it.
-        final remote = page.items
-            .where((a) => _sameActor(_activityActor(a), p.id))
-            .toList();
+      if (p != null) {
         final cached = await _cachedActorActivities(p.id);
         if (!mounted) return;
+        // Show persisted content even when the remote server is unavailable.
+        setState(() => _outbox = cached);
+        if (p.outbox.isEmpty) return;
+        final page = await ActorRepository.instance.fetchOutboxPage(p.outbox,
+            limit: 20, config: widget.appState.config);
+        if (!mounted) return;
+        final remote =
+            page.items.where((a) => _sameActor(_activityActor(a), p.id));
         final merged = <Map<String, dynamic>>[];
         final seen = <String>{};
         for (final a in [...remote, ...cached]) {
-          final id = a['id']?.toString() ?? '';
+          final id =
+              _noteMap(a)?['id']?.toString() ?? a['id']?.toString() ?? '';
           if (id.isNotEmpty && !seen.add(id)) continue;
           merged.add(a);
         }
@@ -299,23 +303,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
             else ...[
               for (final a in _filteredOutbox())
                 TimelineActivityCard(appState: widget.appState, activity: a),
-              if (_outboxNext != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Center(
-                    child: OutlinedButton.icon(
-                      onPressed: _loadingMore ? null : _loadMore,
-                      icon: _loadingMore
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.expand_more_rounded),
-                      label: Text(context.l10n.profileLoadMore),
-                    ),
+            ],
+            if (_outboxNext != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: OutlinedButton.icon(
+                    onPressed: _loadingMore ? null : _loadMore,
+                    icon: _loadingMore
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.expand_more_rounded),
+                    label: Text(context.l10n.profileLoadMore),
                   ),
                 ),
-            ],
+              ),
           ],
         ],
       ),
@@ -359,10 +363,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (cfg == null || !widget.appState.isRunning) return const [];
     final out = <Map<String, dynamic>>[];
     final seen = <String>{};
-    for (final kind in const ['home', 'federated']) {
+    String? cursor;
+    final api = CoreApi(config: cfg);
+    do {
       try {
-        final api = CoreApi(config: cfg);
-        final resp = await api.fetchTimeline(kind, limit: 50);
+        final resp = await api.fetchProfileActivities(actorUrl, cursor: cursor);
         for (final raw in (resp['items'] as List<dynamic>? ?? const [])) {
           if (raw is! Map) continue;
           final activity = raw.cast<String, dynamic>();
@@ -371,10 +376,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (id.isNotEmpty && !seen.add(id)) continue;
           out.add(activity);
         }
+        final next = resp['next'] as String?;
+        if (next == cursor) break;
+        cursor = next;
       } catch (_) {
-        // Best effort: the other feed may still succeed.
+        break;
       }
-    }
+    } while (cursor != null);
     return out;
   }
 
@@ -395,7 +403,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (note == null) return false;
       final irt = (note['inReplyTo'] as String?)?.trim() ?? '';
       final attachment = note['attachment'];
-      final hasMedia = attachment is List && attachment.isNotEmpty;
+      final hasMedia = NoteAttachment.parseList(attachment).isNotEmpty;
       return switch (_profileTab) {
         0 => irt.isEmpty,
         1 => irt.isNotEmpty,
@@ -410,8 +418,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (p == null || next == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ActorRepository.instance
-          .fetchOutboxPage(p.outbox, limit: 20, pageUrl: next);
+      final page = await ActorRepository.instance.fetchOutboxPage(p.outbox,
+          limit: 20, pageUrl: next, config: widget.appState.config);
       if (!mounted) return;
       final seen = _outbox.map((a) => a['id']?.toString()).toSet();
       setState(() {
@@ -434,10 +442,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final out = <Map<String, dynamic>>[];
     for (final a in _filteredOutbox()) {
       final note = _noteMap(a);
-      final att = note?['attachment'];
-      if (att is! List) continue;
-      for (final item in att) {
-        if (item is Map) out.add(item.cast<String, dynamic>());
+      for (final item in NoteAttachment.parseList(note?['attachment'])) {
+        out.add({'url': item.url, 'mediaType': item.mediaType});
       }
     }
     return out;
@@ -466,7 +472,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       itemCount: items.length,
       itemBuilder: (context, index) {
         final item = items[index];
-        final url = (item['url'] as String?)?.trim() ?? '';
+        final url = resolveLocalMediaUrl(
+            widget.appState.config, (item['url'] as String?)?.trim() ?? '');
         final type = (item['mediaType'] as String?)?.trim() ?? '';
         final isVideo = type.startsWith('video/');
         final isAudio = type.startsWith('audio/');

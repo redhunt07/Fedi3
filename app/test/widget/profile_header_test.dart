@@ -7,6 +7,7 @@ import 'package:fedi3/core/core_http.dart';
 import 'package:fedi3/state/app_state.dart';
 import 'package:fedi3/ui/screens/profile_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../support/fake_core.dart';
 import '../support/fake_http.dart';
@@ -62,5 +63,59 @@ void main() {
     expect(find.text('@alice@fedi3.test'), findsOneWidget);
     expect(find.text('https://fedi3.test/users/alice'), findsNothing);
     expect(find.text('Alice'), findsWidgets);
+  });
+  testWidgets('persisted profile posts remain visible without a remote outbox',
+      (tester) async {
+    await setUpPumpEnv(tester);
+    final client =
+        FakeHttpClient(defaultResponse: FakeHttpResponse(body: '{}'));
+    final actor = {
+      ..._actorDoc(),
+      'id': 'https://fedi3.test/users/cached',
+      'outbox': ''
+    };
+    client.json('GET', '/users/cached', actor);
+    client.json('GET', '/_fedi3/profile/activities', {
+      'items': [
+        {
+          'id': 'https://fedi3.test/activities/hello',
+          'type': 'Create',
+          'actor': actor['id'],
+          'object': {
+            'id': 'https://fedi3.test/notes/hello',
+            'type': 'Note',
+            'attributedTo': actor['id'],
+            'content': '<p>Ciao mondo persistente</p>',
+          },
+        }
+      ],
+      'next': null,
+    });
+    client.route(
+        'GET',
+        '/_fedi3/stream',
+        FakeHttpResponse(
+            headers: const {'content-type': 'text/event-stream'}, body: ''));
+    CoreHttp.useTestClient(client);
+    addTearDown(CoreHttp.reset);
+    final app = await _runningApp();
+    await pumpScreen(
+        tester, ProfileScreen(appState: app, actorUrl: actor['id'] as String));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.drag(find.byType(ListView).first, const Offset(0, -500));
+    for (var i = 0;
+        i < 50 &&
+            find
+                .textContaining('Ciao mondo persistente', findRichText: true)
+                .evaluate()
+                .isEmpty;
+        i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(find.textContaining('Ciao mondo persistente', findRichText: true),
+        findsWidgets);
   });
 }

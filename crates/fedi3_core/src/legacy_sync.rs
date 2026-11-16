@@ -22,16 +22,27 @@ struct ActorDoc {
 
 #[derive(Debug, Deserialize)]
 struct OrderedCollection {
-    first: Option<String>,
-    #[serde(rename = "orderedItems")]
+    first: Option<Value>,
+    next: Option<Value>,
+    #[serde(rename = "orderedItems", alias = "items")]
     ordered_items: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OrderedCollectionPage {
-    next: Option<String>,
-    #[serde(rename = "orderedItems")]
+    next: Option<Value>,
+    #[serde(rename = "orderedItems", alias = "items")]
     ordered_items: Option<Vec<Value>>,
+}
+
+fn collection_link(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("id").and_then(Value::as_str))
+        .or_else(|| value.get("href").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
 }
 
 pub fn start_legacy_sync_worker(
@@ -42,6 +53,12 @@ pub fn start_legacy_sync_worker(
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        // Recover missed posts on startup, without waiting five minutes.
+        if !*shutdown.borrow() {
+            if let Err(e) = run_once_with_limits(&state, &delivery, &social, &http, 10, 400).await {
+                warn!("initial legacy sync error: {e:#}");
+            }
+        }
         // Misskey-like "home enrichment" requires that the instance keeps pulling what it follows
         // even if it missed inbox deliveries while offline.
         loop {
@@ -155,14 +172,28 @@ async fn poll_actor_outbox(
     let col: OrderedCollection =
         fetch_legacy_json(http, &outbox_url, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?;
 
-    // Some servers return the items directly on the collection (rare). Prefer first page when present.
-    let first_page = col.first.clone().unwrap_or(outbox_url.clone());
-
-    // Step 2: fetch first page (newest items).
-    let mut next_page: Option<String> = Some(first_page);
+    // Collections can embed their first page, or contain items directly.
+    let mut embedded_page = if col.ordered_items.is_some() {
+        Some(OrderedCollectionPage {
+            next: col.next,
+            ordered_items: col.ordered_items,
+        })
+    } else {
+        col.first.as_ref().and_then(|first| {
+            if first.get("orderedItems").is_some() || first.get("items").is_some() {
+                serde_json::from_value::<OrderedCollectionPage>(first.clone()).ok()
+            } else {
+                None
+            }
+        })
+    };
+    let mut next_page = if embedded_page.is_some() {
+        Some(outbox_url.clone())
+    } else {
+        col.first.as_ref().and_then(collection_link)
+    };
     let mut pages = 0usize;
     let mut ingested = 0usize;
-    let mut dup_streak = 0usize;
 
     while let Some(page_url) = next_page.take() {
         if pages >= max_pages {
@@ -172,19 +203,22 @@ async fn poll_actor_outbox(
             break;
         }
 
-        let page_json =
-            fetch_legacy_bytes(http, &page_url, crate::net_policy::MAX_OUTBOX_PAGE_BYTES).await?;
-
-        let parsed_page = serde_json::from_slice::<OrderedCollectionPage>(&page_json).ok();
-        let items = parsed_page
-            .as_ref()
-            .and_then(|p| p.ordered_items.clone())
-            .or_else(|| col.ordered_items.clone())
-            .unwrap_or_default();
-        next_page = parsed_page.and_then(|p| p.next);
+        let page = if let Some(page) = embedded_page.take() {
+            page
+        } else {
+            let page_json =
+                fetch_legacy_bytes(http, &page_url, crate::net_policy::MAX_OUTBOX_PAGE_BYTES)
+                    .await?;
+            serde_json::from_slice::<OrderedCollectionPage>(&page_json)?
+        };
+        let items = page.ordered_items.unwrap_or_default();
+        next_page = page.next.as_ref().and_then(collection_link);
 
         if items.is_empty() {
-            break;
+            // A server may filter a page to zero visible posts while still
+            // advertising older pages. Keep walking within the page budget.
+            pages += 1;
+            continue;
         }
 
         for activity in items.into_iter() {
@@ -196,23 +230,17 @@ async fn poll_actor_outbox(
             }
             let dedup_id = ap::activity_dedup_id_public(&activity);
             match social.mark_inbox_seen(&dedup_id) {
-                Ok(true) => {
-                    dup_streak = 0;
-                }
-                Ok(false) => {
-                    dup_streak += 1;
-                    if dup_streak >= 25 {
-                        next_page = None;
-                        break;
-                    }
-                    continue;
-                }
+                Ok(true) => {}
+                // A run of known posts is not proof that older pages are cached.
+                Ok(false) => continue,
                 Err(_) => continue,
             }
 
             // Best-effort: store and process as if it arrived via inbox.
             if let Err(e) = ap::process_inbox_activity(state, &activity).await {
                 debug!("process pulled activity failed ({dedup_id}): {e:#}");
+                // A failed write must remain eligible for the next pull.
+                let _ = social.forget_inbox_seen(&dedup_id);
                 continue;
             }
 
@@ -293,5 +321,30 @@ mod bounded_fetch_tests {
         assert!(fetch_legacy_bytes(&client, &url, 1024).await.is_err());
         server.abort();
         std::env::remove_var("FEDI3_ALLOW_PRIVATE_ACTOR_FETCH");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collection_pages_accept_embedded_items_and_link_objects() {
+        let collection: OrderedCollection = serde_json::from_value(serde_json::json!({
+            "first": {"type": "CollectionPage", "items": [{"type": "Create"}],
+                      "next": {"href": "https://remote.test/page2"}}
+        }))
+        .unwrap();
+        let page: OrderedCollectionPage =
+            serde_json::from_value(collection.first.unwrap()).unwrap();
+        assert_eq!(page.ordered_items.unwrap().len(), 1);
+        assert_eq!(
+            collection_link(&page.next.unwrap()).as_deref(),
+            Some("https://remote.test/page2")
+        );
+        assert_eq!(
+            collection_link(&serde_json::json!("https://remote.test/page1")).as_deref(),
+            Some("https://remote.test/page1")
+        );
     }
 }

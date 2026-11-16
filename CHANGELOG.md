@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-16
+
+- Recover profile posts, replies and media from the complete persisted history; paginate public posts before filtering out relationship activities.
+- Exclude accepted and pending follows from suggestions and refresh discovery suggestions while the app remains open.
+- Show available combined search results while the relay index is catching up, avoiding the interactive search coverage 503.
+- Preserve media cache filenames across uploads/restores and atomically replace desktop core libraries during rebuilds.
+- Add TLS WebSocket P2P circuits on HTTPS/443 for networks filtering raw libp2p ports; preserve TLS hostname verification and prefer the secure route advertised by infrastructure.
+- Initialise the Android application context before either native Flutter runtime starts, keeping system DNS available to P2P.
+
+
 ## [0.12.4] - 2026-11-16
 
 - Keep voice-note play available after loading failures, retry preparation and preserve the source for replay.

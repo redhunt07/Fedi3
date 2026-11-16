@@ -1,6 +1,6 @@
 [package]
 name = "fedi3_core"
-version = "0.12.4"
+version = "0.12.5"
 edition = "2021"
 license = "AGPL-3.0-only"
 
@@ -50,3 +50,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+ndk-context = "0.1.1"

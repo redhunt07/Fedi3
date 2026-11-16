@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_core"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1608,8 +1608,10 @@ dependencies = [
  "http",
  "httpdate",
  "image",
+ "jni",
  "libp2p",
  "mime_guess",
+ "ndk-context",
  "pqcrypto-kyber",
  "pqcrypto-traits",
  "rand 0.8.8",
@@ -1633,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_p2p_infra"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1653,7 +1655,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_protocol"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -1668,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_push_gateway"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1690,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "fedi3_relay"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "aes-gcm",
  "anyhow",

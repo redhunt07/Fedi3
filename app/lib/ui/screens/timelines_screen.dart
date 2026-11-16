@@ -381,20 +381,32 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
   List<ActorProfile> _suggested = const [];
   final Set<String> _followed = <String>{};
   bool _loading = true;
+  bool _refreshing = false;
+  Timer? _suggestionsPoll;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _suggestionsPoll =
+        AppActivity.periodic(const Duration(seconds: 30), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _suggestionsPoll?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
+    if (_refreshing) return;
     final cfg = widget.appState.config;
     if (cfg == null || !widget.appState.isRunning) {
       if (mounted) setState(() => _loading = false);
       return;
     }
     final api = CoreApi(config: cfg);
+    _refreshing = true;
     try {
       final results = await Future.wait([
         api.fetchTrendingHashtags(limit: 8),
@@ -413,7 +425,9 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
         for (final it in rawActors) {
           if (it is! String) continue;
           final profile = await ActorRepository.instance.getActor(it);
-          if (profile != null) actors.add(profile);
+          if (profile != null && !_followed.contains(profile.id)) {
+            actors.add(profile);
+          }
         }
       }
       if (!mounted) return;
@@ -424,6 +438,8 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
+    } finally {
+      _refreshing = false;
     }
   }
 
@@ -434,7 +450,10 @@ class _ExploreHeaderState extends State<_ExploreHeader> {
     try {
       await api.follow(profile.id);
       if (!mounted) return;
-      setState(() => _followed.add(profile.id));
+      setState(() {
+        _followed.add(profile.id);
+        _suggested = _suggested.where((p) => p.id != profile.id).toList();
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.l10n.notificationsFollowedBack)),
       );
@@ -1101,7 +1120,9 @@ class _TimelineListState extends State<_TimelineList>
             return const SizedBox.shrink();
           }
           if (index == filtered.length + 2) {
-            if (filtered.isEmpty && !_loading) return const SizedBox.shrink();
+            if (filtered.isEmpty && !_loading && _cursor == null) {
+              return const SizedBox.shrink();
+            }
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Center(

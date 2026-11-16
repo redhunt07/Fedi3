@@ -91,6 +91,21 @@ pub fn is_valid_media_id(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
+/// Resolve the persisted filename before the public ID: uploads and restored
+/// caches can retain their original filename after their public ID changes.
+pub fn load_cached_media(
+    data_dir: &Path,
+    id: &str,
+    local_name: Option<&str>,
+) -> Result<(Vec<u8>, String)> {
+    if let Some(local) = local_name {
+        if let Ok(media) = load_media(data_dir, local) {
+            return Ok(media);
+        }
+    }
+    load_media(data_dir, id)
+}
+
 pub fn load_media(data_dir: &Path, stored_name: &str) -> Result<(Vec<u8>, String)> {
     if !is_valid_media_id(stored_name) {
         anyhow::bail!("invalid media id: {stored_name}");
@@ -522,4 +537,28 @@ fn new_id() -> String {
     let mut b = [0u8; 16];
     OsRng.fill_bytes(&mut b);
     b.iter().map(|v| format!("{v:02x}")).collect()
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn restored_media_uses_persisted_name_and_survives_reopen() {
+        let dir = crate::test_support::TempDir::new("restored-media-cache");
+        std::fs::create_dir_all(media_dir(dir.path())).unwrap();
+        let old = "0123456789abcdef0123456789abcdef.png";
+        let public = "abcdef0123456789abcdef0123456789.png";
+        std::fs::write(media_dir(dir.path()).join(old), b"cached-image").unwrap();
+        let (bytes, _) = load_cached_media(dir.path(), public, Some(old)).unwrap();
+        assert_eq!(bytes, b"cached-image");
+        assert!(load_cached_media(dir.path(), public, Some("../../private")).is_err());
+        std::fs::write(media_dir(dir.path()).join(public), b"fallback-image").unwrap();
+        assert_eq!(
+            load_cached_media(dir.path(), public, Some("missing.png"))
+                .unwrap()
+                .0,
+            b"fallback-image"
+        );
+    }
 }

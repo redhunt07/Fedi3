@@ -591,6 +591,17 @@ class CoreApi {
     return _decodeMap(resp, 'search users');
   }
 
+  Future<Map<String, dynamic>> fetchProfileActivities(String actor,
+      {String? cursor}) async {
+    final uri = _internal('/_fedi3/profile/activities', {
+      'actor': actor,
+      if (cursor != null) 'cursor': cursor,
+    });
+    final resp =
+        await _request(method: 'GET', uri: uri, headers: _internalHeaders);
+    return _decodeMap(resp, 'profile activities');
+  }
+
   Future<Map<String, dynamic>> fetchSuggestedActors({int limit = 6}) async {
     final uri = _internal('/_fedi3/suggested/actors', {
       'limit': limit.toString(),

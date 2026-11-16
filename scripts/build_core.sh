@@ -23,9 +23,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="$repo_root/crates/fedi3_core"
 
 if [[ "$profile" == "debug" ]]; then
-  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core)
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --lib)
 else
-  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --release)
+  (cd "$core_dir" && "$cargo_cmd" build -p fedi3_core --release --lib)
 fi
 
 suffix="$profile"
@@ -39,7 +39,14 @@ app_dir="$repo_root/app"
 
 copy_core_so() {
   local dest="$1"
-  cp -f "$so_path" "$dest"
+  # Replacing an mmap'ed shared library in place can crash a running client.
+  # Rename a complete sibling file so the old process keeps its original inode.
+  local temporary
+  temporary="$(mktemp "${dest}.XXXXXX")"
+  if ! cp -p "$so_path" "$temporary" || ! mv -f "$temporary" "$dest"; then
+    rm -f "$temporary"
+    return 1
+  fi
   echo "Copiata: $dest"
 }
 

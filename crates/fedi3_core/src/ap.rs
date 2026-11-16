@@ -305,6 +305,7 @@ pub async fn handle_request(state: &ApState, req: Request<Body>) -> Response<Bod
         ("GET", "/_fedi3/search/users") => search_users(state, req).await,
         ("GET", "/_fedi3/search/hashtags") => search_hashtags(state, req).await,
         ("GET", "/_fedi3/trending/hashtags") => trending_hashtags(state, req).await,
+        ("GET", "/_fedi3/profile/activities") => profile_activities(state, req).await,
         ("GET", "/_fedi3/suggested/actors") => suggested_actors(state, req).await,
         ("GET", "/_fedi3/chat/bundle") => chat_bundle_get(state, req).await,
         ("POST", "/_fedi3/chat/inbox") => chat_inbox_post(state, req).await,
@@ -1100,10 +1101,10 @@ async fn media_get(state: &ApState, req: Request<Body>) -> Response<Body> {
     }
 
     if let Ok(Some(item)) = state.social.get_media(stored_name) {
-        if item.local_name.is_some() {
-            if let Ok((bytes, mime)) = media_store::load_media(&state.data_dir, stored_name) {
-                return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
-            }
+        if let Ok((bytes, mime)) =
+            media_store::load_cached_media(&state.data_dir, stored_name, item.local_name.as_deref())
+        {
+            return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
         }
         if let Ok(Some((bytes, mime))) = fetch_and_cache_media(state, &item).await {
             return (StatusCode::OK, [("Content-Type", mime)], bytes).into_response();
@@ -3188,6 +3189,52 @@ async fn search_users(state: &ApState, req: Request<Body>) -> Response<Body> {
       "next": next,
     }))
     .into_response()
+}
+
+async fn profile_activities(state: &ApState, req: Request<Body>) -> Response<Body> {
+    let (parts, _) = req.into_parts();
+    if let Err(resp) = require_internal(state, &parts.headers) {
+        return resp;
+    }
+    let query: std::collections::HashMap<_, _> = parts
+        .uri
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k, url_decode(v)))
+        .collect();
+    let actor = query.get("actor").map(String::as_str).unwrap_or("").trim();
+    if actor.is_empty() {
+        return simple(StatusCode::BAD_REQUEST, "actor required");
+    }
+    let offset = query
+        .get("cursor")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    let own = actor.trim_end_matches('/') == canonical_actor_url(&state.cfg).trim_end_matches('/')
+        || actor.trim_end_matches('/')
+            == format!(
+                "{}/users/{}",
+                state.cfg.public_base_url.trim_end_matches('/'),
+                state.cfg.username
+            );
+    let raw = match state.social.list_actor_activities(actor, own, offset, 200) {
+        Ok(items) => items,
+        Err(e) => return simple(StatusCode::BAD_GATEWAY, &format!("db error: {e}")),
+    };
+    let next = if raw.len() == 200 {
+        Some(offset.saturating_add(200).to_string())
+    } else {
+        None
+    };
+    let mut items = timeline_values(state, raw);
+    if own {
+        for item in &mut items {
+            normalize_activity_actor(item, actor);
+        }
+    }
+    axum::Json(serde_json::json!({"items": items, "next": next})).into_response()
 }
 
 async fn suggested_actors(state: &ApState, req: Request<Body>) -> Response<Body> {
@@ -6639,7 +6686,7 @@ async fn outbox_get(
     if !is_page {
         let total = state
             .social
-            .list_outbox_visible(0, None, requester.as_deref(), requester_is_follower)
+            .list_profile_outbox_visible(0, None, requester.as_deref(), requester_is_follower)
             .map(|p| p.total)
             .unwrap_or(0);
         let body = OrderedCollection {
@@ -6653,7 +6700,7 @@ async fn outbox_get(
     }
 
     let limit = 20;
-    let page = match state.social.list_outbox_visible(
+    let page = match state.social.list_profile_outbox_visible(
         limit,
         cursor.clone(),
         requester.as_deref(),

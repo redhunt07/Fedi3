@@ -53,6 +53,7 @@ services:
       - FEDI3_P2P_INFRA_MULTIADDRS=${FEDI3_P2P_INFRA_MULTIADDRS:-}
       - FEDI3_P2P_INFRA_HOST=${FEDI3_P2P_INFRA_HOST:-}
       - FEDI3_P2P_INFRA_PORT=${FEDI3_P2P_INFRA_PORT:-4001}
+      - FEDI3_P2P_INFRA_WSS_ENABLE=${FEDI3_P2P_INFRA_WSS_ENABLE:-false}
       # The relay is only reachable through Caddy; the proxy appends the real
       # client address to X-Forwarded-For.
       - FEDI3_RELAY_TRUST_PROXY_HEADERS=true
@@ -281,7 +282,7 @@ services:
         P2P_GID: ${P2P_GID:-1000}
     user: "${P2P_UID:-1000}:${P2P_GID:-1000}"
     environment:
-      - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1
+      - FEDI3_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1,/ip4/0.0.0.0/tcp/4002/ws
       - FEDI3_P2P_ENABLE_RELAY_SERVER=true
       - FEDI3_P2P_EXTERNAL_ADDR=${FEDI3_P2P_EXTERNAL_ADDR:-}
       - FEDI3_P2P_BOOTSTRAP=${FEDI3_P2P_BOOTSTRAP:-}

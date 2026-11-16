@@ -19,6 +19,81 @@ pub struct SocialDb {
 mod inbox_claim_tests {
     use super::*;
     #[test]
+    fn public_profile_outbox_filters_before_pagination() {
+        let dir = crate::test_support::TempDir::new("profile-outbox-page");
+        let db = SocialDb::open(dir.path().join("social.db")).unwrap();
+        db.store_outbox_at(
+            "hello",
+            1,
+            br#"{"id":"hello","type":"Create","object":{"type":"Note","content":"Ciao mondo!"}}"#
+                .to_vec(),
+        )
+        .unwrap();
+        for i in 2..40 {
+            db.store_outbox_at(&format!("follow-{i}"), i, br#"{"type":"Follow"}"#.to_vec())
+                .unwrap();
+        }
+        let page = db
+            .list_profile_outbox_visible(20, None, None, false)
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert!(page.next.is_none());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&page.items[0]).unwrap()["id"],
+            "hello"
+        );
+        // Device and other activity consumers retain the full outbox view.
+        assert_eq!(
+            db.list_outbox_visible(20, None, None, false).unwrap().total,
+            39
+        );
+    }
+
+    #[test]
+    fn profile_history_survives_reopen_and_does_not_depend_on_feed_head() {
+        let dir = crate::test_support::TempDir::new("profile-history");
+        let path = dir.path().join("social.db");
+        let db = SocialDb::open(&path).unwrap();
+        let conn = db.connect().unwrap();
+        for i in 0..230 {
+            conn.execute(
+                "INSERT INTO federated_feed(activity_id,created_at_ms,actor_id,size_bytes,last_access_ms,activity_json) VALUES (?1,?2,?3,2,1,?4)",
+                params![format!("post-{i}"), i, "https://remote.test/alice", format!("{{\"id\":{i}}}").into_bytes()],
+            ).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO outbox_items(id,created_at_ms,activity_json) VALUES ('own',999,?1)",
+            params![b"{}".to_vec()],
+        )
+        .unwrap();
+        drop(conn);
+        drop(db);
+        let db = SocialDb::open(&path).unwrap();
+        let first = db
+            .list_actor_activities("https://remote.test/alice", false, 0, 200)
+            .unwrap();
+        let older = db
+            .list_actor_activities("https://remote.test/alice", false, 200, 200)
+            .unwrap();
+        assert_eq!(first.len(), 200);
+        assert_eq!(older.len(), 30);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&older[29]).unwrap()["id"],
+            0
+        );
+        assert!(db
+            .list_actor_activities("https://remote.test/bob", false, 0, 200)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.list_actor_activities("https://local.test/me", true, 0, 200)
+                .unwrap(),
+            vec![b"{}".to_vec()]
+        );
+    }
+
+    #[test]
     fn sync_storage_failure_rolls_back_claim_and_allows_retry() {
         let dir = crate::test_support::TempDir::new("sync-rollback");
         let db = SocialDb::open(dir.path().join("social.db")).unwrap();
@@ -2068,12 +2143,45 @@ impl SocialDb {
         Ok(CollectionPage { total, items, next })
     }
 
+    /// Profile history must not depend on the first page of a busy timeline.
+    /// This is used only by the authenticated local UI.
+    pub fn list_actor_activities(
+        &self,
+        actor: &str,
+        own: bool,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<Vec<u8>>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT activity_json FROM (
+                SELECT activity_id, created_at_ms, activity_json FROM inbox_items
+                WHERE rtrim(actor_id, '/') = rtrim(?1, '/')
+                UNION
+                SELECT activity_id, created_at_ms, activity_json FROM federated_feed
+                WHERE rtrim(actor_id, '/') = rtrim(?1, '/')
+                UNION
+                SELECT activity_id, created_at_ms, activity_json FROM global_feed
+                WHERE rtrim(actor_id, '/') = rtrim(?1, '/')
+                UNION
+                SELECT id AS activity_id, created_at_ms, activity_json FROM outbox_items
+                WHERE ?2
+            ) ORDER BY created_at_ms DESC, activity_id DESC LIMIT ?3 OFFSET ?4",
+        )?;
+        let rows = stmt.query_map(params![actor, own, limit.clamp(1, 200), offset], |r| {
+            r.get(0)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn list_suggested_actor_ids(&self, exclude: &[String], limit: u32) -> Result<Vec<String>> {
         let conn = self.connect()?;
         let limit = limit.min(20).max(1) as i64;
         let mut sql = String::from(
             "SELECT actor_id, COUNT(*) AS c FROM federated_feed \
-             WHERE actor_id IS NOT NULL AND actor_id != ''",
+             WHERE actor_id IS NOT NULL AND actor_id != '' \
+             AND NOT EXISTS (SELECT 1 FROM following f \
+                 WHERE rtrim(f.actor_id, '/') = rtrim(federated_feed.actor_id, '/'))",
         );
         if !exclude.is_empty() {
             sql.push_str(" AND actor_id NOT IN (");
@@ -2788,11 +2896,50 @@ impl SocialDb {
         requester_actor: Option<&str>,
         requester_is_follower: bool,
     ) -> Result<CollectionPage<Vec<u8>>> {
+        self.list_outbox_visible_filtered(
+            limit,
+            cursor,
+            requester_actor,
+            requester_is_follower,
+            false,
+        )
+    }
+
+    /// The public profile collection paginates posts, not relationship events.
+    pub fn list_profile_outbox_visible(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+        requester_actor: Option<&str>,
+        requester_is_follower: bool,
+    ) -> Result<CollectionPage<Vec<u8>>> {
+        self.list_outbox_visible_filtered(
+            limit,
+            cursor,
+            requester_actor,
+            requester_is_follower,
+            true,
+        )
+    }
+
+    fn list_outbox_visible_filtered(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+        requester_actor: Option<&str>,
+        requester_is_follower: bool,
+        posts_only: bool,
+    ) -> Result<CollectionPage<Vec<u8>>> {
         let followers_visible = requester_is_follower && requester_actor.is_some();
         let visible_clause = |n: usize| {
-            format!(
+            let visibility = format!(
                 "COALESCE(visibility,'public') IN ('public','unlisted') OR (COALESCE(visibility,'public')='followers' AND ?{n})"
-            )
+            );
+            if posts_only {
+                format!("({visibility}) AND CASE WHEN json_valid(CAST(activity_json AS TEXT)) THEN json_extract(CAST(activity_json AS TEXT), '$.type') END IN ('Create','Announce')")
+            } else {
+                visibility
+            }
         };
         let conn = self.connect()?;
         let total: i64 = conn.query_row(
@@ -5755,6 +5902,34 @@ mod hashtag_tests {
             .list_suggested_actor_ids(&["https://a.test/users/a".to_string()], 10)
             .expect("suggested");
         assert_eq!(suggested, vec!["https://a.test/users/b".to_string()]);
+        // Pending follows must disappear from suggestions too, including URL
+        // variants with a trailing slash, without relying on a capped caller list.
+        db.connect()
+            .unwrap()
+            .execute(
+                "INSERT INTO following(actor_id,status,created_at_ms) VALUES (?1,0,1)",
+                params!["https://a.test/users/b/"],
+            )
+            .unwrap();
+        assert!(db
+            .list_suggested_actor_ids(&["https://a.test/users/a".to_string()], 10)
+            .unwrap()
+            .is_empty());
+        let history = db
+            .list_actor_activities("https://a.test/users/b/", false, 0, 200)
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(
+            db.list_actor_activities("https://a.test/users/b", false, 1, 200)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(db
+            .list_actor_activities("https://unknown.test/u", false, 0, 200)
+            .unwrap()
+            .is_empty());
+
         let _ = std::fs::remove_file(&path);
     }
 }

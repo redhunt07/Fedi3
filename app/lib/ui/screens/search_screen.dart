@@ -185,7 +185,9 @@ class _SearchScreenState extends State<SearchScreen>
       tag: tag,
       cursor: reset ? null : _notesNext,
       source: _source.name,
-      consistency: _source == SearchSource.all ? 'full' : 'best',
+      // Interactive search must also show available local/relay results while
+      // the relay is still indexing. Strict full coverage is an API opt-in.
+      consistency: 'best',
     );
     final items = reset ? <_SearchNoteItem>[] : List.of(_noteItems);
     final raw = resp['items'];
@@ -223,7 +225,9 @@ class _SearchScreenState extends State<SearchScreen>
       query: _query,
       cursor: reset ? null : _usersNext,
       source: _source.name,
-      consistency: _source == SearchSource.all ? 'full' : 'best',
+      // Interactive search must also show available local/relay results while
+      // the relay is still indexing. Strict full coverage is an API opt-in.
+      consistency: 'best',
     );
     final list = reset ? <_SearchUserItem>[] : List.of(_userItems);
     final raw = resp['items'];

@@ -144,3 +144,16 @@ Host hardening checklist (verified on the reference VPS, see
 - [VPS deployment](deploy_vps.md) — reference deployment on `fedi3.redhunt07.ovh`
 - [backup and restore](ops_backup_restore.md) — PostgreSQL and media backups
 - [promotion and launch kit](promotion.md) — directory submissions and fediverse presence
+
+### P2P through HTTPS (v0.12.5)
+
+The Compose infrastructure also listens on an internal WebSocket port 4002.
+Caddy forwards `/_fedi3/p2p` to that listener over the private Compose network.
+Set `FEDI3_P2P_INFRA_WSS_ENABLE=true` to advertise the certificate-verified WSS
+multiaddress on public port 443; clients prefer it to raw port 4001. The peer ID
+and data volume remain unchanged. Port 4002 must not be published to the host.
+
+With external TLS termination (including YunoHost), add the equivalent
+WebSocket forwarding rule and then enable advertisement. Leave the flag false
+until the route is operational. Raw TCP/QUIC 4001 remains available for existing
+clients and installations that do not enable WSS.

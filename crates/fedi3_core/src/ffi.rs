@@ -141,3 +141,36 @@ mod tests {
         assert!(err.is_null());
     }
 }
+
+/// The application (including headless service launches) provides the process
+/// context before native DNS reads Android's ConnectivityManager.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_org_fedi3_client_Fedi3Application_nativeInitialize<'local>(
+    mut unowned: jni::EnvUnowned<'local>,
+    _this: jni::objects::JObject<'local>,
+    context: jni::objects::JObject<'local>,
+) {
+    static CONTEXT: std::sync::OnceLock<jni::refs::Global<jni::objects::JObject<'static>>> =
+        std::sync::OnceLock::new();
+    unowned
+        .with_env(|env| -> Result<(), jni::errors::Error> {
+            if CONTEXT.get().is_none() {
+                let vm = env.get_java_vm()?;
+                let global = env.new_global_ref(context)?;
+                CONTEXT.get_or_init(|| {
+                    // SAFETY: the VM and application global reference live for the
+                    // entire process; OnceLock prevents duplicate initialization.
+                    unsafe {
+                        ndk_context::initialize_android_context(
+                            vm.get_raw().cast(),
+                            global.as_raw().cast(),
+                        );
+                    }
+                    global
+                });
+            }
+            Ok(())
+        })
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+}
