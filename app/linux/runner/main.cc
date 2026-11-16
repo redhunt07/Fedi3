@@ -45,11 +45,16 @@ void prefer_mesa_egl_on_nvidia() {
   if (!any_exists(nvidia_vendors, G_N_ELEMENTS(nvidia_vendors))) {
     return;
   }
+  // Prefer the host glvnd directory on a normal system, then the Flatpak
+  // runtime's own Mesa under GL/default, then the GL extension copy under
+  // GL/glvnd. On a Wayland session the sandboxed zink device is unavailable and
+  // Mesa falls back to llvmpipe; the Flatpak launcher keeps X11 (where zink
+  // works) so rendering stays on the GPU.
   const char* mesa_vendors[] = {
       "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
-      "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d/50_mesa.json",
       "/usr/lib/x86_64-linux-gnu/GL/default/share/glvnd/egl_vendor.d/50_mesa.json",
       "/usr/lib/aarch64-linux-gnu/GL/default/share/glvnd/egl_vendor.d/50_mesa.json",
+      "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d/50_mesa.json",
   };
   const char* mesa_vendor = nullptr;
   for (const char* vendor : mesa_vendors) {
